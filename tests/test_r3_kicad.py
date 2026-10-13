@@ -125,7 +125,12 @@ def test_the_geometric_solve_reproduces_kicads_netlist_pin_for_pin():
         (180, "", (100.0, 103.81)),
         (270, "", (103.81, 100.0)),
         (0, "x", (100.0, 103.81)),
-        (90, "y", (103.81, 100.0)),  # rotate first, then mirror: measured on R3 (4.7k)
+        # Synthetic: the mirror-y branch has **no** KiCad-written file behind it.
+        # kicad-cli's `sch upgrade` normalises a `mirror y` placement to `mirror x`
+        # plus a half turn (the fixture's R3, `4.7k`, is written `(rot 270, mirror x)`
+        # — an equivalent encoding of the generator's rot 90 + mirror y), so this
+        # one case rests on this module's own assertion, not on an oracle.
+        (90, "y", (103.81, 100.0)),
     ],
 )
 def test_the_pin_transform_is_rotate_then_mirror(rot, mirror, expected):

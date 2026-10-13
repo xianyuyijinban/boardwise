@@ -200,6 +200,38 @@ BODY_TOOL = ROOT / "tools" / "118_measure_profiles.py"
 FLAG_GLYPH_PROBE = ROOT / "outputs" / "099" / "libprobe" / "08_geometry_probe.json"
 FLAG_PAGE_READING = ROOT / "outputs" / "111" / "geo_P1_live.json"
 
+#: 147's per-primitive bbox reading (and the layout it was read off), the two
+#: files `tools/118_measure_profiles.py::read_bboxes` folds the library's `body`
+#: boxes from. Named here so the guard below can tell "not in this checkout" from
+#: "the tool said nothing".
+BBOX_READING = ROOT / "outputs" / "118" / "11_geom_bboxes.json"
+BBOX_LAYOUT = ROOT / "outputs" / "118" / "bbox_layout.json"
+#: 119's measurement session — the apply report's own plan, from which the
+#: designator↔symbolRef mapping is read (see :func:`_measured_session`).
+PLAN_118 = ROOT / "outputs" / "118" / "plan_report.json"
+
+
+def _require(*paths: pathlib.Path) -> None:
+    """Skip when a reading this test measures against is not in this checkout.
+
+    Every path passed here is a **local, git-ignored** live-host or apply product
+    (``.gitignore`` line 46 ignores ``outputs/``). They are the *inputs* 118 /
+    145c / 147 measured and are kept as evidence rather than as source, so a fresh
+    clone carries none of them and a test that folds or reads one has nothing to
+    measure. That is a **missing artefact, not a broken assertion**: skip, naming
+    the file and where it comes from, so the run is honest about what it did not
+    check. A tree that has them (the main checkout) runs every assertion below as
+    written — this guard never turns a run into a skip there.
+    """
+    missing = [path for path in paths if not path.is_file()]
+    if missing:
+        pytest.skip(
+            "缺本地产物（未入库，.gitignore 忽略 outputs/）："
+            + "、".join(path.relative_to(ROOT).as_posix() for path in missing)
+            + "；这些是 118/145c/147 的真机 / apply 读数，生成见 outputs/118、"
+            "outputs/110、outputs/145c、outputs/099、outputs/111 或对应任务"
+        )
+
 
 def _measured_bodies() -> dict[str, tuple[float, float, float, float]]:
     """``{symbolRef: local body box}`` **re-derived** from the host's bbox reading.
@@ -506,6 +538,7 @@ def test_two_live_readings_agree_pin_for_pin():
     名字与长度时，脚尖仍然是 118 **逐颗实测**的，0603 的 ±15 与 0805 的 ±20
     由测量区分，不是按尺寸类别猜的。
     """
+    _require(APPLY, PINS110, BODIES110)
     tips, lcsc = _measured_118()
     other = _measured_110()
     shared = [part for part in tips if lcsc[part] in other]
@@ -550,6 +583,7 @@ def test_no_profile_carries_a_hand_written_pin_tip():
     旗标真正会悄悄错掉的是「字形挂在连接点哪一侧」和「姿态」，那由下面那条
     体框测试逐项对着这两份文件核；这里只管登记在不在、文字点不点得出来。
     """
+    _require(APPLY, SWAP_PROBE, PLAN_118, PROBE_145C)
     tips, lcsc = _measured_118()
     probe = _swap_probe()
     current = _current_transformer()
@@ -690,6 +724,7 @@ def test_every_profile_says_where_its_geometry_came_from():
     * **没有读数**（`C0805`，118/147 都没把它放上过页面）：那句话必须说这是
       **引脚内端推出的下界**——把一个没量过的东西说成测量，正是本条要拒的谎话。
     """
+    _require(BBOX_READING, BBOX_LAYOUT)
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
     reading = _measured_bodies()
@@ -800,6 +835,7 @@ def test_every_body_box_is_the_extent_the_host_reports():
       147 才量得出来的事实：**两个族的盒子必须不同**——053B 那个「一盒两族」的
       约定盒恰恰表达不了这件事，而它曾经让六个批次的旗标画反了方向还全绿。
     """
+    _require(BBOX_READING, BBOX_LAYOUT, FLAG_GLYPH_PROBE, FLAG_PAGE_READING)
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
     reading = _measured_bodies()
@@ -970,6 +1006,7 @@ def test_every_pin_carries_the_name_the_host_reports():
     立刻炸——`_pin_of_token` 先按号码找，找不到才按名字——但它会让一个写错名字
     的 spec 悄悄绑到**另一根脚**上，而那正是 118 这次要消灭的那一类事故。
     """
+    _require(PINS110, BODIES110, APPLY, PLAN_118)
     book = json.loads((SPECS / "flyback_uc3845.library.json").read_text(
         encoding="utf-8"))
     declared = {
@@ -1252,6 +1289,7 @@ def test_the_five_pin_transformer_cannot_carry_this_circuit():
     条**历史记录**而不是当前电路的断言——换料是岳的裁定，换料不替编译器把这
     条结论擦掉。
     """
+    _require(LIBRARY_118)
     import itertools
 
     from boardwise.core.circuitspec import CircuitSpec

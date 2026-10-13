@@ -20,8 +20,15 @@ module to them. The measured facts this module depends on:
 * **The schematic has no nets.** Connectivity is geometric: a symbol's pin
   sits at ``at + mirror(rotate(rot) · (x, −y))`` — library y is up and the
   sheet's is down, the rotation is applied first and the ``mirror x`` /
-  ``mirror y`` after it, in sheet coordinates (the other order swaps the pins
-  of a ``rot 90`` + ``mirror y`` resistor; measured against kicad-cli).
+  ``mirror y`` after it, in sheet coordinates. **Measured** against kicad-cli
+  on the fixture: its one rotated-and-mirrored part (R3, ``4.7k``) is written
+  ``(rot 270, mirror x)``, and this order reproduces kicad-cli's netlist pin
+  for pin — the other order swaps that part's pins and the test goes red. The
+  ``mirror y`` *branch* on its own is **not** oracle-backed: kicad-cli's
+  ``sch upgrade`` normalises a ``mirror y`` placement into ``mirror x`` plus a
+  half turn, so no KiCad-written file carries one, and the branch rests on a
+  synthetic unit assertion only
+  (``test_the_pin_transform_is_rotate_then_mirror[90-y-…]``).
   Wires connect at their end points; a junction or a label connects to every
   wire that passes through its point; same-named power symbols and global
   labels are one net everywhere, same-named local labels one net on their
@@ -31,7 +38,12 @@ module to them. The measured facts this module depends on:
   root-sheet local label is ``/NAME`` in KiCad's netlist and ``NAME`` here,
   because the rules recognise rails by the name the designer typed
   (``+3V3``, ``VBUS``), not by its sheet path. Unnamed nets are
-  ``Net-(REF-PadN)`` with the lowest ``(REF, pin)`` member, as KiCad does.
+  ``Net-(REF-PadN)`` with the lowest ``(REF, pin)`` member — kicad-cli's own
+  name shape for an unnamed net. (The fixture draws no unnamed net, so this is
+  KiCad's documented convention plus this module's own unit assertion, **not**
+  a measurement.) A net id carrying no name — the pre-6 ``(net 3)`` form — is
+  refused by name rather than read as a net called ``"3"``: this reader targets
+  the KiCad ≥ 6 forms ``(net "NAME")`` and ``(net N "NAME")``.
 * **The board is explicit.** KiCad 10 ids copper layers 0 (F.Cu), 2 (B.Cu),
   4, 6 … (inner); units are mm with y pointing down. A pad's ``at`` is its
   position in the **footprint's unrotated frame** with its **absolute**
@@ -47,7 +59,13 @@ claim that the two formats agree. Coordinates become mil, y up.
 **What is refused, by name** (:class:`KicadFormatError`, which the CLI turns
 into exit 2): a hierarchical schematic (``sheet``) and buses — this is the
 minimum closed loop, and a reader that silently skipped a sub-sheet would hand
-the rules a netlist with parts missing, which reads as a clean board.
+the rules a netlist with parts missing, which reads as a clean board. A
+**malformed** entity is refused the same way, never with a ``TypeError`` or an
+``IndexError``: a geometry element missing its ``start``/``end``/``mid``/
+``center``/``at``, a coordinate that is not a number, a wire point, junction or
+label without coordinates, a symbol placed but absent from ``lib_symbols``, an
+unbalanced S-expression. Every boundary branch of this reader ends in this
+class or in ``None``.
 """
 
 from __future__ import annotations
@@ -195,6 +213,63 @@ def _num(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _need(node: list, head: str, what: str) -> list:
+    """``node``'s ``head`` child, or a :class:`KicadFormatError` naming it.
+
+    The named-helper half of this reader's one law: a boundary branch ends in
+    :class:`KicadFormatError` (or ``None``), never in the ``TypeError`` /
+    ``IndexError`` that ``_first(...)[1]`` raises on a malformed file.
+    """
+    child = _first(node, head)
+    if child is None:
+        raise KicadFormatError(f"{what}: no {head!r}")
+    return child
+
+
+def _strict_num(value: Any, what: str, head: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise KicadFormatError(f"{what}: {head!r} is not a number: {value!r}") from None
+
+
+def _coord(node: list, head: str, what: str) -> tuple[float, float]:
+    """Two required numbers under ``head``; a missing or bad one refuses."""
+    child = _need(node, head, what)
+    if len(child) < 3:
+        raise KicadFormatError(f"{what}: {head!r} needs two numbers, got {child!r}")
+    return _strict_num(child[1], what, head), _strict_num(child[2], what, head)
+
+
+def _xy_of(item: list, what: str) -> tuple[float, float]:
+    """The two numbers of an ``(xy X Y)`` node itself (not a node that has one)."""
+    if len(item) < 3:
+        raise KicadFormatError(f"{what}: (xy) needs two numbers, got {item!r}")
+    return _strict_num(item[1], what, "xy"), _strict_num(item[2], what, "xy")
+
+
+def _opt_coord(node: list, head: str, what: str) -> tuple[float, float]:
+    """Like :func:`_coord`, but an absent ``head`` is ``(0, 0)`` rather than an error."""
+    child = _first(node, head)
+    if child is None:
+        return (0.0, 0.0)
+    if len(child) < 3:
+        raise KicadFormatError(f"{what}: {head!r} needs two numbers, got {child!r}")
+    return _strict_num(child[1], what, head), _strict_num(child[2], what, head)
+
+
+def _num_arg(node: list, head: str, what: str, default: float = 0.0) -> float:
+    """``head``'s first argument as a number.
+
+    Absent → ``default`` (the field is optional); present but unreadable → a
+    :class:`KicadFormatError` (a bad number must not read as zero quietly).
+    """
+    child = _first(node, head)
+    if child is None or len(child) < 2:
+        return default
+    return _strict_num(child[1], what, head)
+
+
 def _yes(node: list | None, head: str, default: bool) -> bool:
     value = _arg(node, head)
     if value is None:
@@ -309,7 +384,9 @@ class _Placed:
 
 def _lib_symbols(tree: list) -> dict[str, list]:
     lib = _first(tree, "lib_symbols")
-    return {str(s[1]): s for s in _kids(lib, "symbol")} if lib is not None else {}
+    if lib is None:
+        return {}
+    return {str(s[1]) if len(s) > 1 else "": s for s in _kids(lib, "symbol")}
 
 
 def _resolve(name: str, lib: dict[str, list], seen: tuple[str, ...] = ()) -> list:
@@ -329,19 +406,20 @@ def _resolve(name: str, lib: dict[str, list], seen: tuple[str, ...] = ()) -> lis
     ]
 
 
-def _lib_pins(sym: list) -> list[_LibPin]:
+def _lib_pins(sym: list, what: str) -> list[_LibPin]:
     pins: list[_LibPin] = []
     for unit in _kids(sym, "symbol"):
-        match = re.search(r"_(\d+)_(\d+)$", str(unit[1]))
+        unit_name = str(unit[1]) if len(unit) > 1 else ""
+        match = re.search(r"_(\d+)_(\d+)$", unit_name)
         unit_no, style = (int(match.group(1)), int(match.group(2))) if match else (0, 0)
         for pin in _kids(unit, "pin"):
-            at = _first(pin, "at") or [None, 0, 0]
+            x, y = _opt_coord(pin, "at", f"{what}: pin {_arg(pin, 'number', default='')}")
             name = str(_arg(pin, "name", default=""))
             pins.append(_LibPin(
                 number=str(_arg(pin, "number", default="")),
                 name="" if name == "~" else name,
                 etype=str(pin[1]) if len(pin) > 1 and not isinstance(pin[1], list) else "",
-                x=_num(at[1]), y=_num(at[2]), unit=unit_no, style=style,
+                x=x, y=y, unit=unit_no, style=style,
             ))
     return pins
 
@@ -426,9 +504,10 @@ def schematic_connectivity(path: str | Path) -> SchematicConnectivity:
     for sym in _kids(tree, "symbol"):
         lib_id = str(_arg(sym, "lib_id", default=""))
         resolved = _resolve(lib_id, lib)
-        at = _first(sym, "at") or [None, 0, 0, 0]
-        origin = (_num(at[1]), _num(at[2]))
-        rot = _num(at[3]) if len(at) > 3 else 0.0
+        what = f"{path.name}: symbol {lib_id!r}"
+        at = _first(sym, "at")
+        origin = _opt_coord(sym, "at", what)
+        rot = _strict_num(at[3], what, "at") if at is not None and len(at) > 3 else 0.0
         mirror = str(_arg(sym, "mirror", default=""))
         unit = int(_num(_arg(sym, "unit", default=1), 1))
         style = int(_num(_arg(sym, "body_style", default=_arg(sym, "convert", default=1)), 1))
@@ -440,7 +519,7 @@ def schematic_connectivity(path: str | Path) -> SchematicConnectivity:
             props=props,
             is_power=_first(resolved, "power") is not None,
         )
-        for pin in _lib_pins(resolved):
+        for pin in _lib_pins(resolved, what):
             if pin.unit not in (0, unit) or pin.style not in (0, style):
                 continue
             item.pins.append((pin, _sheet_point(origin, rot, mirror, pin.x, pin.y)))
@@ -448,16 +527,23 @@ def schematic_connectivity(path: str | Path) -> SchematicConnectivity:
 
     wires = []
     for w in _kids(tree, "wire"):
-        pts = [(_num(p[1]), _num(p[2])) for p in _kids(_first(w, "pts") or [], "xy")]
+        pts = [_xy_of(p, f"{path.name}: wire") for p in _kids(_first(w, "pts") or [], "xy")]
         for a, b in zip(pts, pts[1:]):
             wires.append((a, b))
-    junctions = [(_num(_first(j, "at")[1]), _num(_first(j, "at")[2])) for j in _kids(tree, "junction") if _first(j, "at")]
+    junctions = [
+        _coord(j, "at", f"{path.name}: junction")
+        for j in _kids(tree, "junction")
+        if _first(j, "at") is not None
+    ]
     labels: list[tuple[str, str, tuple[float, float]]] = []
     for kind, scope in (("label", "local"), ("global_label", "global"), ("hierarchical_label", "local")):
         for lab in _kids(tree, kind):
-            at = _first(lab, "at")
-            if at is not None:
-                labels.append((scope, str(lab[1]), (_num(at[1]), _num(at[2]))))
+            if _first(lab, "at") is None:
+                continue
+            what = f"{path.name}: {kind}"
+            if len(lab) < 2 or isinstance(lab[1], list):
+                raise KicadFormatError(f"{what}: no name")
+            labels.append((scope, str(lab[1]), _coord(lab, "at", what)))
 
     uf = _UnionFind()
     for a, b in wires:
@@ -587,6 +673,13 @@ def read_kicad_schematic_model(path: str | Path) -> DesignModel:
             + " and ".join(f"{ref!r} ({seen[ref]} placements on the sheet)" for ref in sorted(refs))
             + " are not in this netlist",
         )
+    # `danglingTees` — wire ends parked on another wire's interior with no
+    # junction — rides in `raw` **only**, on purpose: the report's model section
+    # is the counts and the nets, not `raw` (cli._model_counts_fields), so a
+    # caller that wants them reads `model.raw` here. It is disclosure-only
+    # because no rule consumes it yet; the geometric solve deliberately does not
+    # join such a T (KiCad's own tools put a junction on every real T), and
+    # inventing a connection is exactly what this reader refuses to do.
     model.raw = {
         "source": "kicad-schematic",
         "file": str(path),
@@ -656,11 +749,23 @@ def _mil(x_mm: float, y_mm: float) -> Point:
 
 
 def _net_name(node: list) -> str | None:
-    """``(net "GND")`` (KiCad 10) or ``(net 3 "GND")`` (earlier)."""
+    """``(net "GND")`` (KiCad 10) or ``(net 3 "GND")`` (KiCad 6–9).
+
+    A bare pre-6 ``(net 3)`` id carries no name, and this reader does not read
+    the top-level ``(net N "NAME")`` table those boards kept their names in —
+    so it is refused by name rather than handed to the rules as a net called
+    ``"3"`` (the capability matrix used to claim both forms were read; the
+    fixture ``kicad_min`` has no such id and cannot tell the two apart).
+    """
     child = _first(node, "net")
     if child is None or len(child) < 2:
         return None
     name = child[-1]
+    if isinstance(name, Atom):
+        raise KicadFormatError(
+            f"a bare (net {name}) id with no name: this reader targets KiCad 6+ "
+            '(net "NAME") / (net N "NAME"); upgrade the board (kicad-cli pcb upgrade)'
+        )
     return str(name) if str(name) else None
 
 
@@ -686,45 +791,48 @@ def _arc_points(start: tuple[float, float], mid: tuple[float, float], end: tuple
     return [(ux + r * math.cos(a1 + sweep * k / steps), uy + r * math.sin(a1 + sweep * k / steps)) for k in range(steps + 1)]
 
 
-def _pts(node: list | None) -> list[tuple[float, float]]:
+def _pts(node: list | None, what: str) -> list[tuple[float, float]]:
     out: list[tuple[float, float]] = []
     for item in (node or [])[1:]:
         if not isinstance(item, list) or not item:
             continue
         if item[0] == "xy":
-            out.append((_num(item[1]), _num(item[2])))
+            out.append(_xy_of(item, what))
         elif item[0] == "arc":
-            s, m, e = (_first(item, k) for k in ("start", "mid", "end"))
-            if s and m and e:
-                points = _arc_points((_num(s[1]), _num(s[2])), (_num(m[1]), _num(m[2])), (_num(e[1]), _num(e[2])))
-                out.extend(points if not out else points[1:])
+            s = _coord(item, "start", what)
+            m = _coord(item, "mid", what)
+            e = _coord(item, "end", what)
+            points = _arc_points(s, m, e)
+            out.extend(points if not out else points[1:])
     return out
 
 
-def _outline(tree: list) -> BoardOutline | None:
+def _outline(tree: list, name: str) -> BoardOutline | None:
     """The Edge.Cuts outline as one closed polygon, or ``None`` when it does not close."""
     segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
     for kind in ("gr_line", "gr_arc", "gr_rect", "gr_poly", "gr_circle"):
         for shape in _kids(tree, kind):
             if str(_arg(shape, "layer", default="")) != "Edge.Cuts":
                 continue
+            what = f"{name}: {kind} on Edge.Cuts"
             if kind == "gr_rect":
-                (x0, y0), (x1, y1) = ((_num(_first(shape, k)[1]), _num(_first(shape, k)[2])) for k in ("start", "end"))
+                (x0, y0), (x1, y1) = (_coord(shape, k, what) for k in ("start", "end"))
                 return BoardOutline(points=[_mil(x0, y0), _mil(x1, y0), _mil(x1, y1), _mil(x0, y1)])
             if kind == "gr_poly":
-                pts = _pts(_first(shape, "pts"))
+                pts = _pts(_first(shape, "pts"), what)
                 if len(pts) >= 3:
                     return BoardOutline(points=[_mil(*p) for p in pts])
                 continue
             if kind == "gr_circle":
-                c, e = _first(shape, "center"), _first(shape, "end")
-                cx, cy, r = _num(c[1]), _num(c[2]), math.hypot(_num(e[1]) - _num(c[1]), _num(e[2]) - _num(c[2]))
+                (cx, cy), (ex, ey) = (_coord(shape, k, what) for k in ("center", "end"))
+                r = math.hypot(ex - cx, ey - cy)
                 return BoardOutline(points=[_mil(cx + r * math.cos(2 * math.pi * k / 72), cy + r * math.sin(2 * math.pi * k / 72)) for k in range(72)])
-            s, e = _first(shape, "start"), _first(shape, "end")
-            a, b = (_num(s[1]), _num(s[2])), (_num(e[1]), _num(e[2]))
-            if kind == "gr_arc" and _first(shape, "mid"):
-                m = _first(shape, "mid")
-                pts = _arc_points(a, (_num(m[1]), _num(m[2])), b)
+            a = _coord(shape, "start", what)
+            b = _coord(shape, "end", what)
+            if kind == "gr_arc":
+                # An arc is always stored as start/mid/end; one without `mid` is
+                # malformed, not a straight line — refuse rather than draw a chord.
+                pts = _arc_points(a, _coord(shape, "mid", what), b)
                 segments += list(zip(pts, pts[1:]))
             else:
                 segments.append((a, b))
@@ -760,12 +868,14 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
     if not tree or tree[0] != "kicad_pcb":
         raise KicadFormatError(f"{path.name}: not a kicad_pcb document")
     layers = _read_layers(tree)
+    name = path.name
     components: list[ComponentPlacement] = []
     pads: list[PadGeometry] = []
     for fp in _kids(tree, "footprint"):
-        at = _first(fp, "at") or [None, 0, 0]
-        fx, fy = _num(at[1]), _num(at[2])
-        rot = _num(at[3]) if len(at) > 3 else 0.0
+        what = f"{name}: footprint"
+        at = _first(fp, "at")
+        fx, fy = _opt_coord(fp, "at", what)
+        rot = _strict_num(at[3], what, "at") if at is not None and len(at) > 3 else 0.0
         side = layers.by_name.get(str(_arg(fp, "layer", default="F.Cu")))
         props = _properties(fp)
         ref = props.get("Reference", "")
@@ -779,12 +889,13 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
         ))
         r = math.radians(rot)
         for pad in _kids(fp, "pad"):
-            pat = _first(pad, "at") or [None, 0, 0]
-            lx, ly = _num(pat[1]), _num(pat[2])
-            angle = _num(pat[3]) if len(pat) > 3 else 0.0
+            what = f"{name}: footprint {ref or lib_id} pad {_arg(pad, 'number', default='')}"
+            pat = _first(pad, "at")
+            lx, ly = _opt_coord(pad, "at", what)
+            angle = _strict_num(pat[3], what, "at") if pat is not None and len(pat) > 3 else 0.0
             ax = fx + lx * math.cos(r) + ly * math.sin(r)
             ay = fy - lx * math.sin(r) + ly * math.cos(r)
-            size = _first(pad, "size") or [None, 0, 0]
+            sw, sh = _coord(pad, "size", what)
             kind = str(pad[2]) if len(pad) > 2 else ""
             shape = str(pad[3]) if len(pad) > 3 else ""
             layer_names = [str(v) for v in (_first(pad, "layers") or [])[1:]]
@@ -810,7 +921,7 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
                 effective_layer_ids=copper,
                 x=point.x, y=point.y,
                 local_x=lx * MM_TO_MIL, local_y=-ly * MM_TO_MIL,
-                width=_num(size[1]) * MM_TO_MIL, height=_num(size[2]) * MM_TO_MIL,
+                width=sw * MM_TO_MIL, height=sh * MM_TO_MIL,
                 shape=_PAD_SHAPES.get(shape, shape.upper()),
                 angle=angle,
                 hole_diameter=hole_d, hole_width=hole_w, hole_height=hole_h, hole_type=hole_type,
@@ -818,25 +929,28 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
             ))
     tracks: list[TrackSegment] = []
     for seg in _kids(tree, "segment"):
-        s, e = _first(seg, "start"), _first(seg, "end")
+        what = f"{name}: segment"
+        a = _coord(seg, "start", what)
+        b = _coord(seg, "end", what)
         tracks.append(TrackSegment(
             id=str(_arg(seg, "uuid", default="")), net=_net_name(seg),
             layer_id=layers.by_name.get(str(_arg(seg, "layer", default=""))),
-            start=_mil(_num(s[1]), _num(s[2])), end=_mil(_num(e[1]), _num(e[2])),
-            width=_num(_arg(seg, "width")) * MM_TO_MIL,
+            start=_mil(*a), end=_mil(*b),
+            width=_num_arg(seg, "width", what) * MM_TO_MIL,
         ))
     for arc in _kids(tree, "arc"):
-        s, m, e = (_first(arc, k) for k in ("start", "mid", "end"))
-        pts = _arc_points((_num(s[1]), _num(s[2])), (_num(m[1]), _num(m[2])), (_num(e[1]), _num(e[2])))
+        what = f"{name}: arc"
+        pts = _arc_points(_coord(arc, "start", what), _coord(arc, "mid", what), _coord(arc, "end", what))
         for i, (a, b) in enumerate(zip(pts, pts[1:])):
             tracks.append(TrackSegment(
                 id=f"{_arg(arc, 'uuid', default='')}#{i}", net=_net_name(arc),
                 layer_id=layers.by_name.get(str(_arg(arc, "layer", default=""))),
-                start=_mil(*a), end=_mil(*b), width=_num(_arg(arc, "width")) * MM_TO_MIL,
+                start=_mil(*a), end=_mil(*b), width=_num_arg(arc, "width", what) * MM_TO_MIL,
             ))
     vias: list[ViaGeometry] = []
     for via in _kids(tree, "via"):
-        at = _first(via, "at")
+        what = f"{name}: via"
+        at = _coord(via, "at", what)
         names = [str(v) for v in (_first(via, "layers") or [])[1:]]
         span = _copper_of(names, layers)
         # A through via spans every copper layer; a blind/buried one states its
@@ -848,11 +962,11 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
             unused = [lid for k, lid in enumerate(ids) if k < lo or k > hi]
         else:
             unused = []
-        point = _mil(_num(at[1]), _num(at[2]))
+        point = _mil(*at)
         vias.append(ViaGeometry(
             id=str(_arg(via, "uuid", default="")), net=_net_name(via), x=point.x, y=point.y,
-            hole_diameter=_num(_arg(via, "drill")) * MM_TO_MIL,
-            via_diameter=_num(_arg(via, "size")) * MM_TO_MIL,
+            hole_diameter=_num_arg(via, "drill", what) * MM_TO_MIL,
+            via_diameter=_num_arg(via, "size", what) * MM_TO_MIL,
             via_type=next((str(v) for v in via[1:] if str(v) in ("blind", "micro")), ""),
             unused_inner_layers=unused,
         ))
@@ -863,19 +977,19 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
         uid = str(_arg(zone, "uuid", default=""))
         net = _net_name(zone)
         zone_layers = [str(v) for v in (_first(zone, "layers") or _first(zone, "layer") or [])[1:]]
-        outline = [_mil(*p) for p in _pts(_first(_first(zone, "polygon"), "pts"))]
-        for name in zone_layers:
-            if name in layers.by_name and len(outline) >= 3:
-                pours.append(PourShape(id=uid, net=net, layer_id=layers.by_name[name], kind="pour", points=outline))
+        outline = [_mil(*p) for p in _pts(_first(_first(zone, "polygon"), "pts"), f"{name}: zone polygon")]
+        for layer_name in zone_layers:
+            if layer_name in layers.by_name and len(outline) >= 3:
+                pours.append(PourShape(id=uid, net=net, layer_id=layers.by_name[layer_name], kind="pour", points=outline))
         for filled in _kids(zone, "filled_polygon"):
             lid = layers.by_name.get(str(_arg(filled, "layer", default="")))
-            pts = [_mil(*p) for p in _pts(_first(filled, "pts"))]
+            pts = [_mil(*p) for p in _pts(_first(filled, "pts"), f"{name}: filled_polygon")]
             if lid is not None and len(pts) >= 3:
                 pours.append(PourShape(id=uid, net=net, layer_id=lid, kind="poured", points=pts, poured_from=uid))
     return BoardGeometry(
         source=str(path), name=path.stem, edit_version=str(_arg(tree, "version", default="")),
         layers=layers.infos, components=components, pads=pads, tracks=tracks, vias=vias,
-        pours=pours, outline=_outline(tree),
+        pours=pours, outline=_outline(tree, name),
     )
 
 
@@ -955,8 +1069,14 @@ def load_kicad(path: str | Path, *, view: str = "schematic") -> tuple[DesignMode
         board = read_kicad_board(pcb)
         return read_kicad_board_model(pcb, board), board
     if sch is None:
+        # `checkup` has no --view and always asks for the schematic
+        # (cli.CHECKUP_VIEW), so the old 「use --view pcb」 hint named a flag its
+        # caller does not have. The honest next action differs per caller, so
+        # the message names both: `review` can ask for the board's own netlist,
+        # `checkup` cannot and needs the schematic.
         raise KicadFormatError(
             f"{path.with_suffix('.kicad_sch').name}: no schematic next to {path.name}; "
-            "for the board's own netlist use --view pcb"
+            "this reader has no board-only view — `review <board> --view pcb` reads the "
+            "board's own netlist, while `checkup` (no --view) needs the schematic"
         )
     return read_kicad_schematic_model(sch), None

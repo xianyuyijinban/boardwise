@@ -2,11 +2,13 @@
 
 > 开发机**没有立创 EDA Pro**，下面五步一条都没跑过。本 PR 只交了实验 ①② 的**仪器**（`sys.probe {realm: true}`，只读，
 > 只执行 connector 里写死的常量代码），以及 ③④ 的步骤。任何一步结果是「不行」就停下，如实写进 `outputs/R4/evidence.md`。
-> 原始读数落 `outputs/R4/live/`。写操作只在 test 工程的窗口里做（R1：动手前先用 `doc.list` 对工程名）。
+> 原始读数落 `outputs/R4/live/`（**该目录不会自动存在**：`outputs/` 被 `.gitignore` 忽略，新检出的仓库同样没有；每条命令重定向前先 `mkdir -p`）。
+> 写操作只在 test 工程的窗口里做（R1：动手前先用 `doc.list` 对工程名）。
 
 ## 0. 前提
 
 ```bash
+mkdir -p outputs/R4/live      # 目录不存在则重定向在命令之前就失败，先建
 boardwise bridge status        # connector 必须是带 realm 模式的 bundle（本 PR 的构建）
 boardwise bridge call --action doc.list --params '{}' --project test > outputs/R4/live/00_doc_list.json
 ```

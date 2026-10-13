@@ -22,7 +22,8 @@
 
 ### 对拍结果（tests/test_r3_kicad.py）
 - **原理图**：几何求解得到的 (网名, 位号, 引脚) 多重集与 kicad-cli 网表**完全相等**，两颗 R3 都算在内。
-  夹具覆盖了 rot 0/90/180/270、mirror x/y、带结点的 T 型交点、挂在导线中段的标签、同名的多个电源符号、全局标签。
+  夹具覆盖了 rot 0/90/180/270、mirror x、带结点的 T 型交点、挂在导线中段的标签、同名的多个电源符号、全局标签。
+  **（fixB 更正：夹具里没有 `mirror y`——`kicad-cli sch upgrade` 把它归一化成 `(rot 270, mirror x)`；`mirror y` 分支只有一条合成单元断言，无对拍。详见能力矩阵 §1.1、§6。）**
 - **PCB**：16 个焊盘的绝对坐标与 pcbnew 一致（误差 < 1e-6 mil，实测最大 1.8e-12），网络、角度、铜层逐个相等；
   走线、过孔、铺铜层与网逐个相等；板框与 pcbnew 的边框 bbox 一致（扣除 0.05 mm 线宽）。底层封装（R1）的翻转变换也在其中。
 - **PCB 视图网表**与原理图网表相同。
@@ -33,7 +34,7 @@
 | `conn-duplicate-designators`（L1） | ERROR R3 | 两颗都叫 R3 |
 | `decap-required-caps`（L2） | WARN U1 2 脚只有 100nF，要求 ≥22µF | AMS1117 输出电容不足（货架事实 C6186） |
 | `shunt-sense-link`（L1） | INFO R4 两端没有 IC | 10mΩ 采样电阻没人读 |
-| `pcb-component-spacing`（距离类） | WARN C2 和 R3 相距 5.9 mil | KiCad 自己的 DRC 报的是同一处 0.15 mm（= 5.9 mil），两边一致 |
+| `pcb-component-spacing`（距离类） | WARN C2 和 R3 相距 5.9 mil | 生成器声明 C2/R3 间距 0.15 mm；boardwise 离线读数 = 5.9055 mil = 0.1500 mm（`outputs/R3/fixB-offline-readings.json`）。**「KiCad 自己的 DRC 报同一处 0.15 mm」这一半无产物、待验**（见能力矩阵 §6） |
 | `pcb-decap-distance`（距离类） | WARN C2 离 U1 567 mil | C2 放得远 |
 
 `checkup --file kicad_min.kicad_pro` 端到端跑通（退出码 1，生成 `report.json` / `board-report.md` 等）；`review` 的原理图视图和 PCB 视图都能读。

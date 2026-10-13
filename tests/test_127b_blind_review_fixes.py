@@ -219,7 +219,9 @@ def test_a_through_hole_pad_occupies_every_copper_layer(foc_project):
 def test_an_unresolved_pad_reports_no_effective_layer():
     """A hand-built pad says nothing rather than guessing.
 
-    ``effective_layer_ids`` is empty by default, and
+    ``effective_layer_ids`` is ``None`` by default (fixA: the sentinel is now
+    explicit — ``None`` = 「never parsed」, ``[]`` = 「measured: occupies no
+    copper layer」), and
     :meth:`PadGeometry.effective_layers` returns the empty set. The empty set is
     「this pad's physical layers were never established」, never 「this pad has no
     copper」 — the two are different, and a caller that treated the first as the

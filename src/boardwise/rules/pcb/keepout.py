@@ -56,7 +56,12 @@ its copper meets the eroded area:
 **What this rule cannot see** (said on every row it writes):
 
 * ``PLANE`` — inner electrical planes are not modelled; a ``PLANE`` keepout is
-  listed as not judged.
+  listed as not judged. A keepout whose vocabulary is **only** ``PLANE`` (or
+  empty) has no kind this rule judges at all; rather than pass over it in
+  silence it gets its own ``INFO`` row naming the type as unjudged, whenever the
+  area holds copper of a kind this rule *does* read (the same gate the
+  unknown-word row uses). Silence on a keepout the designer drew is the one
+  reading nobody can act on.
 * a poured island whose parent ``POUR`` is not in the file has no layer
   (``poured_orphans``); it cannot be placed on or off the keepout's layer and is
   counted, not judged.
@@ -64,7 +69,15 @@ its copper meets the eroded area:
   tested as drawn, which makes an exactly-touching element count.
 * a word outside the vocabulary: if the keepout's layer carries copper inside
   it, the row is an ``INFO`` that names the word and says it was not judged —
-  never a guess at what the word forbids.
+  never a guess at what the word forbids. When such a word sits **beside** words
+  that are in the vocabulary and a judged intrusion is found, the ``WARN`` row
+  says so too: the judged words are judged, the unknown one is not, and its
+  meaning is uncertain.
+* a missing / empty ``regionType`` is read as ``PROHIBIT`` — the record stated
+  no type, and skipping a keepout the designer may well have meant is the
+  dangerous direction (the editor's own ``CONSTRAINT`` areas are recognised by
+  their word, not by silence). Every row about such a region says the default
+  was applied, so the assumption is never invisible.
 
 **Severity.** A judged intrusion is ``WARN``: a keepout is the designer's own
 constraint, so an element inside it is a defect of the layout, not a style
@@ -406,6 +419,11 @@ class KeepoutViolation(PcbRule):
             + f"; {where}"
         )
         blind = []
+        if not region.region_type:
+            blind.append(
+                "the record states no regionType — read as PROHIBIT (the conservative default; "
+                "a CONSTRAINT area is recognised only by its own word)"
+            )
         if "PLANE" in words:
             blind.append("PLANE (内电层) is not modelled here — not judged")
         if orphans:
@@ -426,23 +444,41 @@ class KeepoutViolation(PcbRule):
                 f"禁布区 {region.name or region.id}（层 {region.layer_id}）内有 {len(intrusions)} 处它禁止的图元："
                 f"{listed}。本规则看不到：内电层、无父 POUR 的铺铜岛的层、元件本体外形。"
             )
+            evidence = [
+                identity,
+                *(f"intrudes: [{i.word}] {i.label}" + (f" @ {i.net}" if i.net else "") for i in intrusions),
+                *blind,
+            ]
+            if unknown:
+                # Known words were judged and found intruders; the unknown word
+                # beside them was not judged, and the row has to say so — how a
+                # reader counts "1 violation" depends on it.
+                message += (
+                    f"另：类型 {unknown} 不在宿主词表内，它禁止什么不确定，本规则不判这部分。"
+                )
+                evidence.append(f"unknown prohibitType words (meaning uncertain, not judged): {unknown}")
             return Finding(
                 rule_id=self.id,
                 severity="WARN",
                 level=self.level,
                 message=message,
-                evidence=[identity, *(f"intrudes: [{i.word}] {i.label}" + (f" @ {i.net}" if i.net else "") for i in intrusions), *blind],
+                evidence=evidence,
                 target=FindingTarget(
                     primitive_id=region.id,
                     component_ref=next((i.component for i in intrusions if i.component), ""),
                     net_refs=nets,
                 ),
             )
+        # Nothing in the vocabulary was judged: either the words are all PLANE
+        # (no inner-plane model here) or the record wrote no type at all. Both
+        # are disclosed rather than passed over in silence, on the same "only
+        # when there is copper inside to be silent about" gate the unknown-word
+        # row uses.
         if unknown:
-            copper = self._intrusions(board=ctx.board, region=region, area=area, words=sorted(PROHIBIT_WORDS - {"PLANE"}))[0]
-            if not copper:
+            inside = self._intrusions(board=ctx.board, region=region, area=area, words=sorted(PROHIBIT_WORDS - {"PLANE"}))[0]
+            if not inside:
                 return None
-            listed = "; ".join(f"{i.label}" + (f" net {i.net}" if i.net else "") for i in copper)
+            listed = "; ".join(f"{i.label}" + (f" net {i.net}" if i.net else "") for i in inside)
             return Finding(
                 rule_id=self.id,
                 severity="INFO",
@@ -451,7 +487,25 @@ class KeepoutViolation(PcbRule):
                     f"禁布区 {region.name or region.id}（层 {region.layer_id}）的类型 {unknown} 不在宿主词表内，"
                     f"它禁止什么不确定，不判；区内现有：{listed}"
                 ),
-                evidence=[identity, f"unknown prohibitType words: {unknown}", *(f"inside: {i.label}" for i in copper), *blind],
-                target=FindingTarget(primitive_id=region.id, net_refs=sorted({i.net for i in copper if i.net})),
+                evidence=[identity, f"unknown prohibitType words: {unknown}", *(f"inside: {i.label}" for i in inside), *blind],
+                target=FindingTarget(primitive_id=region.id, net_refs=sorted({i.net for i in inside if i.net})),
             )
-        return None
+        if set(words) - {"PLANE"}:
+            return None  # every word was judged, and nothing intruded
+        inside = self._intrusions(board=ctx.board, region=region, area=area, words=sorted(PROHIBIT_WORDS - {"PLANE"}))[0]
+        if not inside:
+            return None
+        listed = "; ".join(f"{i.label}" + (f" net {i.net}" if i.net else "") for i in inside)
+        not_judged = (
+            "只写了 PLANE（内电层），本规则不建模内电层，未判"
+            if words
+            else "未写任何类型（prohibitType 为空），它禁止什么在文件里没有说明，未判"
+        )
+        return Finding(
+            rule_id=self.id,
+            severity="INFO",
+            level=self.level,
+            message=f"禁布区 {region.name or region.id}（层 {region.layer_id}）{not_judged}；区内现有：{listed}",
+            evidence=[identity, f"prohibitType not judged: {not_judged}", *(f"inside: {i.label}" for i in inside), *blind],
+            target=FindingTarget(primitive_id=region.id, net_refs=sorted({i.net for i in inside if i.net})),
+        )

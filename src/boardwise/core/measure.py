@@ -399,8 +399,11 @@ def _comparable_layers(board: BoardGeometry, pad: PadGeometry) -> set[int]:
     """The layers two pads may be compared on — the parser's reading, or 125's.
 
     A pad the parser resolved speaks through
-    :attr:`PadGeometry.effective_layers`; a hand-built one (empty set) falls
-    back to :func:`_element_layers`, which is the pre-127b derivation.
+    :attr:`PadGeometry.effective_layer_ids` — including an **empty** reading,
+    which is 「no copper layer」 (a bare mechanical hole, R2-2 fixA) and not a
+    signal to guess; a pad nobody read (``effective_layer_ids is None`` — a
+    hand-built one) falls back to :func:`_element_layers`, which is the pre-127b
+    derivation.
 
     The one widening applied here is for a board with **no ``LAYER`` table at
     all** (a synthetic fixture, a minimal hand-built ``BoardGeometry``): there
@@ -703,42 +706,59 @@ def _element_layers(
 
     * **via** — every copper layer except ``unused_inner_layers``. This is
       the vertical barrel plus its annular rings.
-    * **pad** — :meth:`~boardwise.core.geometry.PadGeometry.effective_layers`,
+    * **pad** — :attr:`~boardwise.core.geometry.PadGeometry.effective_layer_ids`,
       i.e. what the parser established about where the copper physically is
-      (task 127b): all copper layers for a through-hole / Multi-Layer pad, and
-      the **placement's own face** for an SMD pad. The footprint's ``layer_id``
-      is *not* read when the parser has spoken — it names the part as the
-      library stores it, and on a part flipped to the bottom face it still says
-      ``1`` (measured: all 28 of PCB1's U4/U6/R17/C14 SMD pads say ``1`` while
-      their placement says ``2``), which is what manufactured six top-x-bottom
-      "touching" pairs on a board whose host DRC is clean. A pad the parser
-      never resolved (``effective_layer_ids`` empty — a hand-built board, a
-      synthetic fixture) **falls back to the pre-127b derivation**: all copper
-      layers if it has a hole, otherwise its own ``layer_id``. That fallback is
-      what keeps 125's own hand-built fixtures saying what they said, and it is
-      the conservative direction — it is the reading 127b proved wrong only for a
-      *flipped* pad, and a flipped pad is one the parser resolved.
+      (task 127b): all copper layers for a through-hole / Multi-Layer pad, the
+      **placement's own face** for an SMD pad, and **no layer at all** for a
+      bare mechanical hole (R2-2 fixA — its NPTH record left it a land no larger
+      than its hole). The footprint's ``layer_id`` is *not* read when the parser
+      has spoken — it names the part as the library stores it, and on a part
+      flipped to the bottom face it still says ``1`` (measured: all 28 of
+      PCB1's U4/U6/R17/C14 SMD pads say ``1`` while their placement says ``2``),
+      which is what manufactured six top-x-bottom "touching" pairs on a board
+      whose host DRC is clean.
+
+      **The parser's reading is keyed on ``None``, not on emptiness**: ``None``
+      is 「nobody has read this pad」 and falls back to the pre-127b derivation
+      below; ``[]`` is the reading 「this pad occupies no copper layer」 and is
+      returned as it stands. Reading the empty list as 「not read」 is what put
+      an NPTH's copper back on all four layers of a 4-layer board (R2-2 fixA).
+      A pad the parser never resolved (a hand-built board, a synthetic fixture)
+      **falls back to the pre-127b derivation**: all copper layers if it has a
+      hole unless its own ``plated`` says otherwise, otherwise its own
+      ``layer_id``. That fallback is what keeps 125's own hand-built fixtures
+      saying what they said, and it is the conservative direction — it is the
+      reading 127b proved wrong only for a *flipped* pad, and a flipped pad is
+      one the parser resolved.
     * **track / pour** — only its own ``layer_id``; the file states it and there
       is nothing to correct.
 
     Elements whose layer is missing land on the empty set and take
     part in nothing (the same "unclassifiable, never guessed" discipline as
     :func:`read_stackup`).
+
+    ``plated`` (``None`` = unstated) is the caller's override for the fallback
+    branch; when it is not given, a pad's **own** :attr:`PadGeometry.plated` is
+    read instead, so ``plated: false`` on a hand-built NPTH reaches this
+    function rather than being dropped on the way (R2-2 fixA).
     """
     copper = _copper_layer_ids(board)
     if via:
         unused = {int(v) for v in getattr(element, "unused_inner_layers", [])}
         return {lid for lid in copper if lid not in unused}
     if isinstance(element, PadGeometry):
-        resolved = element.effective_layers()
-        if resolved:
-            return resolved
+        resolved = element.effective_layer_ids
+        if resolved is not None:
+            # The parser read it. An empty reading is the answer 「no copper
+            # layer」 (a bare mechanical hole), not a signal to guess.
+            return set(resolved)
         # Never resolved by the parser — the pre-127b derivation, kept so a
         # hand-built pad keeps behaving the way 125's fixtures pin it.
         layer_id = element.layer_id
         if layer_id is None:
             return set()
-        if element.hole_diameter is not None and plated is not False:
+        flag = plated if plated is not None else element.plated
+        if element.hole_diameter is not None and flag is not False:
             return set(copper)
         return {layer_id}
     layer_id = getattr(element, "layer_id", None)

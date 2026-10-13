@@ -28,6 +28,8 @@ import functools
 import math
 import pathlib
 
+import pytest
+
 from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.presentationspec import PresentationSpec
 from boardwise.engines import drawapply, drawcompiler as dc, router
@@ -150,6 +152,12 @@ def test_a_leg_that_merely_ends_near_a_foreign_wire_is_not_a_crossing():
 
 @functools.cache
 def _landing_page():
+    if not PAGE_150.is_file():
+        pytest.skip(
+            f"缺本地产物 {PAGE_150.relative_to(ROOT).as_posix()}（未入库，"
+            ".gitignore 忽略 outputs/）：150 交付的落地页是未入库的真机产物，"
+            "生成见 outputs/150 或对应任务；产物在时本条按原断言真跑"
+        )
     result = dc.compile(
         CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json"),
         PresentationSpec.load(PAGE_150),

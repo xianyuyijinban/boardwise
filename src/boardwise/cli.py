@@ -2385,9 +2385,12 @@ def _load_model(
         return parse_enet(path), None
     if suffix in (".kicad_pro", ".kicad_sch", ".kicad_pcb"):
         # R3: a KiCad project. The schematic view reads the .kicad_sch, the pcb
-        # view the .kicad_pcb (with its geometry); a missing file, a
-        # hierarchical sheet or a bus is a KicadFormatError — a ValueError, so
-        # every caller already turns it into exit 2 with the reason.
+        # view the .kicad_pcb (with its geometry). Everything this reader cannot
+        # turn into a model honestly — a missing file, a hierarchical sheet, a
+        # bus, a malformed entity (a geometry element missing start/end/mid/
+        # center/at, an unnumeric coordinate, a bare pre-6 `(net N)` id) — is a
+        # KicadFormatError, a ValueError, so every caller already turns it into
+        # exit 2 with the reason rather than a traceback.
         from .parsers.kicad import load_kicad
 
         return load_kicad(path, view=view)

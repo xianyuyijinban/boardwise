@@ -36,6 +36,8 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPECS = ROOT / "blocklib" / "specs"
 PROBE = ROOT / "outputs" / "145c" / "probe_145c_C14663.json"
@@ -112,6 +114,12 @@ def test_c13_keeps_its_part_and_changes_only_its_symbol():
 
 def test_the_wide_profile_carries_the_measured_tips():
     """**新 profile 的脚尖等于探针读数**（读文件，不信 profile 自己的注）。"""
+    if not PROBE.is_file():
+        pytest.skip(
+            f"缺本地产物 {PROBE.relative_to(ROOT).as_posix()}（未入库，"
+            ".gitignore 忽略 outputs/）：145c 的真机探针读数是未入库产物，"
+            "生成见 outputs/145c 或任务 145c；产物在时本条按原断言真跑"
+        )
     book = _library()
     entry = _profile(book, WIDE_REF)
     measured = _probe_tips()

@@ -39,7 +39,7 @@ READ_ACTIONS = ("doc.list", "sch.geometry", "canvas.highlight")
 #: and reloads the editor page — it was filed risk=write and passed this gate
 #: with no consent while a blank pcb.doc.new was refused. The taxonomy now has
 #: a home for "outranks any document write", and the gate covers it identically.
-DANGEROUS_ACTIONS = ("sys.self_update",)
+DANGEROUS_ACTIONS = ("sys.self_update", "sys.set_document_source")
 
 
 # --------------------------------------------------------------------------

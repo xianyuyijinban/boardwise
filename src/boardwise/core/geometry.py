@@ -344,21 +344,32 @@ class PadGeometry:
     they were comparing lives on opposite faces of a 1.6 mm board.
 
     ``effective_layer_ids`` is the reading the rules and the clearance engine
-    use:
+    use — **a list of copper layer ids, or ``None`` when nobody has read the
+    pad** (R2-2 fixA):
 
     * a **through-hole** pad (one with a hole of any shape — :attr:`has_hole`),
       or any pad whose ``layer_id`` is :data:`MULTI_LAYER_ID`, occupies **every
       copper layer** — its barrel is continuous and its lands exist on both
       faces;
+    * a **non-plated** hole (:attr:`plated` ``False`` — an NPTH) is **no
+      barrel**: the pad occupies only the faces its land is on, and a hole whose
+      land is no larger than the hole itself (a bare mechanical hole) occupies
+      **no copper layer at all** — the empty list is then the physical answer;
     * an **SMD** pad occupies the face its **component** is on
       (``ComponentPlacement.layer_id``), falling back to the footprint's
       ``layer_id`` when the placement carries none.
 
-    It is written by the parser (which knows the placement and the document's
-    stackup) and is **empty by default**, so a hand-built pad falls back to the
-    previous behaviour rather than silently claiming an empty layer set. The
-    empty set is "this pad's physical layers were never established", never
-    "this pad has no copper".
+    **``None`` and ``[]`` are two different answers and are never conflated.**
+    The parser writes ``None`` when it cannot decide where the pad's copper is
+    (a placement with no face and no footprint layer to fall back on, a document
+    that names no copper layer at all); the list comes back empty only when the
+    reading itself is 「this pad occupies no copper layer」 (a bare mechanical
+    hole, a hole whose barrel is gone). A reader that treated ``[]`` as 「not
+    read」 would put an NPTH's copper back on every layer of the board — which
+    is exactly the placeholder R2-2 removed. A hand-built pad that never went
+    through the parser leaves the field at its ``None`` default and reads
+    through the previous behaviour (:func:`boardwise.core.measure._element_layers`'s
+    pre-127b fallback) rather than silently claiming an empty layer set.
 
     **The hole's shape (162b).** ``.epru`` writes a pad's hole as
     ``hole: {"holeType": ..., "width": ..., "height": ...}``, and two types
@@ -386,7 +397,9 @@ class PadGeometry:
 
     The barrel reading (:attr:`effective_layer_ids`, and the fallback in
     :func:`boardwise.core.measure._element_layers`) keys on :attr:`has_hole`,
-    so a **slot** pad is still a plated barrel spanning the copper stackup.
+    so a **slot** pad is still a plated barrel spanning the copper stackup —
+    unless its record says ``plated: false``, which makes it an NPTH whatever
+    the shape of its hole.
     """
 
     id: str
@@ -395,7 +408,12 @@ class PadGeometry:
     pin_number: str | None = None
     net: str | None = None
     layer_id: int | None = None
-    effective_layer_ids: list[int] = field(default_factory=list)
+    #: R2-2 fixA: the copper layers the parser read this pad onto. **``None``
+    #: means nobody has read it** (a hand-built pad, a pad the parser could not
+    #: place) and consumers fall back to :func:`boardwise.core.measure._element_layers`'s
+    #: pre-127b derivation; **``[]`` means the reading is 「no copper layer at
+    #: all」** (a bare mechanical hole). The two are never conflated.
+    effective_layer_ids: list[int] | None = None
     x: float = 0.0
     y: float = 0.0
     local_x: float = 0.0
@@ -417,9 +435,11 @@ class PadGeometry:
     #: R2-2: the footprint PAD record's ``plated`` (是否金属化孔壁) — ``True``,
     #: ``False`` (NPTH) or ``None`` when the record did not say. The parser's
     #: reading decides :attr:`effective_layer_ids` (an NPTH pad is no barrel);
-    #: the ``False`` default only matters for a hand-built pad, which never
-    #: reaches that reading (its effective layers stay empty).
-    plated: bool | None = False
+    #: for a pad the parser could **not** decide — a hand-built one, a
+    #: synthetic board — :func:`boardwise.core.measure._element_layers` reads
+    #: this field, so ``plated is False`` is no longer a stored-but-unread fact
+    #: (R2-2 fixA).
+    plated: bool | None = None
 
     @property
     def center(self) -> Point:
@@ -445,13 +465,16 @@ class PadGeometry:
     def effective_layers(self) -> set[int]:
         """The copper layers this pad physically occupies.
 
-        :attr:`effective_layer_ids` when the parser established it, otherwise
-        **the empty set** — the "never guessed" discipline the rest of
-        :mod:`boardwise.core.measure` follows for an unclassifiable element. A
-        caller that has not got a stackup (a synthetic board, an old file) gets
-        an absent answer and says so, rather than a plausible-looking one.
+        :attr:`effective_layer_ids` read as a set — the empty set for both
+        ``None`` (never read) and ``[]`` (read as 「no copper layer」). A caller
+        that must tell those two apart reads :attr:`effective_layer_ids`
+        itself: ``None`` is 「no reading」, ``[]`` is the reading 「no copper」.
+        Collapsing them here is right for a caller that only wants the layers;
+        a caller about to *fall back* to a derivation of its own (the
+        pre-127b one in :func:`boardwise.core.measure._element_layers`) must
+        not, or a bare mechanical hole becomes a barrel through every layer.
         """
-        return set(self.effective_layer_ids)
+        return set(self.effective_layer_ids or ())
 
 
 @dataclass

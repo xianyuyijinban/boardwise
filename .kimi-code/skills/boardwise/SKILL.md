@@ -24,6 +24,9 @@ boardwise doctor            # 10 项全绿（skip 不算红）= 装好了；退�
 ```
 
 - **只做审查（离线）**：不需要编辑器、不需要 daemon。给一个 `.epro2` 就能跑 `review`。
+  KiCad 工程也行（R3 起）：`.kicad_pro` / `.kicad_sch` / `.kicad_pcb` 直接喂
+  `review` / `checkup --file`，L1 规则与 PCB 几何判决同引擎；能力边界与待验清单见
+  `outputs/R3/capability-matrix.md`。
 - **要读/写活着的编辑器**：需要 daemon + 编辑器里的
   connector 扩展（`.eext`）。缺一不可，报错分别是 `daemon not reachable` / `NO_CONNECTOR`。
   **daemon 不用你手动起（157）**：任何需要桥的命令发现它不在，就自己 detached 拉起、
@@ -152,7 +155,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 | `ping` | daemon 活着吗 | daemon 自己答，`version` 是 daemon 版本；`bridge status` 就是它 |
 | `doc.list` | 焦点工程 + 所有页/板 + 多工程视图 | 非焦点工程只给 `brief`（无文档树）；无焦点文档时 `active: null` |
 | `document.current` | 活动文档/标签属于哪个工程 | 与 `doc.list` **不一致**是已知坑（坑 1） |
-| `sys.probe` | 宿主 API 面在位检查 | `params:{"checks":true}` 按生成的名单逐个 `typeof`；`{"checks":{...}}` 显式名单逐名覆盖；`{"call":"<动作>","params":{...}}` 调白名单内四个只读动作（025 批 1，绕坑 8 的加载期目录，probe 专用）；权威依据是**真机 probe**，不是类型包声明 |
+| `sys.probe` | 宿主 API 面在位检查 | `params:{"checks":true}` 按生成的名单逐个 `typeof`；`{"checks":{...}}` 显式名单逐名覆盖；`{"call":"<动作>","params":{...}}` 调白名单内四个只读动作（025 批 1，绕坑 8 的加载期目录，probe 专用）；`{"realm":true}` 跑内置常量探针测扩展 realm 能力（PR#82，参数不参与构造、无任意执行面）；权威依据是**真机 probe**，不是类型包声明 |
 | `doc.open` | 打开/切到某个 uuid 的文档 | `{uuid}`；只在**活动工程**内寻址，跨工程找不到（坑 1） |
 | `sch.readback` | 页内器件清单 | 键集合写死：**没有 value、没有 mpn**（坑 3） |
 | `sch.geometry` | 原始几何 + 实测页面 bbox | `{bboxIds}`；整页只读一次的坐标来源（打标/定位用） |

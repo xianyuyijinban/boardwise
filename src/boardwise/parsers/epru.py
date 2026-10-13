@@ -1223,8 +1223,18 @@ def build_silk(
 
 def pad_effective_layers(
     template: PadTemplate, placement: ComponentPlacement, copper_layers: Sequence[int]
-) -> list[int]:
+) -> list[int] | None:
     """The copper layers one instantiated pad physically occupies (127b).
+
+    **Two different "nothing"s, and they are not the same answer (R2-2 fixA).**
+    ``None`` means **this reader could not decide** (case 3 below): nobody has
+    established where the pad's copper is, and a consumer must fall back to its
+    own derivation rather than read it as 「no copper」. ``[]`` means the reader
+    decided, and the decision is **「no copper layer at all」** (a bare
+    mechanical hole, case 0). Before fixA both came back as ``[]``, and
+    :func:`boardwise.core.measure._element_layers` read the empty list as
+    「not read」 — which put an NPTH's barrel back on every copper layer of the
+    board.
 
     **Why this is not ``template.layer_id``.** The footprint writes its own
     layer, and that value describes the part *as the library stores it* — a
@@ -1244,12 +1254,12 @@ def pad_effective_layers(
        the pad occupies only the faces its *land* is on, and only if the land is
        larger than the hole — a bare mechanical hole (land no larger than the
        hole on either axis) occupies **no** copper layer, and the empty list is
-       then the physical answer as well as the skip signal. The land's faces are
-       the outer copper layers (``1`` top, ``2`` bottom — the editor's fixed ids)
-       for a multi-layer pad, else the placement's face like an SMD pad. No
-       fixture carries an NPTH pad (every PAD says ``plated: true``), so this
-       case is pinned on an injected copy (``tests/test_r2_2_plated.py``), and a
-       pad whose record says nothing (``plated is None``) stays a barrel.
+       then the physical answer. The land's faces are the outer copper layers
+       (``1`` top, ``2`` bottom — the editor's fixed ids) for a multi-layer pad,
+       else the placement's face like an SMD pad. No fixture carries an NPTH pad
+       (every PAD says ``plated: true``), so this case is pinned on an injected
+       copy (``tests/test_r2_2_plated.py``), and a pad whose record says nothing
+       (``plated is None``) stays a barrel.
     1. **a barrel** — the pad has a hole, or its ``layer_id`` is
        :data:`~boardwise.core.geometry.MULTI_LAYER_ID`: every copper layer.
        The plated barrel is continuous through the board and its lands exist on
@@ -1258,8 +1268,10 @@ def pad_effective_layers(
        footprint's own layer (a placement with no ``layerId`` is old-file or
        synthetic, and refusing to answer would drop every pad off a board that
        is perfectly readable).
-    3. **neither resolvable** — the empty list, which every consumer reads as
-       "unclassifiable" and skips rather than guessing a layer.
+    3. **nothing to read** — ``None``: the pad's face is not stated anywhere, or
+       the document names no copper layer for a barrel to span. The reading is
+       「this reader has nothing to say」, and every consumer falls back to its
+       own derivation — never 「no copper」.
 
     ``copper_layers`` is the document's own copper set (from
     :class:`~boardwise.core.geometry.StackupEntry`, falling back to the ``LAYER``
@@ -1273,10 +1285,10 @@ def pad_effective_layers(
     if template.has_hole and template.plated is False:
         return _npth_land_layers(template, placement, copper)
     if template.has_hole or template.layer_id == MULTI_LAYER_ID:
-        return copper
+        return copper or None
     face = placement.layer_id if placement.layer_id is not None else template.layer_id
     if face is None:
-        return []
+        return None
     return [int(face)]
 
 
@@ -1287,13 +1299,17 @@ _OUTER_COPPER = (1, 2)
 
 def _npth_land_layers(
     template: PadTemplate, placement: ComponentPlacement, copper: list[int]
-) -> list[int]:
+) -> list[int] | None:
     """Faces an NPTH pad's land occupies — case 0 of :func:`pad_effective_layers`.
 
     The land exists only where the pad is larger than the hole. Extents are
     compared as long/short axes (a slot's ``hole.width`` is its long axis, and
     the pad's long axis may be its ``height``), so a land counts when it is
     larger than the hole along either axis.
+
+    ``[]`` is the reading 「no copper layer」 (the bare hole); ``None`` is
+    「nothing to read」 (no face stated, or a document that names no copper) —
+    the same two answers :func:`pad_effective_layers` documents.
     """
     hole = sorted(
         value for value in (template.hole_width, template.hole_height, template.hole_diameter)
@@ -1306,9 +1322,9 @@ def _npth_land_layers(
     if land_long <= hole_long + 1e-6 and land_short <= hole_short + 1e-6:
         return []  # a bare mechanical hole: no copper on any layer
     if template.layer_id == MULTI_LAYER_ID:
-        return [layer for layer in _OUTER_COPPER if layer in copper]
+        return [layer for layer in _OUTER_COPPER if layer in copper] or None
     face = placement.layer_id if placement.layer_id is not None else template.layer_id
-    return [] if face is None else [int(face)]
+    return None if face is None else [int(face)]
 
 
 def build_pads(
@@ -1324,7 +1340,11 @@ def build_pads(
     ``layer_id`` on the result stays **the footprint's own value** (125's
     contract, and 125's tests pin it); ``effective_layer_ids`` carries the
     physical reading from :func:`pad_effective_layers`, which is the one every
-    rule and the clearance engine uses.
+    rule and the clearance engine uses — a list of layers, ``[]`` when the
+    reading is 「no copper layer」 (a bare mechanical hole, R2-2 fixA), or
+    ``None`` when this reader had nothing to say about the pad (which the
+    consumers read as 「fall back to your own derivation」, never as 「no
+    copper」).
     """
     pads: list[PadGeometry] = []
     for comp in placements:
