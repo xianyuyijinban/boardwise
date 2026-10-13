@@ -67,3 +67,141 @@
 3. `pageUuid` 必填是我按「PCB 写不许无守卫」定的，与 `sch.place_component`（可省略）不对称；若主代理要对称，改一行。
 4. 参数名沿用 `pageUuid`（= PCB 文档 uuid，与 `pcb.delete_primitives` / `pcb.modify_primitive` 同名同守卫），
    没有用任务书建议的 `boardUuid`：同一条放-删链路两个名字会让调用方写错。
+
+---
+
+# R1 真机半（2026-10-13 18:20–18:35，有编辑器的机器）
+
+环境：宿主 **3.2.186**，内建 connector **0.5.12**（`sys.probe` 自报）。`bridge status` 两窗口：
+`test`（inst-102017400-798az89f，0.5.12）与 `毕设FOC驱动板`（inst-030312986-lgpmdd69，0.4.29）。
+**只对 test 路由**，另一窗口零路由（只在 status 里被读到过名字）。原始读数全在 `live/`。
+
+## 意外 0：首轮 `--project test` 路由不通，根因是**驻留 daemon 陈旧**（已按环境约定处置）
+
+1. 第一次照抄 §0 的两条命令：`bridge status` 报 daemon 已在跑，但 test 窗口列为 `(no project)`；
+   `doc.list --project test` 回 `PROJECT_NOT_CONNECTED`（`live/00_doc_list.err` 记录了原话，00_doc_list.json 为空）。
+2. 用 `--instance inst-102017400-798az89f` 一问，doc.list **能**拿到完整工程（`projects[0]` name `/test`、
+   friendlyName `test`、focused true）——因此不是"读不到工程"，是 hello 期的工程名读空了
+   （`IDENTITY_DEADLINE_MS=1500ms`）。**这一问本身把窗口的 context 刷新了**（daemon 按每帧 context
+   跟随后续变化），此后 `--project test` 直接可用。
+3. 但真正卡住 R1-1 的是第二件事：`pcb.place_component` 回 **`UNKNOWN_ACTION`**（存 `live/13a_place_unknown_action.json`）。
+   现码的 `bridge --help` 明明列出该动作（`protocol.py:963`），而端口 61190 的 LISTENING 进程
+   PID 38796 起于 **08:39**（0.5.12 代码落地之前）——daemon 的 ACTIONS 是加载期常量，动作没入册。
+   按环境约定 kill 掉驻留 daemon（`Stop-Process`），下一条命令自动拉起新的；两窗口约 5 s 内自行重连，
+   这次 test 窗口的 hello **带上了工程名**（status 只剩 `test` / `毕设FOC驱动板` 两个有名窗口）。
+4. 重连后 §0 重跑通过。**这是 runbook 之外的环境事故，不是代码缺陷**；`live/` 里保留了失败读数。
+
+## §0 身份核验（过）
+
+- `00_doc_list.json`（重跑版）：`projects[]` 唯一项 `focused: true`，`name "/test"` / `friendlyName "test"`；
+  daemon 取 friendlyName → `bridge status` 打印 **`test`**，与任务书逐字一致。
+- `PCB1` = `5dc38976c1fa45ce`；`01_pcb_readback.json`：`componentCount: 0`（**空板**，R1 通过）。
+
+## R1-1 `pcb.place_component`：放 → 读 → 量 → 删（过）
+
+| 读数 | 文件 | 结果 |
+|---|---|---|
+| 宿主有没有这三条调用 | `12_probe.json` | `pcb_PrimitiveComponent` present，`create`/`getAllPrimitiveId`/`delete`/`getAll` **全 function**，`create` arity 6 |
+| 放置 | `13_place.json` | `uuid 18994061da7286d2`，`appeared` **恰好一个且等于 uuid**；`elapsedMs 973` |
+| 坐标 | 同上 | `requested {x0,y0,rot0,layer "top"}` 与 `placed {x0,y0,rot0,layer 1,designator "R1"}` 逐项相同 → **宿主没有吸附**，`layer` 回读 1（TOP） |
+| 读回 | `14_readback.json` | `componentCount 1`；器件在位号 `R1`、`SupplierId C25804`、两个焊盘（Pad 1/2，±29.7） |
+| 量盒 | `15_bbox.json` | 器件盒 `[-57.531,-29.008, 57.531,29.008]`、ATTR 盒 `[-57.531,34.008, -16.531,79.008]`，两个都有限；`meta.measured 2/2` |
+| 删除 | `16_delete.json` | `deleted: ["18994061da7286d2"]`，`notFound`/`failed` 空 |
+| 复原 | `17_after.json` | `componentCount 0` |
+
+**偏差（runbook 的 14 拿不到 ATTR id）**：`pcb.readback` 的 primitive 子集只有 pads/tracks/vias，
+`14_readback.json` 里**没有位号 ATTR 图元**，所以 runbook 第 4 步"从 14 里找 `$ATTR`"照抄跑不通。
+补一发 `14b_pcb_source.json`（`sys.get_document_source` 读 PCB1 全文，29725 字符），从记录流里取
+`{"type":"ATTR",...,"key":"Designator","value":"R1"}` 的 **id `18994061da7286d2e16`**（parentId = 器件 uuid，
+layerId 3，fontSize 45）——与 `src/boardwise/cli.py:_designator_attr_ids` 同一口径，checkup 的实测丝印
+走的就是这条路，所以量的是同一条盒，没有引入第二套口径。
+
+## R2-3 丝印实测（插在放件与删件之间）
+
+见 `outputs/R2/evidence.md` §R2-3 与 `outputs/R2/live/checkup_silk/`。一句话：**字宽来源是实测，
+不是估算**（finding 原文：`文字宽度：实测（宿主 primitive bbox） 1 个、估算值（字宽比带，非读数） 0 个`），
+就是本 R1-1 放下的这颗 0603 的位号。
+
+## R1-2 `sys.get_document_source` 带身份（过）
+
+| 焦点 | 文件 | 读数 |
+|---|---|---|
+| 原理图页 P1 (`b4298962367251c8`) | `21_source.json` / `22_doc_list.json` | `uuid b4298962367251c8` / `name "P1"` / `type "page"`，与 22 里 `active: true` 行的三项**逐字相同**；**无 `notes` 键** |
+| PCB1 (`5dc38976c1fa45ce`) | `23_source_pcb.json` / `24_doc_list.json` | `uuid 5dc38976c1fa45ce` / `name "PCB1"` / `type "pcb"`，与活动行逐字相同；无 `notes` |
+
+两份里都只有原有的 `note`（截断说明），不是身份降级的 `notes`。
+
+## R1-3 `sys.set_document_source` 改名侦察（过；**写通行，改名不通**）
+
+`31_scratch.json` 建 scratch 页 → `pageUuid 82d8ac2229f026f0`，`focused: true`，
+`32_focus.json` 核到它就是活动页。
+
+**偏差（R3 停手点，已按纪律处理）**：`33_source.json` 全源 11121 字符里**没有 `R1-scratch`**——
+`sch.doc.new(name="R1-scratch")` 传的名字**宿主没用**，页面被自动命名 `P23`（`doc.list` 也报 `P23`）。
+runbook 的 `assert 'R1-scratch' in src` 因此会失败。**目标字段本身在场**：源里有一条
+`ATTR key="@Page Name" value="P23"`（ticket 14，id `0edaf7f80fecb4b1`），改名侦察要改的正是它，
+所以没有写回未改动的源，也没有自行换目标：把**该条**记录的 value 改成 `R1-renamed`（`34_diff.txt`
+证明只有这一行不同，11121 → 11128 字符），其余字节不动。
+
+| 读数 | 文件 | 结果 |
+|---|---|---|
+| 写回 | `36_set_source.json` | `hostAnswer: true`，`readBack: "differs"`，`readBackChars 11128` |
+| `differs` 是什么 | `38_diff_vs_sent.txt` | **只有 DOCHEAD 一行不同**：宿主把 `client` 与 `updateTime`/`version` 重新戳了（`c6fccf7de…`→`12abe91ed…`，`1791887328998`→`1791887390968`），其余 33 行**逐字节相同**——正是 runbook 预告的"宿主重序列化" |
+| 文档现在持有那段文本吗 | `38_source_after.json` | `R1-renamed` 在、`P23` 不在；`chars 11128`；身份三项 `82d8ac2229f026f0 / "P23" / "page"` |
+| 页名变了吗 | `37_doc_list.json` | **没变**：该页仍叫 `P23`（documents[] 与 `projects[0].schematics[]` 里都是 `P23`） |
+| 收尾 | `39_delete.json` / `39b_doc_list.json` | `deleted: true`；doc.list 回到 4 份文档，scratch 页不在 |
+
+**判读**：`setDocumentSource` 这条宿主调用**存在且接受文本**（`hostAnswer true`，回读持有的就是我们写的那份
+文本——只差宿主自己重戳的头），写通路**通**。但**改 `ATTR key="@Page Name"` 不能改页名**：`doc.list`
+仍报 `P23`。也就是说 `doc.rename` 的 `NOT_SUPPORTED` **不能靠"改写源里的页名字段"这条路修**
+（至少不是页面上这条 ATTR）。`doc.rename` 的动作代码**一行未动**；本结论交主代理裁决。
+另记一笔：`sch.doc.new` 的 `name` 参数在 3.2.186 上**不生效**（宿主自命名 P23）——与 R1-3 无关，
+但是本机实测事实。
+
+## R1-4 Power 旗字形（过 → **与地旗同病**）
+
+| 读数 | 文件 | 结果 |
+|---|---|---|
+| 三颗旗落地 | `41_place_VIN5.json` / `41_place__5V.json` / `41_place_SEC_12V.json` | uuid 分别 `1fb29667083e1d96` / `4c9bcc7c90cc0125` / `991ff37d43ce423c`，都非空 |
+| 符号名（uuid 级，178b 读法） | `42_geometry.json` | 三颗的 `state.Symbol` **全是同一个** `{name "Power-5V", uuid 125152e45b373de7}`；落点 x = 0 / 200 / 400 |
+
+`VIN5` / `+5V` / `SEC_12V` 三个不同网络，画布上**同一个 `Power-5V` 字形**——与 178b/180 的地旗
+（`place_power(kind=Ground, net=X)` 恒落 `Ground-GND`）**同病**：宿主按 `kind` 挑符号，不按 `net`。
+
+库族对照（`43_power_family.json` 宽搜 + `43b_power_family_exact.json` 逐名精确比对）：
+
+- `lib.device.search(keyword="Power-")` 宽搜回 10 条**全是不相干的芯片**（L78M05ABDT-TR 等），
+  模糊匹配把 "Power" 当词根，**不能**用它证伪族的存在；
+- 逐名精确比对：`Ground-GND`、`Ground-PGND` 有同名器件（各 1 条精确命中）；`Power-5V`、`Power-VCC`
+  有同名器件；而 **`Power-VIN5` / `Power-+5V` / `Power-SEC_12V` 三条都没有同名器件**（精确名一条没有）。
+
+**按 runbook 判读表：同字形 → 结论 `与地旗同病`；代码不动**（任务书明示"结论我拿去裁决"）。
+附一条对裁决有用的事实：即便把 180 的按符号放置推广到 rail 旗，本机库里也只有 `Power-5V`/`Power-VCC`
+这类通用轨旗，**没有** `Power-VIN5`/`Power-+5V`/`Power-SEC_12V`，这三个 net 仍会落到回落分支。
+
+收尾：`44_delete_flags.json`（三颗旗 `deleted` 全中）→ `45_delete_page.json`（`deleted: true`）→
+`46_doc_list.json`（scratch 页不在）。
+
+## 终态复原（doc.list 探前/终态**逐字节同形**，其余项读数归零）
+
+| 项 | 探前 | 终态 | 证据 |
+|---|---|---|---|
+| doc.list 文档集 | 4 份（schematic1 / P1 / P22 / PCB1） | **同样 4 份，uuid 逐条相同** | `00_doc_list.json` vs `46_doc_list.json` |
+| PCB1 器件 | `componentCount 0` | **0** | `01_pcb_readback.json` vs `90_final_pcb_readback.json` |
+| PCB1 源 | （探前未单读此档；放置后是 29725 字符） | **27590 字符**，不含 `18994061da7286d2`、不含 `"value":"R1"`、不含任何 `key":"Designator"` 记录 | `14b_pcb_source.json`（放置态）→ `91_final_pcb_source.json` |
+| scratch 页 | 无 | **无**（两页都已删） | `39b_doc_list.json` / `46_doc_list.json` |
+
+写操作只落在 PCB1 与两张 scratch 页上，终态零残留。
+
+## 意外清单（与 runbook 预期不符的全部读数）
+
+1. **驻留 daemon 陈旧**（见上）：`pcb.place_component` 一度 `UNKNOWN_ACTION`；处置 = kill 重启。
+2. **hello 期工程名读空**：首轮 `--project test` 路由不通；任何一发经该窗口的调用都会把 context 刷新，
+   此后正常。runbook §0 没有这一步。
+3. **`pcb.readback` 不含位号 ATTR 图元**：runbook 第 4 步"从 14 里找 `$ATTR`"做不到（改用 PCB 源读）。
+4. **`sch.doc.new` 的 `name` 不生效**：建页得到的名字是宿主自命的 `P23`，不是 `R1-scratch`；R1-3 的
+   assert 因此失败（已按 R3 处理：改的是真正的页名字段，未写回未改动的源）。
+5. **`export.render` 在空 PCB 上 TIMEOUT**：`format=png, scope=page` 30 s 未 settle（`93_final_render.json`
+   是错误原文）；`export.screenshot` 回的是 **89 字节 1×1 PNG**（`92_final_screenshot.json`）——两者都
+   **不作为证据**，复原由 `90`/`91`/`46` 三份读数钉住。顺带记：`export.render` 的 `format` 收
+   `png|svg|pdf`（不吃 `image/png`）、`scope` 收 `page|selection|project`（不吃 `document`）。

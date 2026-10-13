@@ -29,3 +29,12 @@
 
 ## 过程记录
 第一版直接读了 `globalThis.crypto`，被源码守卫 `source-guard.test.mjs` 拦下（只有 `random.ts` 可以碰全局 crypto）。改为经由 `random.ts` 读取，没有绕过守卫。
+
+## 阶段一实验 ①②：realm 能力（主代理真机，2026-10-13，connector 0.5.12 / 宿主 3.2.186）
+
+原始读数 `live/realm_probe_0.5.12.json`。结论：**动态执行三通**——indirectEval / new Function /
+动态 import(data: URL) 各回哨兵值 42；fetch/WebSocket/Worker/Blob/URL/TextEncoder/indexedDB 在场。
+**缺口：`crypto.subtle` undefined**（`crypto` 本身在）——载荷验签不能用 WebCrypto，
+stub 设计需纯 JS 验签实现或换摘要+带外指纹方案。实验③热更通道本机同日双证
+（0.4.29→0.4.30、0.5.11→0.5.12 均六秒激活 verified）；④菜单点击免 reload 激活未测
+（需手工点菜单，留岳）。阶段二 stub 立不立项由岳定优先级——通道现状已可用。
