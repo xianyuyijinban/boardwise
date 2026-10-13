@@ -53,9 +53,18 @@ function component(id, { x, y, rotation = 0, layer = 1, designator = 'R1' }) {
  *
  * `create` is the knob: `'land'` stores the part and returns it, `'empty'`
  * answers `undefined` and stores nothing, `'throw'` rejects, `'hang-land'`
- * stores the part but never settles (the 006b shape: timed out *and* landed).
- * `board` seeds components already on the board; `enumerable: false` makes
- * `getAllPrimitiveId` unavailable.
+ * stores the part but never settles (the 006b shape: timed out *and* landed),
+ * `'hang-silent'` never settles and stores nothing (timed out, nothing on the
+ * board *at the moment of the readback*). `board` seeds components already on
+ * the board; `enumerable: false` makes `getAllPrimitiveId` unavailable.
+ *
+ * `getAllPrimitiveId` models the **hostile** host the PR #78 review warned
+ * about: the layer argument filters to that copper side, and the *unfiltered*
+ * call answers TOP only. The type package spells `getAllPrimitiveId(layer?,
+ * primitiveLock?)` and says nothing about what the unfiltered call covers, so a
+ * readback that only ever made the layer-blind call would report a `bottom`
+ * placement as "nothing landed" — which is exactly what these tests must make
+ * impossible.
  */
 function fakeEda({ create = 'land', focused = PCB, board = [], enumerable = true } = {}) {
   const calls = { create: [], lcsc: [], search: [], get: [] };
@@ -68,14 +77,20 @@ function fakeEda({ create = 'land', focused = PCB, board = [], enumerable = true
       const [, layer, x, y, rotation] = args;
       if (create === 'empty') return undefined;
       if (create === 'throw') throw new Error('library device has no footprint');
-      onBoard.set(id, { id, x, y });
+      if (create === 'hang-silent') return new Promise(() => {});
+      onBoard.set(id, { id, x, y, layer });
       const placed = component(id, { x, y, rotation, layer, designator: 'U?' });
       if (create === 'hang-land') return new Promise(() => {});
       return placed;
     },
   };
   if (enumerable) {
-    pcbComponent.getAllPrimitiveId = async () => [...onBoard.keys()];
+    pcbComponent.getAllPrimitiveId = async (layer) => {
+      const wanted = layer === undefined ? 1 : Number(layer);
+      return [...onBoard.values()]
+        .filter((part) => (part.layer ?? 1) === wanted)
+        .map((part) => part.id);
+    };
   }
   const eda = {
     dmt_Pcb: { getCurrentPcbInfo: async () => (focused ? { uuid: focused } : undefined) },
@@ -161,6 +176,12 @@ test('pcb.place_component puts a part on the bottom side and rejects any other s
   const data = await place(eda, { pageUuid: PCB, lcsc: 'C25804', x: 0, y: 0, layer: ' Bottom ' });
   assert.equal(calls.create[0][1], 2);
   assert.equal(data.requested.layer, 'bottom');
+  assert.deepEqual(
+    data.appeared,
+    ['cmp-new-1'],
+    'a bottom-side placement must be seen by the readback: the host in this fixture only '
+      + 'answers TOP for the layer-blind call, so a layer-blind diff would miss it',
+  );
 
   for (const layer of ['inner1', 3, '']) {
     const error = await refusal(place(eda, { pageUuid: PCB, lcsc: 'C25804', x: 0, y: 0, layer }));
@@ -218,6 +239,49 @@ test('a placement that timed out but landed says so, with the new id, and says d
   assert.equal(error.detail.landedAnyway, true);
   assert.deepEqual(error.detail.appeared, ['cmp-new-1']);
   assert.ok(onBoard.has('cmp-new-1'));
+});
+
+test('a bottom-side placement that timed out but landed is still read back', async () => {
+  // The readback must ask per copper side: this fixture's layer-blind call
+  // answers TOP only, so a diff that never passed `layer` would report
+  // `appeared: []` here and call a landed part "nothing landed".
+  const { eda } = fakeEda({ create: 'hang-land' });
+  const error = await refusal(place(eda, {
+    pageUuid: PCB, lcsc: 'C25804', x: 0, y: 0, layer: 'bottom', timeoutMs: 200,
+  }));
+  assert.equal(error.code, 'TIMEOUT');
+  assert.equal(error.detail.landedAnyway, true);
+  assert.deepEqual(error.detail.appeared, ['cmp-new-1']);
+  assert.match(error.message, /do NOT retry/);
+});
+
+test('a host that refuses the layer argument is still read through the unfiltered call', async () => {
+  // The union exists for this host: `getAllPrimitiveId` is declared with an
+  // optional layer, but "declared" is not "implemented". A side that throws
+  // contributes nothing, and the layer-blind call must still be made.
+  const { eda, onBoard } = fakeEda({ create: 'hang-land' });
+  eda.pcb_PrimitiveComponent.getAllPrimitiveId = async (layer) => {
+    if (layer !== undefined) throw new Error('layer filtering is not implemented');
+    return [...onBoard.keys()];
+  };
+  const error = await refusal(place(eda, { pageUuid: PCB, lcsc: 'C25804', x: 0, y: 0, timeoutMs: 200 }));
+  assert.equal(error.detail.landedAnyway, true);
+  assert.deepEqual(error.detail.appeared, ['cmp-new-1']);
+});
+
+
+test('a timeout whose readback saw nothing says "may have landed", not "nothing landed"', async () => {
+  // 006b's shape: the deadline fires on a call the host swallowed, and the part
+  // can still commit afterwards — so an empty diff taken right after is NOT
+  // proof that none landed (016 §4 protection 4: a timeout is unknown).
+  const { eda } = fakeEda({ create: 'hang-silent' });
+  const error = await refusal(place(eda, { pageUuid: PCB, lcsc: 'C25804', x: 0, y: 0, timeoutMs: 200 }));
+  assert.equal(error.code, 'TIMEOUT');
+  assert.match(error.message, /may\* have landed|may have landed/);
+  assert.match(error.message, /not there when the read ran/);
+  assert.doesNotMatch(error.message, /nothing landed/);
+  assert.equal(error.detail.landedAnyway, null, 'a timeout that read nothing is unknown, not a denial');
+  assert.deepEqual(error.detail.appeared, []);
 });
 
 test('a host that answers nothing is not a timeout, and nothing landed', async () => {

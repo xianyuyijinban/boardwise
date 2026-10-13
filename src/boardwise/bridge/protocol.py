@@ -410,6 +410,41 @@ ACTIONS: tuple[Action, ...] = (
         risk="read",
     ),
     Action(
+        name="sys.set_document_source",
+        summary=(
+            "**RECON ONLY, DANGEROUS**: rewrite the **active** document's source "
+            "text. The write half of the source channel (R1-3): 178b/179 measured "
+            "that the bridge could read a document's source but nothing could "
+            "write one, so whether `doc.rename`'s NOT_SUPPORTED on 3.2.186 is "
+            "repairable through the source was unmeasurable. Intended use is a "
+            "scratch page of the test project (create → rewrite → read back → "
+            "delete; outputs/R1/runbook.md §R1-3) — the discipline is the "
+            "caller's, because `setDocumentSource` replaces a whole document's "
+            "text in one call. `uuid` is required and must be the active "
+            "document (179's DOC_NOT_ACTIVE shape): the host call takes the text "
+            "and nothing else (declared arity 1), so it rewrites whatever is in "
+            "front. `risk=dangerous` puts it behind the create gate's choke "
+            "point — the daemon refuses it unless `params.confirm is True` and "
+            "strips the flag. A `true` is read back "
+            "(`readBack: identical|differs|unreadable`) rather than trusted; "
+            "anything but `true` is a failure naming the host's own answer."
+        ),
+        params=("source", "uuid", "confirm"),
+        returns=(
+            "{source, uuid, type, chars, hostAnswer: true, readBack, "
+            "readBackChars, notes?}"
+        ),
+        params_schema=(
+            "source: the whole document text as `sys.get_document_source` "
+            "returns it (required, non-empty — an empty string would be a "
+            "blanket erase); uuid: required, must be the active document's uuid "
+            "(from doc.list) or the call is refused with DOC_NOT_ACTIVE; "
+            "confirm: must be `true` — the daemon's dangerous-tier gate refuses "
+            "anything else and consumes the flag, so the connector never sees it"
+        ),
+        risk="dangerous",
+    ),
+    Action(
         name="sch.drc_check",
         summary=(
             "READ-ONLY: the schematic DRC, via sch_Drc.check(strict, "

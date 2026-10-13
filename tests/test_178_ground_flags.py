@@ -206,6 +206,12 @@ def test_each_family_hangs_its_own_flag_and_the_drawing_does_not_move():
     the book — rather than against a recorded hash, so a future layout change
     moves both sides together and this test keeps measuring its own subject.
     """
+    if not LANDING_PAGE.is_file():
+        pytest.skip(
+            f"缺本地产物 {LANDING_PAGE.relative_to(ROOT).as_posix()}（未入库，"
+            ".gitignore 忽略 outputs/）：150 交付的落地页是未入库的真机产物，"
+            "生成见 outputs/150 或对应任务；产物在时本条按原断言真跑"
+        )
     book = _book(FLYBACK_LIBRARY)
     circuit = CircuitSpec.load(FLYBACK)
     presentation = PresentationSpec.load(LANDING_PAGE)

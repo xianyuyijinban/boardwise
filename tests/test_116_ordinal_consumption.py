@@ -33,6 +33,7 @@ import json
 import math
 import pathlib
 import subprocess
+import sys
 
 import pytest
 
@@ -50,6 +51,15 @@ from boardwise.engines.grammar.base import (
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPECS = ROOT / "blocklib" / "specs"
+
+#: The interpreter the two subprocess probes below run under. The checkout's own
+#: ``.venv`` when it is there (the main tree, and the worktree that junctions it);
+#: otherwise the interpreter already running these tests, so a **fresh clone with
+#: no ``.venv``** still runs the probe instead of dying on
+#: ``FileNotFoundError [WinError 2]`` before it starts. Both are the same virtual
+#: environment when one is present, so nothing changes on a machine that has it.
+_VENV_PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
+PYTHON = str(_VENV_PYTHON) if _VENV_PYTHON.is_file() else sys.executable
 
 PROV = "engineer_confirmed"
 
@@ -580,8 +590,7 @@ def test_the_pass_moves_nothing_for_the_five_existing_grammars():
     的原点表。
     """
     probe = subprocess.run(
-        [str(ROOT / ".venv" / "Scripts" / "python.exe"),
-         str(ROOT / "tools" / "116_no_move.py")],
+        [PYTHON, str(ROOT / "tools" / "116_no_move.py")],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         cwd=ROOT,
     )
@@ -609,8 +618,7 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     out = ROOT / "outputs" / "116" / "previews" / "098"
     out.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
-        [str(ROOT / ".venv" / "Scripts" / "python.exe"),
-         str(ROOT / "tools" / "098_previews.py"), str(out)],
+        [PYTHON, str(ROOT / "tools" / "098_previews.py"), str(out)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         cwd=ROOT,
     )

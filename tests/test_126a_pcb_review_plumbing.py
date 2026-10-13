@@ -1053,9 +1053,15 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 与「哪种禁布约束哪类图元、按什么层」取自立创 EDA Pro 3.2.186 自身代码），
     # `rules/pcb/__init__.py` 包说明加一条。既有规则零改动、14 夹具零新增 finding；
     # 行为锚：`tests/test_r2_1_keepout.py`（合成板逐类 + 电机板注入两例）。
+    # **fixA moved the recursive one** — f45cfd99 -> dad6b777，direct 仍
+    # `8269e601`（主代理 2026-10-13，PR#79 审查修复）：`rules/pcb/keepout.py`
+    # 三条 LOW 修（混合词补「不确定」/ PLANE-only 与空 prohibitType 加披露行 /
+    # 缺 regionType 的 PROHIBIT 默认文档化）；同批的 plated 哨兵语义修在
+    # parsers/+core/，不在本 recipe。行为锚：tests/test_r2_1b_keepout_disclosure.py
+    # + test_r2_2b_plated_consumed.py。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "8269e601"
-    assert recursive == "f45cfd99", (
+    assert recursive == "dad6b777", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

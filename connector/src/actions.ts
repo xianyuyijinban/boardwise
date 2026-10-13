@@ -1805,8 +1805,17 @@ function probeChecks(checks: Record<string, unknown>, eda: any): Record<string, 
  *   members. Off by default so a renamed data field is not hidden.
  * - `call` (object, optional): `{action, params?}` — dispatch one allowlisted
  *   read-only action. Checked before `checks`, so the key cannot be shadowed.
+ * - `realm` (boolean, optional): `true` selects the R4 stage-1 realm probe
+ *   (`realmProbe` below); it is a **switch** — any value other than `true` is
+ *   refused with `BAD_REQUEST`, and no code is ever read out of `params`.
+ *   Checked before `call`, so the two modes cannot be combined.
  */
-/**
+/*
+ * Section note (deliberately not a JSDoc): the constants and `realmProbe`
+ * below implement `sys.probe`'s `realm` mode, while `sysProbe` itself is
+ * declared after this section — so the doc block above is the one that
+ * belongs to it.
+ *
  * R4 stage 1 (experiments 1–2): what the extension realm can execute.
  *
  * The roadmap's 「真·热更」 (a fixed stub that fetches and runs the current
@@ -3699,14 +3708,43 @@ const PCB_COMPONENT_LAYERS: Record<string, number> = { top: 1, bottom: 2 };
  * Every component id on the focused board, or `null` when the board cannot be
  * enumerated. A `null` is reported as "unknown" by the caller — never as "no
  * new component appeared", which would be a reading nobody took.
+ *
+ * `getAllPrimitiveId(layer?, primitiveLock?)` takes the copper side as its
+ * first argument, but the type package (§ `IPCB_PrimitiveComponentAPI`,
+ * EDA 3.2.186) spells the signature and says **nothing** about what the
+ * *unfiltered* call covers. A read that assumed "no argument means both sides"
+ * would miss a part placed on `bottom` and report it as "nothing landed" — the
+ * one answer this readback must never invent (PR #78 review, LOW 1). So the
+ * board is enumerated once per declared component layer (top 1 / bottom 2) and
+ * the id sets are unioned; the unfiltered call is unioned in as well, because
+ * its coverage is unverified in *either* direction and a union can only add
+ * ids, never drop one — so this is never weaker than the layer-blind read it
+ * replaces, whatever a given host does with the argument.
+ *
+ * A side that throws or answers a non-array contributes nothing; only when no
+ * call answers at all is the whole reading `null` (unknown).
  */
 async function pcbComponentIds(eda: Eda): Promise<Set<string> | null> {
+  let getAll: (...args: unknown[]) => unknown;
   try {
-    const ids = await settle(requireFn(eda, 'pcb_PrimitiveComponent.getAllPrimitiveId')());
-    return Array.isArray(ids) ? new Set(ids.map((id) => String(id))) : null;
+    getAll = requireFn(eda, 'pcb_PrimitiveComponent.getAllPrimitiveId');
   } catch {
     return null;
   }
+  let answered = false;
+  const ids = new Set<string>();
+  for (const layer of [undefined, ...Object.values(PCB_COMPONENT_LAYERS)]) {
+    try {
+      const got = await settle(getAll(layer));
+      if (!Array.isArray(got)) continue;
+      answered = true;
+      for (const id of got) ids.add(String(id));
+    } catch {
+      // This reading missed. Another side may still answer, and only a host
+      // that refuses every one of them turns the diff into "unknown".
+    }
+  }
+  return answered ? ids : null;
 }
 
 /** A `getState_*` reading as a plain scalar, or `null` when the host gave none. */
@@ -3743,8 +3781,13 @@ async function scalarState(obj: any, name: string): Promise<string | number | bo
  * - A miss is told apart — the host timed out (`TIMEOUT`), threw, or answered
  *   nothing (`CONNECTOR_ERROR`) — and every miss reads back whether a component
  *   **appeared on the board** by diffing the board's component ids from before
- *   the call with after it. Proximity, the schematic action's test, would count
- *   a part that was already sitting near the point as a landing.
+ *   the call with after it, per copper side rather than with the layer-blind
+ *   call (see `pcbComponentIds`). Proximity, the schematic action's test, would
+ *   count a part that was already sitting near the point as a landing. The
+ *   readback runs immediately after the call ends, so a **timeout** is reported
+ *   as "may have landed" with `landedAnyway: null` — 006b measured a placement
+ *   that committed after its deadline, so "the diff saw nothing" is not "nothing
+ *   landed".
  * - `primitiveLock` is always `false`: a placement should not leave behind a
  *   part the user has to unlock before moving it.
  * - No `designator`: the host assigns one. This action places; it does not
@@ -3814,13 +3857,27 @@ export const pcbPlaceComponent: ActionHandler = async (params, eda) => {
     : null;
 
   if (failure) {
+    // The diff is a reading taken *now*, and how strong a statement that is
+    // depends on how the call ended. A timeout is the weak case, and it is the
+    // one the host taught us about: 006b measured a placement that outran its
+    // deadline and committed *afterwards*. So a timeout answers "may have
+    // landed", never "nothing landed" (016 §4 protection 4: a timeout is
+    // unknown — read the page back, never retry) — and its `landedAnyway` is
+    // `null`, because "this read saw none" is a different claim from "none
+    // landed". A host that *threw* or answered nothing gave a definite answer,
+    // so there `false` still reads as "nothing landed".
     const readback = appeared === null
       ? "the board's component ids could not be read before and after the call, so whether "
         + 'anything landed is UNKNOWN — look at the board before retrying'
       : appeared.length
         ? `${appeared.length} new component(s) DID appear on the board [${appeared.join(', ')}] — `
           + 'at least one placement landed, do NOT retry'
-        : 'no new component appeared on the board — nothing landed';
+        : failure.code === 'TIMEOUT'
+          ? 'no new component was on the board in this readback — but the call outran its '
+            + 'deadline, so the placement *may* have landed after it. This says the part was '
+            + 'not there when the read ran, not that it never landed; read the board again '
+            + 'before deciding, and do NOT retry blind'
+          : 'no new component appeared on the board — nothing landed';
     throw new ActionError(
       failure.code,
       `pcb_PrimitiveComponent.create ${failure.what} (elapsed ${elapsedMs} ms); readback: ${readback}`,
@@ -3829,7 +3886,9 @@ export const pcbPlaceComponent: ActionHandler = async (params, eda) => {
         requested,
         elapsedMs,
         timeoutMs,
-        landedAnyway: appeared === null ? null : appeared.length > 0,
+        landedAnyway: appeared === null || (failure.code === 'TIMEOUT' && appeared.length === 0)
+          ? null
+          : appeared.length > 0,
         appeared,
       },
     );
@@ -6860,13 +6919,33 @@ const DOCUMENT_SOURCE_READ: FileManagerRead = {
 };
 
 /**
- * One budget for both `sys_FileManager` reads, and the daemon's is what binds.
+ * The one `sys_FileManager` call the bridge **writes** with (R1-3), described
+ * in the read table's shape so its refusals are reported the same way.
  *
- * The daemon gives a newly registered action the default `ACTION_TIMEOUT` of
- * 30 s (`protocol.timeout_for` does not name these yet). A connector deadline
- * *longer* than the daemon's can never be observed — the caller gets the
- * daemon's TIMEOUT and this action's honest verdict never arrives — so the two
- * are deliberately equal rather than merely compatible.
+ * `setDocumentSource(source)` is `@beta` with a `Promise<boolean>` and no
+ * permission note in the declaration — the same "no gate documented" answer
+ * `getDocumentSource` gets, which is why `gate: null` here is a reading rather
+ * than a missing value. `emptyMeans` is unused on this path (nothing routes a
+ * write through `readArchive`) and is worded for a boolean answer so it cannot
+ * mislead a later reader who greps it.
+ */
+const DOCUMENT_SOURCE_WRITE: FileManagerRead = {
+  path: 'sys_FileManager.setDocumentSource',
+  gate: null,
+  emptyMeans: 'the source was not applied (this call answers a boolean, never undefined)',
+  scope: 'document',
+};
+
+/**
+ * One budget for both `sys_FileManager` reads **and the one source write**, and
+ * the daemon's is what binds.
+ *
+ * The daemon gives these actions the default `ACTION_TIMEOUT` of 30 s
+ * (`protocol.timeout_for` does not name `sys.set_document_source` either — it
+ * is a newly registered action). A connector deadline *longer* than the
+ * daemon's can never be observed — the caller gets the daemon's TIMEOUT and
+ * this action's honest verdict never arrives — so the two are deliberately
+ * equal rather than merely compatible.
  */
 const DOCUMENT_READ_TIMEOUT_MS = 30_000;
 
@@ -7196,6 +7275,169 @@ export const sysGetDocumentSource: ActionHandler = async (params, eda) => {
       : {}),
     ...(chars === 0 ? { note: 'the host returned an empty string' } : {}),
     ...(problems.length ? { notes: problems } : {}),
+  };
+};
+
+/**
+ * `sys.set_document_source` — rewrite the **active** document's source (R1-3).
+ *
+ * A **reconnaissance instrument**, not a maintenance action, and the docstring
+ * says so because the discipline it needs cannot be enforced in code. 178b
+ * filed the hole and 179 named it: the bridge can *read* a document's source
+ * (`sys.get_document_source`) but nothing could *write* one, so whether
+ * `doc.rename`'s measured `NOT_SUPPORTED` on 3.2.186 (the host has
+ * `modifySchematicPageName`, answers falsy, and the project's own listing never
+ * changes — `outputs/179/live/`) can be repaired through the source channel was
+ * unmeasurable: `sys.probe`'s `call` mode is a closed read-only allowlist by
+ * design, so no probe could reach the write. The R1-3 ruling (2026-10-12) chose
+ * option 1 of the two the acceptance report offered — add the write behind the
+ * confirmation gate rather than keep "setDocumentSource 未验" in pits #47.
+ *
+ * **Scratch pages only.** The intended use is a page created for the purpose
+ * (`sch.doc.new --yes`), rewritten, read back with `sys.get_document_source`,
+ * and deleted (`doc.delete_page`) — `outputs/R1/runbook.md` §R1-3 is that
+ * procedure. Nothing here checks *which* page it is; the write replaces a whole
+ * document's text in one call, which is why it is `risk="dangerous"` and the
+ * daemon refuses it without `params.confirm is True` (016's single choke point,
+ * the `create` gate's sibling), consuming the flag so the connector never sees
+ * it. This action is the newest member of that tier and is the *second* one
+ * after `sys.self_update`, so the tier's reviewed set has to carry it.
+ *
+ * `params.uuid` is **required and must be the active document** — 179's
+ * `DOC_NOT_ACTIVE` shape, the same guard `sys.get_document_source` reads with,
+ * and the reason it is mandatory here rather than optional: the host's
+ * `setDocumentSource(source)` takes the text and nothing else (declared arity
+ * 1), so it rewrites whatever document happens to be in front. An unguarded
+ * write of a whole document is the one shape this action never has. A `uuid`
+ * naming anything else is refused **before** the host call; `doc.open {uuid}`
+ * is how a caller makes its target active, and this action will not do it,
+ * because moving the user's tab is a side effect a write is not entitled to
+ * take silently.
+ *
+ * The host's own answer travels rather than being trusted. The declaration says
+ * `false` means the source was malformed, so anything but `true` is reported as
+ * a **failure** naming what the host said — never as a quiet `ok: false`. A
+ * `true` is read back (`getDocumentSource()` again) and the answer carries
+ * `readBack`: `identical`, `differs`, or `unreadable`. "The host said it
+ * worked" and "the document now holds this text" are two different statements
+ * (179's lesson), so the second one is measured; a difference is **reported,
+ * not judged**, because a host that accepts a document may re-serialise it, and
+ * which of the two a difference means is exactly the question the recon exists
+ * to answer. The active document is read again after the call too: if the focus
+ * moved while the host worked, the text may have landed on the other document
+ * and that is said rather than passed over.
+ */
+export const sysSetDocumentSource: ActionHandler = async (params, eda) => {
+  const PATH = 'sys_FileManager.setDocumentSource';
+  const source = typeof params.source === 'string' ? params.source : '';
+  if (!source) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'sys.set_document_source needs params.source as a non-empty string — the whole '
+        + "document's text, in the form `sys.get_document_source` returns it. An empty "
+        + 'string would be a blanket erase, which is not what this instrument is for',
+    );
+  }
+  const requested = typeof params.uuid === 'string' ? params.uuid.trim() : '';
+  if (!requested) {
+    throw new ActionError(
+      'BAD_REQUEST',
+      'sys.set_document_source needs params.uuid — the uuid of the document it may rewrite '
+        + '(doc.list lists them). The host rewrites whatever document is active, so this '
+        + 'write is never unguarded',
+    );
+  }
+
+  // The guard 179 established for the read half, applied to the write half: the
+  // host call cannot address a document, so a uuid that is not the active one
+  // is answered with a refusal instead of a rewrite of somebody else's page.
+  const problems: string[] = [];
+  const active = await activeDocument(eda, problems);
+  const activeUuid = active?.uuid ?? null;
+  if (activeUuid !== requested) {
+    throw new ActionError(
+      'DOC_NOT_ACTIVE',
+      `${PATH} takes the new text and nothing else (declared arity 1) — it rewrites the `
+        + `**active** document's source and nothing else. Asked for uuid ${requested} while the `
+        + `active document is ${activeUuid ?? '(none)'}, so calling it would have rewritten a `
+        + 'different document. Open the one you meant (`doc.open {uuid}`) and write again',
+      {
+        uuid: requested,
+        activeUuid,
+        hostCall: PATH,
+        hostArity: 1,
+        ...(problems.length ? { notes: problems } : {}),
+      },
+    );
+  }
+
+  const call = requireFn(eda, PATH);
+  let answer: unknown;
+  try {
+    answer = await raceHostCall(
+      settle(call(source)),
+      PATH,
+      DOCUMENT_READ_TIMEOUT_MS,
+      'the host may have applied the source before the deadline — re-read the document with '
+        + 'sys.get_document_source before writing again',
+    );
+  } catch (error) {
+    if (isActionError(error)) throw error;
+    throw fileReadFailure(DOCUMENT_SOURCE_WRITE, error);
+  }
+  if (answer !== true) {
+    throw new ActionError(
+      'CONNECTOR_ERROR',
+      `${PATH} answered ${describeHostAnswer(answer)} for ${requested} — the declaration `
+        + 'returns `false` when the source is malformed, so the document was not rewritten '
+        + 'by this call. Nothing here says it was: re-read the document with '
+        + '`sys.get_document_source` before changing the text further',
+      { uuid: requested, hostAnswer: describeHostAnswer(answer), chars: source.length },
+    );
+  }
+
+  // "The host said yes" is not the answer a caller asked for; the document
+  // holding the text is. A failure to read the text back is a reading
+  // (`unreadable`), never a failed write — the write already happened.
+  let readBack: 'identical' | 'differs' | 'unreadable' = 'unreadable';
+  let readBackChars: number | null = null;
+  try {
+    const read = requireFn(eda, 'sys_FileManager.getDocumentSource');
+    const again = await raceHostCall(
+      settle(read()),
+      'sys_FileManager.getDocumentSource',
+      DOCUMENT_READ_TIMEOUT_MS,
+    );
+    if (typeof again === 'string') {
+      readBackChars = again.length;
+      readBack = again === source ? 'identical' : 'differs';
+    }
+  } catch {
+    // Left as `unreadable`: this host would not give the text back, so whether
+    // the document holds it is not knowable from here.
+  }
+
+  const moved = (await activeDocument(eda, []))?.uuid !== requested;
+  return {
+    source: PATH,
+    uuid: requested,
+    type: active?.type ?? null,
+    chars: source.length,
+    hostAnswer: true,
+    readBack,
+    readBackChars,
+    ...(moved || problems.length
+      ? {
+          notes: [
+            ...(moved
+              ? [`the active document changed while the write ran (${requested} before, `
+                + 'something else after) — the host rewrites whichever document is in front, '
+                + 'so the text may have landed on the other one']
+              : []),
+            ...problems,
+          ],
+        }
+      : {}),
   };
 };
 
@@ -8389,6 +8631,12 @@ export function buildHandlers(eda: Eda): Record<string, BoundHandler> {
     // and the two DRC checks. All four are reads.
     'sys.get_document_file': bind(sysGetDocumentFile),
     'sys.get_document_source': bind(sysGetDocumentSource),
+    // R1-3: the write half of the document-source channel — the recon
+    // instrument that measures whether `doc.rename`'s NOT_SUPPORTED is
+    // repairable. Dangerous tier: the daemon refuses it without `confirm: true`
+    // (it is deliberately NOT in PROBE_CALL_ACTIONS above, whose allowlist is
+    // read-only precisely so no write can be routed around that gate).
+    'sys.set_document_source': bind(sysSetDocumentSource),
     // 025 batch 2: the whole-project archive. Same gate family as the document
     // read, but a *different* gate (工程管理 > 下载工程) and a different scope —
     // this is the tier-A1 payload checkup tries first.

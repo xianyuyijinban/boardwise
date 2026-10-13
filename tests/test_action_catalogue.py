@@ -162,7 +162,10 @@ def test_the_dangerous_tier_is_exactly_the_reviewed_set():
     的动作必须只有名单里这些。要把新动作放进危险档，先改这个清单——
     那就是评审发生的地方。
     """
-    reviewed = {"sys.self_update"}
+    reviewed = {"sys.self_update", "sys.set_document_source"}
+    # 评审记录：sys.set_document_source（R1-3，主代理 2026-10-13 裁方案 1）——
+    # 写活动文档的源文本，dangerous 档；uuid 必须等于活动文档（DOC_NOT_ACTIVE），
+    # 侦察用途、scratch 页限定。
     actual = {action.name for action in ACTIONS if action.risk == "dangerous"}
     assert actual == reviewed, (
         f"the dangerous tier drifted from the reviewed set: "

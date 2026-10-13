@@ -51,6 +51,12 @@ def _library(path: pathlib.Path):
 
 
 def _compile_locked():
+    if not LOCKS_144.is_file():
+        pytest.skip(
+            f"缺本地产物 {LOCKS_144.relative_to(ROOT).as_posix()}（未入库，"
+            ".gitignore 忽略 outputs/）：144 的锁定表是未入库的本地产物，"
+            "生成见 outputs/144 或任务 144；产物在时本条按原断言真跑"
+        )
     circuit = CircuitSpec.load(FLYBACK)
     presentation = PresentationSpec.load(LOCKS_144)
     book = _library(FLYBACK_LIBRARY)
@@ -342,6 +348,12 @@ def test_the_delivered_lock_table_compiles_with_every_ground_flag():
 
 def test_the_reservation_pass_is_deterministic():
     """Two runs of one input reserve the same cells (053 stage A's rule)."""
+    if not LOCKS_144.is_file():
+        pytest.skip(
+            f"缺本地产物 {LOCKS_144.relative_to(ROOT).as_posix()}（未入库，"
+            ".gitignore 忽略 outputs/）：144 的锁定表是未入库的本地产物，"
+            "生成见 outputs/144 或任务 144；产物在时本条按原断言真跑"
+        )
     circuit = CircuitSpec.load(FLYBACK)
     presentation = PresentationSpec.load(LOCKS_144)
     book = _library(FLYBACK_LIBRARY)

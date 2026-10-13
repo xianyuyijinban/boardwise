@@ -1504,11 +1504,20 @@ class BridgeDaemon:
             return forwarded
         if params.get("confirm") is True:
             return forwarded
-        reason = (
-            "creates a new document"
-            if spec.risk == "create"
-            else "replaces running code or reloads the editor (dangerous tier)"
-        )
+        if spec.risk == "create":
+            reason = "creates a new document"
+        else:
+            # Per-action, because the tier's one sentence cannot describe them
+            # all: `sys.set_document_source` neither replaces code nor reloads
+            # anything, and the refusal must say what *this* action does
+            # (found when the second dangerous action landed, 179-follow-up).
+            reason = {
+                "sys.self_update": "replaces running code or reloads the editor",
+                "sys.set_document_source": (
+                    "overwrites the active document's source text"
+                ),
+            }.get(spec.name, "has dangerous effects")
+            reason = f"{reason} (dangerous tier)"
         raise BridgeError(
             ErrorCodes.CONFIRMATION_REQUIRED,
             f"{spec.name} {reason}; re-send with confirm: true "
