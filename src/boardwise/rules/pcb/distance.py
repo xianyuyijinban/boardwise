@@ -992,6 +992,15 @@ class BoardOffEdge(PcbRule):
     rule files nothing — 「the frame did not read」 is not evidence about a part.
     That silence is a gap, not a pass, and it is stated here rather than dressed
     up as a finding about the parts.
+
+    **A frame that is a *piece* of one is not a frame either (bug98-B)**, and
+    that case is loud rather than silent: when the parser's stitching fails and
+    it falls back to one record's own closed ring
+    (:attr:`BoardOutline.stitched` is ``False``) while other ``BOARD_OUTLINE``
+    records are left out (``outline_fragments > 0``), the ring in hand is a
+    fragment — the field board's case exactly — and this rule files **one WARN**
+    naming the counts instead of an ERROR per part. See
+    :meth:`BoardOffEdge._frame_is_a_piece`.
     """
 
     id = "pcb-component-off-board"
@@ -1003,7 +1012,59 @@ class BoardOffEdge(PcbRule):
         board = ctx.board
         if board is None:
             return []
+        unreadable = self._frame_is_a_piece(board)
+        if unreadable is not None:
+            return [unreadable]
         return self._outside_outline(board, _measurable_designators(board))
+
+    def _frame_is_a_piece(self, board: BoardGeometry) -> Finding | None:
+        """The one WARN that replaces everything when the frame is a fragment.
+
+        bug98-B's guardrail, on the 建议 of the field board's own 复测 (结论
+        §6.2): a frame that arrives as several records and comes out of the
+        parser as **one record's own closed ring** is a *piece* of a frame, and
+        measuring parts against a piece is the bug bug98 exists to remove. The
+        parser says so on :attr:`BoardOutline.stitched` (False) and states how
+        many records were left out on
+        :attr:`~boardwise.core.geometry.BoardGeometry.outline_fragments`.
+
+        It must be a WARN and not a silence. 「did not run」 is a gap in the
+        report, and this one is actionable — the frame is there, the pieces just
+        did not join — so the row names the counts and what to do about them:
+        the drawn frame has to become one ring (or the stray records have to go)
+        before 「器件出板框」 means anything. One row, never one per part: the
+        98 rows this replaced were the symptom.
+
+        A single-record board is untouched (``stitched`` is None: the question
+        does not arise, and a board whose own ring is closed is a board). A ring
+        that *was* assembled from every record is untouched too — including the
+        bug98-A case of a stitched frame with a loose segment beside it, where
+        ``stitched`` is True and the loose piece is disclosed on the report's
+        ``outlineNote`` rather than suppressing the check.
+        """
+        outline = board.outline
+        if outline is None or outline.stitched is not False:
+            return None
+        fragments = int(getattr(board, "outline_fragments", 0) or 0)
+        if fragments <= 0:
+            return None
+        return Finding(
+            rule_id=self.id,
+            severity="WARN",
+            level=self.level,
+            message=(
+                f"板框由 {outline.segments} 段 BOARD_OUTLINE 记录组成，只认了其中一环、"
+                f"另有 {fragments} 段未入环——多段板框拼合失败，拿到的是碎片，"
+                "「器件出板框」检查已抑制（未出逐器件结论；"
+                "把板框画成一条闭环，或补齐/删掉多余段后重跑）"
+            ),
+            evidence=[
+                f"板框记录 {outline.segments} 段：{len(outline.points)} 角点的一环被采用，"
+                f"{fragments} 段未入环（板框是碎片，不是整板）",
+                "判据：「器件出板框」需要一个**整板**板框才成立；"
+                "板框多段且拼不出整环时，逐器件判定一律不成立（bug98-B 护栏）",
+            ],
+        )
 
     def _outside_outline(
         self, board: BoardGeometry, designators: list[str]

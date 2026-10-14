@@ -357,6 +357,8 @@ def _board_entry(
     # 拼合失败的板，曾经在报告里淹出 98 条假 ERROR（只认了第一段弧）。
     # 审计 325 又钉了两档：单段**开放**折线（closed=False）同样不许量；
     # 成了环但有碎段/多余闭环没入环（outline_fragments>0）检查照跑、碎段披露。
+    # bug98-B 钉第三档：多段只认一环（outline.stitched is False）是**碎片**不是板，
+    # 检查已抑制、改出 1 条 WARN——这句与「照跑」那句互斥。
     # 有好板框且无碎段的板不带此键（逐字节不变）。
     outline = getattr(board, "outline", None)
     fragments = int(getattr(board, "outline_fragments", 0) or 0)
@@ -381,7 +383,15 @@ def _board_entry(
                 f"{MIN_OUTLINE_CORNERS:g}，疑似没画完的框）——「出板框」检查未运行"
                 "（没跑，不是全过）"
             )
-        if fragments:
+        if getattr(outline, "stitched", None) is False and fragments:
+            # bug98-B 护栏：多段只认一环 = 拿到的是**碎片**，出板框检查已抑制。
+            # 这句必须与「照跑」那句互斥——同一份报告不能既说照跑又说抑制。
+            outline_notes.append(
+                f"板框 {outline.segments} 段只认了其中一环、另有 {fragments} 段未入环"
+                "——多段拼合失败（拿到的是碎片），「出板框」检查已抑制"
+                "并改出 1 条 WARN（没跑，不是全过）"
+            )
+        elif fragments:
             outline_notes.append(
                 f"另有 {fragments} 段板框记录未入环（多余闭环或碎段），"
                 "「出板框」检查按所成闭环照跑"
@@ -392,6 +402,9 @@ def _board_entry(
                 f"板框含 {welds} 处容差焊缝（端点非逐字相等）——"
                 "0.5 mil 级面板缝隙可能被误焊，人工核"
             )
+        note = str(getattr(outline, "note", "") or "")
+        if note:
+            outline_notes.append(note)
     if outline_notes:
         entry["outlineNote"] = "；".join(outline_notes)
     return entry

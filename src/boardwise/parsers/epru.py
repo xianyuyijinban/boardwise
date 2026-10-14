@@ -534,8 +534,379 @@ def _longest_closed_chain(
     return (best, best_used, best_welds) if best is not None else None
 
 
+#: bug98-B: how much larger a **wall** step must be than a **cap** step for the
+#: two to count as different populations of the ring's step sizes.
+#:
+#: The reading does **not** scale a fixed multiple of the record's ``width``,
+#: and that is a measured decision rather than a taste. A stroked piece's ring
+#: carries two populations of step — the editor's own angular tessellation of
+#: the round end caps (radius = half the stroke width) and of its walls (a
+#: larger arc radius, or a straight chord) — and the constant of proportionality
+#: between them is the *radius ratio*, not anything ``width`` states:
+#:
+#: * the field board's 16 pieces: 1941 cap steps of 0.118..0.262 mil against 270
+#:   wall steps of 60.08..67.5 — 229x apart (its walls are arcs of radius
+#:   1224..1294, its caps arcs of radius 2.5);
+#: * a rounded rectangle of corner radius 150 (the shape this file's fixture
+#:   draws): cap steps 0.131 against wall steps 7.72..7.98 — 59x apart.
+#:
+#: ``5 x width`` (the value the batch's plan named) separates the first board
+#: and **fails the second**: 5 x 10 = 50 mil is above that fixture's *wall*
+#: steps, so its walls would read as caps and the piece would be refused. The
+#: ratio is also the honest invariant: 「cap steps and wall steps are orders of
+#: magnitude apart」 is a property of a stroke, while 「a wall step exceeds
+#: 5 x width」 is a property of how wide the board happens to be drawn. 5x
+#: refuses the shapes that are not strokes at all (a rectangle's four sides:
+#: every ratio under 2) and still admits any piece longer than ~5 cap radii.
+OUTLINE_CAPSULE_MIN_STEP_RATIO = 5.0
+
+#: bug98-B: steps below this are treated as **not steps at all** when the two
+#: populations are told apart — a repeated vertex, not a drawn edge. A mil is
+#: written with four decimals in this format, so a thousandth of a mil is two
+#: orders below anything the file can mean.
+OUTLINE_CAPSULE_MIN_STEP_MIL = 0.001
+
+#: bug98-B: how nearly antiparallel the two wall edges flanking a cap must be.
+#: At a cap the line turns around, so the wall arriving and the wall leaving
+#: point opposite ways: the unit dot product is ``-1`` (measured on all 32 caps
+#: of the field board: exactly ``-1.000``, because the two wall ends are
+#: symmetric about the join). Anything that is **not** an end — the wall of a
+#: genuine closed ring, an unfinished rectangle — answers near ``0`` or ``+1``,
+#: so -0.5 keeps a wide margin on both sides (-\u221a2/2 = -0.707 would do too;
+#: -0.5 is the looser of the two and still refuses a turn of under 120 degrees,
+#: which no end of a stroked piece is).
+OUTLINE_CAPSULE_REVERSAL_DOT = -0.5
+
+
+def _capsule_centerline(
+    points: Sequence[Point],
+    tolerance: float = OUTLINE_STITCH_TOLERANCE_MIL,
+) -> list[Point] | None:
+    """The centre line of one **closed stroked outline**, or ``None``.
+
+    bug98-B. The field board's frame is not 16 polylines: it is a **drawn line**,
+    and the editor stores each *piece* of that line as the outline of the piece
+    — a closed ring of two offset walls and two round end caps. All sixteen
+    rings are closed, so bug98-A's split sent all sixteen to ``closed_rings``,
+    nothing was stitched, and ``max(perimeter)`` handed one piece to the
+    off-board rule as the board.
+
+    **The ring must arrive with its arcs expanded** (:func:`_ring_points`, which
+    is what the parser collects for this reading). The pieces are strokes of
+    *arcs* as well as of lines — the field board's walls are arcs of radius 1226
+    and 1294 mil — and the flat reader :func:`_path_points` keeps an ``ARC``'s
+    end point and drops its sweep, so a flattened ring turns an 880-mil arc into
+    its chord. Reading the centre line off that chord would cut 82 mil off the
+    board at the middle of the arc (measured), which is exactly the false
+    「part hangs off the board」 this batch exists to remove: 10 of the field
+    board's 98 parts sit within 62 mil of those four arcs.
+
+    The reading, on one closed ring:
+
+    1. drop the repeated closing vertex, so the ring is ``count`` distinct
+       vertices joined cyclically;
+    2. the ring's steps fall into two populations — the caps' and the walls' —
+       at least :data:`OUTLINE_CAPSULE_MIN_STEP_RATIO` apart, and the caps are
+       the **smaller** one (a cap is the smallest feature a stroke has). The
+       split is therefore the lowest adjacent pair in the sorted steps whose
+       ratio clears that factor, and the threshold is the pair's geometric mean
+       (:func:`_capsule_cap_step`). A ring with no such pair — a rectangle, a
+       circle, four sides of similar length — is not a stroke and the answer is
+       ``None``;
+    3. the maximal runs of cap steps are the caps. There must be **exactly two**
+       — one per end of the piece — and each must be a real end: the wall edge
+       arriving at the run and the wall edge leaving it have to point opposite
+       ways (:func:`_capsule_reverses`), and the run has to have at least one
+       vertex **between** its two walls (a cap spanned by a single edge is the
+       corner of a rectangle, and a rectangle has no centre line to read). Any
+       other count or shape is refused rather than guessed;
+    4. the centre line is the **midpoint locus** of the two walls that run from
+       one cap to the other, sampled along each wall's own arc length (the two
+       walls of one piece need not be tessellated identically). A straight wall
+       gives two vertices; an arc wall gives the arc's own points, so the frame
+       keeps the board's curvature.
+
+    The endpoints of the returned polyline are the joins themselves, and exactly
+    so: the two walls end symmetrically about the drawn vertex, so their
+    midpoint **is** that vertex — measured on the field board's 32 ends, the
+    closest pair of ends is 0.001 mil apart and the farthest of the 16 joins is
+    0.011 mil. That is why :func:`_capsule_frame` can weld them with the house
+    1-mil vertex tolerance instead of a stroke-scaled one.
+
+    ``None`` means 「this record is not a stroke of the frame」 — a genuinely
+    closed outline, a piece with fewer or more than two ends, a cap spanned by a
+    single edge (the corner of a rectangle), or a ring whose steps show no such
+    two populations at all. The caller then keeps bug98-A's reading, disclosed
+    rather than guessed (and bug98-B's guardrail stops the off-board rule
+    measuring against a piece of a frame).
+    """
+    ring = list(points)
+    if len(ring) >= 2 and _endpoints_meet(ring[0], ring[-1], tolerance):
+        ring = ring[:-1]
+    count = len(ring)
+    if count < 4:
+        return None
+    steps = [
+        math.hypot(
+            ring[(index + 1) % count].x - ring[index].x,
+            ring[(index + 1) % count].y - ring[index].y,
+        )
+        for index in range(count)
+    ]
+    cap_step = _capsule_cap_step(steps)
+    if cap_step is None:
+        return None
+    runs = _capsule_cap_runs([step <= cap_step for step in steps])
+    if len(runs) != 2:
+        return None
+    after_first = _capsule_chain(ring, (runs[0][1] + 1) % count, runs[1][0])
+    after_second = _capsule_chain(ring, (runs[1][1] + 1) % count, runs[0][0])
+    if len(after_first) < 2 or len(after_second) < 2:
+        return None
+    if (runs[0][1] - runs[0][0]) % count < 1 or (runs[1][1] - runs[1][0]) % count < 1:
+        # A cap spanned by a single edge has **nothing between its two walls**:
+        # it is the corner of a rectangle, and a rectangle is not a stroke —
+        # reading its long axis as a centre line would be a guess about a shape
+        # the file did not draw that way. The editor's own caps are round arcs
+        # (60 steps each on the field board), so this refuses a butt cap rather
+        # than inventing one.
+        return None
+    if not _capsule_reverses(after_second[-2:], after_first[:2]):
+        return None  # the first cap is not an end of the piece
+    if not _capsule_reverses(after_first[-2:], after_second[:2]):
+        return None  # nor is the second
+    return _capsule_midpoint_line(after_first, list(reversed(after_second)))
+
+
+def _capsule_cap_step(steps: Sequence[float]) -> float | None:
+    """The step size that separates a cap's steps from a wall's, or ``None``.
+
+    The ring's steps come in two populations at least
+    :data:`OUTLINE_CAPSULE_MIN_STEP_RATIO` apart (see that constant for the two
+    measurements), and the caps are the **smaller** one — a cap is the smallest
+    feature a stroke has, and every wall step is the tessellation of a larger
+    radius or a straight chord. So the split is the *lowest* adjacent pair in
+    the sorted steps whose ratio clears the factor, and the threshold is the
+    pair's geometric mean: an arc wall two populations above the cap (the
+    fixture's rounded rectangle: caps, then 150-mil wall arcs, then straight
+    sides) still splits at the caps, whereas the *largest* ratio would not.
+
+    Steps below :data:`OUTLINE_CAPSULE_MIN_STEP_MIL` are ignored here — a
+    repeated vertex is not a drawn edge, and letting one in would put the split
+    under the cap population. ``None`` when no pair clears the factor: a ring
+    with no such structure (a rectangle: four sides of similar length) is not a
+    stroke, and the caller discloses rather than guesses.
+    """
+    ordered = sorted(step for step in steps if step > OUTLINE_CAPSULE_MIN_STEP_MIL)
+    for index in range(len(ordered) - 1):
+        lower, upper = ordered[index], ordered[index + 1]
+        if upper >= lower * OUTLINE_CAPSULE_MIN_STEP_RATIO:
+            return math.sqrt(lower * upper)
+    return None
+
+
+def _capsule_cap_runs(short: Sequence[bool]) -> list[tuple[int, int]]:
+    """The maximal runs of consecutive cap steps, as ``(first, last)`` edges.
+
+    ``short[i]`` describes the edge from vertex ``i`` to vertex ``i + 1``. The
+    walk starts at a wall edge, so a run that straddles the ring's seam comes
+    back as one run rather than as two halves.
+    """
+    count = len(short)
+    if all(short) or not any(short):
+        return []
+    start = next(index for index in range(count) if not short[index])
+    runs: list[tuple[int, int]] = []
+    opened: int | None = None
+    for step in range(count):
+        index = (start + step) % count
+        if short[index]:
+            if opened is None:
+                opened = index
+        elif opened is not None:
+            runs.append((opened, (index - 1) % count))
+            opened = None
+    if opened is not None:
+        runs.append((opened, (start - 1) % count))
+    return runs
+
+
+def _capsule_chain(ring: Sequence[Point], start: int, end: int) -> list[Point]:
+    """The ring's vertices from ``start`` to ``end`` inclusive, ring order."""
+    chain = [ring[start]]
+    index = start
+    while index != end:
+        index = (index + 1) % len(ring)
+        chain.append(ring[index])
+    return chain
+
+
+def _capsule_reverses(
+    arriving: Sequence[Point], leaving: Sequence[Point]
+) -> bool:
+    """Do the wall edges arriving at and leaving a cap run opposite ways?
+
+    The question that says a run of cap steps really is an **end** of the piece:
+    at an end the line turns around, so the wall that arrives and the wall that
+    leaves are antiparallel (see :data:`OUTLINE_CAPSULE_REVERSAL_DOT`). A
+    degenerate zero-length edge answers False rather than dividing by zero.
+    """
+    into = (arriving[-1].x - arriving[0].x, arriving[-1].y - arriving[0].y)
+    out_of = (leaving[-1].x - leaving[0].x, leaving[-1].y - leaving[0].y)
+    lengths = math.hypot(*into) * math.hypot(*out_of)
+    if lengths <= 0.0:
+        return False
+    return (
+        (into[0] * out_of[0] + into[1] * out_of[1]) / lengths
+        < OUTLINE_CAPSULE_REVERSAL_DOT
+    )
+
+
+def _capsule_midpoint_line(
+    first: Sequence[Point], second: Sequence[Point]
+) -> list[Point] | None:
+    """The centre line between two walls that run the same way, or ``None``.
+
+    Both walls are sampled by **their own arc length** rather than by vertex
+    index: a stroked arc's two walls are tessellated from different radii, so
+    they do not carry the same number of vertices, and pairing index 3 with
+    index 3 would shear the centre line along the piece. Pairing equal
+    fractions of the two lengths keeps it centred.
+    """
+    lengths_first = _capsule_lengths(first)
+    lengths_second = _capsule_lengths(second)
+    if lengths_first[-1] <= 0.0 or lengths_second[-1] <= 0.0:
+        return None
+    samples = max(len(first), len(second))
+    line: list[Point] = []
+    for step in range(samples):
+        fraction = step / (samples - 1)
+        near = _capsule_point_at(first, lengths_first, fraction * lengths_first[-1])
+        far = _capsule_point_at(second, lengths_second, fraction * lengths_second[-1])
+        line.append(Point((near.x + far.x) / 2.0, (near.y + far.y) / 2.0))
+    return line
+
+
+def _capsule_lengths(points: Sequence[Point]) -> list[float]:
+    """Cumulative edge lengths of a polyline, one longer than its vertices."""
+    cumulative = [0.0]
+    for index in range(len(points) - 1):
+        cumulative.append(
+            cumulative[-1]
+            + math.hypot(
+                points[index + 1].x - points[index].x,
+                points[index + 1].y - points[index].y,
+            )
+        )
+    return cumulative
+
+
+def _capsule_point_at(
+    points: Sequence[Point], cumulative: Sequence[float], distance: float
+) -> Point:
+    """The point ``distance`` along a polyline, clamped to its ends."""
+    total = cumulative[-1]
+    distance = min(max(distance, 0.0), total)
+    low, high = 0, len(points) - 2
+    while low < high:
+        middle = (low + high + 1) // 2
+        if cumulative[middle] <= distance:
+            low = middle
+        else:
+            high = middle - 1
+    first, second = points[low], points[low + 1]
+    span = cumulative[low + 1] - cumulative[low]
+    fraction = 0.0 if span <= 0.0 else (distance - cumulative[low]) / span
+    return Point(
+        first.x + (second.x - first.x) * fraction,
+        first.y + (second.y - first.y) * fraction,
+    )
+
+
+def _capsule_frame(
+    rings: Sequence[tuple[Sequence[Point], float]],
+    tolerance: float = OUTLINE_STITCH_TOLERANCE_MIL,
+) -> list[Point] | None:
+    """The frame that stroked-outline pieces trace, or ``None``.
+
+    ``rings`` are the **closed** ``BOARD_OUTLINE`` records with their widths and
+    their **arc-expanded** vertices (:func:`_ring_points`); the answer is the
+    ring their centre lines join into. Four things must all hold, and any
+    failure is ``None`` — the caller keeps bug98-A's reading and says so
+    (bug98-B's guardrail then stops the off-board rule measuring against a piece
+    of a frame):
+
+    * **every** ring reads as a stroke (:func:`_capsule_centerline`);
+    * welding the centre lines' ends consumes **every** piece and leaves a
+      simple ring (:func:`_longest_closed_chain`, with ``_is_simple_ring``'s
+      refusal of a figure-eight). The house 1-mil vertex tolerance is enough
+      because a centre-line end **is** the join, not an estimate of it —
+      measured on the field board's 16 joins: 0.001..0.011 mil apart;
+    * the ring's bbox sits inside the drawn rings' bbox by no more than
+      ``2 x width``: the centre line is the same board as the stroke, half a
+      stroke narrower on each side (measured: 2.5 mil = ``width / 4``, the
+      stroke's own half width, since the record offsets its walls by a quarter
+      of the width it states). Anything further apart is a mis-stitch.
+    """
+    lines: list[list[Point]] = []
+    for points, _width in rings:
+        line = _capsule_centerline(points, tolerance)
+        if line is None:
+            return None  # one piece that is not a stroke: the shape is not this one
+        lines.append(line)
+    if len(lines) < 2:
+        return None
+    widths = [width for _points, width in rings if width and width > 0]
+    stitched = _longest_closed_chain(lines, tolerance)
+    if stitched is None:
+        return None
+    ring, used, _welds = stitched
+    if used != len(lines) or not _is_simple_ring(ring):
+        return None
+    slack = 2.0 * max(widths) if widths else None
+    if slack is not None:
+        corners = [point for points, _width in rings for point in points]
+        drawn = (
+            min(point.x for point in corners),
+            max(point.x for point in corners),
+            min(point.y for point in corners),
+            max(point.y for point in corners),
+        )
+        line_box = (
+            min(point.x for point in ring),
+            max(point.x for point in ring),
+            min(point.y for point in ring),
+            max(point.y for point in ring),
+        )
+        if any(
+            abs(line_box[index] - drawn[index]) > slack for index in range(4)
+        ):
+            return None  # the centre line is not the board the pieces were drawn on
+    return ring
+
+
+def _capsule_note(
+    rings: Sequence[tuple[Sequence[Point], float]], count: int
+) -> str:
+    """What the capsule reading did, in one sentence for the report.
+
+    The parser's own disclosure, carried on :attr:`BoardOutline.note` and
+    printed verbatim by the report — the same job the ``outlineNote`` lines do
+    for the readings that *failed*. It names the stroke width because that is
+    the number the centre line was inferred from, and it says that every record
+    went in, because 「全都用上了」 is exactly what the field report could not
+    say before bug98-B.
+    """
+    widths = sorted({width for _points, width in rings if width and width > 0})
+    spelled = "/".join(f"{width:g}" for width in widths) if widths else "未声明"
+    return (
+        f"{count} 段描边板框按描边中心线拼合成一个闭环"
+        f"（描边宽度 {spelled} mil，{count} 段全部入环）"
+    )
+
+
 def _stitch_outline(
-    segments: Sequence[tuple[str, list[Point], bool]],
+    segments: Sequence[tuple],
     tolerance: float = OUTLINE_STITCH_TOLERANCE_MIL,
 ) -> tuple[BoardOutline | None, int]:
     """Turn every ``BOARD_OUTLINE`` record into one outline, or say why not.
@@ -572,26 +943,91 @@ def _stitch_outline(
     a stitched ring is its opening segment; ``segments`` says how many records
     the ring was built from, so a reader that needs the exact set can still see
     the count.
+
+    **bug98-B: the pieces may be strokes, not edges.** The field board's frame is
+    a drawn line whose 16 pieces the editor stores as 16 **closed** rings (each
+    piece's own outline), so bug98-A's split put all sixteen in ``closed_rings``,
+    stitched nothing, and let ``max(perimeter)`` hand one piece to the off-board
+    rule as the board. When every record is closed and none is open, the pieces'
+    **centre lines** are read and joined instead (:func:`_capsule_frame`) — that
+    ring is the drawn frame, with every record consumed. The capsule reading
+    refuses anything it cannot verify, and the fallback below is then bug98-A's
+    code path unchanged, so a document that is not this shape reads exactly as
+    it did.
+
+    Each ``segments`` entry is ``(source_id, points, is_rectangle)`` as bug98-A
+    collected it, optionally with the record's own ``width`` and its
+    **arc-expanded** ring (:func:`_ring_points`) as fourth and fifth elements
+    (bug98-B: the capsule reading needs the arcs — the pieces are strokes of
+    arcs, and a flattened ring would cut the board — and uses ``width`` for the
+    note and the bounding-box sanity). Both elements are optional so a caller
+    that omits them still gets bug98-A's reading, and so the fixtures that call
+    this with three-element tuples stay green: no ring falls back to ``points``
+    (which for a document with no ``ARC`` commands is the same thing), and no
+    width only costs the sanity check's scale.
+
+    The returned :class:`BoardOutline` carries the disclosure of *how* it was
+    read: ``stitched`` is True when the ring was assembled by welding record
+    ends (the capsule frame, or bug98-A's open-polylines stitch), **False** when
+    the frame is one record's own closed ring picked out of several — the
+    fallback that hands a piece of a frame to the off-board rule, which is what
+    ``pcb-component-off-board`` refuses to measure against (bug98-B guardrail) —
+    and ``None`` for a single record, where the question does not arise.
     """
     if not segments:
         return None, 0
     if len(segments) == 1:
-        source_id, points, is_rectangle = segments[0]
-        closed = bool(is_rectangle) or _is_closed_ring(points, tolerance)
+        # The record's own points, byte for byte what bug98-A returned — the
+        # arc-expanded ``ring`` a 5-element entry may carry is **not** used here:
+        # a single-record frame keeps the reading every existing fixture has.
+        points = segments[0][1]
+        closed = bool(segments[0][2]) or _is_closed_ring(points, tolerance)
         return (
             BoardOutline(
-                points=list(points), source_id=source_id, segments=1, closed=closed
+                points=list(points),
+                source_id=segments[0][0],
+                segments=1,
+                closed=closed,
             ),
             0,
         )
-    closed_rings: list[list[Point]] = []
+    closed: list[tuple[list[Point], float, list[Point]]] = []
     open_polylines: list[list[Point]] = []
-    for _source_id, points, is_rectangle in segments:
+    for segment in segments:
+        points = segment[1]
+        is_rectangle = segment[2]
+        width = float(segment[3]) if len(segment) > 3 and segment[3] else 0.0
+        drawn = list(segment[4]) if len(segment) > 4 and segment[4] else list(points)
         if is_rectangle or _is_closed_ring(points, tolerance):
             if len(points) >= 3:
-                closed_rings.append(list(points))
+                closed.append((list(points), width, drawn))
         else:
             open_polylines.append(list(points))
+    # bug98-B: all of the records are closed rings and none is open — the shape
+    # a **stroked** frame arrives in (every piece is the outline of a drawn
+    # line). Read the pieces' centre lines and join them; the answer is the
+    # frame the editor's line traces. ``_capsule_frame`` refuses anything it is
+    # not sure of, and the fallback below then does exactly what it did before
+    # bug98-B — which is why a document that is *not* this shape cannot change
+    # behaviour here. Note which reading each half gets: the capsule reading
+    # wants ``drawn`` (arcs expanded) and the fallback wants ``points`` (the
+    # record's own vertices, bug98-A's reading byte for byte).
+    if closed and not open_polylines:
+        strokes = [(drawn, width) for _points, width, drawn in closed]
+        frame = _capsule_frame(strokes, tolerance)
+        if frame is not None:
+            return (
+                BoardOutline(
+                    points=frame,
+                    source_id=segments[0][0],
+                    segments=len(segments),
+                    closed=True,
+                    stitched=True,
+                    note=_capsule_note(strokes, len(segments)),
+                ),
+                0,
+            )
+    closed_rings = [points for points, _width, _drawn in closed]
     stitched = _longest_closed_chain(open_polylines, tolerance) if open_polylines else None
     stitched_used = 0
     stitched_welds = 0
@@ -601,25 +1037,18 @@ def _stitch_outline(
     if not closed_rings:
         return None, len(segments)
     longest = max(closed_rings, key=_perimeter)
-    consumed = (
-        stitched_used
-        if stitched is not None and longest is stitched_ring
-        else 1
-    )
-    welds = (
-        stitched_welds
-        if stitched is not None and longest is stitched_ring
-        else 0
-    )
+    joined = stitched is not None and longest is stitched_ring
+    welds = stitched_welds if joined else 0
     return (
         BoardOutline(
             points=longest,
             source_id=segments[0][0],
             segments=len(segments),
             closed=True,
+            stitched=joined,
             tolerance_welds=welds,
         ),
-        len(segments) - consumed,
+        len(segments) - (stitched_used if joined else 1),
     )
 
 
@@ -1710,10 +2139,17 @@ class PcbContext:
     prohibit_regions: list[ProhibitRegion] = field(default_factory=list)
     outline: BoardOutline | None = None
     #: bug98-A: every ``BOARD_OUTLINE`` record's polyline, in file order, as
-    #: ``(record id, points, is_rectangle_form)``. The walk collects **all** of
-    #: them (it used to keep only the first) and :func:`_stitch_outline` turns
-    #: them into :attr:`outline` once the document has been read.
-    outline_segments: list[tuple[str, list[Point], bool]] = field(default_factory=list)
+    #: ``(record id, points, is_rectangle_form, width, ring)``. The walk collects
+    #: **all** of them (it used to keep only the first) and
+    #: :func:`_stitch_outline` turns them into :attr:`outline` once the document
+    #: has been read. ``width`` and ``ring`` are bug98-B's additions: a frame
+    #: drawn as a line arrives as one closed ring per piece, the stroke width is
+    #: what the centre-line reading scales its wall/cap test by, and ``ring`` is
+    #: that record's geometry with its **arcs expanded** (``points``, the flat
+    #: reading every other consumer wants, drops an ``ARC``'s sweep).
+    outline_segments: list[tuple[str, list[Point], bool, float, list[Point]]] = field(
+        default_factory=list
+    )
     #: bug98-A: how many ``BOARD_OUTLINE`` records could not be stitched into
     #: one closed outline. See :attr:`boardwise.core.geometry.BoardGeometry.
     #: outline_fragments`.
@@ -2014,7 +2450,21 @@ def collect_pcb_context(
                     # second-and-later ones used to — and stitched into one ring
                     # after the walk (see :func:`_stitch_outline`).
                     context.outline_segments.append(
-                        (record.id or "", points, _path_is_rectangle(path))
+                        (
+                            record.id or "",
+                            points,
+                            _path_is_rectangle(path),
+                            _as_float(body.get("width")),
+                            # bug98-B: the same record with its **arcs expanded**
+                            # (`_ring_points`, the editor's own command reading).
+                            # A board frame drawn as a line arrives as one closed
+                            # ring per piece, and a piece may be a stroke of an
+                            # ARC — `_path_points` keeps an arc's end point and
+                            # drops its sweep, so the flattened ring would turn an
+                            # 880-mil arc into its chord and the centre line read
+                            # off it would cut 82 mil off the board.
+                            _ring_points(path),
+                        )
                     )
                     continue
                 # 162b: copper or artwork? The record types here carry both —

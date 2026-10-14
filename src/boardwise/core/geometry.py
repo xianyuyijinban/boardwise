@@ -927,6 +927,28 @@ class BoardOutline:
     hand-built outline a test or a caller constructs from a raw point list:
     one segment, closure not asserted — so a hand-built frame that *means* to
     be a board must say ``closed=True``.
+
+    ``stitched`` and ``note`` (bug98-B) carry the one reading ``segments`` and
+    ``closed`` cannot express: whether the ring **is** the frame or is a piece
+    of one. A frame drawn as a line arrives as one closed ring per piece
+    (bug98-B's field board: 16 of them, every one closed, each the outline of a
+    stroked **arc** or line), and when the pieces cannot be joined the parser
+    falls back to bug98-A's ``max(perimeter)`` — the ring of one piece,
+    ``closed=True`` and indistinguishable from a board by
+    ``segments``/``closed`` alone. ``stitched`` says which happened: True for a
+    ring assembled by welding record ends (the pieces' **centre lines**, which is
+    the frame a drawn line traces, or bug98-A's open-polylines stitch), **False**
+    for a frame that is one record's own closed ring chosen out of several, and
+    None for a single record, where the question does not arise. False is what
+    ``pcb-component-off-board`` consumes: a piece of a frame is not evidence
+    that a part hangs off the board, so that rule suppresses its per-part ERRORs
+    and files one WARN instead.
+
+    ``note`` is the parser's own sentence for the same occasion and is printed
+    verbatim by the report — 「16 段描边板框按描边中心线拼合成一个闭环」 and the
+    stroke width it was read from. It is empty for every reading the fields
+    above already describe, so a board whose frame was always one record carries
+    no key at all.
     """
 
     points: list[Point] = field(default_factory=list)
@@ -940,7 +962,20 @@ class BoardOutline:
     #: shared corner sits 0.5 mil apart into one pinched ring no crossing test
     #: can see — the honest answer is to count the inexact joins and let the
     #: report say so. 0 for a single record and for an exactly-joined ring.
+    #: **0 as well for a stroke-stitched ring** (bug98-B): every join of a
+    #: capsule frame is inexact *by construction* (the join is the centroid of
+    #: a cap, not a shared vertex), so counting them would report a 16-piece
+    #: board as 15 welding hazards; ``note`` says how that ring was assembled
+    #: instead.
     tolerance_welds: int = 0
+    #: Whether **every** record was welded into ``points`` (bug98-B). See the
+    #: class docstring: True (stitched), False (one record's own ring chosen
+    #: among several — a piece of a frame), None (single record; not applicable).
+    stitched: bool | None = None
+    #: The parser's own sentence about a reading ``segments``/``closed`` cannot
+    #: spell out (bug98-B), printed verbatim by the report's ``outlineNote``.
+    #: Empty for every reading the fields above already describe.
+    note: str = ""
 
     @property
     def bbox(self) -> BBox | None:

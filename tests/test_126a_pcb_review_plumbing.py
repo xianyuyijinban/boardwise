@@ -1097,9 +1097,19 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 毕设FOC 2026-09-17 各四行、毕设滤波采样一行、KiCad 合成夹具一行、
     # 其余六个夹具零行（逐板扫过，命令与输出在 `outputs/182_highspeed_scaffold/
     # evidence.md`）。
+    # **bug98-B moved the recursive one** — 68ecaf84 -> 38cb7b23，direct 仍
+    # `8269e601`（第二十一批连任）：本批落在 `rules/pcb/` 的**一个文件**——
+    # `rules/pcb/distance.py` 的 `BoardOffEdge` 加护栏（`_frame_is_a_piece`）：
+    # 多段板框只认了一环（`BoardOutline.stitched is False`）且另有段未入环时，
+    # 不出逐器件 ERROR，改出 1 条 WARN 点名段数与处置。判据与实现都在
+    # `parsers/epru.py`（描边中心线拼合）与 `core/geometry.py`（新字段
+    # `stitched`/`note`）——两个文件都在本 recipe 之外，与 131c/131d/131f 记过的
+    # 同一条限制一致；规则里只有这一处判定变化。原样保留的锚：本文件上方逐字
+    # 序列表（规则清单未动）、`test_bug98a_outline_stitch.py` 20 条、14 夹具
+    # 003 秒级对拍（bug98-B 实板对拍见 `outputs/183_bug98b/evidence.md`）。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "8269e601"
-    assert recursive == "68ecaf84", (
+    assert recursive == "38cb7b23", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )
