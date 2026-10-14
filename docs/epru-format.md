@@ -183,6 +183,38 @@ names are literal; the "copper" classification is **[inferred]** from the names)
 | 71–100 | CUSTOM | Custom1 … Custom30 |
 | 361 | SUBSTRATE | Dielectric1 |
 
+### 5.1 `LAYER_PHYS` — the fabricated stackup **[confirmed]**
+
+`LAYER` is what the *editor* knows (all 32 possible inner layers on a 2-layer
+board); `LAYER_PHYS` is the fabrication truth — one record per **physical**
+layer, copper or dielectric, ordered by `zIndex`. `boardwise.parsers.epru` has
+consumed it into `BoardGeometry.stackup` since 125a (a `StackupEntry` per
+record, sorted by `z_index`); 182 added the two dielectric columns.
+
+```jsonc
+{"type":"LAYER_PHYS","ticket":…,"id":"[\"LAYER_PHYS\",361]"}||
+{"material":"FR4","thickness":59.449,"permittivity":4.5,"lossTangent":0,
+ "isKeepIsland":true,"zIndex":5}
+```
+
+| key | lands in | note |
+|---|---|---|
+| `material` | `StackupEntry.material` | free text, verbatim (`FR4`, `外层铜厚1oz`, `7628 RC49% 8.6mil`, `-`) |
+| `thickness` | `StackupEntry.thickness` | **mils** (1 oz copper 1.378, a 1.5 mm core 59.449) |
+| `zIndex` | `StackupEntry.z_index` + the sort key | only the *ordering* means anything, never the magnitude (llc uses 1…9, 毕设FOC 1000/1002/9000) |
+| `permittivity` | `StackupEntry.permittivity` | **182** — Er |
+| `lossTangent` | `StackupEntry.loss_tangent` | **182** — Df |
+
+**A non-positive value is 未声明, not a value**: llc writes `permittivity 0` on
+its copper layers and `lossTangent 0` on its `FR4` core beside a real Er of 4.5,
+毕设FOC 1.0.0 writes `0` in *both* columns of all 13 records, and the
+DCDC-12V9V转5V3V3 backup writes `null` where 毕设FOC writes `0` — one meaning,
+two spellings. So both columns read `None` for 0 and for a missing key, and a
+consumer that wants a dielectric constant reads `None` as 「the file did not
+state one」. Measured real numbers: llc's `FR4` core (361) is Er 4.5, its two
+solder masks (5/6) are Er 3.3 / Df 0.02, and 智能药箱's core is Er 4.5 / Df 0.02.
+**[confirmed]**
+
 ## 6. Records that carry board geometry
 
 ### 6.1 `COMPONENT` — a placed instance **[confirmed]**
@@ -435,7 +467,7 @@ bridge the pour engine did not create. **[confirmed by measurement]**
 > resolvable parent links across the fixtures are forward — so one pass
 > suffices. **[confirmed]**
 
-### 6.10 `NET` — net metadata, not geometry **[confirmed]**
+### 6.10 `NET` — net metadata, not geometry **[confirmed]** **[consumed since 182]**
 
 ```jsonc
 {"type":"NET","ticket":69974,"id":"[\"NET\",\"$1N144223\"]","firstTicket":57540}||
@@ -443,17 +475,45 @@ bridge the pour engine did not create. **[confirmed by measurement]**
  "isPositiveNet":false,"equalLengthGroupName":null}
 ```
 
-73 in the PCB document, 47 of them empty-body. Net *names* on the PCB side are
-a mix of schematic names (`DC-`, `DC+`, `CHS`, `DHS`, `CHG`, `CLG`, `DHG`,
-`DLG`) and internal ids (`$1N144223`). **[confirmed]**
+The **net name is the record's id tuple** (`["NET","D+"]`), not a body key. Net
+*names* on the PCB side are a mix of schematic names (`DC-`, `DC+`, `CHS`,
+`DHS`, `CHG`, `CLG`, `DHG`, `DLG`) and internal ids (`$1N144223`). Many records
+carry an empty body (`…||`): measured 73 records / 47 empty on the llc backup,
+and 115 / 27 on 毕设FOC 1.0.0's `PCB1`.
+
+**182 consumes three of the body's keys** into
+`BoardGeometry.net_meta[<net name>]` as a `NetMeta` row — the first per-net
+*declaration* the geometry reader has ever kept:
+
+| key | lands in | meaning |
+|---|---|---|
+| `differentialName` | `NetMeta.diff_pair` | the editor's own differential-pair group name |
+| `isPositiveNet` | `NetMeta.diff_positive` | which member of the group is positive |
+| `equalLengthGroupName` | `NetMeta.equal_length_group` | the editor's equal-length group |
+
+`netType`, `specialColor` and `retLine` stay unread (`netType` is `null` on every
+fixture and has no slot in `NetMeta`; the other two are display options). A
+record with an empty body declares nothing and gets **no** row — the same
+「absent, not empty」 rule the rest of the parser follows (so 毕设FOC 1.0.0's 115
+records make 87 rows: 27 empty bodies and the no-net row dropped).
+
+Measured declarations: 毕设FOC 1.0.0's `PCB1` declares `D+/D-` as **`DP1`** and
+`CAN_H/CAN_L` as **`DP2`**, and nothing else; ROBOT's and 智能药箱's `PCB1` declare
+`D+/D-` as `DP1`. **`isPositiveNet` is not derivable from the name**: 1.0.0 writes
+`true` on `D-` and `CAN_L`, ROBOT and 智能药箱 write `true` on `D-` as well, while
+毕设FOC's older 2026-09-17 backup writes `true` on `D+` for the same pair — the
+flag is carried verbatim and never normalised. **[confirmed]**
 
 ## 7. Records present but not consumed
 
 Counted in `ParseStats.unconsumed_types` so it stays obvious what else the
 format carries: `RULE` (242 whole-file), `RULE_SELECTOR`, `RULE_TEMPLATE`,
-`PRIMITIVE`, `ELE_PLACEHOLDER`, `META`, `CANVAS`, `ACTIVE_LAYER`, `LAYER_PHYS`,
-`PANELIZE`, `PREFERENCE`, `SILK_OPTS`, `DIMENSION`, `NET`, `GROUP`. (`STRING`
-was on this list until 152; see below for what it carries and where it goes.)
+`PRIMITIVE`, `ELE_PLACEHOLDER`, `META`, `CANVAS`, `ACTIVE_LAYER`, `PANELIZE`,
+`PREFERENCE`, `SILK_OPTS`, `DIMENSION`, `GROUP`. (`STRING` was on this list
+until 152, `LAYER_PHYS` was **never** on it — the copper walk has consumed it
+since 125a, and this list only said otherwise until 182 corrected the stale
+line — and `NET` left it in 182; see §6.10 and §5.1 for what each of the two
+carries and where it goes.)
 
 Two of them are worth a future task:
 
@@ -707,10 +767,11 @@ retired — the same run now reports 0 ERROR / 0 WARN / 0 INFO, and the
 paragraph above stands as the measurement it was made from.)*
 
 Net names come straight from `PAD_NET.padNet`. There is **no** id → friendly
-name lookup: the 73 `NET` records in the PCB document only carry display
-options (`retLine`, `specialColor`), and the `$1N…` identifiers are EasyEDA's
-own auto-names for nets the designer never labelled. 25 nets are actually
-used by pads on this board. **[confirmed]**
+name lookup in the `NET` table either: the 73 records on llc carry the net's own
+declaration row (its differential-pair fields — see §6.10, consumed since 182 —
+plus display options `retLine` / `specialColor`), not a name mapping, and the
+`$1N…` identifiers are EasyEDA's own auto-names for nets the designer never
+labelled. 25 nets are actually used by pads on this board. **[confirmed]**
 
 ## 11. Encrypted and unreadable backups
 

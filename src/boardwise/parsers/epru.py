@@ -63,6 +63,7 @@ from ..core.geometry import (
     BoardOutline,
     ComponentPlacement,
     LayerInfo,
+    NetMeta,
     PadGeometry,
     ParseStats,
     Point,
@@ -126,10 +127,19 @@ __all__ = [
 #: still counted in ``ParseStats.unconsumed_types`` by the copper walk — that
 #: walk genuinely does not consume them, and the census is a statement about
 #: what the walk saw, not about what the module reads in total.
+#:
+#: ``NET`` joined in 182, the first **declaration** record here rather than a
+#: geometric one: the walk now reads the net table's own differential-pair keys
+#: (``differentialName`` / ``isPositiveNet`` / ``equalLengthGroupName``) into
+#: :class:`~boardwise.core.geometry.NetMeta`, so the record type stops being
+#: counted as 「known but unread」 — the census the 131f/162b discipline keeps
+#: asking for. ``LAYER_PHYS`` was already in this set while
+#: ``docs/epru-format.md`` still listed it as unconsumed; 182 corrected that doc
+#: line (it was stale, not this set).
 CONSUMED_RECORD_TYPES: frozenset[str] = frozenset(
     {
         "ATTR", "COMPONENT", "DOCHEAD", "FILL", "LAYER", "LAYER_PHYS", "LINE",
-        "PAD_NET", "POLY", "POUR", "POURED", "STRING", "TEXT", "VIA",
+        "NET", "PAD_NET", "POLY", "POUR", "POURED", "STRING", "TEXT", "VIA",
     }
 )
 
@@ -278,6 +288,31 @@ def _net_name(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _positive_or_none(value: Any) -> float | None:
+    """A declared physical quantity, or ``None`` when the file stated none (182).
+
+    **Zero and negatives are 「未声明」, not a value.** The fixtures write
+    ``permittivity: 0`` / ``lossTangent: 0`` on layers whose dielectric columns
+    were never filled (every copper layer of 毕设FOC 1.0.0, and llc's FR4 core
+    beside a real Er of 4.5), while the DCDC-12V9V转5V3V3 fixture writes
+    ``null`` for the same thing — one meaning, two spellings, and `0` is not a
+    permittivity any fab can build. A non-numeric payload is the same answer,
+    never a crash and never a silent ``0.0``.
+    """
+    number = _as_float(value, 0.0)
+    return number if number > 0 else None
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    """``True`` / ``False`` when the record stated a real bool, else ``None`` (182).
+
+    ``NET.isPositiveNet`` is a JSON bool on every fixture, but a record that
+    omits it or writes a string must land ``None`` (未声明) rather than be
+    coerced: ``bool("false")`` is ``True``, which would invert a declaration.
+    """
+    return value if isinstance(value, bool) else None
 
 
 def _path_points(path: Any) -> list[Point]:
@@ -1652,6 +1687,12 @@ class PcbContext:
     #: Physical stackup (``LAYER_PHYS`` records), sorted by z_index at the
     #: end of the walk. See :class:`boardwise.core.geometry.StackupEntry`.
     stackup: list[StackupEntry] = field(default_factory=list)
+    #: 182: net name → the ``NET`` record's own declaration row
+    #: (:class:`boardwise.core.geometry.NetMeta`). Only records **with a body**
+    #: get a row: 27 of 毕设FOC 1.0.0's 115 ``NET`` records carry an empty body
+    #: (``…||``, measured), which states nothing, and the module's "absent, not
+    #: empty" rule is that a missing key already says so.
+    net_meta: dict[str, NetMeta] = field(default_factory=dict)
     placements: list[ComponentPlacement] = field(default_factory=list)
     by_id: dict[str, ComponentPlacement] = field(default_factory=dict)
     pads: list[PadGeometry] = field(default_factory=list)
@@ -1750,8 +1791,35 @@ def collect_pcb_context(
                     z_index=int(_as_float(body.get("zIndex"))),
                     material=str(body.get("material") or ""),
                     thickness=_as_float(body.get("thickness")),
+                    # 182: the two dielectric columns, read since the fixtures
+                    # carry them (llc's FR4 core: Er 4.5; the 智能药箱 backup:
+                    # Er 4.5 / Df 0.02). A zero is 未声明 — see
+                    # :func:`_positive_or_none`.
+                    permittivity=_positive_or_none(body.get("permittivity")),
+                    loss_tangent=_positive_or_none(body.get("lossTangent")),
                 )
             )
+        elif rtype == "NET":
+            # 182: the net table's own declaration row — the net name lives in
+            # the id tuple (``["NET","D+"]``), the body carries the rest.
+            # ``netType`` / ``specialColor`` / ``retLine`` stay unread on
+            # purpose: the first has no slot in
+            # :class:`~boardwise.core.geometry.NetMeta` (whose ``net_class`` is
+            # KiCad netclass membership) and it is ``null`` on every fixture,
+            # while the other two are display options. A record with an empty
+            # body never reaches here (the walk's `continue` above), so it
+            # declares nothing and gets no row.
+            try:
+                net = parse_id_tuple(record)[1]
+            except IndexError:
+                continue
+            if net:
+                context.net_meta[net] = NetMeta(
+                    name=net,
+                    diff_pair=_net_name(body.get("differentialName")),
+                    diff_positive=_bool_or_none(body.get("isPositiveNet")),
+                    equal_length_group=_net_name(body.get("equalLengthGroupName")),
+                )
         elif rtype == "COMPONENT":
             # Older documents use "angle"; the published V3 schema names the
             # same field "rotation" (plus a separate "isMirror" flag).
@@ -2086,6 +2154,7 @@ def extract_board(
         edit_version=stats.edit_version,
         layers=context.layers,
         stackup=context.stackup,
+        net_meta=context.net_meta,
         components=context.placements,
         pads=context.pads,
         tracks=context.tracks,
@@ -2141,6 +2210,7 @@ def build_board_geometry(source: Epro2Source) -> BoardGeometry:
         edit_version=source.stats.edit_version,
         layers=context.layers,
         stackup=context.stackup,
+        net_meta=context.net_meta,
         components=context.placements,
         pads=context.pads,
         tracks=context.tracks,

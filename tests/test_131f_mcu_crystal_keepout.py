@@ -514,7 +514,8 @@ def test_rule_is_declared_house_rule_with_no_threshold_and_is_in_the_list():
     自身铜与空层 INFO」) supplies the verdict while **keeping** the margin, so the
     source now names the ruling and the constant stays where it was —
     :data:`CRYSTAL_REGION_MARGIN_MIL` is still a region margin documented as a
-    default rather than a datasheet figure.
+    default rather than a datasheet figure. **182 appended one id at the end**
+    (``pcb-hs-diffpair-inventory``), which moves no MCU-block adjacency.
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
@@ -543,7 +544,8 @@ def test_rule_is_declared_house_rule_with_no_threshold_and_is_in_the_list():
         "pcb-component-off-board",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
-        "pcb-keepout-violation",  # R2-1, appended last
+        "pcb-keepout-violation",  # R2-1, the sweep's last
+        "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
     ]
     rule = McuCrystalKeepout()
     assert rule.id == RULE_ID

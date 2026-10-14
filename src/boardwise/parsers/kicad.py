@@ -7,8 +7,20 @@ without KiCad being installed:
   view, which the 011-family rules are written against);
 * ``.kicad_pcb`` → :class:`~boardwise.core.geometry.BoardGeometry` plus the
   board's own netlist view (every pad states its net);
-* ``.kicad_pro`` is JSON with project settings only — it is used to find the
-  other two (same stem, same folder) and nothing else.
+* ``.kicad_pro`` is JSON. It used to be read for one thing only — finding the
+  other two files (same stem, same folder) — and **182** made it a data source
+  as well: its ``net_settings`` block carries the project's netclasses
+  (``diff_pair_width`` / ``diff_pair_gap``, in mm) plus the net →
+  netclass ``netclass_assignments`` map and the ``netclass_patterns`` globs, and
+  those land in :class:`~boardwise.core.geometry.NetMeta`
+  (:func:`read_project_net_settings` / :func:`apply_net_settings`). The block's
+  shape is taken from KiCad's own files and public format documentation, not
+  guessed: KiCad 9's project initialiser writes ``net_settings`` with
+  ``classes[]`` / ``meta.version 4`` / ``netclass_assignments`` /
+  ``netclass_patterns``, which is also the shape KiCad 6–8 projects carry.
+  Reading it never refuses a board: a missing file, a broken JSON body or a
+  wrong type in any key leaves the net metadata empty rather than failing a
+  review over a settings block this reader does not need.
 
 Everything here was written against KiCad's public format and **measured**
 against KiCad itself, not aligned with the EasyEDA reader by assumption
@@ -48,6 +60,20 @@ module to them. The measured facts this module depends on:
   4, 6 … (inner); units are mm with y pointing down. A pad's ``at`` is its
   position in the **footprint's unrotated frame** with its **absolute**
   orientation; a bottom-side footprint is stored already flipped.
+* **The stackup is optional and partial (182).** ``(setup (stackup …))`` lists
+  the fabricated layers in order — the copper ones by canonical name
+  (``"F.Cu"``), the dielectric ones as ``"dielectric 1"`` — each with
+  ``(type "copper"|"core"|"prepreg"|…)``, ``(thickness …)`` in mm and, for a
+  dielectric, ``(material "FR4")`` / ``(epsilon_r 4.5)`` /
+  ``(loss_tangent 0.02)``. The S-expression grammar is KiCad's published one
+  ([KiCad board file format](https://dev-docs.kicad.org/en/file-formats/sexpr-pcb/),
+  "Stack Up Layer Settings"): the two dielectric columns are **``epsilon_r`` and
+  ``loss_tangent``**, not ``permittivity``/``loss_tangent`` — this reader takes
+  KiCad's own spelling. Verifying the keys against KiCad rather than against
+  EasyEDA's names is the same discipline as the layer-id bridge below.
+  A board that states no stackup reads as an empty ``stackup`` list, which is
+  the *absent* state :func:`~boardwise.core.measure.read_stackup` already falls
+  back from (the ``LAYER`` table).
 
 **The layer-id bridge.** boardwise's PCB rules speak the EasyEDA layer ids
 (top 1, bottom 2, inner 15+, multi-layer 12) — several rules have them as
@@ -70,6 +96,7 @@ class or in ``None``.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import math
 import re
@@ -83,9 +110,11 @@ from ..core.geometry import (
     BoardOutline,
     ComponentPlacement,
     LayerInfo,
+    NetMeta,
     PadGeometry,
     Point,
     PourShape,
+    StackupEntry,
     TrackSegment,
     ViaGeometry,
 )
@@ -101,6 +130,9 @@ __all__ = [
     "KICAD_SUFFIXES",
     "Atom",
     "KicadFormatError",
+    "NetClassDecl",
+    "NetSettings",
+    "apply_net_settings",
     "is_kicad_path",
     "kicad_project_files",
     "load_kicad",
@@ -108,6 +140,7 @@ __all__ = [
     "read_kicad_board",
     "read_kicad_board_model",
     "read_kicad_schematic_model",
+    "read_project_net_settings",
     "schematic_connectivity",
 ]
 
@@ -301,6 +334,160 @@ def kicad_project_files(path: str | Path) -> tuple[Path | None, Path | None]:
     sch = stem.with_suffix(".kicad_sch")
     pcb = stem.with_suffix(".kicad_pcb")
     return (sch if sch.is_file() else None, pcb if pcb.is_file() else None)
+
+
+# ---------------------------------------------------------------------------
+# the project's net settings (.kicad_pro) — 182
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class NetClassDecl:
+    """One ``net_settings.classes[]`` row: a netclass and its declared diff pair.
+
+    Both sizes are in **mils** — KiCad writes mm and every boardwise length is
+    mil, so the conversion happens here, once, at the boundary (the same
+    ``MM_TO_MIL`` the pads and tracks are converted with). ``None`` means
+    「the class states no usable value」: the key is absent, or it is not a
+    number, or it is non-positive (KiCad writes ``0`` for 「not set here」).
+    """
+
+    name: str
+    diff_pair_width: float | None = None
+    diff_pair_gap: float | None = None
+
+
+@dataclass
+class NetSettings:
+    """A project's ``net_settings`` block, read leniently (182).
+
+    Three tables, exactly the ones KiCad's own project files carry: the
+    classes, the explicit net → netclass assignments (``null`` in a default
+    project) and the netclass *patterns* (globs). Every field is optional and
+    nothing here raises — see :func:`read_project_net_settings`.
+    """
+
+    classes: dict[str, NetClassDecl] = field(default_factory=dict)
+    #: net name → netclass, as written (KiCad writes the net's *path* form,
+    #: ``"/CAN_H"``, for a net on a child sheet and the bare name is what a
+    #: root-sheet net often gets — both forms are tried).
+    assignments: dict[str, str] = field(default_factory=dict)
+    #: ``(pattern, netclass)`` in **file order**; the first glob that matches a
+    #: net wins, which is KiCad's own "first match" reading of the list.
+    patterns: list[tuple[str, str]] = field(default_factory=list)
+
+    def netclass_of(self, net: str) -> str | None:
+        """The netclass ``net`` resolves to: an assignment first, else a pattern.
+
+        KiCad's own precedence: an explicit assignment beats the pattern list,
+        and within the list the first matching entry wins. Both the bare net
+        name and its ``"/NAME"`` path form are tried, because a project may
+        write either and this reader has no schematic to say which sheet the
+        net came from. ``fnmatchcase`` rather than ``fnmatch``: the latter
+        lower-cases both sides on Windows, so the same project would resolve
+        differently on two machines.
+        """
+        for candidate in (net, "/" + net):
+            klass = self.assignments.get(candidate)
+            if klass:
+                return klass
+        for pattern, klass in self.patterns:
+            if fnmatch.fnmatchcase(net, pattern) or fnmatch.fnmatchcase("/" + net, pattern):
+                return klass
+        return None
+
+
+def _mil_or_none(value: Any) -> float | None:
+    """A declared KiCad length (mm) in mils, or ``None`` when it is not usable."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number * MM_TO_MIL if number > 0 else None
+
+
+def read_project_net_settings(path: str | Path) -> NetSettings | None:
+    """The ``net_settings`` of one ``.kicad_pro``, or ``None`` (182).
+
+    ``None`` covers three situations that all answer the same way, and saying so
+    is the point: the file is not there, it is not readable JSON, or it carries
+    no ``net_settings`` block. None of them is an error for a *board* review —
+    the net metadata is an extra column, and 182's own rule is that an absent
+    column stays absent. What is refused is nothing here: an input ``.kicad_pro``
+    that is not JSON at all is refused by :func:`load_kicad` before this runs
+    (that is a broken *input*, not a missing sidecar).
+
+    Every key is read defensively — a wrong type in any of them drops that one
+    table rather than the whole block, so a project written by a newer KiCad
+    still yields whatever this reader understands.
+    """
+    project = Path(path)
+    if not project.is_file():
+        return None
+    try:
+        data = json.loads(project.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = data.get("net_settings")
+    if not isinstance(block, dict):
+        return None
+
+    settings = NetSettings()
+    for row in block.get("classes") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        settings.classes[name] = NetClassDecl(
+            name=name,
+            diff_pair_width=_mil_or_none(row.get("diff_pair_width")),
+            diff_pair_gap=_mil_or_none(row.get("diff_pair_gap")),
+        )
+    assignments = block.get("netclass_assignments")
+    if isinstance(assignments, dict):
+        for net, klass in assignments.items():
+            if str(net) and str(klass or "").strip():
+                settings.assignments[str(net)] = str(klass).strip()
+    for row in block.get("netclass_patterns") or []:
+        if not isinstance(row, dict):
+            continue
+        pattern = str(row.get("pattern") or "").strip()
+        klass = str(row.get("netclass") or "").strip()
+        if pattern and klass:
+            settings.patterns.append((pattern, klass))
+    return settings
+
+
+def apply_net_settings(board: BoardGeometry, settings: NetSettings | None) -> None:
+    """Fill ``board.net_meta`` with the netclass each of the board's nets falls in (182).
+
+    A net with **no** resolved netclass gets no row — that is the same
+    「nothing was declared」 a net in no class really is, and :func:`netclass_of`
+    returning ``None`` cannot be told apart from a class named ``""``. A net
+    that resolves to a class the ``classes[]`` list does not describe gets a row
+    naming the class with both sizes ``None``: the project declared the
+    membership and did not declare the size, which is two different facts and
+    the row keeps them apart.
+
+    In place, and only ever additive: ``board.net_meta`` is empty for a KiCad
+    board until this runs, and a caller that passes ``None`` leaves it that way.
+    """
+    if settings is None:
+        return
+    for net in board.nets:
+        klass = settings.netclass_of(net)
+        if klass is None:
+            continue
+        decl = settings.classes.get(klass)
+        board.net_meta[net] = NetMeta(
+            name=net,
+            net_class=klass,
+            declared_diff_width=decl.diff_pair_width if decl else None,
+            declared_diff_gap=decl.diff_pair_gap if decl else None,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -744,6 +931,101 @@ def _copper_of(names: list[str], layers: _Layers) -> list[int]:
     return sorted(out)
 
 
+def _stackup_number(value: Any) -> float | None:
+    """A stackup number, or ``None`` when the node is absent or unusable (182).
+
+    Deliberately **not** :func:`_strict_num`'s discipline: every stackup column
+    is optional metadata (nothing in ``src/`` reads :attr:`StackupEntry.thickness`
+    today, and the two dielectric columns are read by no rule yet), so an
+    unreadable ``(epsilon_r 4,5)`` must cost that one column and not the whole
+    board. Geometry numbers keep the strict path — see the module docstring's
+    refusal list.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stackup_positive(value: Any) -> float | None:
+    """A dielectric column (Er / Df), or ``None`` when the file declared none (182).
+
+    The same rule :func:`boardwise.parsers.epru._positive_or_none` applies on the
+    EasyEDA side, and for the same measured reason: KiCad writes ``0`` — not
+    ``null`` — for a column the designer left at its default, so ``0`` here
+    means 「not declared」, never 「zero permittivity」.
+    """
+    number = _stackup_number(value)
+    return number if number is not None and number > 0 else None
+
+
+def _read_stackup(tree: list, layers: _Layers) -> list[StackupEntry]:
+    """``(setup (stackup …))`` → a :class:`StackupEntry` list, ``[]`` when absent (182).
+
+    **The trade-off this reader has to make.** An EasyEDA ``LAYER_PHYS`` record
+    carries a ``layerId``, so a stackup entry's id *is* a boardwise layer id; a
+    KiCad ``(stackup)`` entry carries only a name (``"F.Cu"``, ``"dielectric 1"``,
+    ``"F.Mask"`` …). Three decisions follow, and they are this function's whole
+    interface:
+
+    * a **copper** stackup layer takes the boardwise id the same bridge gives
+      every pad and track (:func:`_bw_layer` via the ``layers`` table, so
+      ``F.Cu`` → 1, ``B.Cu`` → 2, ``In1.Cu`` → 15) — a stackup entry and the
+      copper it describes agree by construction, not by a second mapping;
+    * a **non-copper** layer (dielectric, mask, paste, silk) gets the negative id
+      ``-(position + 1)``. It has no boardwise id and cannot be given one
+      honestly: EasyEDA's dielectric ids (361…) and mask ids (5/6) are *its*
+      numbering, and a dielectric wearing ``361`` would be a claim this reader
+      cannot make. A negative id cannot collide with any of them, and it keeps
+      :func:`~boardwise.core.measure.read_stackup` — which treats an entry as
+      copper only when ``board.layers`` has a copper ``LayerInfo`` for its id —
+      unable to mistake a dielectric for copper. The cost is that a dielectric
+      entry's own ``(type "core"|"prepreg")`` word is **not** carried:
+      :class:`StackupEntry` has no slot for it, and 182 adds the two dielectric
+      columns only;
+    * ``z_index`` is the entry's **position in the stackup**, 0-based, top of
+      the board first — KiCad's own order, and the only order the file states.
+      It is *not* comparable with an EasyEDA ``zIndex`` (those are 1/1000/9000
+      …); as :class:`StackupEntry`'s docstring says, only the ordering means
+      anything, never the magnitude.
+
+    ``(thickness …)`` is mm in the file (mils in the model, like every other
+    length here). A board with no ``stackup`` node, and a stackup whose ``layer``
+    nodes are all malformed, both come back as ``[]`` — the same *absent* state
+    ``read_stackup`` falls back from to the ``LAYER`` table.
+    """
+    setup = _first(tree, "setup")
+    stackup = _first(setup, "stackup") if setup is not None else None
+    if stackup is None:
+        return []
+
+    entries: list[StackupEntry] = []
+    for node in _kids(stackup, "layer"):
+        if len(node) < 2:
+            continue
+        name = str(node[1])
+        if name == "dielectric" and len(node) > 2 and not isinstance(node[2], list):
+            # The published grammar's unquoted form: `(layer dielectric 1 …)`.
+            name = f"dielectric {node[2]}"
+        if not name:
+            continue
+        copper_id = layers.by_name.get(name)
+        if copper_id is None:
+            mapped = _bw_layer(name, str(_arg(node, "type", default="")))
+            copper_id = mapped[0] if mapped else None
+        thickness = _stackup_number(_arg(node, "thickness"))
+        entries.append(StackupEntry(
+            layer_id=copper_id if copper_id is not None else -(len(entries) + 1),
+            z_index=len(entries),
+            material=str(_arg(node, "material", default="") or ""),
+            thickness=0.0 if thickness is None else thickness * MM_TO_MIL,
+            # KiCad's own key names: `epsilon_r` / `loss_tangent`.
+            permittivity=_stackup_positive(_arg(node, "epsilon_r")),
+            loss_tangent=_stackup_positive(_arg(node, "loss_tangent")),
+        ))
+    return entries
+
+
 def _mil(x_mm: float, y_mm: float) -> Point:
     return Point(x_mm * MM_TO_MIL, -y_mm * MM_TO_MIL)
 
@@ -986,11 +1268,21 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
             pts = [_mil(*p) for p in _pts(_first(filled, "pts"), f"{name}: filled_polygon")]
             if lid is not None and len(pts) >= 3:
                 pours.append(PourShape(id=uid, net=net, layer_id=lid, kind="poured", points=pts, poured_from=uid))
-    return BoardGeometry(
+    board = BoardGeometry(
         source=str(path), name=path.stem, edit_version=str(_arg(tree, "version", default="")),
-        layers=layers.infos, components=components, pads=pads, tracks=tracks, vias=vias,
+        layers=layers.infos, stackup=_read_stackup(tree, layers),
+        components=components, pads=pads, tracks=tracks, vias=vias,
         pours=pours, outline=_outline(tree, name),
     )
+    # 182: the project's own netclasses, from the sibling `.kicad_pro` (same
+    # stem, same folder — the convention `kicad_project_files` already uses).
+    # Read here rather than by the caller so every entry point gets it: the
+    # PCB runner reads the board through this function directly
+    # (`engines.pcbreview._review_units`), never through `load_kicad`, and a
+    # netclass that only a `load_kicad` caller could see would be invisible to
+    # the rules.
+    apply_net_settings(board, read_project_net_settings(path.with_suffix(".kicad_pro")))
+    return board
 
 
 def read_kicad_board_model(path: str | Path, board: BoardGeometry | None = None) -> DesignModel:
@@ -1053,6 +1345,12 @@ def load_kicad(path: str | Path, *, view: str = "schematic") -> tuple[DesignMode
     and returns no geometry; ``view="pcb"`` reads the ``.kicad_pcb`` and returns
     its netlist view with its geometry. A view whose file is missing is a
     :class:`KicadFormatError` naming the file it looked for.
+
+    An **input** ``.kicad_pro`` is still validated here — a project file that is
+    not JSON is a broken input and is refused by name. The project's
+    ``net_settings`` are read by :func:`read_kicad_board` itself (182), so the
+    board this returns carries its netclasses whether or not the caller passed a
+    project file; this function's own ``json.loads`` stays the validation.
     """
     path = Path(path)
     sch, pcb = kicad_project_files(path)

@@ -367,6 +367,11 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
     discipline, and **131f** inserted ``pcb-mcu-crystal-keepout`` after *that*,
     the fourth insert, which reads the same crystal along the other axis
     (straight through the board, layer by layer, rather than across it).
+
+    **182 appends ``pcb-hs-diffpair-inventory``** after R2-1's
+    ``pcb-keepout-violation``: the first row of the high-speed family, an
+    inventory rather than a judgement, so it lands last and 0.6.0's length /
+    split / impedance rules will follow *it*.
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
@@ -395,7 +400,8 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
         "pcb-component-off-board",  # bug98-A, the split-out board-frame rule
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
-        "pcb-keepout-violation",  # R2-1, appended last
+        "pcb-keepout-violation",  # R2-1, the board-frame sweep's last
+        "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
     ]
 
 
@@ -1523,7 +1529,10 @@ def test_llc_prices_no_rail_and_declares_no_current_so_both_rules_are_silent():
     ]
     assert section is not None
     # R2-1 appended `pcb-keepout-violation` after the IPC pair; the pair is
-    # still the last two rules before it.
-    assert section["boards"][0]["checksRun"][-3:] == [
+    # still the last two rules before it. 182 appended its inventory rule after
+    # R2-1's, so the pinned tail grew by one and the adjacency this test claims
+    # （the IPC pair immediately precedes the board-frame sweep） is unchanged.
+    assert section["boards"][0]["checksRun"][-4:] == [
         "pcb-track-ampacity", "pcb-voltage-spacing", "pcb-keepout-violation",
+        "pcb-hs-diffpair-inventory",  # 182
     ]

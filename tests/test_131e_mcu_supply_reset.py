@@ -631,7 +631,8 @@ def test_both_rules_are_in_builtin_pcb_rules_in_the_declared_order():
     why the list below has one more id than it did when this test was written
     and why the adjacency assertions no longer say 「immediately after 131d」:
     they say the supply pair is a **contiguous block**, which is the property
-    this test is actually about.
+    this test is actually about. **182 appended one id at the end**
+    (``pcb-hs-diffpair-inventory``), which moves no MCU-block adjacency.
     """
     ids = [rule.id for rule in BUILTIN_PCB_RULES]
     assert ids == [
@@ -661,7 +662,8 @@ def test_both_rules_are_in_builtin_pcb_rules_in_the_declared_order():
         "pcb-component-off-board",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
-        "pcb-keepout-violation",  # R2-1, appended last
+        "pcb-keepout-violation",  # R2-1, the sweep's last
+        "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
     ]
     assert ids.index("pcb-mcu-reset-boot") == ids.index(
         "pcb-mcu-supply-groups"

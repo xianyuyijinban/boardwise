@@ -164,6 +164,10 @@ def test_the_five_foc_rules_sit_between_the_mcu_block_and_the_geometry_sweep():
     output, so the order is a reading choice — and pinning it is what stops a
     later batch from reordering by accident. Every id is ``pcb-``-prefixed and
     every entry is a :class:`~boardwise.rules.pcb.base.PcbRule`.
+
+    **182 appended one id at the end** (``pcb-hs-diffpair-inventory``, the
+    high-speed family's inventory); the block above and everything this test
+    claims about the FOC five's placement are unchanged.
     """
     from boardwise.rules.pcb.base import PcbRule
 
@@ -192,7 +196,8 @@ def test_the_five_foc_rules_sit_between_the_mcu_block_and_the_geometry_sweep():
         "pcb-component-off-board",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
-        "pcb-keepout-violation",  # R2-1, appended last
+        "pcb-keepout-violation",  # R2-1, the sweep's last
+        "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
     ]
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     ids = [rule.id for rule in BUILTIN_PCB_RULES]

@@ -159,7 +159,9 @@ def test_the_three_rules_continue_the_foc_block_after_133c_three():
 
     The three land as a **contiguous continuation** of 133c's three — same block,
     same shape (L1 geometry readers), and in the task book's own 133d table order
-    (R7 → R8 → R9). The whole list is pinned by value, not as a set.
+    (R7 → R8 → R9). The whole list is pinned by value, not as a set; **182
+    appended one id at the end** (``pcb-hs-diffpair-inventory``), which moves no
+    FOC adjacency.
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
@@ -188,7 +190,8 @@ def test_the_three_rules_continue_the_foc_block_after_133c_three():
         "pcb-component-off-board",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
-        "pcb-keepout-violation",  # R2-1, appended last
+        "pcb-keepout-violation",  # R2-1, the sweep's last
+        "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
     ]
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     ids = [rule.id for rule in BUILTIN_PCB_RULES]

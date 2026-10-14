@@ -219,7 +219,8 @@ def test_the_three_rules_sit_in_the_foc_block_after_133b_five():
     **133d widened this list again** (its R7 / R8 / R9 land after 133c's three),
     which is the second time this pin has had to move for a new FOC batch — the
     pattern rather than an accident, and the reason the list is spelled out in
-    full each time.
+    full each time. **182 appended one id at the end**
+    (``pcb-hs-diffpair-inventory``), which moves no FOC adjacency.
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
@@ -248,7 +249,8 @@ def test_the_three_rules_sit_in_the_foc_block_after_133b_five():
         "pcb-component-off-board",
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
-        "pcb-keepout-violation",  # R2-1, appended last
+        "pcb-keepout-violation",  # R2-1, the sweep's last
+        "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
     ]
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     ids = [rule.id for rule in BUILTIN_PCB_RULES]

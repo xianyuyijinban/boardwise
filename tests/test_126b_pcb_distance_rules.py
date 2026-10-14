@@ -1091,6 +1091,14 @@ def test_llc_is_clean_under_both_distance_rules():
     # `test_153_derating_package.py`; this pin keeps saying what it always
     # said — *126b's two distance rules and every rule that existed before the
     # E 阶段 device batches are silent on llc*.
+    # **182 subtracts one more id, and the subtraction is again a *reading*
+    # rather than a distance moving.** ``pcb-hs-diffpair-inventory`` lists two
+    # differential pairs on llc — ``DC+``/``DC-`` and ``DCVP``/``DCVN``, the
+    # board's own naming for its DC bus and its sense pair, read by KiCad's own
+    # suffix rule — as INFO rows that grade nothing. Both are pinned in the new
+    # `tests/test_182_highspeed_scaffold.py`, and this pin keeps saying what it
+    # always said: *126b's two distance rules and every rule that existed before
+    # the FOC pack are silent on llc*.
     assert [
         f for f in findings
         if f.rule_id
@@ -1099,6 +1107,7 @@ def test_llc_is_clean_under_both_distance_rules():
             "pcb-polarity-orientation",
             "pcb-silk-designator",
             "pcb-derating-package",
+            "pcb-hs-diffpair-inventory",
         }
     ] == [], (
         f"llc is clean under both rules; got "
@@ -1174,7 +1183,8 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-component-spacing",
         "pcb-component-off-board",
         "pcb-track-ampacity", "pcb-voltage-spacing",
-        "pcb-keepout-violation",  # R2-1, appended last
+        "pcb-keepout-violation",  # R2-1, the sweep's last
+        "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
     ]
 
 

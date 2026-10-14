@@ -75,6 +75,7 @@ from ..rules.pcb.mcusupply import McuSupplyGroups
 from ..rules.pcb.mcureset import McuResetBoot
 from ..rules.pcb.regulator import RegulatorCapDistance
 from ..rules.pcb.fbplacement import RegulatorFbPlacement
+from ..rules.pcb.highspeed import DiffPairInventory
 from ..rules.base import SEVERITY_ORDER, Finding
 
 #: The rules this runner applies, in execution order. Empty in 126a (地基);
@@ -156,6 +157,17 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: a hundred identical-looking ERRORs. It sits where it was born (its rows used
 #: to be the spacing rule's ERRORs), so a reader diffing two reports sees the
 #: same rows under a different id and nothing moved position.
+#:
+#: **182 appends ``pcb-hs-diffpair-inventory``** at the very end, and it is the
+#: first row of a new family rather than a reading like the rows above it: every
+#: batch before 182 added a *judgement* (a distance, a width, a comparison),
+#: while this one prints the high-speed family's **inventory** — one ``INFO``
+#: naming each differential pair the board declares or its net names imply
+#: (``rules/pcb/highspeed.py``). It goes last because nothing follows it yet:
+#: 0.6.0's length / split / impedance rules will be appended *after* this row,
+#: each of them a reading of the pairs this one lists. It has no threshold,
+#: ``INFO`` severity throughout, and reads no other rule's output, so its
+#: position is a reading choice like every other append above.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
@@ -184,6 +196,7 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     TrackAmpacity(),
     VoltageSpacing(),
     KeepoutViolation(),
+    DiffPairInventory(),  # 182, the high-speed family's inventory
 ]
 
 #: The runner identity a report carries, so a reader can tell which engine

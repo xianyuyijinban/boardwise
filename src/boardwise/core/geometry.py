@@ -40,6 +40,7 @@ __all__ = [
     "BBox",
     "LayerInfo",
     "StackupEntry",
+    "NetMeta",
     "ComponentPlacement",
     "PadGeometry",
     "SilkShape",
@@ -278,12 +279,36 @@ class StackupEntry:
     outer copper reads 1.378 mil = 35 µm; the LLC core reads 59.449 mil ≈
     1.51 mm). ``material`` is the free-text string the file carries
     (``"FR4"``, ``"外层铜厚1oz"``, ...), kept verbatim for reporting.
+
+    **182 added the two dielectric columns.** ``permittivity`` is the relative
+    permittivity (Er) and ``loss_tangent`` the dissipation factor (Df); both
+    are ``None`` when the file declares neither. A **non-positive** value is
+    read as 未声明 and lands ``None`` rather than ``0.0``: the fixtures carry
+    ``permittivity: 0`` on every copper layer of 毕设FOC 1.0.0 (all 13
+    ``LAYER_PHYS`` records) and ``lossTangent: 0`` on llc's FR4 core beside a
+    real Er of 4.5, and neither 0 is a dielectric a fab could build — it is the
+    editor's way of saying the column was never filled (measured, not assumed:
+    the DCDC-12V9V转5V3V3 fixture writes ``null`` where 毕设FOC writes ``0`` for
+    the same layer). So ``None`` always means 「the file stated nothing usable」,
+    and a reader that wants to distinguish 「stated nothing」 from 「stated a
+    number」 reads these two fields and nothing else.
+
+    A **KiCad** ``(setup (stackup ...))`` fills the same class (182). Its
+    ``epsilon_r`` / ``loss_tangent`` are the same two columns and its
+    ``material`` string is carried verbatim; see
+    :func:`boardwise.parsers.kicad._read_stackup` for the layer-id/z-index
+    trade-off a stackup *without* EasyEDA layer ids needs.
     """
 
     layer_id: int
     z_index: int
     material: str = ""
     thickness: float = 0.0
+    #: 182: relative permittivity (Er). ``None`` = the file declared none, or
+    #: declared a non-positive placeholder. Never ``0.0`` — see the docstring.
+    permittivity: float | None = None
+    #: 182: loss tangent (Df), same ``None`` rule as :attr:`permittivity`.
+    loss_tangent: float | None = None
 
 
 @dataclass
@@ -923,6 +948,63 @@ class BoardOutline:
 
 
 @dataclass
+class NetMeta:
+    """What a net **declares about itself**, as opposed to where its copper is.
+
+    :class:`NetGeometry` is copper (pads, tracks, vias, pours); this is the
+    net's own row of parameters, which the file states in a different record
+    than the copper it carries. 182 reads it from two sources:
+
+    * **EasyEDA Pro** — the ``NET`` records of the PCB document, whose
+      ``differentialName`` / ``isPositiveNet`` / ``equalLengthGroupName`` are
+      the editor's own declaration of a differential pair and an equal-length
+      group. Measured on the fixtures: 毕设FOC 1.0.0's ``PCB1`` declares
+      ``D+/D-`` as ``DP1`` and ``CAN_H/CAN_L`` as ``DP2``, and **every** other
+      net declares nothing. Note what the polarity flag actually says there —
+      ``isPositiveNet`` is ``true`` on ``D-`` and ``CAN_L`` and ``false`` on
+      ``D+`` and ``CAN_H``, while the older 毕设FOC 2026-09-17 backup writes the
+      opposite on the very same ``D+/D-`` pair. The flag is therefore carried
+      **verbatim** and never normalised against the net name: it is the file's
+      statement, and 182's job is to hand it on, not to decide which of the two
+      the designer meant.
+    * **KiCad** — the project's ``net_settings`` (netclass membership and the
+      netclass's own differential-pair width/gap). KiCad has no per-net
+      differential field, so on that side :attr:`diff_pair` is always ``None``
+      and the pairing is left to the suffix heuristic
+      (:func:`boardwise.core.highspeed.identify_diff_pairs`).
+
+    ``None`` means 「the file declared nothing here」 and never 「zero」 — the
+    same rule :class:`StackupEntry`'s two dielectric columns follow. A net the
+    file states **nothing** about has no entry in
+    :attr:`BoardGeometry.net_meta` rather than an all-``None`` row: on the
+    EasyEDA side that is exactly a ``NET`` record with an empty body (27 of
+    毕设FOC 1.0.0's 115) and on the KiCad side a net that no netclass claims.
+    A net that *does* state something gets a row even when the something is
+    「not positive」 and 「in no group」 — 毕设FOC 1.0.0's ``GND`` has one. This
+    field is an input to 0.6.0's rules, not a net census; the census is
+    :attr:`BoardGeometry.nets`.
+    """
+
+    name: str
+    #: EasyEDA Pro ``NET.differentialName``: the editor's own group name
+    #: (``"DP1"``). ``None`` on the KiCad side by construction.
+    diff_pair: str | None = None
+    #: EasyEDA Pro ``NET.isPositiveNet``, verbatim — see the class docstring.
+    diff_positive: bool | None = None
+    #: EasyEDA Pro ``NET.equalLengthGroupName``.
+    equal_length_group: str | None = None
+    #: KiCad ``net_settings``: the netclass this net resolves to (an explicit
+    #: assignment, else the first matching ``netclass_patterns`` glob).
+    net_class: str | None = None
+    #: KiCad netclass ``diff_pair_width`` in **mils** (the file writes mm), or
+    #: ``None`` when the class declares none / the net is in no class. It is a
+    #: *declaration*, never a measurement of the routed geometry.
+    declared_diff_width: float | None = None
+    #: KiCad netclass ``diff_pair_gap`` in **mils**, same rule.
+    declared_diff_gap: float | None = None
+
+
+@dataclass
 class NetGeometry:
     """All copper belonging to one net — the unit review rules query."""
 
@@ -1163,6 +1245,15 @@ class BoardGeometry:
     #: to avoid.
     silk_texts: list[SilkText] = field(default_factory=list)
     nets: dict[str, NetGeometry] = field(default_factory=dict)
+    #: 182: net name → what that net **declares about itself**
+    #: (:class:`NetMeta`): the editor's differential-pair / equal-length
+    #: declaration on the EasyEDA side, the netclass and its differential-pair
+    #: width/gap on the KiCad side. A net that declares nothing has **no** entry
+    #: — like every other "absent, not empty" field here, a missing key is the
+    #: answer 「nothing was declared」 and an all-``None`` row is not written to
+    #: say it. Empty for a hand-built board, and for a KiCad board whose
+    #: ``.kicad_pro`` was not beside the ``.kicad_pcb``.
+    net_meta: dict[str, NetMeta] = field(default_factory=dict)
     stats: ParseStats = field(default_factory=ParseStats)
     #: **perf-02A C2: the ``read_stackup`` memo slot**, ``(fingerprint, answer)``.
     #: ``boardwise.core.measure.read_stackup`` is called once per *query* on a

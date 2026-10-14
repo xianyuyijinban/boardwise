@@ -149,6 +149,12 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
     rather than re-stated where the point is "this file did not move it", so
     the assertion is that the two lists are separate objects and that the PCB
     one grew on its own.
+
+    **182 appends ``pcb-hs-diffpair-inventory``** (R2-1's ``pcb-keepout-violation``
+    stays where it was, still the last of the board-frame sweep group): the new
+    row is the high-speed family's *inventory* — one ``INFO`` per differential
+    pair — so it lands after every judgement rule, and the 0.6.0 rules that read
+    its output will be appended after it.
     """
     assert [rule.id for rule in BUILTIN_PCB_RULES] == [
         "pcb-decap-distance",
@@ -178,6 +184,7 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-track-ampacity",
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, appended last
+        "pcb-hs-diffpair-inventory",  # 182, the high-speed family's inventory
     ]
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     # The schematic side is untouched by this file: its list is the 011-family
@@ -379,7 +386,8 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-component-spacing",
             "pcb-component-off-board",  # bug98-A, the split-out board-frame rule
             "pcb-track-ampacity", "pcb-voltage-spacing",
-            "pcb-keepout-violation",  # R2-1, appended last
+            "pcb-keepout-violation",  # R2-1, the sweep's last
+            "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
         ]
         for index in board["findings"]:
             assert findings[index].board == board["title"]
@@ -504,6 +512,11 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
     # rules are in ``BUILTIN_PCB_RULES`` and four of them fire on 毕设FOC
     # 1.1.0's PCB1/PCB3, so they belong in the set. Their own behaviour is
     # `test_133b_foc_rules.py`'s subject; this pin says only that they ran.
+    # **182 moved it once more**: ``pcb-hs-diffpair-inventory`` fires here with
+    # two INFO rows on PCB1 (``D+/D-`` declared ``DP1`` and ``CAN_H/CAN_L``
+    # declared ``DP2``), pinned in `tests/test_182_highspeed_scaffold.py`. The
+    # claim this pin makes — the mounted rules reach the merged ``findings[]``
+    # array through ``checkup --file`` — is unchanged.
     assert {f["rule_id"] for f in pcb_rows} == {
         "pcb-decap-distance", "pcb-regulator-cap-distance",
         "pcb-regulator-fb-placement",
@@ -527,6 +540,7 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
         "pcb-silk-designator",
         "pcb-derating-package",
         "pcb-component-spacing", "pcb-voltage-spacing",
+        "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
     }
     # 126a did not touch the schema or the verdict; **126d did**, by bumping the
     # id to `/7` and adding `coverage.pcbReviewMissing`. This fixture has PCB
@@ -1067,9 +1081,25 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `rules/pcb/__init__.py` 注册；`rules/pcb/footprint.py` 吃库件 id→封装名
     # 回退（档内 FOOTPRINT 文档 META.title，provenance 记 `footprint=library-id`）。
     # 行为锚：tests/test_bug98a_outline_stitch.py + test_151b_footprint_id_fallback.py。
+    # **182 moved the recursive one** — 0f524f9d -> 68ecaf84，direct 仍
+    # `8269e601`（第二十批连任）：本批落在 `rules/pcb/` 的**两个文件**——
+    # 新规则 `highspeed.py`（`pcb-hs-diffpair-inventory`，差分对清单，一条 INFO
+    # 一对、零对零行）与 `__init__.py` 的包说明。规则之外的五个文件
+    # （新模块 `core/highspeed.py`、`core/geometry.py` 的 `NetMeta`/`net_meta`、
+    # `parsers/epru.py` 的 NET + LAYER_PHYS 读取、`parsers/kicad.py` 的
+    # net_settings/stackup 读取，以及注册那一笔所在的 `engines/pcbreview.py`）
+    # 按本 recipe 的定义**不进摘要**——它只覆盖 `src/boardwise/rules/`——与
+    # 131c/131d/131f 记过的同一条限制；注册那一笔由本文件上方的逐字序列表兜住。
+    # 行为锚：新建 `tests/test_182_highspeed_scaffold.py`（夹具读数 + 启发式表 +
+    # 端到端）。本规则在 14 个夹具里出账的是：毕设FOC 1.0.0 的 PCB1 两行
+    # （声明 DP1/DP2）、ROBOT 与智能药箱各一行（声明 DP1）、超声波四行（声明
+    # DP1–DP4）、llc 与级联多电平-主拓扑各两行、FPC 两行、高速电机控制器与
+    # 毕设FOC 2026-09-17 各四行、毕设滤波采样一行、KiCad 合成夹具一行、
+    # 其余六个夹具零行（逐板扫过，命令与输出在 `outputs/182_highspeed_scaffold/
+    # evidence.md`）。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "8269e601"
-    assert recursive == "0f524f9d", (
+    assert recursive == "68ecaf84", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

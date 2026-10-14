@@ -766,6 +766,11 @@ def test_the_llc_fixture_stays_clean_under_the_fixed_rules():
         # summary, and it grades nothing because llc's rails carry no stated
         # voltage. Pinned in `test_153_derating_package.py`.
         "pcb-derating-package",
+        # 182's differential-pair inventory, fifth batch in a row with the same
+        # shape: it lists llc's ``DC+``/``DC-`` and ``DCVP``/``DCVN`` — the
+        # board's own names, read by KiCad's suffix rule — as two INFO rows and
+        # grades none of them. Pinned in `tests/test_182_highspeed_scaffold.py`.
+        "pcb-hs-diffpair-inventory",
     }
     assert [f for f in findings if f.rule_id not in foc_ids] == [], [
         (f.rule_id, f.message) for f in findings if f.rule_id not in foc_ids

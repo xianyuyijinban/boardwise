@@ -57,6 +57,12 @@ Layout of the package as the batches land:
   power. The series split is the half 岳 named as a false-positive risk: the
   rule recognises the string first so the whole string's voltage is never
   booked against one part. It is the first PCB rule at ``L2-facts``.
+* ``highspeed`` — 差分对清单 (182): the high-speed family's first rule, and an
+  inventory rather than a judgement — one ``INFO`` per differential pair the
+  board declares (the EasyEDA ``NET`` record's ``differentialName``) or its net
+  names imply (KiCad's own ``MatchDpSuffix``), carrying the two nets and the
+  evidence. Nothing is graded: the length / split / impedance readings are
+  0.6.0's, and this module is the list they will read.
 * ``keepout`` — 禁布区侵入 (R2-1): the first reader of 162b's ``REGION``
   keepouts. What each ``prohibitType`` word forbids, and on which layer, is the
   editor's own reading (3.2.186's DRC), and a pour is judged as its outline

@@ -80,8 +80,17 @@ def test_prohibit_types_are_read_through_the_hosts_own_table(tokens, words, unkn
 
 
 def test_the_rule_is_registered_last_and_says_where_its_reading_comes_from():
-    assert BUILTIN_PCB_RULES[-1].id == "pcb-keepout-violation"
-    assert isinstance(BUILTIN_PCB_RULES[-1], KeepoutViolation)
+    """R2-1 put this rule at the end of the list. **182 appended its own after it.**
+
+    The claim this test makes is 「it was registered, and it is the last of the
+    board-frame sweep at the head of the tail」; 182's high-speed inventory
+    (``pcb-hs-diffpair-inventory``) is a new family appended *after* the sweep,
+    so the rule is no longer the literal last entry and the pin says both
+    positions rather than pretending nothing moved.
+    """
+    assert BUILTIN_PCB_RULES[-2].id == "pcb-keepout-violation"
+    assert isinstance(BUILTIN_PCB_RULES[-2], KeepoutViolation)
+    assert BUILTIN_PCB_RULES[-1].id == "pcb-hs-diffpair-inventory"  # 182, appended last
     assert RULE.level == "L1-pcb-geometry"
     assert "3.2.186" in RULE.source and "checkProhibitXXX" in RULE.source
 
