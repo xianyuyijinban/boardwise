@@ -9,9 +9,12 @@
 
 1. **不动 git**：不 `commit` / `add` / `checkout` / `restore` / `push`。任何 git 变更逐次经用户点头。
 2. **pytest 必带 `--basetemp=.tmp_pt_home`**：Windows 上否则汇总行被吞、假 exit 1。
+   并行只许 `-n 4 --dist loadfile`（**不许 `-n auto`**——打满主机被岳叫停过；
+   不许 `--dist load`——它把同文件的测试对拆到不同 worker，test_bridge_cli 的
+   审计序就这么死过）；多前场并行时各用各的 basetemp（`.tmp_pt_<批名>`）。
 
    ```bash
-   .venv/Scripts/python.exe -m pytest tests/ -q --basetemp=.tmp_pt_home
+   .venv/Scripts/python.exe -m pytest tests/ -q -n 4 --dist loadfile --basetemp=.tmp_pt_home
    cd connector && npm test && npm run typecheck
    cd dsh-plugin && npm run typecheck && npm test && npm run build
    ```

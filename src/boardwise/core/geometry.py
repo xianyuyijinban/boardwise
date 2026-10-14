@@ -1164,6 +1164,22 @@ class BoardGeometry:
     silk_texts: list[SilkText] = field(default_factory=list)
     nets: dict[str, NetGeometry] = field(default_factory=dict)
     stats: ParseStats = field(default_factory=ParseStats)
+    #: **perf-02A C2: the ``read_stackup`` memo slot**, ``(fingerprint, answer)``.
+    #: ``boardwise.core.measure.read_stackup`` is called once per *query* on a
+    #: board — 3,286 times per ``run_pcb_review`` on the 毕设FOC fixture and
+    #: 470,792 times across the suite — and re-scans every pad, track and pour
+    #: each time for an answer that depends only on the board's layer table and
+    #: its element lists. Measured 108 µs/call, of which the memo's own guard is
+    #: 0.16 µs (``outputs/perf02A/units.json``).
+    #:
+    #: ``repr=False, compare=False`` on purpose: a cache is not part of what a
+    #: board **is**. ``compare=True`` would make two boards parsed from the same
+    #: file unequal whenever only one of them had been read, and ``repr`` would
+    #: print a StackupInfo into every board dump — both are the ``__eq__``/
+    #: ``__hash__`` pollution this repository has been bitten by before. The
+    #: field is private and set only by ``read_stackup``; nothing else may write
+    #: it, and nothing may read it to learn a board fact.
+    _stackup_cache: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         # Nets are derived from the flat lists, so a caller can build a

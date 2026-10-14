@@ -23,3 +23,15 @@ def _no_auto_daemon(monkeypatch):
     """
     monkeypatch.setenv("BOARDWISE_NO_AUTO_DAEMON", "1")
 
+
+# C7 (perf-02B): `tests/_pcb_cache.py` installs a session cache in front of
+# `boardwise.engines.pcbreview.run_pcb_review`, which was 383 calls / 444 s of
+# worker time per full run — the largest single engine entry in the suite.
+#
+# It has to be imported **here**, before any test module: the PCB files bind the
+# runner at module scope (`from boardwise.engines.pcbreview import
+# run_pcb_review`), so a conftest that imported this later would leave every one
+# of them holding the uncached name. The mechanism and the cache key are in that
+# file; the pins for it are in `tests/test_pcb_review_cache.py`.
+import _pcb_cache  # noqa: E402,F401  (after sys.path, like everything else here)
+

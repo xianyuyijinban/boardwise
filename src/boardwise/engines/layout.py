@@ -940,6 +940,44 @@ def _ordered_nets(
     return front + [e for e in entries if e[0] not in taken]
 
 
+def _box_cell_union(placements: list[Placement]) -> set[tuple[int, int]]:
+    """Every grid cell that lies inside some placement's box (**perf-02A C3**).
+
+    ``classify`` asks "may the search stand in this cell?" once per BFS
+    expansion — 160.7 M times on ``test_141``'s boards, 38 M in one golden
+    solve — and the answer for a box is always ``"blocked"``. Asking it of the
+    **union** is the same predicate asked once instead of once per box: measured
+    on the golden page's scale (17 boxes, 14,229 cells) the linear scan is
+    0.34 µs/call against 0.03 µs/call for ``cell in union``, while building the
+    union costs 0.4 ms — repaid by ~1,200 lookups
+    (``outputs/perf02A/units.json``).
+
+    Built from a dict keyed by designator, exactly as the per-pass table it
+    replaces was, so the one pathological input keeps its meaning: two
+    placements sharing a designator are **one** key, and only the later one's
+    cells are in the union. A placement with no box contributes nothing.
+
+    Rebuilt by every :func:`_route_pass` — no memo across passes. The pass is
+    handed a fresh placements list each call, so an honest key ("the same
+    boxes") would cost a scan of the placements plus a staleness surface to save
+    0.4 ms out of a 6.5 s pass, three of which the retry ladder pays on the same
+    board. Rebuilding is the version that cannot go stale.
+    """
+    boxes: dict[str, set[tuple[int, int]]] = {}
+    for p in placements:
+        if p.bbox is None:
+            continue
+        boxes[p.designator] = {
+            (i, j)
+            for i in range(int(p.bbox.x0 / GRID), int(p.bbox.x1 / GRID) + 1)
+            for j in range(int(p.bbox.y0 / GRID), int(p.bbox.y1 / GRID) + 1)
+        }
+    union: set[tuple[int, int]] = set()
+    for cells in boxes.values():
+        union |= cells
+    return union
+
+
 def _route_pass(
     model: DesignModel,
     pin_positions: dict[tuple[str, str], tuple[float, float]],
@@ -982,15 +1020,7 @@ def _route_pass(
         for j in range(int(ty0 / GRID), int(ty1 / GRID) + 1)
     }
 
-    box_cells: dict[str, set[tuple[int, int]]] = {}
-    for p in placements:
-        if p.bbox is None:
-            continue
-        box_cells[p.designator] = {
-            (i, j)
-            for i in range(int(p.bbox.x0 / GRID), int(p.bbox.x1 / GRID) + 1)
-            for j in range(int(p.bbox.y0 / GRID), int(p.bbox.y1 / GRID) + 1)
-        }
+    box_union = _box_cell_union(placements)
 
     #: foreign wire cells -> their axis ('h'/'v'); enter perpendicular only
     routed_axis: dict[tuple[int, int], str] = {}
@@ -1087,9 +1117,8 @@ def _route_pass(
                 return "blocked"
             if cell in title_cells:
                 return "blocked"
-            for cells in box_cells.values():
-                if cell in cells:
-                    return "blocked"
+            if cell in box_union:
+                return "blocked"
             if cell in routed_endpoints:
                 return "blocked"
             wax = routed_axis.get(cell)

@@ -25,7 +25,9 @@ Nothing here touches the network or the editor: this is the offline half, and
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -1214,18 +1216,68 @@ def library_to_json(library: PartLibrary) -> dict[str, Any]:
     }
 
 
+#: **perf-02A C1: the shelf memo.** ``rules/pcb/*`` read the shelf from inside
+#: 20 rule bodies, and one ``run_pcb_review`` makes 296-312 ``load_parts`` calls
+#: — each of which used to re-read and re-validate all 109 entries of
+#: ``blocklib/parts.json`` (measured 2.26 ms/call; 43,506 calls / 92 s of
+#: worker-time across the suite).
+#:
+#: **The key is the file's content digest, not ``(mtime, size)``** — measured,
+#: because the task book asked the question rather than assumed the answer
+#: (``outputs/perf02A/units.json``, and the test that pins the behaviour is
+#: ``tests/test_perf02a_memoization.py::test_load_parts_reads_a_rewritten_shelf``):
+#: 2000 same-size rewrites of one path produced only **784 distinct
+#: ``st_mtime_ns`` values**, i.e. 1216 of 1999 consecutive rewrites carried
+#: their predecessor's timestamp. Windows' file-time clock is far coarser than
+#: ``st_mtime_ns`` suggests, so a stat-keyed memo would hand a rewritten shelf's
+#: *old* entries to a caller that writes, reads, rewrites and reads again — the
+#: exact shape ``tests/test_039_parts_toolchain.py`` exercises. The digest costs
+#: 114 µs against the 2491 µs parse it avoids (22x), and has no stale window at
+#: all — "compute once more rather than answer wrong".
+_PARTS_MEMO: dict[tuple[str, str], PartLibrary] = {}
+
+#: How many shelves the memo keeps. The suite writes a temp shelf per test, so
+#: this is a ceiling on a working set, not a hit-rate knob: the hot path (one
+#: shelf, 43,506 reads) never evicts.
+PARTS_MEMO_LIMIT = 256
+
+
 def load_parts(path: str | Path) -> PartLibrary:
-    """Read a part library. A missing file is an empty shelf, not an error."""
+    """Read a part library. A missing file is an empty shelf, not an error.
+
+    **Memoised per process** (perf-02A C1) on ``(path, sha256 of the file's
+    bytes)`` — the key and why it is a digest rather than a stat are in
+    :data:`_PARTS_MEMO`. The object handed back is therefore **shared**, and
+    the shelf is read-only by convention: the one writer in the code base
+    (``boardwise parts add`` / ``parts select``) appends to the library it then
+    ``save_parts``, and that write changes the very bytes the next key is
+    computed from — so the next ``load_parts`` re-reads the file instead of
+    handing the half-edited object back.
+    """
     file = Path(path)
     if not file.is_file():
         return PartLibrary()
     try:
-        raw = json.loads(file.read_text(encoding="utf-8"))
+        raw = file.read_bytes()
     except OSError as exc:
         raise PartError(f"{file}: cannot read: {exc}") from exc
+    key = (os.path.normcase(os.path.abspath(file)), hashlib.sha256(raw).hexdigest())
+    memoised = _PARTS_MEMO.get(key)
+    if memoised is not None:
+        return memoised
+    try:
+        document = json.loads(raw.decode("utf-8"))
     except ValueError as exc:
         raise PartError(f"{file}: not JSON: {exc}") from exc
-    return library_from_json(raw, str(file))
+    library = library_from_json(document, str(file))
+    if len(_PARTS_MEMO) >= PARTS_MEMO_LIMIT:
+        # Insertion order, so this drops the oldest key. A ceiling rather than
+        # an LRU: the working set is a handful of shelves (the suite touches
+        # every temp shelf it writes), and a long-lived daemon must not keep
+        # every library it has ever read.
+        _PARTS_MEMO.pop(next(iter(_PARTS_MEMO)))
+    _PARTS_MEMO[key] = library
+    return library
 
 
 def save_parts(library: PartLibrary, path: str | Path) -> Path:

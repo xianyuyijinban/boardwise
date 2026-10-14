@@ -257,7 +257,46 @@ def read_stackup(board: BoardGeometry) -> StackupInfo:
 
     Hand-built boards and files without ``LAYER_PHYS`` fall back to
     :meth:`BoardGeometry.copper_layers` (the ``LAYER`` definitions).
+
+    **Memoised on the board** (perf-02A C2 — :attr:`BoardGeometry._stackup_cache`).
+    This is a *per-query* function in practice: 3,286 calls per
+    ``run_pcb_review`` on the 毕设FOC fixture, 470,792 across the suite, each
+    one re-scanning every pad, track and pour (measured 108 µs/call). The
+    answer depends on exactly five containers — ``layers``, ``stackup``,
+    ``pads``, ``tracks``, ``pours`` — so the memo's **fingerprint is those five
+    objects by identity, plus their lengths**:
+
+    * **identity** (not ``id()``) is what makes the hit safe: the cache holds
+      the containers themselves, so an object cannot be freed and a different
+      one allocated at the same address — the stale-``id()`` reuse that the
+      test-side plan cache at ``tests/test_117_text_overlap.py`` got caught by.
+      A board handed a *different* list is a different question and is re-read;
+    * **the length recorded when the answer was computed** catches the in-place
+      edit: a caller that appends a pad, a track, a pour or a layer, or that
+      swaps ``board.stackup`` for ``[]`` (``tests/test_125_pcb_measure.py`` does
+      exactly that, on a stackup it then re-reads). The length has to be stored
+      because the cache holds the live container — ``len(held) == len(inputs)``
+      would compare a list with itself and never fire.
+
+    What it does **not** catch is an element mutated in place without changing
+    any length (``pad.layer_id = 5``, ``layer.is_copper = False``). That is
+    outside the contract this repository relies on and states: a parsed board is
+    read-only once constructed (:mod:`boardwise.engines.layout`'s module
+    docstring, ``tests/_golden.py``), and there is no such write in ``src/`` or
+    ``tests/``. A caller that crosses that line gets a fresh board, not a fresh
+    reading. The guard is 0.16 µs against the 108 µs it saves.
     """
+    inputs = (board.layers, board.stackup, board.pads, board.tracks, board.pours)
+    cached = board._stackup_cache
+    if cached is not None:
+        held, answer = cached
+        # ``size`` is the length **at read time**: comparing ``len(h)`` to
+        # ``len(n)`` would be comparing the list with itself, since the cache
+        # holds the very containers it guards. That is the difference between a
+        # guard and a tautology, and it is why the length is stored.
+        if all(h is n and size == len(n) for (h, size), n in zip(held, inputs)):
+            return answer
+
     if board.stackup:
         seen: set[int] = set()
         copper: list[LayerInfo] = []
@@ -283,11 +322,13 @@ def read_stackup(board: BoardGeometry) -> StackupInfo:
         if info is not None and info.is_copper:
             used.add(layer_id)
 
-    return StackupInfo(
+    answer = StackupInfo(
         copper_layers=copper,
         copper_count=len(copper),
         used_copper_layer_ids=sorted(used),
     )
+    board._stackup_cache = (tuple((c, len(c)) for c in inputs), answer)
+    return answer
 
 
 # ---------------------------------------------------------------------------

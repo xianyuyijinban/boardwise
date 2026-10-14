@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -285,7 +286,7 @@ def test_regeneration_reproduces_the_committed_content():
     assert _generator().check() == 0
 
 
-def test_check_reports_drift_without_rewriting_the_fixture(capsys):
+def test_check_reports_drift_without_rewriting_the_fixture(capsys, tmp_path, monkeypatch):
     """The guard must be read-only, and this is not a hypothetical.
 
     The first version built the boards into the fixture directory and compared
@@ -295,24 +296,69 @@ def test_check_reports_drift_without_rewriting_the_fixture(capsys):
     this test drives a drifted fixture through it and requires both that the
     drift is reported -- by member name, as content -- and that the file on
     disk is left exactly as it was.
+
+    **perf-02B (C12) moved the drift off the fixture directory.** The drifted
+    copy used to be written *into* ``reviewsets/injected/`` and restored in a
+    ``finally`` -- so a run killed between the two (Ctrl-C, a timeout, a worker
+    that dies) left a drifted fixture behind for the next person, who would read
+    it as a broken fixture rather than as a killed test. Now the whole family is
+    copied into ``tmp_path`` and the guard is pointed at the copy: the committed
+    directory is never opened for writing, and the assertion below says so in
+    the strongest available form -- bytes **and** mtime, on every file, which is
+    what "nothing wrote here" looks like (a restore would have moved the mtime).
     """
     module = _generator()
     target = INJECTED / "v3-decap-missing.epro2"
     original = target.read_bytes()
     drifted = GOLDEN.read_bytes()
     assert original != drifted
-    try:
-        target.write_bytes(drifted)
-        assert module.check() == 1
-        err = capsys.readouterr().err
-        assert "member content" in err and "v3-decap-missing.epro2" in err, err
-        # The report names the member that moved, not just the file: an
-        # unnamed "drift" would leave the reader to diff two zips by hand.
-        assert "CH340G.epru" in err, err
-        assert target.read_bytes() == drifted, "the guard rewrote what it checked"
-    finally:
-        target.write_bytes(original)
-    assert module.check() == 0, "the fixture is back and the guard agrees"
+
+    # The layout the guard resolves its paths from, copied whole: ``HERE`` is the
+    # committed side; ``ROOT`` is what ``_source_rel`` (the annotation's own
+    # ``source_rel``) and the two paths the guard reads *beside* the family --
+    # ``reviewsets/ch340g_golden.json`` and the golden fixture under
+    # ``tests/fixtures/`` -- are spelled relative to. All three are module
+    # attributes the guard reads at call time, so the copy is a full stand-in for
+    # the tree it walks.
+    scratch_root = tmp_path / "repo"
+    scratch_dir = scratch_root / "reviewsets" / "injected"
+    scratch_dir.mkdir(parents=True)
+    for artifact in sorted(INJECTED.glob("*.epro2")) + sorted(INJECTED.glob("*.json")):
+        shutil.copyfile(artifact, scratch_dir / artifact.name)
+    shutil.copyfile(GOLDEN_SET, scratch_root / "reviewsets" / GOLDEN_SET.name)
+    golden_copy = scratch_root / "tests" / "fixtures" / GOLDEN.name
+    golden_copy.parent.mkdir(parents=True)
+    shutil.copyfile(GOLDEN, golden_copy)
+    monkeypatch.setattr(module, "HERE", scratch_dir)
+    monkeypatch.setattr(module, "ROOT", scratch_root)
+    monkeypatch.setattr(module, "GOLDEN", golden_copy)
+
+    before = {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in sorted(INJECTED.iterdir()) if path.is_file()
+    }
+
+    (scratch_dir / target.name).write_bytes(drifted)
+    assert module.check() == 1
+    err = capsys.readouterr().err
+    assert "member content" in err and "v3-decap-missing.epro2" in err, err
+    # The report names the member that moved, not just the file: an
+    # unnamed "drift" would leave the reader to diff two zips by hand.
+    assert "CH340G.epru" in err, err
+
+    after = {
+        path.name: (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in sorted(INJECTED.iterdir()) if path.is_file()
+    }
+    assert after == before, (
+        "the guard wrote into the committed fixture directory: the drift this "
+        "test injects belongs in the copy, and a run that dies before its "
+        "finally is exactly how a drifted fixture used to survive on disk"
+    )
+    # That the real directory still agrees with a real run is
+    # `test_regeneration_reproduces_the_committed_content`'s assertion, and it is
+    # the stronger one now: here the real directory was never opened for writing
+    # at all, so nothing had to be put back.
 
 
 def test_the_guard_compares_content_not_the_compression_stream(monkeypatch):

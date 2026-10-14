@@ -52,6 +52,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import pathlib
 
 import pytest
@@ -70,6 +71,12 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPECS = ROOT / "blocklib" / "specs"
 
 
+#: The library sidecar the page's ``book`` is built from. ``t113._library_from``
+#: is a **pure function of this file** — it reads the JSON and rebuilds the
+#: dataclasses — so the file's digest is the book's content fingerprint.
+LIBRARY = SPECS / "flyback_uc3845.library.json"
+
+
 #: **118 更新**：实测几何下只有 `spacing=2.2` 那两档能出 plan，其余四档卡在
 #: `net 'SW'/'HVDC'/'SEC_12V' has a direct-wire obligation ... could not be
 #: joined inside the searched corridor`（部件更大，走线走廊更紧）。117(2) 量的是
@@ -78,6 +85,30 @@ SPECS = ROOT / "blocklib" / "specs"
 #: **报「没有 plan 了」**，而不是悄悄量到别的东西上。
 #: 119: one routing search per session, not one per test.
 _PLAN_CACHE: dict = {}
+
+
+def _plan_key(circuit_digest, presentation_digest, library_digest, ladder):
+    """What the cached measurement is a measurement **of**.
+
+    **perf-02B（缓存修复）**：119 写的 key 是
+    ``(circuit.sha256(), presentation.sha256(), id(ctx.book))``，而 ``_plan()``
+    每条测试都从侧车**重建一次 book** —— 新对象、新 ``id``，于是这个缓存
+    **六条测试条条 miss**，每条各自重跑一次 30–45s 的布线搜索（实测 6 次、
+    199.7s，见 ``outputs/perf02B/before_117.log`` 与同目录的搜索探针读数）。
+    ``id()`` 还带一个真隐患：对象被 GC 之后 ``id`` 会被重用，那时命中的是
+    **别人的** plan。
+
+    所以 key 落在这三件套的**内容**上：库侧车是纯输入（book 是它的纯函数），
+    电路与呈现各有自己的 ``sha256``；再加上 ``ladder`` —— 阶梯宽度**是**这次
+    测量的一部分（见下）。三个输入文件在本文件里是固定的，所以这三个摘要加
+    阶梯常量唯一确定这次搜索问的是什么。
+    """
+    return (circuit_digest, presentation_digest, library_digest, ladder)
+
+
+def _library_digest() -> str:
+    """``sha256`` of the library sidecar's bytes — the book's content, not its id."""
+    return hashlib.sha256(LIBRARY.read_bytes()).hexdigest()
 
 
 def _first_plan(ctx):
@@ -96,8 +127,19 @@ def _first_plan(ctx):
     结果**缓存**：布线搜索是这一页最贵的一步（实测每档数十秒），而本文件有
     六条测试各自要一张 plan。不缓存的话，同一次测量要重做六遍——那不是严格，
     是浪费。缓存的是**测量结果**，不是结论。
+
+    **perf-02B 修的是 key**（见 :func:`_plan_key`）：119 那版缓存一次都没命中过，
+    这条注释当时说的「一次搜索」其实是六次。阶梯常量（``TEXT_ESCALATION_STEPS``
+    与它那两根尺子）进 key 是必须的：``test_every_conflict_had_a_free_slot_
+    somewhere_so_the_cure_was_search`` 故意把阶梯压到 1，它要的是**关掉阶梯**
+    那一侧的量，共用一条缓存就等于让它量错东西。
     """
-    key = (ctx.circuit.sha256(), ctx.presentation.sha256(), id(ctx.book))
+    key = _plan_key(
+        ctx.circuit.sha256(),
+        ctx.presentation.sha256(),
+        _library_digest(),
+        (dc.TEXT_ESCALATION_STEPS, dc.TEXT_GAP, dc.TEXT_SIZE),
+    )
     if key in _PLAN_CACHE:
         return _PLAN_CACHE[key]
     real = rb.check
@@ -279,6 +321,40 @@ def test_every_conflict_had_a_free_slot_somewhere_so_the_cure_was_search():
             f"{first} has no free slot even with the escalation ladder — the "
             "fixture's geometry changed, re-measure before trusting the fix"
         )
+
+
+def test_the_plan_cache_key_is_the_search_itself_not_the_objects_identity():
+    """**perf-02B**：缓存的 key 必须落在**这次搜索的输入**上，不是对象身份。
+
+    这一条看的是 key 本身，不是它的效果——效果（六条测试只搜一次）在
+    ``outputs/perf02B/`` 的计时与搜索探针里，而那是跑一次才知道的事。key 的
+    三条纪律在这里各自钉住一条：
+
+    * 相同输入 → 同一条目（否则缓存永远 miss，119 的病就是这个：``id(ctx.book)``
+      每条测试都不同）；
+    * 库侧车是问题的一部分（换一份料就是换一个问题）；
+    * 阶梯常量是问题的一部分（``test_every_conflict...`` 把
+      ``TEXT_ESCALATION_STEPS`` 压到 1，它量的是**关掉阶梯**那一侧。
+      两个阶梯共用一条缓存 = 让它拿到别人的 plan，而那条测试的整套推理就废了）。
+    """
+    one = _plan_key("c" * 64, "p" * 64, "L" * 64, (3, 6.0, 90.0))
+    assert one == _plan_key("c" * 64, "p" * 64, "L" * 64, (3, 6.0, 90.0)), (
+        "equal inputs must be one entry, or the cache misses on every call"
+    )
+    assert one != _plan_key("c" * 64, "p" * 64, "M" * 64, (3, 6.0, 90.0)), (
+        "the library sidecar is part of the question"
+    )
+    assert one != _plan_key("c" * 64, "p" * 64, "L" * 64, (1, 6.0, 90.0)), (
+        "the escalation ladder is part of the question"
+    )
+    assert one != _plan_key("c" * 64, "p" * 64, "L" * 64, (3, 6.0, 80.0))
+    assert one != _plan_key("d" * 64, "p" * 64, "L" * 64, (3, 6.0, 90.0))
+    # And the digest really is the sidecar's own content: one file, one digest,
+    # stable across calls (a hash of the path would pass the test above and
+    # still miss every time the library changed).
+    assert _library_digest() == _library_digest() == hashlib.sha256(
+        LIBRARY.read_bytes()
+    ).hexdigest()
 
 
 def _conflicts(plan, bodies):
