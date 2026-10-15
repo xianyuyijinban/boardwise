@@ -1027,15 +1027,89 @@ def render_review_summary(report: dict, chains: list[dict]) -> str:
 #: worklist is uniform — the *reason* differs per entry and travels beside it.
 UNKNOWN_PART_QUESTION = "核对该器件周边配置是否符合规格书典型应用（去耦/上下拉/限流/耐压），并确认可用型号"
 #: Why a part is on the list. Reported per entry so the model can prioritise:
-#: "no MPN at all" and "an MPN this decoder refuses" are different problems.
+#: "no MPN at all" and "the value cannot be known" are different problems.
 UNKNOWN_REASON_NO_MPN = "无 MPN"
-UNKNOWN_REASON_UNDECODABLE = "MPN 里的值码解不出（按 values.py 的白名单判定，不是值不存在）"
+#: Reworded by 184 — the reason now says what the gate actually asks. Until 184 it
+#: fired on "the MPN's value code does not decode, and that is not the same as the
+#: value not existing"; the gate now asks whether the value can be known **at
+#: all** (:func:`_value_decodable`), so the old parenthesis would be a lie: a part
+#: that reaches this reason has no board ``Value`` to read *and* no MPN the
+#: decoders can read.
+UNKNOWN_REASON_UNDECODABLE = (
+    "值不可知（MPN 里的值码解不出，板上 Value 也读不出；判定见 values.py）"
+)
 UNKNOWN_REASON_NO_SUPPLIER = "供应商字段为空"
 
 #: Designator prefixes whose MPN is expected to carry an EIA value code, i.e. the
-#: ones for which "the decoder refused it" is a real signal. An IC's MPN never
+#: ones for which "the value cannot be known" is a real signal. An IC's MPN never
 #: carries one, so asking a decoder about it would put every IC on the list.
 _VALUE_CODE_PREFIXES = frozenset({"R", "C", "L", "RV", "RP", "RT", "FB"})
+
+
+def _value_decodable(prefix: str, component: Component) -> bool:
+    """Can this part's **value** be known at all? (task 184)
+
+    The gate's predicate since 184, replacing the question it used to ask
+    (``mpn_value_code`` returned ``None``). Why the old one was wrong: it read
+    **one** of the two value decoders and had no view of the board at all, so a
+    board whose ``Value`` fields were all present and all correct reported
+    "cannot decode" for every resistor family the EIA whitelist does not spell
+    — 34 of the 68 unreviewed parts on
+    ``.tmp_bug98b/实板A.epro2`` (岳 2026-10-15 实板反馈), whose board
+    values are all readable. UNKNOWN_REASON_UNDECODABLE now means what its name
+    says: the value is genuinely unknowable.
+
+    Three ways to know it, tried in this order:
+
+    * the **board's own** ``Value`` field parses — by the parser of that part's
+      quantity (:func:`parse_resistance_ohms` for R/RV/RP/RT/FB, the closest
+      reader those have; :func:`parse_capacitance_farads` for C). A part whose
+      board value is already a number needs no MPN reading to be judged; this is
+      the branch the old gate could not see;
+    * the **MPN** states an EIA value code (:func:`mpn_value_code`) — the
+      whitelist's reading, unchanged;
+    * the **MPN** is read by the resistance candidates system
+      (:func:`mpn_resistance_candidates`), the several-shape family of
+      043/046/048/071/184:
+      a resistor spelling the whitelist refuses (``FRC0603F1000TS``, whose E-96
+      field sits in front of a taping tail) is still a value a rule can use.
+      For ``C``/``L`` this branch is not consulted — the capacitor side has no
+      candidates entry, and inventing one here would be a second decoder.
+
+    ``L`` deliberately has no board-value branch: this module has no inductance
+    parser (``parse_inductance`` does not exist), and reading an inductor's value
+    with the resistance grammar would be inventing a number. An inductor is
+    still covered by the MPN branches above.
+
+    ``ERA16V100M5X7`` (an electrolytic whose MPN prints microfarads, so
+    :func:`_foreign_unit_code` refuses it) is the witness for the first branch:
+    the board's ``100uF`` is readable, and the refusal of the MPN reading is
+    correct behaviour that stays.
+    """
+    from ..core.values import (
+        mpn_resistance_candidates,
+        mpn_value_code,
+        parse_capacitance_farads,
+        parse_resistance_ohms,
+    )
+
+    value = (component.value or "").strip()
+    if value:
+        parsed = None
+        if prefix == "C":
+            parsed = parse_capacitance_farads(value)
+        elif prefix != "L":
+            parsed = parse_resistance_ohms(value)
+        if parsed is not None:
+            return True
+    mpn = (component.mpn or "").strip()
+    if not mpn:
+        return False
+    if mpn_value_code(mpn) is not None:
+        return True
+    if prefix in ("C", "L"):
+        return False
+    return bool(mpn_resistance_candidates(mpn))
 
 
 def _prefix_of(designator: str) -> str:
@@ -1072,25 +1146,29 @@ def unknown_parts(model: DesignModel) -> list[dict]:
     Three signals, each reported (`reasons`) rather than collapsed:
 
     * **no MPN** — nothing to search for;
-    * **an MPN whose value code the decoder refuses** (`rules/values.py`, the
-      whitelist task 015 built) — restricted to prefixes whose MPN is *expected*
-      to carry one (R/C/L/…), because asking about an IC's MPN would list every
-      IC on the board;
+    * **the value is not knowable** (`UNKNOWN_REASON_UNDECODABLE`, rewritten by
+      184) — the part's board ``Value`` field does not parse *and* its MPN
+      carries no value code the decoders can read (:func:`_value_decodable`,
+      which asks the board's own parsers, the EIA whitelist and the resistance
+      candidates system). Restricted to prefixes whose MPN is *expected* to
+      carry a code (R/C/L/…), because asking about an IC's MPN would list every
+      IC on the board. Before 184 the signal was narrower — "``mpn_value_code``
+      returned ``None``" — which listed every resistor family the whitelist does
+      not spell, board value or no board value;
     * **no supplier part** — the part cannot be ordered or cross-checked by code.
 
     `question` is the same for all of them: the review's next step is "go and read
     the datasheet's typical application", whatever it was that made the part
     unfamiliar.
     """
-    from ..rules.values import mpn_value_code
-
     out: list[dict] = []
     for designator, component, boards in _parts_with_boards(model):
         reasons: list[str] = []
+        prefix = _prefix_of(designator)
         mpn = (component.mpn or "").strip()
         if not mpn:
             reasons.append(UNKNOWN_REASON_NO_MPN)
-        elif _prefix_of(designator) in _VALUE_CODE_PREFIXES and mpn_value_code(mpn) is None:
+        elif prefix in _VALUE_CODE_PREFIXES and not _value_decodable(prefix, component):
             reasons.append(UNKNOWN_REASON_UNDECODABLE)
         if not (component.lcsc_part or "").strip():
             reasons.append(UNKNOWN_REASON_NO_SUPPLIER)
@@ -1118,6 +1196,31 @@ def _board_field(boards: list[str]) -> dict:
     about.
     """
     return {"boards": boards} if boards else {}
+
+
+def unreviewed_counts_by_reason(unreviewed: list[dict] | None) -> dict[str, int]:
+    """``{reason: rows carrying it}`` for one 未审器件 list (task 184).
+
+    One aggregation over the section's own ``reasons``, so the summary cannot
+    disagree with the rows below it: the numbers are counted from the report's
+    list, never from a second walk of the model. A row can carry two reasons and
+    is counted under each, exactly as the list itself reads; the keys are sorted
+    so two runs of the same board write the same report.
+
+    Why it exists (岳 2026-10-15, task 184): ``68`` unreviewed parts is one
+    number for problems that need different work — 26 parts have no MPN at all,
+    34 were on the list because the value decoder could not read their MPN, 26
+    have no supplier. A reader deciding what to do next needs the split, and the
+    report already carries it per row.
+    """
+    counts: dict[str, int] = {}
+    for row in unreviewed or []:
+        if not isinstance(row, dict):
+            continue
+        for reason in row.get("reasons") or []:
+            key = str(reason)
+            counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 # --------------------------------------------------------------------------
@@ -3150,6 +3253,18 @@ def render_report_markdown(report: dict) -> str:
             "本节非空时**不得宣称审查通过**：只能说 DRC/连接性已审，"
             f"{len(unreviewed)} 颗器件缺手册未审。三通道（工程师给 / 立创找 / 官网搜）逐条列在下面。"
         )
+        # 184: the总 number is one number for different problems. Printed from the
+        # rows below (or, for a hand-built report, from the section itself), never
+        # recomputed from the model — the ledger may not say more than the JSON.
+        counts = summary.get("unreviewedByReason")
+        if not isinstance(counts, dict):
+            counts = unreviewed_counts_by_reason(unreviewed)
+        if counts:
+            lines.append("")
+            lines.append(
+                "按原因计数："
+                + " · ".join(f"{reason} {count}" for reason, count in counts.items())
+            )
         lines.append("")
         lines.append("| 位号 | MPN | 供应商 | 缺哪些 fact | 工程师给 | 立创找 | 官网搜 |")
         lines.append("|---|---|---|---|---|---|---|")

@@ -418,6 +418,66 @@ def _foreign_unit_code(token: str) -> bool:
     return token.startswith(_POLYMER_SERIES_HEADS)
 
 
+#: The ceramic field that prints the value **and** the rating and names the
+#: packaging at the end (task 184): ``<value code><tolerance letter><voltage
+#: code>NT`` — ``0603B103K500NT`` (10 nF, ±10 %, 50 V), ``CGA1206X7R104K501NT``
+#: (100 nF, ±10 %, 500 V), ``0603B225K250NT`` (2.2 µF, ±10 %, 25 V). Measured on
+#: ``.tmp_bug98b/实板A.epro2`` (岳 2026-10-15 实板反馈): that board's
+#: own ``Value`` fields spell the first two 10nF and 100nF, which is exactly
+#: what the group **in front of** the tolerance letter reads.
+#:
+#: The ``$`` is what makes this a field rather than a scan: with the tail named,
+#: only one nine-character window of a token can match, so the pair of three-
+#: figure groups is located by the token itself. That is also why the reader
+#: does not have to guess which of the two groups is a rating — the one behind
+#: the tolerance letter is the voltage code, and the one in front of it is the
+#: value.
+_CAP_VOLTAGE_TAIL_RE = re.compile(r"(\d{3})[A-Z](\d{3})NT$")
+
+
+def _cap_voltage_tail_code(token: str) -> str | None:
+    """The EIA value code of a ``<value><tol><voltage>NT`` ceramic, or None.
+
+    The reading :func:`mpn_value_code` asks *before* :func:`_non_eia_notation`
+    is consulted, and the reason it has to come first: the voltage tail
+    (:data:`_VOLTAGE_TAIL_RE`, ``103K500``) is one of the notations 015 refuses
+    a token for, and that refusal is right — the raw records of the trade do
+    not say which group is which. The ``NT`` tail does say it (that is the
+    whole point of this reader's pattern), so the token is read here, and the
+    notation refusal is left standing for every token that does not carry the
+    tail — the electrolytics and the ``HGC1206R5106K500NSPJ`` family it was
+    written for keep their ``None``.
+
+    Refusals, deliberately narrow: a token whose three figures before the
+    tolerance letter are not a value code this decoder would state (an empty
+    group cannot happen — the pattern fixes the length), and every token that
+    does not end in the tail. Nothing else is invented.
+    """
+    m = _CAP_VOLTAGE_TAIL_RE.search(token)
+    if m is None:
+        return None
+    return m.group(1)
+
+
+#: 国巨 (Yageo) puts its own power code between the size and the value, and the
+#: value is then **glued** to it as an ordinary mid-letter spelling (task 184):
+#: ``RC0603FR-071KL`` is 1 kΩ and ``RC0603FR-074K7L`` is 4.7 kΩ, the ``07``
+#: being the vendor's field — the same ``070``/``071`` family the resistor
+#: reader has read as its own spelling since 071 and anchored since 078 A1
+#: (``RL0805FR-070R1L``'s ``07`` is that date code). Before 184
+#: :func:`mpn_value_code` answered ``"071"``/``"074"`` for those tokens, i.e. the
+#: EIA whitelist read a power code as a value code; 岳 2026-10-15 实板反馈 named
+#: ``RC0603FR-071KL``/``AC0603FR-071KL`` as the shape to refuse.
+#:
+#: The refusal is the **whole token**, not only the group that begins right after
+#: the dash: the figures the vendor code is glued to *are* the value field, so
+#: every three-figure group inside them belongs to a value the resistor reader
+#: already reads. Skipping only the first group was measured (184) to invent a
+#: reading instead of removing one — ``RC0603FR-07200KL``, the shelf's
+#: ``res.200k_0603`` at 200 kΩ, answered ``"200"`` under it.
+_VENDOR_POWER_CODE_RE = re.compile(r"\d{4}FR-(\d{2})")
+
+
 def _farads_of_field(text: str) -> float | None:
     """The capacitance a **whole field** states, by the two grammars, or None.
 
@@ -979,12 +1039,14 @@ def mpn_resistance_readings(mpn: str) -> list[tuple[float, str]]:
     matches the board's own declared value against them, and an MPN whose readings
     *all* disagree is still a contradiction.
 
-    Five shapes are read, each one's whitelist written out at its own helper --
+    Seven shapes are read, each one's whitelist written out at its own helper --
     the mid-letter notation (:func:`_mid_letter_readings`), 厚声's
     three-figures-plus-exponent field in both its alphabets
     (:func:`_letter_exponent_reading`, :func:`_numeric_exponent_reading`), the
-    E-96 four-figure code (:func:`_e96_reading`) and the shunt field between a
-    tolerance letter and its ``R`` (:func:`_shunt_reading`). They are additive
+    E-96 four-figure code (:func:`_e96_reading`), the shunt field between a
+    tolerance letter and its ``R`` (:func:`_shunt_reading`), and since 184 the
+    two families whose four-figure fields sit in front of a taping tail
+    (:func:`_frc_reading`, :func:`_wsl_reading`). They are additive
     on purpose (task 046): an MPN where two conventions are by shape
     indistinguishable keeps *both* readings, because the caller -- the board's
     own declared value -- is the only thing that can choose, and dropping the
@@ -1044,6 +1106,8 @@ def mpn_resistance_candidates(mpn: str) -> list[tuple[float, str, str]]:
         _numeric_exponent_reading(token),
         _e96_reading(token),
         _shunt_reading(token),
+        _frc_reading(token),
+        _wsl_reading(token),
     ):
         if reading is not None:
             value, text, anchor = reading
@@ -1207,6 +1271,84 @@ def _shunt_reading(token: str) -> tuple[float, str, str] | None:
     return value, f"{m.group(0)} (shunt field)", ANCHOR_E96_LETTER
 
 
+#: FOJAN's FRC family in its E-96 spelling (task 184): ``FRC`` + a four-figure
+#: size + a tolerance letter + four E-96 figures + the ``TS`` taping tail —
+#: ``FRC0603F1000TS`` = 100 Ω, ``FRC0603F1500TS`` = 150 Ω, ``FRC0603F3301TS`` =
+#: 3.3 kΩ, ``FRC0603F1002TS`` = 10 kΩ, ``FRC0603F4701TS`` = 4.7 kΩ. Measured on
+#: ``.tmp_bug98b/实板A.epro2`` (岳 2026-10-15 实板反馈), where those five
+#: are the parts the board declares at exactly those resistances and the two
+#: with no ``Value`` field at all (``R1``/``R2``/``R5``/…, all ``..F1000TS``).
+#:
+#: :func:`_e96_reading` cannot read this shape and should not be widened for it
+#: (071 §1 C's anchor discipline): its field has to *end* the token, and here
+#: the code sits in front of a two-letter tail. The ``TS`` tail plus the family
+#: head, the size and the tolerance letter are this reader's own anchor, and
+#: the reading carries :data:`ANCHOR_E96_LETTER` for that reason. The family's
+#: **E-24** spelling (``FRC0805J471`` = 470 Ω, three figures at the end) is
+#: :func:`mpn_value_code`'s and stays there.
+_FRC_FIELD_RE = re.compile(
+    r"^FRC(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)"
+    r"([A-Z])(\d{4})TS$"
+)
+
+
+def _frc_reading(token: str) -> tuple[float, str, str] | None:
+    """The FRC family's four-figure E-96 field, or None.
+
+    Three significant figures and a power of ten (:data:`_FRC_FIELD_RE`), the
+    same arithmetic as :func:`_e96_reading` -- what differs is where the field
+    sits and what it is anchored on. A figure group starting with ``0`` is not
+    an E-96 code, the same refusal its sibling makes.
+    """
+    m = _FRC_FIELD_RE.match(token)
+    if m is None:
+        return None
+    figures = m.group(2)
+    if figures.startswith("0"):
+        return None
+    value = int(figures[:3]) * (10.0 ** int(figures[3]))
+    if value <= 0:
+        return None
+    return value, f"{figures} (FRC E-96 field)", ANCHOR_E96_LETTER
+
+
+#: Vishay's WSL family (task 184): ``WSL`` + a four-figure size + ``R`` as the
+#: decimal point + a **four-figure** fraction + a tail —
+#: ``WSL1206R1000FEA`` states 0.1 Ω. Measured on
+#: ``.tmp_bug98b/实板A.epro2`` (岳 2026-10-15 实板反馈): ``R21``/``R28``/
+#: ``R32`` are three placements of it and the board declares all three 100mΩ.
+#:
+#: Why :func:`_shunt_reading` does not cover it, and why 043's refusal does not
+#: either: that reader's ``FR400`` field ends the fraction at three figures and
+#: needs a tolerance letter *in front of the* ``R``; here the fraction is four
+#: figures and the ``R`` follows the size's last digit, so the token is not the
+#: ``<digit>R<digits>`` shape 043 refused (``JER2512F3R005``). What is read is
+#: the family's own field — head, size, point, fraction, tail — which is the
+#: anchor, and the reading carries :data:`ANCHOR_E96_LETTER` on the same footing
+#: as the shunt shape's.
+_WSL_FIELD_RE = re.compile(
+    r"^WSL(?:01005|0201|0402|0603|0805|1206|1210|1812|2010|2512)R(\d{4})[A-Z]{2,3}$"
+)
+
+
+def _wsl_reading(token: str) -> tuple[float, str, str] | None:
+    """The WSL family's ``R``-pointed four-figure field, or None.
+
+    ``R`` is the decimal point with every digit of the fraction written out
+    (``R1000`` = 0.1 Ω, ``R0100`` = 0.01 Ω), the same reading
+    :func:`_shunt_reading` gives its shorter field. Two- and three-letter tails
+    are both read because the tail is packaging, not part of the value.
+    """
+    m = _WSL_FIELD_RE.match(token)
+    if m is None:
+        return None
+    digits = m.group(1)
+    value = int(digits) / (10.0 ** len(digits))
+    if value <= 0:
+        return None
+    return value, f"R{digits} (WSL shunt field)", ANCHOR_E96_LETTER
+
+
 def mpn_value_code(mpn: str) -> str | None:
     """The EIA value code inside an MPN, or None when absent/ambiguous/refused.
 
@@ -1240,11 +1382,45 @@ def mpn_value_code(mpn: str) -> str | None:
     #27): the guards below are quadratic in the token's length -- each one walks
     or backtracks over the whole digit run -- and a string that long is not a part
     number.
+
+    Two shapes were added by task 184, both of them measured on
+    ``.tmp_bug98b/实板A.epro2`` (岳 2026-10-15 实板反馈):
+
+    * a ceramic whose tail names its own voltage code and packaging
+      (:func:`_cap_voltage_tail_code`, ``0603B103K500NT`` -> ``103``) is read
+      **before** the notation refusal above, because the tail is what makes the
+      pair of three-figure groups unambiguous — the refusal itself is untouched;
+    * 国巨's power code between the size and the value
+      (:data:`_VENDOR_POWER_CODE_RE`, ``RC0603FR-071KL``) is skipped, so the
+      three figures after the dash are no longer read as a value code (the
+      ``"071"`` this entry point used to answer for that part). The resistor
+      reader's own mid-letter readings of the same tokens (1 kΩ, 4.7 kΩ) are
+      unaffected — they never came from here.
     """
     if not mpn or _too_long(mpn):
         return None
     token = mpn.strip().split()[0] if mpn.strip() else ""
-    if not token or _non_eia_notation(token) or _foreign_unit_code(token):
+    if not token or _foreign_unit_code(token):
+        return None
+    # 184: the ceramic field that names its own voltage code and packaging
+    # (``0603B103K500NT``). Asked before the notation refusal below, because
+    # that refusal covers this shape too -- and here the tail says which group
+    # is the rating, so the token is not ambiguous after all.
+    value_and_rating = _cap_voltage_tail_code(token)
+    if value_and_rating is not None:
+        return value_and_rating
+    if _non_eia_notation(token):
+        return None
+    # 184: 国巨's power code between the size and the value (``RC0603FR-071KL``
+    # states 1 kΩ, ``07`` is the vendor's own field). This token shape is
+    # refused **whole**, not just at the group that begins right after the dash:
+    # the figures the vendor code is glued to are the value written in the
+    # mid-letter notation (``07`` + ``200K``, ``07`` + ``1K``), so every
+    # three-figure group inside them belongs to a value the resistor reader
+    # already reads. Skipping only the first group was measured to invent a
+    # reading instead of removing one: ``RC0603FR-07200KL`` (the shelf's
+    # ``res.200k_0603``, 200 kΩ) would have answered ``"200"``.
+    if _VENDOR_POWER_CODE_RE.search(token):
         return None
     candidates: list[str] = []
     for m in _CODE_RE.finditer(token):

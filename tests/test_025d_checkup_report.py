@@ -286,14 +286,24 @@ def test_unknown_parts_reports_each_reason_separately():
 
 
 def test_an_undecodable_mpn_is_flagged_for_the_prefixes_it_means_something_for():
+    """The prefix restriction, and — since 184 — what "undecodable" now means.
+
+    184 widened the reason to "the value cannot be known": a part whose board
+    ``Value`` field is readable is no longer on this list however the MPN reads,
+    so the witness has to be a part with **no** board value as well. The prefix
+    question this test exists for is unchanged (``U9`` is never asked), and so is
+    the "decodes fine" case.
+    """
     parts = unknown_parts(model_of(
-        component("C9", value="330uF", mpn="EEUFR1V331", supplier="C1"),   # non-EIA notation
+        component("C9", mpn="EEUFR1V331", supplier="C1"),                  # non-EIA notation, no value
+        component("C10", value="330uF", mpn="EEUFR1V331", supplier="C1"),  # 184: value readable
         component("U9", mpn="LM358", supplier="C2"),                       # an IC: never EIA
         component("R9", value="4.7k", mpn="FRC0805J472", supplier="C3"),    # decodes fine
     ))
 
     by_ref = {part["designator"]: part for part in parts}
     assert UNKNOWN_REASON_UNDECODABLE in by_ref["C9"]["reasons"]
+    assert "C10" not in by_ref, "184: a readable board value is not undecodable"
     assert "U9" not in by_ref, "asking a decoder about an IC's MPN would list every IC"
     assert "R9" not in by_ref
 

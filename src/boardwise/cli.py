@@ -57,6 +57,7 @@ from .engines.checkup import (
     render_review_summary,
     summary_template,
     unknown_parts,
+    unreviewed_counts_by_reason,
     unreviewed_parts,
     warning_triage_slots,
 )
@@ -3898,6 +3899,15 @@ def _completion_body(
     error_entries = error_entries if isinstance(error_entries, list) else []
     counts_incomplete = bool(summary.get("countsIncomplete"))
     unreviewed_count = len(unreviewed)
+    # 184: the reason split, read from the summary when the report carries it and
+    # counted from the section's own rows otherwise (a report written before the
+    # split existed still re-gates to a consistent pair of numbers).
+    by_reason = summary.get("unreviewedByReason")
+    by_reason = (
+        dict(by_reason)
+        if isinstance(by_reason, dict) and by_reason
+        else unreviewed_counts_by_reason(unreviewed)
+    )
     # One per part however many pins it carries, and the facts seed it may also
     # have is *not* added again — `unreviewedParts` already counts that part and
     # 058 §二 says the same question is not counted twice (`marked_parts`).
@@ -3974,6 +3984,11 @@ def _completion_body(
         "scope": dict(scope),
         "errors": errors,
         "unreviewedParts": unreviewed_count,
+        # 184: `unreviewedParts` is one number for different jobs. The split
+        # travels with it here as well as on `summary`, so a reader of the
+        # completion section (the 欠账 line in report.md) does not have to go and
+        # find the other section. Additive: every key that was here stays.
+        "unreviewedByReason": by_reason,
         "needsDatasheet": marked_count,
         "warningsPendingTriage": pending,
         "architectureSlots": architecture_slots,
@@ -5977,6 +5992,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         model, library=shelf, datasheet_dir=Path(UNREVIEWED_DATASHEET_DIR)
     )
     summary["unreviewedParts"] = len(unreviewed)
+    # 184: the same number split by reason. One count for problems that need
+    # different work (no MPN vs a value nobody can read vs no supplier) sent the
+    # reader to the wrong job — and the split is already in every row below.
+    summary["unreviewedByReason"] = unreviewed_counts_by_reason(unreviewed)
     # **Narrow on purpose** (053 §2.2): this field answers exactly one question —
     # "did the datasheet gate leave any part unjudged?" — and the name is kept
     # (downstream and friends read it) rather than widened, because widening it
