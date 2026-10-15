@@ -192,8 +192,9 @@ The boards come from `blocklib/harvest.sources.json` — a JSON array of
 repository-relative paths — unless `--sources` names them. That file is the
 single source the tests read too, so the shipped command, the shelf and the
 suite cannot name three different sets of boards. Naming `--sources` yourself
-(including the old `blocklib/sources/*.eprj2` glob) still works, but that glob
-covers 2 of the 6 harvestable boards: see the measured counts below.
+still works; private source boards (e.g. a local `blocklib/sources/` directory,
+**never committed** — real project containers stay off the repo) are picked up
+the same way.
 
 Rules the tool keeps:
 

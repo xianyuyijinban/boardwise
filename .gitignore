@@ -44,3 +44,12 @@ inputs/smart_pillbox/firmware/
 # force-added (`git add -f`) and stays tracked; everything else here is
 # one-shot probe output that would only add noise to `git status`.
 outputs/
+
+# Local private-source drop box (2026-10-15 history scrub). These are real
+# boards — mostly company designs — read as input by `tools/harvest_parts.py`
+# and by the tests that read them; they are never an artifact of this
+# repository. The four files that used to live here were removed from git's
+# whole history, so keep your own copies in this directory: with them present,
+# `harvest_parts.py --check` and the source-reading tests work as before, and
+# neither this rule nor `tools/check_repo_hygiene.py` has anything to report.
+blocklib/sources/

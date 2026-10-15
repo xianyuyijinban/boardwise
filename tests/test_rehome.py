@@ -41,6 +41,16 @@ PILLBOX = SOURCES / "smart_pillbox.eprj2"
 #: The two entries the library cannot key, and the C-numbers they carry.
 PERSONAL = {"C2861195": "ic.drv8350srtvr", "C49423996": "ic.hb04n090s"}
 
+#: `blocklib/sources/` is a **local drop box**, not a repository directory: the
+#: company boards that used to live there were scrubbed from git's whole history
+#: (2026-10-15) and `.gitignore` keeps the path out of the index, so a clone has
+#: neither the files nor the directory. Tests that read one skip instead of
+#: failing; the path constants above are deliberately untouched, so copying your
+#: own backup into `blocklib/sources/` brings these tests back with it.
+_no_private_sources = pytest.mark.skipif(
+    not SOURCES.is_dir(), reason="private sources not on this machine"
+)
+
 
 def _load_tool():
     """`tools/` is not a package, so the module is loaded by path."""
@@ -287,6 +297,7 @@ def _pillbox_ch340_lcsc() -> str:
     raise AssertionError("the pillbox no longer places a CH340N")
 
 
+@_no_private_sources
 def test_the_harvest_applies_an_identity_correction_and_says_so():
     from boardwise.core.parts import IdentityOverride
     from boardwise.engines.harvest import harvest_board
@@ -302,6 +313,7 @@ def test_the_harvest_applies_an_identity_correction_and_says_so():
     assert "re-anchored by test" in ch340.notes
 
 
+@_no_private_sources
 def test_the_verifier_is_asked_about_the_corrected_pair():
     """The whole point: the bridge must be asked about the identity the entry
     will carry, not the one the board wrote."""
@@ -336,6 +348,7 @@ def test_the_verifier_is_asked_about_the_corrected_pair():
     assert ("f" * 32, "0" * 32) not in original
 
 
+@_no_private_sources
 def test_the_harvest_applies_a_datasheet_link_from_the_sidecar():
     """An offline harvest can reproduce a link that only the network could fetch.
 

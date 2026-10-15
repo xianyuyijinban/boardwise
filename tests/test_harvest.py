@@ -13,6 +13,13 @@ Every claim the task asks the harvest to be able to make has a test here:
 
 The numbers are the measured ones, so a change in the reader or the boards shows
 up as a failing assertion rather than as a quietly different library.
+
+Two of the boards the committed shelf was harvested from are **private** ones
+kept in `blocklib/sources/` — a local drop box, not a repository directory: those
+files were scrubbed from git's whole history on 2026-10-15. Everything that reads
+them, *including the shelf itself*, which cannot be reproduced without them,
+skips on a machine that has no drop box rather than failing. The path constants
+are left as they are, so restoring the local copies restores the tests.
 """
 
 from __future__ import annotations
@@ -79,6 +86,13 @@ HARVEST_SOURCES = [
     )
 ]
 
+#: See the module docstring: `blocklib/sources/` is a local drop box, absent from
+#: a clone, so the tests that read a board from it — or the committed shelf, which
+#: came from those boards — skip instead of failing.
+_no_private_sources = pytest.mark.skipif(
+    not SOURCES.is_dir(), reason="private sources not on this machine"
+)
+
 #: Measured 2026-09-17 (the library was topped up with the two `.epro2` exports
 #: of the pillbox and the thesis board on top of the four 2026-09-16 sources).
 #: Per board, then merged.
@@ -110,6 +124,7 @@ SHARED_ENTRIES = (
 )
 
 
+@_no_private_sources
 def test_a_local_project_carries_the_library_identity_it_needs():
     """The finding that made 008b possible — measured, not assumed."""
     project = load_local_project(PILLBOX)
@@ -123,6 +138,7 @@ def test_a_local_project_carries_the_library_identity_it_needs():
     assert device.attributes.get("Supplier Part")
 
 
+@_no_private_sources
 def test_the_harvest_reports_what_each_board_contributed():
     result = harvest(HARVEST_SOURCES)
     reports = {r.board: r for r in result.sources}
@@ -143,6 +159,7 @@ def test_the_harvest_reports_what_each_board_contributed():
     assert all(p.lcsc for p in result.library.parts)
 
 
+@_no_private_sources
 def test_every_entry_reconciles_with_the_board_it_names():
     result = harvest(HARVEST_SOURCES)
     counts = reconcile_counts(result)
@@ -175,6 +192,7 @@ def test_the_committed_library_comes_from_the_sources_it_names():
     )
 
 
+@_no_private_sources
 def test_the_committed_library_is_exactly_a_fresh_harvest():
     """The artifact must be reproducible from **sources + sidecar**.
 
@@ -226,6 +244,7 @@ def test_the_committed_library_is_exactly_a_fresh_harvest():
     ), "the shelf records no verification, so `--verify` has not run"
 
 
+@_no_private_sources
 def test_the_spelling_tallies_are_written_by_the_harvest_and_retired_by_verify():
     """A bridge run answers the spelling question, so its notes outlive it.
 
@@ -270,6 +289,7 @@ def test_the_datasheet_links_in_the_library_come_from_the_sidecar():
     )
 
 
+@_no_private_sources
 def test_the_same_c_number_on_many_boards_becomes_one_entry():
     """The CH340N is on **all six** boards — the strongest claim in the shelf."""
     result = harvest(HARVEST_SOURCES)
@@ -294,6 +314,7 @@ def test_the_same_c_number_on_many_boards_becomes_one_entry():
     assert ch340.provenance.source.count(";") == len(HARVEST_SOURCES) - 1
 
 
+@_no_private_sources
 def test_a_shared_place_does_not_swallow_the_entry_it_shares():
     """One part placed at six designators is one entry with six names."""
     result = harvest([PILLBOX, THESIS])
@@ -328,6 +349,7 @@ def test_a_conflicting_field_is_recorded_not_averaged():
     assert set(first.provenance.designators) == {"R1@a", "R2@b"}
 
 
+@_no_private_sources
 def test_an_ambiguous_key_is_suffixed_for_every_claimant():
     """Measured: two different 100nF 0805 capacitors share the value/footprint slug."""
     result = harvest([PILLBOX, THESIS])
@@ -337,6 +359,7 @@ def test_an_ambiguous_key_is_suffixed_for_every_claimant():
     assert {p.key for p in shared} == {"cap.100n_0805.c28233", "cap.100n_0805.c49678"}
 
 
+@_no_private_sources
 def test_a_board_that_cannot_be_harvested_says_so():
     """An edit-log-only project contributes a reason, never an empty success."""
     entries, report = harvest_board(EDIT_LOG_ONLY)
@@ -366,6 +389,7 @@ def _device_name_table(project) -> dict[tuple[str, str], str]:
     return table
 
 
+@_no_private_sources
 def test_the_bridge_verifier_is_the_only_thing_that_marks_a_name_verified():
     """`--verify` upgrades, corrects, or leaves it unverified — in that order."""
     # Without a verifier nothing is called verified.
@@ -446,6 +470,7 @@ def test_the_basic_flag_comes_from_evidence_in_any_spelling(klass, expected):
         assert "unrecognised" in note
 
 
+@_no_private_sources
 def test_a_real_entry_carries_the_library_vocabulary_footprint_name():
     """`R0805`, not `0805` — 006b's vocabulary rule, on real data.
 
@@ -463,6 +488,7 @@ def test_a_real_entry_carries_the_library_vocabulary_footprint_name():
     assert part.footprint_name != part.params.get("Supplier Footprint")
 
 
+@_no_private_sources
 def test_the_milliohm_part_is_kept_apart_from_a_megaohm_reading():
     """The real 5mΩ shunt is the #202 shape: `m` vs `M` is nine decades."""
     result = harvest([THESIS])
@@ -481,6 +507,7 @@ def test_a_case_only_disagreement_is_not_a_conflict():
     assert prefer_footprint_spelling("R0603", "R0805") == ("R0603", False)
 
 
+@_no_private_sources
 def test_the_library_says_which_names_came_from_one_source_only():
     """A name only one source spelled is left alone — and the fact is recorded.
 
@@ -535,6 +562,7 @@ def test_the_committed_library_never_writes_a_human_footprint_label():
         assert part.footprint_name == part.footprint_name.strip()
 
 
+@_no_private_sources
 def test_the_verifier_is_asked_about_the_device_never_about_a_project_uuid():
     """The measured chain starts at the device; a project uuid is not a key.
 
@@ -587,6 +615,7 @@ def test_the_footprint_uuid_comes_from_the_device_dump_and_says_which_path():
     assert FOOTPRINT_UUID_PATHS[0] == ("association", "footprintUuid")
 
 
+@_no_private_sources
 def test_the_devices_to_verify_are_the_ones_the_harvest_would_write():
     """One rule for "which devices", shared by the harvest and the verifier."""
     wanted = devices_to_verify(HARVEST_SOURCES)
@@ -600,6 +629,7 @@ def test_the_devices_to_verify_are_the_ones_the_harvest_would_write():
     assert any("CH340N" in label for label in labels)
 
 
+@_no_private_sources
 def test_the_library_file_declares_its_kind(tmp_path):
     result = harvest([PILLBOX])
     assert library_to_json(result.library)["kind"] == PART_LIBRARY_KIND

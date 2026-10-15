@@ -46,12 +46,23 @@ EXPORTS = [
 HIGHS= FIXTURES / "ProPrj_高速电机控制器_2026-09-16.epro2"
 ROBOT = FIXTURES / "ProPrj_ROBOT ctrl FOC_2026-09-16.epro2"
 
+#: `blocklib/sources/` is a **local drop box**, not a repository directory: the
+#: company boards that used to live there were scrubbed from git's whole history
+#: (2026-10-15) and `.gitignore` keeps the path out of the index, so a clone has
+#: neither the files nor the directory. Tests that read one skip instead of
+#: failing; the path constants above are deliberately untouched, so copying your
+#: own backup into `blocklib/sources/` brings these tests back with it.
+_no_private_sources = pytest.mark.skipif(
+    not SOURCES.is_dir(), reason="private sources not on this machine"
+)
+
 
 # --------------------------------------------------------------------------
 # the local project
 # --------------------------------------------------------------------------
 
 
+@_no_private_sources
 def test_a_local_project_carries_the_library_identity_it_needs():
     project = load_local_project(PILLBOX)
     assert project.kind == "eprj2-local"
@@ -63,6 +74,7 @@ def test_a_local_project_carries_the_library_identity_it_needs():
     assert device.attributes.get("Supplier Part")
 
 
+@_no_private_sources
 def test_an_edit_log_only_project_is_refused_with_that_reason():
     with pytest.raises(LocalProjectError, match="only an edit log"):
         load_local_project(EDIT_LOG_ONLY)
@@ -142,6 +154,7 @@ def test_a_missing_footprint_attribute_is_not_guessed_at():
 # --------------------------------------------------------------------------
 
 
+@_no_private_sources
 def test_the_same_board_is_unharvestable_as_an_edit_log_and_fine_as_an_export():
     """Measured: 0 identity in the local file, full identity in the export.
 
@@ -164,6 +177,7 @@ def test_the_same_board_is_unharvestable_as_an_edit_log_and_fine_as_an_export():
 # --------------------------------------------------------------------------
 
 
+@_no_private_sources
 def test_the_format_is_decided_by_the_file():
     assert load_board_source(PILLBOX).kind == "eprj2-local"
     assert load_board_source(ROBOT).kind == "epro2-export"

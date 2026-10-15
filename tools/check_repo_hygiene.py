@@ -44,16 +44,19 @@ _CONTAINER_RE = re.compile(
     r"\.(epro2|epro|eprj2|eprj3|epru|esch2|esch|epcb)(?:\.[^/]*)?(/|$)", re.IGNORECASE
 )
 
-# The 32 project containers tracked as of 2026-09-27, each individually
-# approved (own teaching/DIY boards + synthetic/golden fixtures). Frozen.
+# The project containers tracked as of 2026-10-15, each individually approved
+# (own teaching/DIY boards + synthetic/golden fixtures). Frozen.
 # (Paths are matched against NUL-separated `git ls-files -z` output, so
 # non-ASCII names compare literally — never add the quoted/escaped form.)
+#
+# The four company boards under `blocklib/sources/` were listed here until
+# 2026-10-15, when the owner had them scrubbed from git's **entire history**.
+# That path is a local drop box now (`.gitignore` keeps it out of the index), so
+# there is no tracked container left to allow — and a `blocklib/sources/` entry
+# reappearing in this list would mean the private boards had come back into the
+# index, which is the one thing this guard exists to stop.
 ALLOWLIST: frozenset[str] = frozenset(
     {
-        "blocklib/sources/ROBOT_ctrl_FOC.eprj2",
-        "blocklib/sources/highspeed_motor_ctrl.eprj2",
-        "blocklib/sources/smart_pillbox.eprj2",
-        "blocklib/sources/thesis_FOC_board.eprj2",
         "reviewsets/injected/duplicate-designator.epro2",
         "reviewsets/injected/fixed-base.epro2",
         "reviewsets/injected/ldo-no-headroom.epro2",

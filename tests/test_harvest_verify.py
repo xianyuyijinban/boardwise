@@ -31,6 +31,18 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT / "blocklib" / "sources"
 PILLBOX = SOURCES / "smart_pillbox.eprj2"
 
+#: `blocklib/sources/` is a **local drop box**, not a repository directory: the
+#: company boards that used to live there were scrubbed from git's whole history
+#: (2026-10-15) and `.gitignore` keeps the path out of the index, so a clone has
+#: neither the files nor the directory. Tests that read one skip instead of
+#: failing — an unreadable board would otherwise leave these asserting nothing,
+#: since a harvest of no devices answers `{}` without complaint. The path
+#: constants above are deliberately untouched, so copying your own backup into
+#: `blocklib/sources/` brings these tests back with it.
+_no_private_sources = pytest.mark.skipif(
+    not SOURCES.is_dir(), reason="private sources not on this machine"
+)
+
 
 def _load_tool():
     """`tools/` is not a package, so the module is loaded by path.
@@ -101,6 +113,7 @@ def run(client: StubBridge, sources=None):
 # --------------------------------------------------------------------------
 
 
+@_no_private_sources
 def test_every_device_is_asked_about_with_the_two_step_chain():
     client = StubBridge()
     answers, problems = run(client)
@@ -120,6 +133,7 @@ def test_every_device_is_asked_about_with_the_two_step_chain():
     assert all(p["uuid"].startswith("fp-") for p in footprint_calls)
 
 
+@_no_private_sources
 def test_the_chain_is_asked_once_per_device_not_once_per_placement():
     client = StubBridge()
     run(client)
@@ -127,6 +141,7 @@ def test_the_chain_is_asked_once_per_device_not_once_per_placement():
     assert len(client.calls) == 2 * len(wanted)
 
 
+@_no_private_sources
 def test_an_injected_client_is_not_closed_by_the_tool():
     """The caller owns what the caller opened."""
     client = StubBridge()
@@ -139,6 +154,7 @@ def test_an_injected_client_is_not_closed_by_the_tool():
 # --------------------------------------------------------------------------
 
 
+@_no_private_sources
 def test_a_device_that_cannot_be_read_is_reported_and_changes_nothing_else():
     def device(_params: dict):
         raise RuntimeError("no such device")
@@ -151,6 +167,7 @@ def test_a_device_that_cannot_be_read_is_reported_and_changes_nothing_else():
     assert "lib.footprint.get" not in client.actions()
 
 
+@_no_private_sources
 def test_a_device_dump_without_a_footprint_uuid_is_reported_as_unusable():
     client = StubBridge(device={"item": {"association": {"symbolUuid": "s-1"}}})
     answers, problems = run(client)
@@ -163,6 +180,7 @@ def test_a_device_dump_without_a_footprint_uuid_is_reported_as_unusable():
     assert "lib.footprint.get" not in client.actions()
 
 
+@_no_private_sources
 def test_a_footprint_that_cannot_be_read_is_reported():
     client = StubBridge(footprint=RuntimeError("not found"))
     answers, problems = run(client)
@@ -171,6 +189,7 @@ def test_a_footprint_that_cannot_be_read_is_reported():
     assert all("via association.footprintUuid" in line for line in problems)
 
 
+@_no_private_sources
 def test_a_footprint_that_answers_without_a_name_is_reported():
     client = StubBridge(footprint={"found": True, "name": ""})
     answers, problems = run(client)
@@ -178,6 +197,7 @@ def test_a_footprint_that_answers_without_a_name_is_reported():
     assert problems and all("returned no name" in line for line in problems)
 
 
+@_no_private_sources
 def test_one_bad_device_does_not_stop_the_others():
     """Failure is per device: the rest of the shelf still gets verified."""
     seen: list[str] = []
@@ -200,6 +220,7 @@ def test_one_bad_device_does_not_stop_the_others():
 # --------------------------------------------------------------------------
 
 
+@_no_private_sources
 def test_the_answers_feed_the_harvest_and_mark_the_names_verified():
     from boardwise.engines.harvest import harvest_board
 
@@ -217,6 +238,7 @@ def test_the_answers_feed_the_harvest_and_mark_the_names_verified():
     assert all(entry.footprint_name_verified is True for entry in entries)
 
 
+@_no_private_sources
 def test_a_board_with_no_verifiable_device_is_not_an_error():
     client = StubBridge()
     answers, problems = run(client, sources=[SOURCES / "highspeed_motor_ctrl.eprj2"])
@@ -224,6 +246,7 @@ def test_a_board_with_no_verifiable_device_is_not_an_error():
     assert client.calls == [], "an unreadable board produced bridge calls"
 
 
+@_no_private_sources
 def test_the_window_hint_rides_every_frame_and_nothing_is_sent_without_one():
     """The daemon refuses an unhinted read as soon as two windows are open (023).
 
@@ -281,7 +304,12 @@ def test_the_default_sources_are_the_committed_ones():
         (ROOT / "blocklib" / "harvest.sources.json").read_text(encoding="utf-8")
     )
     assert TOOL._default_sources() == [ROOT / entry for entry in entries]
-    assert all(path.is_file() for path in TOOL._default_sources()), entries
+    # Two of those boards are the private ones in `blocklib/sources/` (see
+    # `tests/test_harvest.py`), so on a machine without the drop box the list is
+    # not fully readable — a skip, never a failure: the files are simply not here.
+    missing = [path.name for path in TOOL._default_sources() if not path.is_file()]
+    if missing:
+        pytest.skip(f"the committed source list names board(s) not on this machine: {missing}")
 
 
 def test_an_unreadable_source_list_says_which_file(tmp_path):
@@ -303,6 +331,7 @@ def test_an_unreadable_source_list_says_which_file(tmp_path):
         monkey.undo()
 
 
+@_no_private_sources
 def test_an_explicit_source_list_still_wins(tmp_path):
     """`--sources` is untouched: a named board is harvested even when the
     committed list cannot be read at all (the sidecar is switched off here
@@ -320,6 +349,7 @@ def test_an_explicit_source_list_still_wins(tmp_path):
         monkey.undo()
 
 
+@_no_private_sources
 def test_the_shipped_check_run_needs_no_arguments(capsys):
     """The acceptance command: from the repository root, `harvest_parts.py
     --check` with no `--sources` reproduces the committed shelf (1.5 s)."""
