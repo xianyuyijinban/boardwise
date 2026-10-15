@@ -249,12 +249,19 @@ def test_a_checkout_still_uses_the_relative_shelf_spelling():
     assert default_library_path() == DEFAULT_LIBRARY_PATH
 
 
-def test_a_frozen_process_without_an_extraction_root_keeps_the_old_answer(monkeypatch):
+def test_a_frozen_process_without_an_extraction_root_keeps_the_old_answer(monkeypatch, tmp_path):
     # A broken bootstrap must not turn into a new exception out of whichever
     # rule happened to touch the shelf: the constant is returned and the run
     # behaves exactly as it did before this function existed.
+    #
+    # 187v: the home is redirected for the same reason its siblings redirect it.
+    # 186-H2 consults the user shelf *before* the extraction root, so on a
+    # machine that has one this test answered with that file and measured the
+    # machine rather than the broken bootstrap (found by the 0.5.13 release
+    # gate, where a real `parts add` on the exe had just created one).
     from boardwise.rules.facts import DEFAULT_LIBRARY_PATH, default_library_path
 
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.delattr(sys, "_MEIPASS", raising=False)
     assert default_library_path() == DEFAULT_LIBRARY_PATH
