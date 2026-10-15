@@ -1062,12 +1062,18 @@ def test_an_instance_hint_reaches_that_window_without_any_project(tmp_path):
 
 
 def test_an_instance_hint_that_matches_no_window_lists_the_online_ones(tmp_path):
-    """``WINDOW_NOT_CONNECTED``: the same shape as the project refusal.
+    """``INSTANCE_STALE``: the same shape as the project refusal (re-pinned by 185 §C).
 
     An instance id is a name someone typed or copied, so a miss is the ordinary
     outcome — a closed window, or an id from an earlier session. The message
     carries the windows that *are* online, because naming one of them is the
     caller's next move.
+
+    185 §C renamed the code to :data:`ErrorCodes.INSTANCE_STALE` and widened the
+    listing to the row `bridge status` prints (key + project + page): the point of
+    the change was that a caller keeping an old id must be told the id may be
+    **stale**, not that it typo'd. The old code stays in the vocabulary (field
+    builds switch on it) and this test pins that the daemon no longer sends it.
     """
     async def scenario():
         daemon = _daemon(tmp_path)
@@ -1082,11 +1088,17 @@ def test_an_instance_hint_that_matches_no_window_lists_the_online_ones(tmp_path)
                 request_frame("doc.list", {}, id="x", target_instance="inst-gone"))
             reply = decode_frame(await cli_ws.recv())
             assert reply["ok"] is False
-            assert reply["error"]["code"] == ErrorCodes.WINDOW_NOT_CONNECTED
-            assert reply["error"]["message"] == (
-                "no connected window is instance 'inst-gone'; online windows: "
-                f"/test ({WINDOW_A}), test2 ({WINDOW_B})"
+            assert reply["error"]["code"] == ErrorCodes.INSTANCE_STALE
+            assert reply["error"]["code"] != ErrorCodes.WINDOW_NOT_CONNECTED, (
+                "185 §C moved the instance miss to INSTANCE_STALE; WINDOW_NOT_CONNECTED "
+                "is kept in the vocabulary but the daemon must not send it"
             )
+            message = reply["error"]["message"]
+            assert message.startswith("no connected window is instance 'inst-gone' — ")
+            assert "实例可能已失效" in message
+            # Every online window, as the row `bridge status` prints it.
+            assert f"/test ({WINDOW_A})" in message
+            assert f"test2 ({WINDOW_B})" in message
             assert [c["windowKey"] for c in reply["error"]["detail"]["candidates"]] == [
                 WINDOW_A, WINDOW_B,
             ]

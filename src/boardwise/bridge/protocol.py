@@ -1250,7 +1250,35 @@ class ErrorCodes:
     #: exist. Its own code rather than a reuse of ``PROJECT_NOT_CONNECTED``
     #: because the hint was a different kind of name, and a caller that mistyped
     #: an instance id should be told *that*, not that a project is not open.
+    #:
+    #: **Superseded by ``INSTANCE_STALE`` (185), and kept on purpose.** The
+    #: daemon no longer raises it: an instance hint that resolves to nothing live
+    #: is now reported under the name that says what the caller most likely did
+    #: (kept a window id across a reconnect). It stays in the vocabulary for the
+    #: same reason ``CONNECTOR_ALREADY_ACTIVE`` below does — a connector or CLI
+    #: build in the field switches on the string, and a name that vanished from
+    #: the shared vocabulary would leave its handling referencing nothing. A build
+    #: that still switches on it has a branch that no longer fires, and the two
+    #: codes carry the same listing and the same explanation.
     WINDOW_NOT_CONNECTED = "WINDOW_NOT_CONNECTED"
+    #: A ``targetInstance`` hint that names no **live** window, where the useful
+    #: thing to say is not "wrong id" but "**this id is stale**" (185 §C, 岳's
+    #: 2026-10-15 feedback P5). An editor window's instance id is minted by the
+    #: connector at ``hello`` time: restart the editor, or reload the page, and the
+    #: window comes back under a *new* id — so an id copied out of an earlier
+    #: ``bridge status`` (or out of a report) names nothing, and a caller that
+    #: mistook that for "the call worked and returned nothing" loses the run.
+    #:
+    #: Raised by the daemon, before anything is forwarded, with the **same**
+    #: listing ``WINDOW_NOT_CONNECTED`` uses and the same sentence about the id
+    #: possibly being stale. The daemon cannot tell 「a window that was here and
+    #: has gone」 from 「an id it has never seen」: a window is dropped from the hub
+    #: when its socket ends (:meth:`WindowHub.unregister`), and nothing keeps a
+    #: per-instance history across that — an id from a previous daemon run is
+    #: indistinguishable from a typo. Both are therefore reported under this one
+    #: code, whose message says the id may be stale, never that the caller made a
+    #: mistake.
+    INSTANCE_STALE = "INSTANCE_STALE"
     #: Several windows are connected and the request named none (023). Not an
     #: error in the "something is broken" sense — it is the daemon saying it will
     #: not guess which window the caller meant.

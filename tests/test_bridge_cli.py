@@ -1708,7 +1708,10 @@ def test_call_instance_hint_reaches_that_window_from_the_cli(own_daemon):
     assert by_project.returncode == 1
     assert "PROJECT_NOT_CONNECTED" in by_project.stdout + by_project.stderr
     assert missing.returncode == 1
-    assert "WINDOW_NOT_CONNECTED" in missing.stdout + missing.stderr
+    # 185 §C: the instance miss is INSTANCE_STALE now (the code a caller keeping an
+    # old window id must see), and the listing is the row `bridge status` prints.
+    assert "INSTANCE_STALE" in missing.stdout + missing.stderr
+    assert "实例可能已失效" in missing.stderr
     assert "window-A" in missing.stderr and "window-B" in missing.stderr
     assert token not in routed.stdout + routed.stderr
 

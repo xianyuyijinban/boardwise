@@ -50,6 +50,25 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 **先看 `board-report.md` 一眼定盘**（哪块板、哪个模块、几条 ERROR、能不能投板），
 再按下面的四步逐段读 `report.md` 做深度审查。
 
+- **只想问「能不能投板」就只读 `report.json` 的 `conclusion` 节**（185 起，顶层）——
+  它是这份报告**唯一权威**的结论，五个字段全是既有数据的**读**，不是第二套算法：
+
+  | 字段 | 是什么 | 同源处 |
+  |---|---|---|
+  | `verdict` | 审查跑完没有（`complete` / `complete-with-open-items` / `incomplete`） | `completion.verdict` |
+  | `exitCode` | 这次跑退出几（就是下面那条退出码规则） | `summary.exitCode` |
+  | `mayClaimPassed` | **窄义**：没有器件缺手册未审（053 §2.2） | `summary.mayClaimPassed` |
+  | `oneLiner` | 那一句话结论，**与 `board-report.md` 末行的结论句逐字同一份**（同一个生成函数） | `board_report_verdict` |
+  | `blockers` | 为什么不能投/还欠什么，逐条 | `completion.verdictWhy` |
+
+  **AI 汇报、脚本判读一律只读 `conclusion` 节；`summary.*` / `completion.*` / `ai_slots` /
+  `board_report` 都是它的投影**，要细节（哪条规则、哪个位号）再往下翻对应节。任何场合都**不要**
+  自己拿 `summary.conclusion`（窄义字符串）或 `mayClaimPassed` 拼一句结论——那正是 185 要收掉的缝。
+  节里没有的东西就是没有，不许由 `board_report` 或 `report.md` 反推一个「应该通过」。
+- **`needsDatasheet` 三键别读错**（185）：`completion.needsDatasheet` 是**窄义**（审查者手工标记数，
+  已判 deprecated，改读 `completion.reviewerMarked`）；`completion.needsDatasheetTotal` 才是
+  `needs_datasheet[]` 的全量（facts 触发 + 手工标记）。向工程师报「还差几份手册」时用
+  `needsDatasheetTotal`（那才是清单长度），报「你标了几项」才用 `reviewerMarked`。
 - **退出码**：`0` 无 ERROR / `1` 有 ERROR（主机 ERC fatalError/error、主机 PCB DRC 逐条、
   自有规则 ERROR 任一命中）/ `2` 输入不可用 / `3` 说不清——在线状态不可陈述（daemon 不通、
   没 connector、三级数据路全被拒）**或 `completion.verdict` 是 `incomplete`**（073：审查没看全——

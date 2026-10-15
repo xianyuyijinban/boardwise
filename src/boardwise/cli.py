@@ -42,6 +42,7 @@ from .engines.checkup import (
     TRIGGER_MARKED,
     UNREVIEWED_DATASHEET_DIR,
     board_report_section,
+    conclusion_section,
     disambiguated_triage_keys,
     finding_chains,
     intent_section,
@@ -3467,8 +3468,18 @@ def _write_checkup_report(out_dir: Path, report: dict) -> Path:
     integrated report prints from disagreeing with the `completion` beside it in
     the same file. A report dict that carries no `findings`/`summary` still gets a
     (degenerate but honest) section rather than a stale one.
+
+    185 A: the `conclusion` section is written here for the same reason, one level
+    up — it is the report's **one** answer (verdict / exit code / may-claim /
+    one-liner / blockers), and the one-liner is the integrated report's own closing
+    line. Passing the section's verdict into :func:`conclusion_section` is what
+    makes that literal rather than a promise: one call to `board_report_verdict`,
+    two readers. Nothing else in the report reads `conclusion` — it is a projection
+    written for whoever needs a single place to ask, not a new gate.
     """
-    report["board_report"] = board_report_section(report)
+    section = board_report_section(report)
+    report["board_report"] = section
+    report["conclusion"] = conclusion_section(report, verdict=section.get("verdict"))
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "report.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -3886,6 +3897,12 @@ def _completion_body(
     :func:`_clean_coverage` — the reading this section had before the gate existed
     — which is why a section can still be built from counts alone and why a report
     written by an older build re-gates to the same verdict it had.
+
+    185 B split the datasheet counting into three keys, all of them counts of the
+    same list read three ways: ``needsDatasheet`` (kept, narrow — the reviewer's
+    marks), ``reviewerMarked`` (the same number under its own name) and
+    ``needsDatasheetTotal`` (every row of the worklist). See the comment on the
+    return value for why the old key stays.
     """
     errors = int(summary.get("errorCount", 0) or 0)
     # The gate below is the one `drc.summarise` already used to decide `exitCode`:
@@ -3989,7 +4006,31 @@ def _completion_body(
         # completion section (the 欠账 line in report.md) does not have to go and
         # find the other section. Additive: every key that was here stays.
         "unreviewedByReason": by_reason,
+        # 185 B: `needsDatasheet` was carrying two jobs under one name — the
+        # reviewer's hand-marks and the whole worklist the datasheet gate is about
+        # — and a reader could tell neither which it had. It keeps its name and its
+        # **narrow** meaning (the marked count, 058 §二/053 §2.2) because renaming a
+        # report key breaks every reader written against it; the two questions get
+        # their own names beside it instead.
+        #
+        #   * `reviewerMarked` — what the reviewer wrote down by hand (one per
+        #     part, however many pins). The **same number** as `needsDatasheet`,
+        #     and the key to read from now on;
+        #   * `needsDatasheetTotal` — `len(needs_datasheet[])`: every row of the
+        #     worklist, facts-triggered and hand-marked together. The gate's own
+        #     size, which no key in this section stated before.
+        #
+        # The total is the **list's** length, which is one row per *part*
+        # (`needs_datasheet_section` folds a part's rows together), so it can be
+        # smaller than `unreviewedParts` — that key counts `unreviewed_parts[]`
+        # rows, and a designator placed on two boards has one there. Measured on
+        # 毕设FOC 1.0.0: 73 unreviewed rows, 69 worklist rows (C1/R3/R4/U1 are on
+        # two boards each). Neither number is wrong; they answer two questions.
+        #
+        # deprecated → reviewerMarked
         "needsDatasheet": marked_count,
+        "reviewerMarked": marked_count,
+        "needsDatasheetTotal": len(needs_datasheet or []),
         "warningsPendingTriage": pending,
         "architectureSlots": architecture_slots,
         "openTodos": open_todos,
@@ -4853,8 +4894,8 @@ async def _checkup_ladder(
                        if d.get("type") == "page" and d.get("uuid")}
     except BridgeError as exc:
         attempts.append({"tier": "identity", "ok": False, "code": exc.code, "message": exc.message})
-        if exc.code in ("NO_CONNECTOR", "WINDOW_NOT_CONNECTED", "WINDOW_UNSPECIFIED",
-                        "PROJECT_NOT_CONNECTED", "PROJECT_AMBIGUOUS"):
+        if exc.code in ("NO_CONNECTOR", "INSTANCE_STALE", "WINDOW_NOT_CONNECTED",
+                        "WINDOW_UNSPECIFIED", "PROJECT_NOT_CONNECTED", "PROJECT_AMBIGUOUS"):
             notes.append(f"doc.list: {exc.code}: {exc.message}")
             return None
     except Exception as exc:  # noqa: BLE001

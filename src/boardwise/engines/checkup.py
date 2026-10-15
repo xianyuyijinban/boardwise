@@ -2754,6 +2754,62 @@ def board_report_verdict(report: dict) -> dict:
     }
 
 
+#: The `conclusion` section's five keys, in the order they are written (185 A).
+#: Nothing else goes in: the section exists so a caller has **one** place to read
+#: a verdict from, and a sixth key would be one more thing to keep in sync.
+CONCLUSION_KEYS = ("verdict", "exitCode", "mayClaimPassed", "oneLiner", "blockers")
+
+
+def conclusion_section(report: dict, *, verdict: dict | None = None) -> dict:
+    """The report's **one authoritative conclusion** — every field read, none recomputed.
+
+    185 A. The report has carried its verdict in five places for a while, and each
+    of them answers a slightly different question:
+
+    * ``completion.verdict`` — did the review finish;
+    * ``summary.exitCode`` — what the process exits with;
+    * ``summary.mayClaimPassed`` — the **narrow** datasheet question (053 §2.2);
+    * the first sentence of ``board-report.md`` — the sentence a human is told to
+      read first (154's :func:`board_report_verdict`);
+    * ``completion.verdictWhy`` — why, in clauses.
+
+    An AI reporting to an engineer, or a script deciding whether to fail CI, had
+    to know which of the five to trust and when they disagree. This section is
+    that decision, made once, in the one place every report is written
+    (:func:`boardwise.cli._write_checkup_report`).
+
+    **Every field is a read**, which is the whole point:
+
+    * ``oneLiner`` is the verdict dict's ``line`` — the *same string*, from the
+      *same call*, that :func:`render_board_report` prints as the closing line of
+      ``board-report.md``; pass the section's own ``verdict`` in (the CLI does) so
+      there is exactly one generation and the two cannot drift. One generator, two
+      readers — not a second sentence written beside the first;
+    * ``blockers`` is ``completion.verdictWhy`` as it stands. The one exception is
+      a report with **no** ``completion`` section at all (a hand-built dict, a
+      report from before 053), where there is no ``verdictWhy`` to quote and the
+      narrow reasons :func:`board_report_verdict` derived are used instead — still
+      that one function's own list, never a re-derivation here.
+
+    Additive by construction: the five older readings keep their names, meanings
+    and places. Nothing in the verdict arithmetic reads this section.
+    """
+    summary = report.get("summary") or {}
+    completion = report.get("completion") or {}
+    info = verdict if isinstance(verdict, dict) else board_report_verdict(report)
+    if completion:
+        blockers = [str(reason) for reason in (completion.get("verdictWhy") or [])]
+    else:
+        blockers = [str(reason) for reason in (info.get("blockers") or [])]
+    return {
+        "verdict": str(completion.get("verdict") or info.get("completionVerdict") or ""),
+        "exitCode": summary.get("exitCode"),
+        "mayClaimPassed": summary.get("mayClaimPassed"),
+        "oneLiner": str(info.get("line") or ""),
+        "blockers": blockers,
+    }
+
+
 def _drc_baseline(report: dict) -> dict:
     """The ERC + DRC baseline the integrated report opens with, read from `drc`.
 

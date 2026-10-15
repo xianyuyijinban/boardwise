@@ -820,6 +820,31 @@ def window_listing(windows: Iterable[WindowConnection]) -> str:
     return ", ".join(rendered) if rendered else "(none)"
 
 
+def instance_listing(windows: Iterable[WindowConnection]) -> str:
+    """``projectName (windowKey) 页 pageType pageUuid`` per window (185 §C).
+
+    The richer listing the stale-instance refusal carries, and a second renderer
+    rather than a change to :func:`window_listing` on purpose: the 023 messages'
+    exact wording is asserted in tests and quoted in `docs/bridge.md`, and a
+    caller read by a project hint needs the list, not a wider row. This one is for
+    the caller that has *no* working hint at all — its next move is to re-read
+    `bridge status` — so the row is the one `bridge status` prints: the hub key it
+    must copy, the project, and the page (the field that moves while a window
+    stays connected, which is why it is shown even when the project is unknown).
+
+    ``(none)`` for an empty list, same as :func:`window_listing`.
+    """
+    rendered = [
+        "{} ({}) 页 {}".format(
+            window.project_name or window.project_uuid or "(no project)",
+            window.key,
+            f"{window.page_type or '?'} {window.page_uuid}" if window.page_uuid else "(未读到)",
+        )
+        for window in windows
+    ]
+    return ", ".join(rendered) if rendered else "(none)"
+
+
 @dataclass
 class BridgeDaemon:
     """Routes frames between CLI callers and the connected editor windows."""
@@ -1257,9 +1282,14 @@ class BridgeDaemon:
           claimed by several — and because it is the only hint that still works
           when no window can read a project at all (editor just restarted:
           measured 2026-09-22, three windows, every ``context`` null);
-        - **an instance hint, no match** → ``WINDOW_NOT_CONNECTED``, listing the
-          windows that are online. Same shape as the project refusal below:
-          the caller names one of *those*;
+        - **an instance hint, no match** → ``INSTANCE_STALE`` (185 §C), listing the
+          windows that are online with their key, project and page — the row
+          `bridge status` prints, because the caller's next move is to re-read one
+          of them. Same shape as the project refusal below: the caller names one of
+          *those*. The code and the sentence say the id may be **stale** rather
+          than wrong (a window is re-minted on an editor restart or a page
+          reload), so a caller that kept an old id learns what happened instead of
+          concluding the window answered nothing;
         - **a project hint, exactly one match** → that window. Matched by project
           *name* or *uuid* against each window's live context, so a user who
           switched project a minute ago is found under their new project;
@@ -1294,9 +1324,12 @@ class BridgeDaemon:
             if window is not None:
                 return window
             raise BridgeError(
-                ErrorCodes.WINDOW_NOT_CONNECTED,
-                f"no connected window is instance {instance!r}; online windows: "
-                f"{window_listing(live)}",
+                ErrorCodes.INSTANCE_STALE,
+                f"no connected window is instance {instance!r} — "
+                "实例可能已失效：窗口的 instance id 在编辑器重启或页面重连后会重新生成，"
+                "旧 id 指向不了任何窗口（这不是「调用成功但没数据」）。"
+                f"请用 `boardwise bridge status` 重取在线窗口 id；在线窗口："
+                f"{instance_listing(live)}",
                 {"targetInstance": instance, "candidates": [w.as_status() for w in live]},
             )
         hint = self._target_project(target_project)
