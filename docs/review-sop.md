@@ -69,6 +69,13 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
   已判 deprecated，改读 `completion.reviewerMarked`）；`completion.needsDatasheetTotal` 才是
   `needs_datasheet[]` 的全量（facts 触发 + 手工标记）。向工程师报「还差几份手册」时用
   `needsDatasheetTotal`（那才是清单长度），报「你标了几项」才用 `reviewerMarked`。
+  **口径（185-中1）**：`needsDatasheetTotal = len(needs_datasheet[])` 是**去重位号数**，
+  不是 placement 行数——`unreviewed_parts[]` 每个（板，器件）一行，`needs_datasheet[]`
+  按位号折叠成一行，所以它 `≤ len(unreviewed_parts)`，多板工程里严格小于。
+  折叠行带 `boards`：该位号出现在哪几块板、**每块板上的 mpn/name/value**（15/14 个位号
+  在多板上的身份并不相同，`C2` 一块板无 MPN、另一块板带值码）。所以
+  「还差几份手册」= 去重位号数，**但要按「位号 × 板」估工作量**：一块板上一颗料要一份
+  手册，多板同位号要逐块核。`report.md` 的未知项节会把多板位号逐条列出来。
 - **退出码**：`0` 无 ERROR / `1` 有 ERROR（主机 ERC fatalError/error、主机 PCB DRC 逐条、
   自有规则 ERROR 任一命中）/ `2` 输入不可用 / `3` 说不清——在线状态不可陈述（daemon 不通、
   没 connector、三级数据路全被拒）**或 `completion.verdict` 是 `incomplete`**（073：审查没看全——

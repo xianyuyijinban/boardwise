@@ -123,6 +123,18 @@ _BANNER = (
 #
 # That asymmetry is the point: a list of an organisation's own project names
 # cannot be shipped with the guard that reads it.
+#
+# The file's format (187B):
+#
+#     AcmeCorp                       # a word to watch, everywhere in the index
+#     docs/notes.md<TAB>AcmeCorp     # the **baseline**: this word on this path
+#                                    # is grandfathered — reported, never fatal
+#
+# The baseline exists because a leak detector switched on over a repository that
+# already contains the word has only two honest options, and before 187B it had
+# neither: stay off, or be permanently red on hits nobody is going to fix (the
+# 178/108/63 hits measured on 2026-10-16). With the baseline the owner writes the
+# existing hits down once and the gate then reports only what is **new**.
 SENSITIVE_WORDS_FILE = ".sensitive-words"
 
 _BANNER_SENSITIVE = (
@@ -136,33 +148,151 @@ _BANNER_SENSITIVE = (
     "  list — it is yours)."
 )
 
-#: How to read a word from the list: everything before a ``#`` (so a note may
+#: How to read a line of the list: everything before a ``#`` (so a note may
 #: follow on the same line), trimmed. Blank lines and comment-only lines are
-#: not words.
+#: not entries.
 _WORD_COMMENT_SPLIT = "#"
 
+#: The **baseline** separator (中5 / 187B): ``path<TAB>word`` is not a word but
+#: a statement that this one word on this one path is grandfathered — the shape
+#: of every list that has to be switched on over a repository that already
+#: contains the word. A tab, because a path may contain a space and a word almost
+#: never contains a tab; the line is otherwise as free as a word line (a trailing
+#: `#` note included).
+_EXEMPT_SEPARATOR = "\t"
 
-def sensitive_words(path: str | Path) -> list[str]:
-    """The list, in file order, comments and blanks dropped.
+#: Extensions whose contents this gate cannot read as text and whose being
+#: unreadable says nothing a reader can act on: images, archives, binaries and
+#: the project containers the first gate exists for. Named here so the unscanned
+#: report can lead with the files that **do** need a look; nothing is skipped by
+#: this list — every file is still counted and still scanned for a word when its
+#: bytes do decode (中4).
+_BINARY_SUFFIXES = (
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".svgz",
+    ".pdf", ".zip", ".7z", ".gz", ".tar", ".whl", ".xlsx", ".docx", ".pptx",
+    ".exe", ".dll", ".so", ".dylib", ".pyc", ".bin",
+    ".epro", ".epro2", ".eprj2", ".eprj3", ".epru", ".esch", ".esch2", ".epcb",
+    ".woff", ".woff2", ".ttf", ".mp4", ".webm",
+)
 
-    One word per line; ``#`` starts a comment (whole-line or trailing). A
-    missing file is an **empty** list, not an error: that is what "this clone
-    has no list" means, and it is the documented off switch.
+
+def _decode_text(data: bytes) -> str | None:
+    """Bytes → text, sniffing the encoding, or ``None`` when it is not text.
+
+    Three candidates, tried in the order a file's own first bytes make them
+    likely (中4 / 187B): a BOM is authoritative (`utf-8-sig` for a UTF-8 BOM,
+    `utf-16` for either UTF-16 order), otherwise plain UTF-8, then GBK — the
+    Windows console/redirect encoding that produced the files this gate used to
+    skip in silence. ``None`` means "not text this guard can read": a binary, or
+    a charset none of the candidates knows.
+
+    Why it matters: the original reader decoded everything as UTF-8 with
+    ``errors="replace"``, so a UTF-16 or GBK file's *content* never matched a
+    word pattern even when the word was right there in it — a leak detector that
+    reported "clean" about files it could not read at all.
+    """
+    if data.startswith(b"\xef\xbb\xbf"):
+        candidates = ("utf-8-sig",)
+    elif data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        candidates = ("utf-16",)
+    else:
+        candidates = ("utf-8", "gbk")
+    for encoding in candidates:
+        try:
+            return data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return None
+
+
+def _read_entry_file(file: Path) -> str:
+    """The list file's text, or ``SystemExit(2)`` when it cannot be read.
+
+    The list is the owner's own file, and the one thing this guard must not do is
+    fail **open**: an unreadable list is not "no list" (which is the documented
+    off switch), it is "the detector cannot run". (187B: the encodings the reader
+    now sniffs are the ones the file plausibly arrives in — a PowerShell redirect
+    wrote UTF-16 until now and turned every commit into a hard failure.)
+    """
+    try:
+        data = file.read_bytes()
+    except OSError as exc:
+        print(f"repo hygiene: cannot read {file}: {exc}", file=sys.stderr)
+        raise SystemExit(2)
+    text = _decode_text(data)
+    if text is None:
+        print(
+            f"repo hygiene: {file} is not text this guard can read "
+            "(tried utf-8-sig / utf-16 / utf-8 / gbk): an unreadable list is not "
+            "an empty one, so this run stops instead of reporting clean",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    return text
+
+
+def _is_binary_name(relative: str) -> bool:
+    """Whether a path's *name* says "not a text file", for the unscanned report.
+
+    Used only to decide how the unscanned list is **printed** — the file is
+    counted either way, and :func:`sensitive_report` never filters it. The
+    distinction is what makes the disclosure readable: a `.png` this guard cannot
+    decode is expected and unfixable (image text is not text this gate can read),
+    while a `.md` that failed to decode is the case worth a second look.
+    """
+    return relative.lower().endswith(_BINARY_SUFFIXES)
+
+
+def _word_list(path: str | Path) -> tuple[list[str], list[tuple[str, str]]]:
+    """``(words, exemptions)`` from one list file, in file order.
+
+    A line is a **word** (``AcmeCorp``) or, when it carries a tab, an
+    **exemption** (``docs/notes.md<TAB>AcmeCorp``: that word on that path is part
+    of the baseline). ``#`` starts a comment, whole-line or trailing. A missing
+    file is ``([], [])``, not an error: that is what "this clone has no list"
+    means, and it is the documented off switch.
     """
     file = Path(path)
     if not file.is_file():
-        return []
-    try:
-        text = file.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        print(f"repo hygiene: cannot read {file}: {exc}", file=sys.stderr)
-        raise SystemExit(2)
+        return [], []
     words: list[str] = []
-    for line in text.splitlines():
-        word = line.split(_WORD_COMMENT_SPLIT, 1)[0].strip()
-        if word and word not in words:
-            words.append(word)
-    return words
+    exemptions: list[tuple[str, str]] = []
+    for line in _read_entry_file(file).splitlines():
+        entry = line.split(_WORD_COMMENT_SPLIT, 1)[0].strip()
+        if not entry:
+            continue
+        if _EXEMPT_SEPARATOR in entry:
+            exempt_path, _, word = entry.partition(_EXEMPT_SEPARATOR)
+            exempt_path = exempt_path.strip().replace("\\", "/")
+            word = word.strip()
+            if exempt_path and word:
+                pair = (exempt_path, word)
+                if pair not in exemptions:
+                    exemptions.append(pair)
+                if word not in words:
+                    # The baseline does not switch the word off elsewhere on the
+                    # machine — an exemption is per path by construction, and a
+                    # word that appears in only one exempt line is still a word
+                    # the rest of the repository is scanned for.
+                    words.append(word)
+                continue
+        if entry not in words:
+            words.append(entry)
+    return words, exemptions
+
+
+def sensitive_words(path: str | Path) -> list[str]:
+    """The words, in file order, comments and blanks dropped.
+
+    The exemptions travel separately (:func:`sensitive_exemptions`): they select
+    which *hits* are baselined, they never remove a word from the vocabulary.
+    """
+    return _word_list(path)[0]
+
+
+def sensitive_exemptions(path: str | Path) -> list[tuple[str, str]]:
+    """``(path, word)`` pairs grandfathered by the list file, in file order."""
+    return _word_list(path)[1]
 
 
 def _word_pattern(word: str) -> "re.Pattern[str]":
@@ -179,26 +309,60 @@ def _word_pattern(word: str) -> "re.Pattern[str]":
     )
 
 
-def sensitive_violations(
-    root: str | Path, words: list[str], paths: list[str]
-) -> list[str]:
-    """``file:line (word #n)`` for every tracked file matching a listed word.
+def _any_word_pattern(words: list[str]) -> "re.Pattern[str] | None":
+    """One alternation over every word — the single pass (中6 / 187B).
 
-    The **word is never echoed** — the list is local-only by design, and a
-    report that printed it would move the secret into whatever log reads the
-    report. ``word #n`` is 1-based, so the owner can find the entry in their own
-    file without it being repeated anywhere.
-
-    Whole-file text, not a line-by-line match, because the interesting hits
-    straddle nothing in particular: a name in a table cell, a code block, an
-    HTML comment. Line numbers come from counting newlines before each match, so
-    a hit inside a long line still reports the right line.
+    The same token boundaries, hoisted out of the alternation so they are applied
+    once to whichever word matched. The per-word patterns are still what answers
+    *which* word and *where*; this one only answers "is there anything here at
+    all", which is the question that has to be asked of every file, and the one
+    that used to cost one full scan **per word** (12 words × 51 MB measured
+    10.5 s; the target is a single pass under 3 s).
     """
     if not words:
-        return []
+        return None
+    alternatives = "|".join(re.escape(word) for word in words)
+    return re.compile(
+        r"(?<![0-9A-Za-z])(?:" + alternatives + r")(?![0-9A-Za-z])", re.IGNORECASE
+    )
+
+
+def sensitive_report(
+    root: str | Path,
+    words: list[str],
+    paths: list[str],
+    exemptions: list[tuple[str, str]] | None = None,
+) -> dict:
+    """Everything the word gate found: ``hits`` / ``exempt`` / ``unscanned``.
+
+    * ``hits`` — ``file:line (word #n)`` for every match that is **not** in the
+      baseline. The word is never echoed: it lives in the owner's own file, and
+      a report that printed it would move the secret into whatever log reads the
+      report. ``word #n`` is 1-based so the owner can find the entry.
+    * ``exempt`` — the same shape for matches the baseline grandfathers. They are
+      reported *and* printed (中5: the baseline decides the exit code, never the
+      visibility) so "the gate is green" cannot be read as "nothing matched".
+    * ``unscanned`` — files whose bytes are not text this guard can read. Counted
+      and named rather than skipped in silence: an unreadable file is exactly
+      where a leak hides, and the old reader's silent skip was the blind spot
+      (中4).
+
+    Whole-file text, not a line-by-line match, because the interesting hits
+    straddle nothing in particular: a name in a table cell, a code block, an HTML
+    comment. Line numbers come from counting newlines before each match, so a hit
+    inside a long line still reports the right line.
+    """
+    hits: list[str] = []
+    exempt_hits: list[str] = []
+    unscanned: list[str] = []
+    if not words:
+        return {"hits": hits, "exempt": exempt_hits, "unscanned": unscanned}
     base = Path(root)
-    patterns = [(index + 1, _word_pattern(word)) for index, word in enumerate(words)]
-    found: list[str] = []
+    grandfathered = {
+        (str(path).replace("\\", "/"), word) for path, word in (exemptions or [])
+    }
+    patterns = [(index + 1, word, _word_pattern(word)) for index, word in enumerate(words)]
+    combined = _any_word_pattern(words)
     for relative in paths:
         if relative == SENSITIVE_WORDS_FILE:
             # The list is not scanned by its own contents: every line of it
@@ -208,16 +372,45 @@ def sensitive_violations(
         if not file.is_file():
             continue
         try:
-            text = file.read_bytes().decode("utf-8", "replace")
+            data = file.read_bytes()
         except OSError:
             continue
-        for index, pattern in patterns:
-            match = pattern.search(text)
+        text = _decode_text(data)
+        if text is None:
+            unscanned.append(relative)
+            continue
+        # One pass decides whether this file is worth a per-word look at all;
+        # the words themselves are then searched from that match's offset, which
+        # is their first occurrence in the file (nothing earlier matched).
+        first = combined.search(text)
+        if first is None:
+            continue
+        for index, word, pattern in patterns:
+            match = pattern.search(text, first.start())
             if match is None:
                 continue
             line = text.count("\n", 0, match.start()) + 1
-            found.append(f"{relative}:{line} (word #{index})")
-    return sorted(found)
+            entry = f"{relative}:{line} (word #{index})"
+            if (str(relative).replace("\\", "/"), word) in grandfathered:
+                exempt_hits.append(entry)
+            else:
+                hits.append(entry)
+    return {
+        "hits": sorted(hits),
+        "exempt": sorted(exempt_hits),
+        "unscanned": sorted(unscanned),
+    }
+
+
+def sensitive_violations(
+    root: str | Path,
+    words: list[str],
+    paths: list[str],
+    exemptions: list[tuple[str, str]] | None = None,
+) -> list[str]:
+    """Just the ``hits`` half of :func:`sensitive_report` — the exit-code half."""
+    return sensitive_report(root, words, paths, exemptions)["hits"]
+
 
 
 def _git(*args: str) -> list[str]:
@@ -256,16 +449,39 @@ def main(argv: list[str]) -> int:
     # The second gate. Scanning the **whole index**, not just this commit's
     # files: a word that entered the repository three commits ago is still in
     # it, and "it was fine last time" is how a leak becomes permanent.
-    words = sensitive_words(REPO_ROOT / SENSITIVE_WORDS_FILE)
+    words, exemptions = _word_list(REPO_ROOT / SENSITIVE_WORDS_FILE)
     if words:
         suspects = sorted(set(tracked) | set(paths))
-        hits = sensitive_violations(REPO_ROOT, words, suspects)
+        report = sensitive_report(REPO_ROOT, words, suspects, exemptions)
         if SENSITIVE_WORDS_FILE in tracked:
-            hits = [*hits, f"{SENSITIVE_WORDS_FILE} itself is tracked"]
-        if hits:
+            report["hits"] = [*report["hits"], f"{SENSITIVE_WORDS_FILE} itself is tracked"]
+        if report["hits"] or report["exempt"]:
             print(_BANNER_SENSITIVE, file=sys.stderr)
-            for hit in hits:
+            for hit in report["hits"]:
                 print(f"  HIT: {hit}", file=sys.stderr)
+            for hit in report["exempt"]:
+                print(f"  baselined（豁免，不拦）: {hit}", file=sys.stderr)
+        if report["unscanned"]:
+            # Never silent (中4): a file this guard could not read is not a file
+            # it checked, and "0 hits" over unreadable bytes is the one reading a
+            # leak could hide behind. The **count** is always printed; the list is
+            # split, because on this repository 126 of the 154 non-UTF-8 files are
+            # images, and a wall of `.png` lines would train the reader to skip the
+            # one line that matters (a UTF-16 markdown file the reader failed on).
+            text_like = [name for name in report["unscanned"] if not _is_binary_name(name)]
+            others = len(report["unscanned"]) - len(text_like)
+            print(
+                f"repo hygiene: {len(report['unscanned'])} 个跟踪文件不是可读文本"
+                "（utf-8-sig/utf-16/utf-8/gbk 都解不出），本次**没有扫**"
+                f"（其中 {others} 个按扩展名判是图片/压缩/工程容器）：",
+                file=sys.stderr,
+            )
+            for name in text_like[:10]:
+                print(f"  unscanned: {name}", file=sys.stderr)
+            if len(text_like) > 10:
+                print(f"  … 另有 {len(text_like) - 10} 个", file=sys.stderr)
+        # Only the non-exempt hits move the exit code (中5).
+        if report["hits"]:
             status = 1
     return status
 

@@ -96,7 +96,7 @@ from dataclasses import dataclass
 from ..base import Finding, FindingTarget
 from ...core.geometry import BoardGeometry
 from ...core.measure import component_distance
-from ...core.parts import find_facts, load_parts
+from ...core.parts import load_parts, resolve_component_facts
 from ...core.pinrole import pin_role
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on
@@ -276,10 +276,13 @@ def _regulator_readings(model: object, library=None) -> list[RegulatorReading]:
     """Every ``ic.ldo`` / ``ic.buck`` part, per board, with its pin roles read.
 
     The shelf is read once through :func:`boardwise.core.parts.load_parts` /
-    :func:`~boardwise.core.parts.find_facts` — the same exact-match lookup
-    (#202's lesson: MPN, then C-number, never a prefix match) that
-    :func:`boardwise.rules.pcb.distance.device_facts` uses, asked directly so the
-    category read here is the one this rule's evidence quotes.
+    :func:`boardwise.core.parts.resolve_component_facts` — the whole identity
+    chain (exact MPN → C-number → **device name**, #202's exactness lesson at
+    every step), the same call
+    :func:`boardwise.rules.pcb.distance.device_facts` and `checkup`'s gate make,
+    asked directly so the category read here is the one this rule's evidence
+    quotes. 187B moved this site onto that shared call: with only MPN/C码 the
+    rule skipped parts the gate had already judged reviewable (task 186-H1).
 
     Sides come from :func:`boardwise.core.pinrole.pin_role` on each pin's
     **name**. A ground pin, an enable pin and an unconnected ``NC`` all resolve
@@ -296,15 +299,7 @@ def _regulator_readings(model: object, library=None) -> list[RegulatorReading]:
         components = getattr(board_model, "components", {}) or {}
         for designator in sorted(components):
             component = components[designator]
-            entry = (
-                find_facts(
-                    library,
-                    mpn=str(getattr(component, "mpn", "") or ""),
-                    lcsc=str(getattr(component, "lcsc_part", "") or ""),
-                )
-                if library is not None
-                else None
-            )
+            entry, _matched = resolve_component_facts(library, component)
             category = (entry.category or "") if entry is not None else ""
             if category not in REGULATOR_CATEGORIES:
                 continue

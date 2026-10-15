@@ -719,23 +719,20 @@ def _looks_like_resistor(designator: str, value: str, model: object, library) ->
     a tie reading. Both together is the narrowest available test.
 
     **``library=None`` means no shelf**, which is this module's stated contract
-    (131b/131d's wording) and is honoured by passing
-    :data:`boardwise.core.parts.PartLibrary`'s empty form down rather than
-    ``None``: :func:`~boardwise.core.parts.find_facts` dereferences its argument,
-    so handing it ``None`` would raise rather than degrade, and a caller who
-    took the docstring at its word would crash instead of getting a narrower
-    answer.
+    (131b/131d's wording): :func:`boardwise.core.parts.resolve_component_facts`
+    answers ``(None, "")`` for a ``None`` shelf, so the caller gets the narrower
+    reading (the designator door alone) instead of an exception. Before 187B this
+    site held the shelf itself and handed down an empty
+    :class:`~boardwise.core.parts.PartLibrary`; the shared call does that job, and
+    it also walks the **device-name** step, so a board whose parts carry no MPN is
+    judged from the same identity the gate used (task 186-H1).
     """
-    from ...core.parts import PartLibrary, find_facts
+    from ...core.parts import resolve_component_facts
 
     component = (getattr(model, "components", {}) or {}).get(designator)
     category = ""
     if component is not None:
-        entry = find_facts(
-            library if library is not None else PartLibrary(),
-            mpn=str(getattr(component, "mpn", "") or ""),
-            lcsc=str(getattr(component, "lcsc_part", "") or ""),
-        )
+        entry, _matched = resolve_component_facts(library, component)
         category = (entry.category or "") if entry is not None else ""
     by_designator = bool(RESISTOR_DESIGNATOR.match(designator))
     by_category = category.lower() in RESISTOR_CATEGORIES

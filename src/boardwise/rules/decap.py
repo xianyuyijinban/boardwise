@@ -156,7 +156,10 @@ def looks_like_capacitor(
         # evidence below still does. `find_facts(None, …)` used to raise
         # `AttributeError: 'NoneType' object has no attribute 'parts'` — a crash
         # in the middle of an apply, discovered on the machine because every
-        # fixture net happened to be shelf-free.
+        # fixture net happened to be shelf-free. (187B: historical note only —
+        # this module resolves through `resolve_facts` below, and `rules/` is not
+        # allowed to *call* `find_facts` any more; the grep test exempts a comment
+        # that carries the batch number.)
         return bool(
             _CAP_DESIGNATOR.match(designator or "")
             and (

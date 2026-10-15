@@ -1,25 +1,26 @@
 """Repo hygiene as a test: no unapproved project containers tracked (see
 tools/check_repo_hygiene.py). A red here means someone committed a real
 board — most likely a company board — and it must be scrubbed from
-history, not just deleted."""
+history, not just deleted.
+
+**Containers only** (187B). The guard's second gate reads a *local*,
+gitignored word list, and once an owner writes one (with however many baseline
+lines) "run the whole script and expect 0" stops being a statement about this
+repository and starts being a statement about that machine. What a clone can
+always check is the container allowlist — the red line this file exists for —
+so that is what is checked here.
+"""
 from __future__ import annotations
 
 import subprocess
-import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
 
-def test_no_unapproved_project_containers_tracked():
-    out = subprocess.run(
-        [sys.executable, str(REPO / "tools" / "check_repo_hygiene.py")],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        cwd=REPO,
-    )
-    assert out.returncode == 0, out.stderr
+def _tracked_paths() -> list[str]:
+    out = subprocess.run(["git", "ls-files", "-z"], capture_output=True, cwd=REPO)
+    return [p for p in out.stdout.decode("utf-8").split("\0") if p]
 
 
 def _load_guard():
@@ -33,19 +34,17 @@ def _load_guard():
     return mod
 
 
+def test_no_unapproved_project_containers_tracked():
+    guard = _load_guard()
+    assert guard.violations(_tracked_paths()) == []
+
+
 def test_allowlist_matches_current_tracked_containers():
     """The frozen allowlist neither rots (lists a deleted file) nor drifts
     (a container sneaks in unlisted) — both directions are checked."""
     guard = _load_guard()
 
-    out = subprocess.run(
-        ["git", "ls-files", "-z"], capture_output=True, cwd=REPO
-    )
-    tracked = {
-        p
-        for p in out.stdout.decode("utf-8").split("\0")
-        if p and guard._CONTAINER_RE.search(p)
-    }
+    tracked = {p for p in _tracked_paths() if guard._CONTAINER_RE.search(p)}
     assert guard.ALLOWLIST == tracked, (
         f"allowlist drift: only-in-allowlist={sorted(guard.ALLOWLIST - tracked)}, "
         f"only-tracked={sorted(tracked - guard.ALLOWLIST)}"

@@ -59,6 +59,10 @@ _BUNDLE_PARTS = ("connector", "dist", "index.js")
 _EXTENSION_PARTS = ("connector", "extension.json")
 _SKILL_PARTS = (".kimi-code", "skills", "boardwise", "SKILL.md")
 _PARTS_LIBRARY_PARTS = ("blocklib", "parts.json")
+#: The name the **user's** shelf lives under in the boardwise home (186-H2). Same
+#: file name as the bundled one, different directory: a reader comparing the two
+#: paths sees "the same shelf, one of them yours".
+USER_PARTS_LIBRARY_NAME = "parts.json"
 _PORT_META_PARTS = ("blocklib", "blocks.portmeta.json")
 _DRC_RULESET_REFERENCE_PARTS = ("blocklib", "drc_ruleset_reference.json")
 #: The deep-water documents SKILL.md's routing layer points at (124). They are
@@ -128,13 +132,41 @@ def parts_library() -> Path:
     """The curated shelf (``blocklib/parts.json``) this install judges parts against.
 
     Read-only by nature: frozen, this path lives inside PyInstaller's extraction
-    directory, which is deleted when the process exits. Curating a shelf writes
-    to a file on disk, so the writing subcommands deliberately keep the
-    repo-relative spelling (``rules.facts.DEFAULT_LIBRARY_PATH``) instead of
-    resolving through here — a write into the extraction directory would report
-    success and vanish.
+    directory, which is deleted when the process exits. A **write** therefore
+    never lands here: a frozen process's writable shelf is the user's own file
+    under the boardwise home (:func:`user_parts_library`, 186-H2), and the two
+    ends are one answer because the read side
+    (``rules.facts.default_library_path``) prefers that file once it exists.
+
+    Before 186-H2 the writing subcommands kept the repo-relative spelling
+    (``rules.facts.DEFAULT_LIBRARY_PATH``) instead of resolving through here —
+    right about *this* path and wrong about the exe, where that spelling is a
+    file beside the working directory that never had the entry: `parts add`
+    reported success, the review read the bundle, and the report's own
+    clearing instruction (「facts 写进货架」) was a no-op on the artifact a
+    friend actually runs.
     """
     return resource_root().joinpath(*_PARTS_LIBRARY_PARTS)
+
+
+def user_parts_library() -> Path:
+    """The **user's own** shelf: ``~/.boardwise/parts.json`` (186-H2).
+
+    ``BOARDWISE_HOME`` wins over ``~``, exactly as it does for
+    ``core.config``'s settings file and the daemon's token — one home directory
+    for the whole tool, and a test or a second profile never has to touch the
+    real one.
+
+    Frozen, this is the shelf everything writes to and the shelf the review reads
+    first: `parts add` / `parts fetch` copy the bundled shelf here on their first
+    run and edit it from then on, so curating adds entries to the shelf the exe
+    ships instead of replacing it with a one-entry file. A checkout is untouched
+    — there the repository's ``blocklib/parts.json`` is both the read and the
+    write answer, and this path is simply not consulted.
+    """
+    from .core.config import boardwise_home
+
+    return boardwise_home() / USER_PARTS_LIBRARY_NAME
 
 
 def portmeta_sidecar() -> Path:

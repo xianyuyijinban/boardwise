@@ -15,7 +15,10 @@ Four pieces, one flow (岳 2026-10-15 的 AI 使用者体验反馈 P1–P4 + 清
   器件 into 「工具读不懂」 / 「真缺资料」, and `parts fetch` tells the reader what to
   do when the extractor proposes nothing;
 * **D** — `tools/check_repo_hygiene.py` gains a second gate reading a **local,
-  gitignored** word list; three states (hit / clean / no list).
+  gitignored** word list; three states (hit / clean / no list). 187B added the
+  baseline, the encoding sniff and the single pass, and moved every case here
+  onto a **temporary** list: the real one is a fact about a machine, so the
+  repository-side assertion is the container gate only.
 
 The fixtures are synthetic and use **neutral codes** (R4b): no real project name
 or part number is typed into this file. The one fixture board it reads is a
@@ -439,6 +442,12 @@ def test_the_rules_lookup_walks_the_same_chain_as_the_gate():
     Both sides resolve a board part through `resolve_facts`, so a part whose
     entry was found by name is judged *and* judged from those facts — the
     report cannot say "this part is fine" while a rule says "no facts for it".
+
+    187B (task 186-H1) widened this from `FactsRule` alone to the **four PCB
+    rules that still read the shelf by MPN/C-number only**: they were the
+    counter-example to the paragraph above, skipping exactly the name-only parts
+    the gate had already called reviewable. Same ruler, four more readers — a
+    name-only part must be visible to each of them.
     """
     from boardwise.core.parts import PartEntry
     from boardwise.rules.facts import FactsRule
@@ -457,6 +466,52 @@ def test_the_rules_lookup_walks_the_same_chain_as_the_gate():
         pins=[Pin("1", "VIN", "+5V")],
     )
     assert rule.entry_for(near_miss) is None
+
+    # The four rules 187B migrated, each asked the question its own gate asks.
+    # Three entries, three names, three categories: the parts carry no MPN and no
+    # C-number, so only the device-name step can find any of them — and one
+    # name-only part is visible to the rule that cares about *its* category.
+    from boardwise.rules.pcb.focground import _looks_like_resistor
+    from boardwise.rules.pcb.mcureset import _read_mcus as _reset_readings
+    from boardwise.rules.pcb.mcusupply import _read_mcus as _supply_readings
+    from boardwise.rules.pcb.regulator import _regulator_readings
+
+    shelf = PartLibrary(parts=[
+        _category_entry("ic.mcu.by_name", "ACME-MCU-1", "ic.mcu"),
+        _category_entry("ic.ldo.by_name", "ACME-LDO-1", "ic.ldo"),
+        _category_entry("res.by_name", "ACME-RES-1", "resistor"),
+    ])
+
+    def _board(designator: str, device_name: str) -> DesignModel:
+        component = Component(
+            uid=designator.lower(), designator=designator, lcsc_part="", mpn="",
+            props={"device_name": device_name},
+            pins=[Pin("1", "VDD", "+3V3"), Pin("2", "NRST", "NRST")],
+        )
+        return DesignModel(components={designator: component}, nets={})
+
+    mcu = _board("U3", "ACME-MCU-1")
+    assert len(_supply_readings(mcu, shelf)) == 1, "pcb-mcu-supply-groups 没看见它"
+    assert len(_reset_readings(mcu, shelf)) == 1, "pcb-mcu-reset-boot 没看见它"
+    ldo = _board("U5", "ACME-LDO-1")
+    assert len(_regulator_readings(ldo, shelf)) == 1, "pcb-regulator-cap-distance 没看见它"
+    resistor = _board("U7", "ACME-RES-1")
+    assert _looks_like_resistor("U7", "", resistor, shelf)[0] is True, "R1b 没看见它"
+
+    # …and the same four say nothing about a near miss, exactly as the gate does:
+    # the widened chain is still an **exact** chain, not a looser one.
+    fuzzy = _board("U9", "acme-mcu-1")
+    assert _supply_readings(fuzzy, shelf) == []
+    assert _reset_readings(fuzzy, shelf) == []
+    assert _regulator_readings(fuzzy, shelf) == []
+    assert _looks_like_resistor("U9", "", fuzzy, shelf)[0] is False
+
+
+def _category_entry(key: str, mpn: str, category: str):
+    """A shelf entry with a category, for the four migrated rules."""
+    from boardwise.core.parts import PartEntry
+
+    return PartEntry(key=key, mpn=mpn, lcsc="", category=category)
 
 
 # --------------------------------------------------------------------------
@@ -789,14 +844,21 @@ def test_the_list_file_itself_is_never_scanned(tmp_path):
     assert guard.sensitive_violations(tmp_path, words, [".sensitive-words"]) == []
 
 
-def test_the_real_repository_passes_both_gates_as_it_stands():
-    """The gate the repo actually runs: this checkout has no list, and the
-    container gate is green — so nothing in this batch started leaking."""
+def test_the_real_repository_passes_the_container_gate_as_it_stands():
+    """The red line this repository always checks: no unapproved container.
+
+    **187B narrowed this to the container gate.** It used to run the whole guard
+    and expect exit 0, which stopped being a statement about the repository the
+    moment the owner wrote their own (gitignored) word list: the number of hits
+    in an old clone depends on *their* list, not on this batch. The word gate's
+    own semantics are pinned against temporary lists (here and in
+    `tests/test_187b_gate_holes.py`), which is the machine-independent half.
+    """
     import subprocess
-    import sys
 
     out = subprocess.run(
-        [sys.executable, str(ROOT / "tools" / "check_repo_hygiene.py")],
-        capture_output=True, text=True, encoding="utf-8", cwd=ROOT,
+        ["git", "ls-files", "-z"], capture_output=True, cwd=ROOT
     )
-    assert out.returncode == 0, out.stderr
+    tracked = [p for p in out.stdout.decode("utf-8").split("\0") if p]
+    guard = _guard()
+    assert guard.violations(tracked) == []

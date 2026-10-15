@@ -83,18 +83,33 @@ def default_library_path() -> str:
 
     From a checkout that is :data:`DEFAULT_LIBRARY_PATH` — unchanged, because
     the constant is what the CLI's help text, docs and `--library` defaults are
-    all written against. Frozen it is the copy the exe carries, resolved through
-    :mod:`boardwise.resources` the same way the connector bundle is.
+    all written against. Frozen it is, in order (186-H2):
+
+    1. **the user's own shelf**, ``~/.boardwise/parts.json``, when it exists —
+       the file `parts add` / `parts fetch` write, and the reason a curated
+       entry is visible to the review that is supposed to act on it. It starts
+       as a copy of the bundled shelf, so preferring it keeps every entry the
+       exe ships;
+    2. otherwise the copy the exe carries, resolved through
+       :mod:`boardwise.resources` the same way the connector bundle is.
 
     A frozen process that cannot name its extraction directory is a broken
     bootstrap: the constant is returned so the caller behaves exactly as it did
     before (an empty shelf, and every caller that cares already reports the path
     it looked at) rather than raising out of a rule run.
+
+    **A reader that reports this path reports the shelf the run used**, which is
+    why `report.json` carries it as `shelfPath` and the report's clearing
+    instruction quotes it back: a curation write into a *different* file is
+    exactly the hole 186-H2 closed.
     """
     from .. import resources
 
     if not resources.is_frozen():
         return DEFAULT_LIBRARY_PATH
+    user = resources.user_parts_library()
+    if user.is_file():
+        return str(user)
     try:
         return str(resources.parts_library())
     except RuntimeError:

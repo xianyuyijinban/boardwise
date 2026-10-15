@@ -95,7 +95,7 @@ from dataclasses import dataclass, field
 from ..base import Finding, FindingTarget
 from ...core.measure import component_distance
 from ...core.model import is_ground_net
-from ...core.parts import find_facts, load_parts
+from ...core.parts import load_parts, resolve_component_facts
 from ...core.pinrole import pin_role
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on, looks_like_capacitor
@@ -445,20 +445,21 @@ def _split_pool(
 def _read_mcus(model: object, library) -> list[McuSupply]:
     """Every ``ic.mcu`` part in this PCB document, with its groups read.
 
-    The shelf is read through :func:`boardwise.core.parts.find_facts` (exact MPN
-    then LCSC — #202's lesson), the same lookup 131b/131c/131d make, so the
-    category the evidence quotes is the one the shelf states and the object set
-    is identical across the four MCU rules.
+    The shelf is read through :func:`boardwise.core.parts.resolve_component_facts`
+    — the whole identity chain (exact MPN → C-number → **device name**, #202's
+    exactness lesson at every step), which is what `checkup`'s own gate walks.
+    131b/131c/131d make the same call, so the category the evidence quotes is the
+    one the shelf states and the object set is identical across the four MCU rules.
+    187B moved this site onto the shared call: reading only MPN/C码 here judged a
+    different set of parts from the one the gate had already called reviewable, so
+    a board whose parts carry no MPN got "this part is unjudged" from the rule that
+    was looking straight at it (task 186 §A, 186-H1).
     """
     readings: list[McuSupply] = []
     components = getattr(model, "components", {}) or {}
     for designator in sorted(components):
         component = components[designator]
-        entry = find_facts(
-            library,
-            mpn=str(getattr(component, "mpn", "") or ""),
-            lcsc=str(getattr(component, "lcsc_part", "") or ""),
-        )
+        entry, _matched = resolve_component_facts(library, component)
         category = (entry.category or "") if entry is not None else ""
         if category not in MCU_CATEGORIES:
             continue

@@ -67,7 +67,7 @@ from dataclasses import dataclass, field
 from ..base import Finding, FindingTarget
 from ...core.measure import component_distance
 from ...core.model import is_ground_net
-from ...core.parts import category_of, find_facts, load_parts
+from ...core.parts import category_of, load_parts, resolve_component_facts
 from ..decap import looks_like_capacitor
 from ..facts import default_library_path
 from .base import PcbReviewContext, PcbRule
@@ -250,18 +250,17 @@ def _bucket(model: object, designator: str, net: str, library) -> str:
 def _read_mcus(model: object, library) -> list[McuReset]:
     """Every ``ic.mcu`` part, with its reset and boot pins read.
 
-    The same exact-MPN-then-LCSC shelf lookup 131b–131e make, so all four MCU
-    rules agree on which parts are microcontrollers.
+    The same identity chain the other three MCU rules use
+    (:func:`boardwise.core.parts.resolve_component_facts` — exact MPN →
+    C-number → device name), so all four agree on which parts are
+    microcontrollers and the gate cannot call a part judged that these rules
+    never saw (187B, task 186-H1).
     """
     readings: list[McuReset] = []
     components = getattr(model, "components", {}) or {}
     for designator in sorted(components):
         component = components[designator]
-        entry = find_facts(
-            library,
-            mpn=str(getattr(component, "mpn", "") or ""),
-            lcsc=str(getattr(component, "lcsc_part", "") or ""),
-        )
+        entry, _matched = resolve_component_facts(library, component)
         category = (entry.category or "") if entry is not None else ""
         if category not in MCU_CATEGORIES:
             continue

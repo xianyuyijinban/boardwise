@@ -3395,6 +3395,7 @@ def _checkup_report(
     intent: dict | None = None,
     completion: dict | None = None,
     pcb_review: dict | None = None,
+    shelf_path: str = "",
 ) -> dict:
     """Assemble the report: what was read (batch 2), what was found (batch 3),
     what it means and what the model still has to do (batch 4).
@@ -3458,6 +3459,14 @@ def _checkup_report(
         "needs_datasheet": list(needs_datasheet or []),
         "warning_triage": list(warning_triage or []),
         "ai_slots": slots,
+        # 186-H2: the shelf this run actually read. The report's 未审器件 section
+        # tells the reader to write verified facts into a shelf, and that
+        # instruction is only actionable if it names the file — "which shelf"
+        # differs between a checkout and the frozen exe. Always present (empty
+        # string when the caller could not name one), because a consumer reading
+        # `report["shelfPath"]` on an older report is the reader this key exists
+        # for.
+        "shelfPath": shelf_path,
     }
     # Absent, not empty: "the switch is off" and "the switch is on and nobody has
     # scored anything yet" are two different states of the report (039 批② §WI-3).
@@ -5139,6 +5148,20 @@ async def _checkup_ladder(
             return None
 
 
+def _checkup_shelf_path(args: argparse.Namespace) -> str:
+    """The shelf path this run reads — one answer for the loader and the report.
+
+    ``--library`` wins; otherwise whatever this process's default is
+    (:func:`boardwise.rules.facts.default_library_path`, frozen-aware since
+    186-H2). The report prints it back (`shelfPath`) because the clearing
+    instruction it carries names a write target: without the path, a reader
+    cannot tell whether the file they just curated is the file this review read.
+    """
+    from boardwise.rules.facts import default_library_path
+
+    return getattr(args, "library", None) or default_library_path()
+
+
 def _checkup_shelf(args: argparse.Namespace):
     """``(library | None, note)`` — the curated shelf for the facts-driven sections.
 
@@ -5147,9 +5170,8 @@ def _checkup_shelf(args: argparse.Namespace):
     which is a different claim from "the shelf could not be read".
     """
     from boardwise.core.parts import PartError, load_parts
-    from boardwise.rules.facts import default_library_path
 
-    path = getattr(args, "library", None) or default_library_path()
+    path = _checkup_shelf_path(args)
     try:
         return load_parts(path), ""
     except PartError as exc:
@@ -5684,6 +5706,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # order. The block itself is unchanged; only its position moved, which is why
     # a few notes below are appended a little earlier than they used to be.
     shelf, shelf_note = _checkup_shelf(args)
+    shelf_path = _checkup_shelf_path(args)
     if shelf_note:
         notes.append(shelf_note)
 
@@ -6259,6 +6282,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         intent=intent_report,
         completion=completion,
         pcb_review=pcb_review,
+        shelf_path=shelf_path,
     )
     # issue #69 条 1（机器侧）: the chains are built **before** anything is written,
     # so `report.json`, `report.md` and `review-summary.md` all carry the same rows
@@ -6377,6 +6401,11 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         print("  errors: none")
     for note in notes:
         print(f"  note: {note}")
+    # 186-H2: which shelf this run judged against, on the console too. The AI
+    # reporting the review to an engineer needs it for the same reason the
+    # report does: "写进货架" without a path is an instruction that cannot be
+    # followed, and the path differs between a checkout and the exe.
+    print(f"  shelf: {shelf_path}")
     print(f"  modules: {len(modules)}（basis {source.get('moduleBasis')}，"
           f"pageAttribution {source.get('pageAttribution')}）")
 
@@ -12596,18 +12625,56 @@ def _parts_library_path(args: argparse.Namespace, *, writable: bool = False) -> 
     than repeated — two copies of that path is how a curation pass ends up
     filling a file no rule ever opens.
 
-    ``writable`` picks which of the two spellings that default is: reading asks
-    the process (:func:`~boardwise.rules.facts.default_library_path`), which
-    frozen is the copy the exe carries; a **write** stays on the repo-relative
-    constant, because curating a shelf edits a file on disk and the frozen copy
-    lives inside PyInstaller's extraction directory — a write there would report
-    success and disappear with the process.
+    ``writable`` picks which of the two spellings that default is: a **checkout**
+    writes to the repo-relative constant, and a **frozen** process writes to the
+    user's own shelf under the boardwise home (186-H2), which is created as a copy
+    of the bundled shelf on its first use (:func:`_seed_user_shelf`). Both are the
+    file the read side resolves — `rules.facts.default_library_path` prefers the
+    user shelf once it exists — so "written" and "read" name the same file on the
+    artifact a friend runs. Before 186-H2 a frozen write went to a relative
+    ``blocklib/parts.json`` beside the working directory: the entry landed in a
+    file no review ever opened, while the report's own clearing instruction told
+    the reader to do exactly that.
     """
+    from boardwise import resources
     from boardwise.rules.facts import DEFAULT_LIBRARY_PATH, default_library_path
 
     if args.library:
         return args.library
-    return DEFAULT_LIBRARY_PATH if writable else default_library_path()
+    if not writable:
+        return default_library_path()
+    if not resources.is_frozen():
+        return DEFAULT_LIBRARY_PATH
+    return str(_seed_user_shelf())
+
+
+def _seed_user_shelf() -> Path:
+    """The frozen process's writable shelf, seeded from the bundled one.
+
+    A write cannot land in the bundle (PyInstaller's extraction directory dies
+    with the process), and a user shelf that started **empty** would be a
+    different shelf: every curated entry the exe carries would silently stop
+    being read, and the first `parts add` would look like it had thrown the
+    library away. So the first write copies the bundled file here; every later
+    write edits this one file, which is also what the read side prefers.
+    """
+    import shutil
+
+    from boardwise import resources
+
+    user = resources.user_parts_library()
+    if user.is_file():
+        return user
+    try:
+        bundled = resources.parts_library()
+    except RuntimeError:
+        return user
+    if bundled.is_file():
+        user.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(bundled, user)
+        print(f"boardwise: 用户货架 {user} 不存在，已从内置架 {bundled} 复制一份"
+              f"（186-H2：冻结态的可写货架在用户数据目录，不在 exe 里）")
+    return user
 
 
 def _shelf_entry(

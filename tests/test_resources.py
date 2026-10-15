@@ -142,7 +142,7 @@ def test_version_says_unknown_with_the_path_it_looked_at(frozen, capsys):
     assert "extension.json" in text
 
 
-def test_the_default_shelf_is_the_bundled_copy_when_frozen(frozen, monkeypatch):
+def test_the_default_shelf_is_the_bundled_copy_when_frozen(frozen, monkeypatch, tmp_path):
     """The default shelf follows the process, never the working directory.
 
     The bug this pins: the shelf's default was the *relative* spelling
@@ -151,15 +151,23 @@ def test_the_default_shelf_is_the_bundled_copy_when_frozen(frozen, monkeypatch):
     downloaded into, judged every board against nothing at all, silently. The
     frozen answer is the copy the exe carries; a checkout keeps the relative
     spelling it always had.
+
+    **186-H2 re-pin**: "the copy the exe carries" is now the answer only while
+    the *user's* shelf does not exist (the next test covers the other half), and
+    the user shelf's home is redirected here — a developer whose machine happens
+    to have ``~/.boardwise/parts.json`` must not change what this test measures.
     """
     from boardwise.rules.facts import DEFAULT_LIBRARY_PATH, FactsRule, default_library_path
 
+    home = tmp_path / "home"
+    monkeypatch.setenv("BOARDWISE_HOME", str(home))
     shelf = frozen / resources.FROZEN_SUBDIR / "blocklib"
     shelf.mkdir(parents=True)
     shutil.copyfile(REPO_ROOT / "blocklib" / "parts.json", shelf / "parts.json")
     monkeypatch.chdir(frozen)
 
     assert resources.is_frozen() is True
+    assert not resources.user_parts_library().is_file()
     assert default_library_path() == str(resources.parts_library())
     # The old spelling resolves to nothing from here — which is exactly what it
     # did on a friend's machine, and why the rule now asks this function.
@@ -168,6 +176,70 @@ def test_the_default_shelf_is_the_bundled_copy_when_frozen(frozen, monkeypatch):
     rule = FactsRule()
     assert rule.library_path == ""  # un-injected: "this process's shelf"
     assert len(rule.library.parts) > 50  # the bundled shelf, not an empty one
+
+
+def test_a_frozen_process_writes_and_reads_the_user_shelf(frozen, monkeypatch, tmp_path, capsys):
+    """186-H2: on a frozen process, `parts add` and the review name one shelf.
+
+    The hole this pins: the write path was the repo-relative constant while the
+    read path was the bundle's copy, so on the exe a curated entry landed in a
+    file no rule ever opened — and the report's own clearing instruction («write
+    verified facts into the shelf») was a no-op on the artifact a friend runs.
+
+    Both halves are asserted: the write goes to the user shelf under the
+    boardwise home, and the **read** side then resolves that same file. The first
+    write copies the bundled shelf rather than starting empty, so curating adds
+    to the shelf the exe ships instead of silently dropping it.
+    """
+    from boardwise.cli import main as cli_main
+    from boardwise.rules.facts import default_library_path
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("BOARDWISE_HOME", str(home))
+    bundle = frozen / resources.FROZEN_SUBDIR / "blocklib"
+    bundle.mkdir(parents=True)
+    shutil.copyfile(REPO_ROOT / "blocklib" / "parts.json", bundle / "parts.json")
+    monkeypatch.chdir(frozen)
+
+    bundled_parts = len(resources.parts_library().read_text(encoding="utf-8").split('"key"'))
+    user_shelf = resources.user_parts_library()
+    assert user_shelf == home / "parts.json"
+    assert user_shelf != resources.parts_library()
+    assert not user_shelf.is_file()
+    assert default_library_path() == str(resources.parts_library())
+
+    code = cli_main(["parts", "add", "SHELF-PROBE-1", "--lcsc", "C9900000001"])
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert user_shelf.is_file(), "冻结态的写没有落到用户货架"
+    assert resources.parts_library().read_bytes() == (bundle / "parts.json").read_bytes()
+    # …and the second half: from here on, the read side resolves that same file.
+    assert default_library_path() == str(user_shelf)
+    written = user_shelf.read_text(encoding="utf-8")
+    assert "SHELF-PROBE-1" in written
+    assert len(written.split('"key"')) == bundled_parts + 1, (
+        "用户货架不是内置架的增补：第一条写把 exe 自带的货架弄丢了"
+    )
+
+
+def test_a_checkout_still_writes_the_relative_shelf_spelling(monkeypatch, tmp_path):
+    """The checkout answer is unchanged: the repo's own `blocklib/parts.json`.
+
+    186-H2 moved only the frozen write. From a checkout the curated shelf *is*
+    the repository's file, and `parts add` without `--library` keeps editing it.
+    """
+    from boardwise.cli import _parts_library_path
+    from boardwise.rules.facts import DEFAULT_LIBRARY_PATH, default_library_path
+
+    monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path / "home"))
+    args = type("Args", (), {"library": None})()
+    assert resources.is_frozen() is False
+    assert _parts_library_path(args, writable=True) == DEFAULT_LIBRARY_PATH
+    assert _parts_library_path(args) == default_library_path() == DEFAULT_LIBRARY_PATH
+    # `--library` wins over both, in both directions.
+    args.library = "some/where/parts.json"
+    assert _parts_library_path(args, writable=True) == "some/where/parts.json"
+    assert _parts_library_path(args) == "some/where/parts.json"
 
 
 def test_a_checkout_still_uses_the_relative_shelf_spelling():

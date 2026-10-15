@@ -1119,9 +1119,44 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # **0 个**（`outputs/186_pdf_facts/evidence.md` §2），实板 未审清单 34 条
     # 前后逐条同因同序。判据与锚：新建 `tests/test_186_pdf_facts_path.py`
     # （身份链证据序/精确性、端到端清闸、报告分栏、hygiene 三态）。
+    # **187A moved both** — recursive ada814c6 -> 2033fcbd，direct b4d75a74 ->
+    # 946e8610：本批落在 `rules/pcb/distance.py` **一个文件**——`BoardOffEdge`
+    # 的护栏从「多段只认一环（`stitched is False`）一刀切抑制」收窄到「拿到的那
+    # 一环读出来是**描边**（`BoardOutline.fragment_kind == "stroke_piece"`）才
+    # 抑制」，完整板框 + 内槽那种多余闭环记录改回照跑。判据与字段在
+    # `core/geometry.py`（新字段 `fragment_kind`）与 `parsers/epru.py`（H1 的形状
+    # 不变量、M1 的实算计数、M3 的 capsule 焊缝地板值），**两个文件都在本 recipe
+    # 之外**，与
+    # 131c/131d/131f 记过的同一条限制一致。
+    # **注意：本值量在一棵还有另一批未提交改动的树上** —— 同一工作树的
+    # `rules/decap.py`、`rules/facts.py`、`rules/pcb/{focground,mcureset,mcusupply,
+    # regulator}.py` 当时正被另一批改（187A 不碰它们），所以 `2033fcbd` 是**这棵
+    # 树**的值而不是 187A 单独的值。实测拆分（同一棵树的副本里按文件还原 HEAD）：
+    # 只把 187A 之外的上述 6 个文件还原回 HEAD → recursive `472fd377`、direct 仍
+    # `b4d75a74`（= 187A 单独的值）；只把 187A 的 `distance.py` 还原回 HEAD →
+    # recursive `0283930c`、direct `946e8610`（= 另一批单独的值）。direct 被移动的
+    # 全部原因是另一批动了两个 `rules/` 直下文件（`decap.py`、`facts.py`），187A
+    # 一个直下文件都没动。后落地的那批按同一规矩再量一次即可（命令同上方 171 条）。
+    # 行为锚：新建 `tests/test_187a_outline_holes.py`（21 条：H1 两条拼合路径的退化
+    # 环、M1「入环段数 + fragments == 段数」、M2 内槽照跑/描边碎片抑制两形态、
+    # M3 焊缝地板值），既有 `tests/test_183_bug98b_capsule_outline.py` 与
+    # `tests/test_bug98a_outline_stitch.py` 逐条未改仍绿；现场实板对拍
+    # （16 段全入环、off-board 0 条）见 `outputs/187a_outline_holes/evidence.md`。
+    # **187B 的账（同一棵树上，与 187A 合并量）**：上一段里的六处
+    # 「另一批」= 187B —— `rules/pcb/{mcusupply,mcureset,regulator,focground}.py`
+    # 四处把 `find_facts(mpn, lcsc)`（两键）改走 `resolve_component_facts`
+    # （三键身份链，多一步**器件名**），`rules/facts.py` 改
+    # `default_library_path`（冻结态读侧先用户货架 `~/.boardwise/parts.json`），
+    # `rules/decap.py` 改了一行注释（历史提及 + 批号豁免注释）。判决语义：四处
+    # 会**多**认出「只有器件名」的料，这是修洞不是回归（186-H1：同一颗料被
+    # checkup 闸门判过、又被规则当不认识）；库内夹具实测无翻转，锚
+    # `tests/test_187b_gate_holes.py`（grep 级不变量 + 四规则同名可见 + 冻结态
+    # 读写同一架 + hygiene 三态/编码/单遍 + 3 板折叠行），证据
+    # `outputs/187b_gate_holes/evidence.md`。187B 未再动 `rules/`，故本段钉值
+    # `2033fcbd` / `946e8610` 对合并树有效。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "b4d75a74"
-    assert recursive == "ada814c6", (
+    assert old_digest == "946e8610"
+    assert recursive == "2033fcbd", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

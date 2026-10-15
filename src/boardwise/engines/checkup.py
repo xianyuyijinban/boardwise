@@ -1014,7 +1014,7 @@ def render_review_summary(report: dict, chains: list[dict]) -> str:
         "\n## 3. 待确认（本报告依赖的未知项）\n\n"
         "<!-- needs_datasheet 非空时逐条写：缺什么资料、找谁要。空着才允许写「通过」。 -->\n"
         "\n"
-        f"{UNREVIEWED_CLEARING_NOTE}\n"
+        f"{unreviewed_clearing_note(str(report.get('shelfPath') or ''))}\n"
         "\n## 4. 下一步（按优先级）\n\n"
         "<!-- 1. / 2. / 3. …工程师照着做就行，别写「建议进一步分析」。 -->\n"
     )
@@ -1302,6 +1302,31 @@ UNREVIEWED_CLEARING_NOTE = (
     "候选不驱动规则、也不清闸；另一条通道是审查者自己标记未知"
     "（`boardwise need-datasheet`），它只会让本节变长，不会让它变空。"
 )
+
+
+def unreviewed_clearing_note(shelf_path: str = "") -> str:
+    """The clearing instruction, with **the shelf this run read** named (186-H2).
+
+    The constant above says *what* clears the gate (verified facts on the shelf)
+    and not *where* — which was enough while the answer was always the file
+    beside the working directory, and wrong the moment the exe grew a shelf of
+    its own: a reader who curated a file the review never opened had followed the
+    instruction exactly and seen nothing change. So the report prints the path it
+    read, and the write command that names the same file.
+
+    ``shelf_path`` empty (a hand-built report, a caller that could not name one)
+    returns the constant unchanged: the honest degradation is the older wording,
+    not a `<该路径>` placeholder that never resolves to anything.
+    """
+    if not shelf_path:
+        return UNREVIEWED_CLEARING_NOTE
+    return (
+        UNREVIEWED_CLEARING_NOTE
+        + f"本次审查读的货架就是 {shelf_path}——"
+        f"facts 要写进**这一架**才算数（`boardwise parts add <MPN> --lcsc <C码> "
+        f"--facts <facts.json> --verified --library {shelf_path}`，"
+        f"报告里这行是 `shelfPath`）。"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -1647,16 +1672,43 @@ def needs_datasheet_section(
     When a part is hit by both triggers the marked entry wins — the reviewer's
     own words are the more specific claim — and carries ``factSeed: true`` so
     the seed (its channels, MPN, missing facts) is not lost; the part is then
-    counted once by :func:`marked_parts`. A facts row copied here keeps its
-    designator under ``part``; everything else about it is unchanged.
+    counted once by :func:`marked_parts`.
+
+    A folded row keeps its designator under ``part``, the identity fields of the
+    **first** placement it saw (185-中1: ``channels``/``mpn``/``supplier``/
+    ``missingFacts``, unchanged), and — added by 185-中1 — a ``boards`` list
+    saying **which placements that one designator stands for**: ``{"board",
+    "mpn", "name", "value"}`` per board. It exists because the fold is by
+    designator, and a project's designator is not one part: measured on the 3-board
+    fixture, 15 of the folded designators are on more than one board with
+    **different** MPNs, names and values (`C2` is a no-MPN capacitor on one board
+    and a code-bearing part on another). Reporting only the first one made the
+    worklist read "one part, one datasheet" about a question that is really "two
+    boards, two parts", while ``report.md`` said the opposite in another section
+    (``conn-duplicate-designators``). The per-board rows are deduplicated, so two
+    placements with identical identity on one board read as one line; ``boards``
+    is empty for a model with no board identity at all (a plain ``DesignModel``),
+    never omitted.
     """
     seed_by_part: dict[str, dict] = {}
+    boards_by_part: dict[str, list[dict]] = {}
     for row in unreviewed or []:
         if not isinstance(row, dict):
             continue
         part = str(row.get("designator") or "")
-        if part:
-            seed_by_part.setdefault(part, row)
+        if not part:
+            continue
+        seed_by_part.setdefault(part, row)
+        placements = boards_by_part.setdefault(part, [])
+        for title in row.get("boards") or []:
+            placement = {
+                "board": str(title),
+                "mpn": str(row.get("mpn") or ""),
+                "name": str(row.get("name") or ""),
+                "value": str(row.get("value") or ""),
+            }
+            if placement not in placements:
+                placements.append(placement)
 
     grouped: dict[str, list[dict]] = {}
     order: list[str] = []
@@ -1690,6 +1742,7 @@ def needs_datasheet_section(
             "reason": "；".join(str(reason) for reason in (seed.get("reasons") or [])),
             "dependentFindings": dependent_findings(findings, part),
             "factSeed": True,
+            "boards": list(boards_by_part.get(part) or []),
             **_seed_fields(seed),
         })
     for part in order:
@@ -1713,6 +1766,7 @@ def needs_datasheet_section(
             "reason": "；".join(reasons),
             "dependentFindings": dependent_findings(findings, part),
             "factSeed": seed is not None,
+            "boards": list(boards_by_part.get(part) or []),
             **_seed_fields(seed),
         })
     return out
@@ -3477,9 +3531,10 @@ def render_report_markdown(report: dict) -> str:
         # 186 §C (P1): the action that actually clears the gate, spelled with the
         # CLI's own commands. Feeding a PDF is the step that *looked* like it
         # cleared the gate and does not — a reader that has to guess is the
-        # accident this line exists for.
+        # accident this line exists for. 186-H2 added **which shelf** to that
+        # instruction: the write has to land in the file this run read.
         lines.append("")
-        lines.append(UNREVIEWED_CLEARING_NOTE)
+        lines.append(unreviewed_clearing_note(str(report.get("shelfPath") or "")))
         # 184: the总 number is one number for different problems. Printed from the
         # rows below (or, for a hand-built report, from the section itself), never
         # recomputed from the model — the ledger may not say more than the JSON.
@@ -3610,6 +3665,30 @@ def render_report_markdown(report: dict) -> str:
             "同一器件两源命中时按 marked 展示（该条 `factSeed: true`），计数只算一次；"
             f"每个器件问同一件事：{UNKNOWN_PART_QUESTION}"
         )
+        # 185-中1: the fold is by designator, and a project's designator is not
+        # one part. Only the rows where that matters are spelled out — one line
+        # per designator that stands for more than one placement — because the
+        # reader deciding "how many datasheets do I still owe" has to see it, and
+        # the table above cannot say it without one row per board.
+        multi = [entry for entry in needs if len(entry.get("boards") or []) > 1]
+        if multi:
+            lines.append("")
+            lines.append("**同一份清单按位号折叠，下列位号出现在多块板上（板上身份各不相同）：**")
+            lines.append("")
+            for entry in multi:
+                placements = "；".join(
+                    f"{row.get('board') or '(单板)'}"
+                    f"（MPN {row.get('mpn') or '无'}，name {row.get('name') or '无'}，"
+                    f"value {row.get('value') or '无'}）"
+                    for row in entry["boards"]
+                )
+                lines.append(f"- `{entry.get('part')}`：{placements}")
+            lines.append("")
+            lines.append(
+                "一份手册答不了两块板上两颗不同的料——这是**清单条数按位号去重**"
+                "（`completion.needsDatasheetTotal`）而不是按板计数的原因，"
+                "报「还差几份手册」时按位号乘板数算。"
+            )
     lines.append("")
 
     lines.append("## 主机 DRC")
