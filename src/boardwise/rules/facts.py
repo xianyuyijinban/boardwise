@@ -30,8 +30,8 @@ from ..core.model import Component, DesignModel, Net
 from ..core.parts import (
     PartEntry,
     PartLibrary,
-    find_facts,
     is_ic_designator,
+    resolve_component_facts,
 )
 from ..core.power_domains import (
     domain_of,
@@ -203,12 +203,20 @@ class FactsRule(OutcomeRule):
         return self._library
 
     def entry_for(self, comp: Component) -> PartEntry | None:
-        """Exact-match identity only (find_facts' contract — no fuzzy)."""
-        entry = None
-        if comp.mpn:
-            entry = find_facts(self.library, mpn=comp.mpn)
-        if entry is None and comp.lcsc_part:
-            entry = find_facts(self.library, lcsc=comp.lcsc_part)
+        """The shelf entry for a board component — the identity **chain**.
+
+        MPN → C-number → device name, exact match at every step
+        (:func:`boardwise.core.parts.resolve_facts`; 186 §B added the third
+        step). The device name is what a board carries when its parts have no
+        MPN field filled in at all: measured on
+        `.tmp_bug98b/实板A.epro2` (岳 2026-10-15), 26 of 98 parts have
+        an empty MPN **and** an empty supplier, and their device name is the
+        only identity they have. Without the third step the shelf could hold the
+        datasheet facts for such a part and every rule here would still answer
+        UNKNOWN "no facts for it" — the two sides of the report disagreeing
+        about the same shelf.
+        """
+        entry, _matched = resolve_component_facts(self.library, comp)
         return entry
 
     def ics(self, model: DesignModel) -> list[Component]:

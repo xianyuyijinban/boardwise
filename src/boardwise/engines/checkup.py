@@ -1013,6 +1013,8 @@ def render_review_summary(report: dict, chains: list[dict]) -> str:
     lines.append(
         "\n## 3. 待确认（本报告依赖的未知项）\n\n"
         "<!-- needs_datasheet 非空时逐条写：缺什么资料、找谁要。空着才允许写「通过」。 -->\n"
+        "\n"
+        f"{UNREVIEWED_CLEARING_NOTE}\n"
         "\n## 4. 下一步（按优先级）\n\n"
         "<!-- 1. / 2. / 3. …工程师照着做就行，别写「建议进一步分析」。 -->\n"
     )
@@ -1223,6 +1225,85 @@ def unreviewed_counts_by_reason(unreviewed: list[dict] | None) -> dict[str, int]
     return dict(sorted(counts.items()))
 
 
+#: 186 §C: 184's per-reason count is one table of six reasons; the reader's
+#: question is coarser and has an **opposite next step** per answer. Two classes:
+#:
+#: * 「工具读不懂」 — the value is genuinely unknowable to this project's
+#:   decoders (``UNKNOWN_REASON_UNDECODABLE``): more datasheets will not help;
+#:   the work is a better reading (a decoder, or the board's own ``Value``);
+#: * 「真缺资料」 — the datasheet hunt itself is blocked (no MPN to search, no
+#:   supplier code to look up, shelf has nothing): a PDF **is** the next step.
+#:
+#: A row may be in both when it carries both reasons; that is the same
+#: counting rule :func:`unreviewed_counts_by_reason` uses, and for the same
+#: reason — the rows below are the truth, and a row counted once in each class
+#: it belongs to is not counted twice.
+REASON_CLASS_UNDECODABLE = "工具读不懂"
+REASON_CLASS_MISSING_MATERIAL = "真缺资料"
+
+#: The order the two classes are printed in: the one whose next step is **not**
+#: "fetch a datasheet" goes first, so a reader does not start hunting for a PDF
+#: that would not have helped.
+CLASS_ORDER: tuple[str, ...] = (REASON_CLASS_UNDECODABLE, REASON_CLASS_MISSING_MATERIAL)
+
+
+def unreviewed_reason_class(reason: str) -> str:
+    """Which of the two classes one reason belongs to (186 §C)."""
+    return (
+        REASON_CLASS_UNDECODABLE
+        if str(reason) == UNKNOWN_REASON_UNDECODABLE
+        else REASON_CLASS_MISSING_MATERIAL
+    )
+
+
+def unreviewed_classes(row: dict) -> list[str]:
+    """The classes one 未审器件 row belongs to, in :data:`CLASS_ORDER` order.
+
+    A row with no reasons at all — an IC whose only problem is "the shelf has
+    no facts for it" — is :data:`REASON_CLASS_MISSING_MATERIAL`: the work it
+    needs is a datasheet.
+    """
+    reasons = [str(reason) for reason in (row.get("reasons") or [])]
+    classes = {unreviewed_reason_class(reason) for reason in reasons} or {
+        REASON_CLASS_MISSING_MATERIAL
+    }
+    return [name for name in CLASS_ORDER if name in classes]
+
+
+def unreviewed_counts_by_class(unreviewed: list[dict] | None) -> dict[str, int]:
+    """``{class: rows in it}`` for one 未审器件 list (task 186 §C).
+
+    Read from the same rows as :func:`unreviewed_counts_by_reason`, so the two
+    tables cannot disagree; the counting rule is the same one — a row in both
+    classes is counted in each, and the heading's number remains the number of
+    parts.
+    """
+    counts: dict[str, int] = {}
+    for row in unreviewed or []:
+        if not isinstance(row, dict):
+            continue
+        for name in unreviewed_classes(row):
+            counts[name] = counts.get(name, 0) + 1
+    return {name: counts[name] for name in CLASS_ORDER if name in counts}
+
+
+#: The fixed line the 未审器件 section must carry (186 §C, P1). The accident it
+#: answers: handing a PDF over looked like it closed the gate, and the reader
+#: could not tell which action actually would. Named commands are the CLI's own
+#: — `boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`
+#: closes it, and `boardwise need-datasheet` is the *other* channel (the
+#: reviewer's own "cannot establish"), which makes this section longer rather
+#: than emptying it. There is no `accept-unknown` command in this CLI, and the
+#: line does not pretend there is one.
+UNREVIEWED_CLEARING_NOTE = (
+    "给 PDF ≠ 清闸。清闸 = 货架条目带**已核验 facts**"
+    "（`boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`）"
+    "——喂 PDF（`parts fetch --file`）只写出 `facts_verified: false` 的候选，"
+    "候选不驱动规则、也不清闸；另一条通道是审查者自己标记未知"
+    "（`boardwise need-datasheet`），它只会让本节变长，不会让它变空。"
+)
+
+
 # --------------------------------------------------------------------------
 # 未审器件 — the promoted section (039 批② §WI-1)
 # --------------------------------------------------------------------------
@@ -1241,19 +1322,63 @@ OFFICIAL_CHANNEL_DETAIL = (
 UNREVIEWED_DATASHEET_DIR = ".tmp_datasheets"
 
 
-def _local_datasheet(directory: Path | None, *needles: str) -> Path | None:
-    """A local PDF whose file name carries one of ``needles`` (case-insensitive)."""
+#: Characters a file name may carry that an identity token never does: the
+#: separator/hyphen/underscore/dot family, plus the spaces a hand-renamed
+#: download picks up. Dropped on **both** sides of the loose comparison so
+#: `OCP8201ASAD`, `OCP-8201-ASAD` and `ocp 8201 asad` are one token.
+_IDENTITY_NOISE_RE = re.compile(r"[^0-9a-z]+")
+
+
+def _identity_token(text: str) -> str:
+    """The comparison form of an identity: lowercase, letters and digits only."""
+    return _IDENTITY_NOISE_RE.sub("", (text or "").casefold())
+
+
+def _local_datasheet(
+    directory: Path | None, *needles: tuple[str, str]
+) -> tuple[Path | None, str]:
+    """``(PDF, which identity matched)`` — ``needles`` are ``(value, identity)``.
+
+    Two passes, strongest reading first (task 186 §B):
+
+    * the **literal** one — the lowercased value inside the lowercased file
+      name, which is what this matcher has always done;
+    * the **normalised** one — :func:`_identity_token` on both sides and the
+      value inside the file *stem*, so a file named `OCP-8201-ASAD_v1.2.pdf`
+      still answers for a device the board calls `OCP8201ASAD`. The value is
+      compared against the whole normalised name as well as the stem, because
+      the token that matters may span the dot (`ACME-8201 rev B.pdf`).
+
+    The caller lists its needles in evidence order (MPN, C-number, device
+    name) and the answer says **which one** hit: a document found under the
+    device's name is weaker evidence than one found under its MPN, and a report
+    that could not tell the two apart would be claiming the stronger one.
+    """
     if directory is None:
-        return None
+        return None, ""
     folder = Path(directory)
     if not folder.is_dir():
-        return None
-    wanted = [needle.strip().lower() for needle in needles if needle and needle.strip()]
-    for path in sorted(folder.glob("*.pdf")):
-        name = path.name.lower()
-        if any(needle in name for needle in wanted):
-            return path
-    return None
+        return None, ""
+    wanted = [
+        (value.strip(), value.strip().lower(), identity)
+        for value, identity in needles
+        if value and value.strip()
+    ]
+    if not wanted:
+        return None, ""
+    files = sorted(folder.glob("*.pdf"))
+    for _, lowered, identity in wanted:
+        for path in files:
+            if lowered in path.name.lower():
+                return path, identity
+    for path in files:
+        stem = _identity_token(path.stem)
+        whole = _identity_token(path.name)
+        for token, _, identity in wanted:
+            token = _identity_token(token)
+            if token and (token in stem or token in whole):
+                return path, identity
+    return None, ""
 
 
 def suggested_queries(mpn: str, manufacturer: str = "", value: str = "") -> list[str]:
@@ -1295,13 +1420,33 @@ def unreviewed_parts(
       supplier part number — the three 025 identity signals, kept because they
       are also reasons a datasheet hunt cannot even start.
 
+    …and **not** when the shelf can judge it: an entry resolved through the
+    identity chain (:func:`boardwise.core.parts.resolve_facts` — MPN, then
+    C-number, then the device name) that carries `facts` a rule may act on.
+    "The shelf cannot judge this part" is the section's own definition, and a
+    part whose verified facts are on the shelf is judgeable whatever its board
+    fields say — the 025 signals stay as the row's *reasons* on rows that are
+    still unreviewed, but a part relisted only because of them, while the shelf
+    holds the datasheet the reader was being sent to find, is the gate lying
+    about the work left (task 186 §A: 喂 PDF 清不掉闸). `mayClaimPassed` (053)
+    follows the same rule: it asks whether a part was left unjudged by the
+    shelf, and this one was not.
+
     Each entry carries the three channels' real state, and the CLI only claims
     what it can measure: `engineer` (a local PDF in the datasheet folder —
-    `parts fetch --file` puts one there), `lcsc` (the shelf entry's own
+    `parts fetch --file` puts one there, and the name step is what finds one
+    filed under the device name), `lcsc` (the shelf entry's own
     `datasheetPdfUrl`/`datasheetUrl`, which is what `parts fetch` downloads),
     `official` (never the CLI's — it hands over the queries instead).
     """
-    from ..core.parts import FACTS_KEYS, find_facts, is_ic_designator
+    from ..core.parts import (
+        FACTS_KEYS,
+        IDENTITY_LCSC,
+        IDENTITY_MPN,
+        IDENTITY_NAME,
+        is_ic_designator,
+        resolve_facts,
+    )
 
     known = {
         (entry["designator"], tuple(entry.get("boards") or [])): entry
@@ -1311,12 +1456,19 @@ def unreviewed_parts(
     out: list[dict] = []
     for designator, component, boards in _parts_with_boards(model):
         is_ic = is_ic_designator(designator)
+        name = str(component.props.get("device_name") or "").strip()
         entry = None
+        matched_by = ""
         if library is not None:
-            if (component.mpn or "").strip():
-                entry = find_facts(library, mpn=component.mpn)
-            if entry is None and (component.lcsc_part or "").strip():
-                entry = find_facts(library, lcsc=component.lcsc_part)
+            entry, matched_by = resolve_facts(
+                library,
+                mpn=(component.mpn or "").strip(),
+                lcsc=(component.lcsc_part or "").strip(),
+                name=name,
+            )
+        judged = entry is not None and entry.facts is not None
+        if judged:
+            continue
         facts = {}
         if entry is not None:
             facts = entry.facts if entry.facts is not None else (entry.candidate_facts or {})
@@ -1336,18 +1488,30 @@ def unreviewed_parts(
         manufacturer = (entry.manufacturer if entry is not None else "") or str(
             component.props.get("manufacturer") or ""
         )
-        local = _local_datasheet(folder, mpn, component.lcsc_part or "")
+        local, local_by = _local_datasheet(
+            folder,
+            (mpn, IDENTITY_MPN),
+            (component.lcsc_part or "", IDENTITY_LCSC),
+            (name, IDENTITY_NAME),
+        )
         entry_url = (entry.datasheetPdfUrl if entry is not None else "") or ""
         page_url = (entry.datasheetUrl if entry is not None else "") or ""
         channels = {
             CHANNEL_ENGINEER: {
                 "ok": local is not None,
                 "detail": (
-                    f"工作区有本地手册 {local.name}" if local is not None
+                    f"工作区有本地手册 {local.name}"
+                    + (
+                        "（按器件名匹配，证据弱于 MPN/供应商码）"
+                        if local_by == IDENTITY_NAME
+                        else ""
+                    )
+                    if local is not None
                     else f"{UNREVIEWED_DATASHEET_DIR}/ 下没有这颗料的 PDF"
                     "（工程师给手册用 `parts fetch --file`）"
                 ),
                 "path": str(local) if local is not None else "",
+                "matchedBy": local_by,
             },
             CHANNEL_LCSC: {
                 "ok": bool(entry_url or page_url),
@@ -1379,6 +1543,7 @@ def unreviewed_parts(
             "isIc": is_ic,
             "onShelf": entry is not None,
             "shelfKey": entry.key if entry is not None else "",
+            "shelfMatchedBy": matched_by,
             "factsVerified": (entry.facts_verified if entry is not None else None),
             "factsPresent": sorted(facts),
             "missingFacts": (
@@ -3309,6 +3474,12 @@ def render_report_markdown(report: dict) -> str:
             "本节非空时**不得宣称审查通过**：只能说 DRC/连接性已审，"
             f"{len(unreviewed)} 颗器件缺手册未审。三通道（工程师给 / 立创找 / 官网搜）逐条列在下面。"
         )
+        # 186 §C (P1): the action that actually clears the gate, spelled with the
+        # CLI's own commands. Feeding a PDF is the step that *looked* like it
+        # cleared the gate and does not — a reader that has to guess is the
+        # accident this line exists for.
+        lines.append("")
+        lines.append(UNREVIEWED_CLEARING_NOTE)
         # 184: the总 number is one number for different problems. Printed from the
         # rows below (or, for a hand-built report, from the section itself), never
         # recomputed from the model — the ledger may not say more than the JSON.
@@ -3320,6 +3491,31 @@ def render_report_markdown(report: dict) -> str:
             lines.append(
                 "按原因计数："
                 + " · ".join(f"{reason} {count}" for reason, count in counts.items())
+            )
+        # 186 §C: the same rows, split by what the reader has to do next. A row
+        # in both classes is named in both lists and counted once in each — the
+        # question "how many parts" is the heading's number, not these.
+        by_class = summary.get("unreviewedByClass")
+        if not isinstance(by_class, dict):
+            by_class = unreviewed_counts_by_class(unreviewed)
+        if by_class:
+            lines.append("")
+            lines.append(
+                "按性质分栏（同一器件两类都沾的，两边都列）："
+                + " · ".join(
+                    f"{name} {by_class.get(name, 0)}" for name in CLASS_ORDER
+                )
+            )
+            for name in CLASS_ORDER:
+                members = [part for part in unreviewed if name in unreviewed_classes(part)]
+                lines.append(
+                    f"- **{name}**（{len(members)}）："
+                    + ("、".join(f"`{part.get('designator')}`" for part in members) or "无")
+                )
+            lines.append("")
+            lines.append(
+                "两类的下一步相反：「工具读不懂」不是缺资料——再喂 PDF 也没用，"
+                "要补的是读法（板上 `Value` / 解码器）；「真缺资料」才轮到去要手册。"
             )
         lines.append("")
         lines.append("| 位号 | MPN | 供应商 | 缺哪些 fact | 工程师给 | 立创找 | 官网搜 |")

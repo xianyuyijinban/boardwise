@@ -1107,9 +1107,21 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 同一条限制一致；规则里只有这一处判定变化。原样保留的锚：本文件上方逐字
     # 序列表（规则清单未动）、`test_bug98a_outline_stitch.py` 20 条、14 夹具
     # 003 秒级对拍（bug98-B 实板对拍见 `outputs/183_bug98b/evidence.md`）。
+    # **186 moved both**（首次同时移动）— recursive 38cb7b23 -> ada814c6，
+    # direct 8269e601 -> b4d75a74：本批把「板上的器件 → 货架条目」的**身份链**
+    # 收成一个共享入口 `core.parts.resolve_facts` / `resolve_component_facts`
+    # （MPN → C 码 → **器件名**，每步仍是精确匹配），并让 10 处板→条目查找改走它
+    # （`rules/facts.py`、`rules/paramspec.py`、`rules/decap.py`、`rules/pcb/`
+    # 的 crystal/distance/foc 三个文件都在本 recipe 内，故 direct 也被移动；
+    # `engines/checkup.py`、`core/architecture.py`、`core/power_domains.py`、
+    # `cli.py` 四处按本 recipe 的定义不进摘要）。判决语义：**今天零翻转**——
+    # 全库扫过 4 张常用夹具 + 现场实板，器件名恰好等于某条货架 MPN 的元件
+    # **0 个**（`outputs/186_pdf_facts/evidence.md` §2），实板 未审清单 34 条
+    # 前后逐条同因同序。判据与锚：新建 `tests/test_186_pdf_facts_path.py`
+    # （身份链证据序/精确性、端到端清闸、报告分栏、hygiene 三态）。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "8269e601"
-    assert recursive == "38cb7b23", (
+    assert old_digest == "b4d75a74"
+    assert recursive == "ada814c6", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

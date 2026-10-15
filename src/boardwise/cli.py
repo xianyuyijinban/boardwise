@@ -58,6 +58,7 @@ from .engines.checkup import (
     render_review_summary,
     summary_template,
     unknown_parts,
+    unreviewed_counts_by_class,
     unreviewed_counts_by_reason,
     unreviewed_parts,
     warning_triage_slots,
@@ -1922,19 +1923,73 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parts_add = parts_sub.add_parser(
         "add",
-        help="Append an unverified candidate entry (facts_verified: false).",
+        help=(
+            "Append a candidate entry, or write facts into the shelf "
+            "(--facts/--fact; --verified closes the gate)."
+        ),
         description=(
-            "Append a candidate shelf entry: no category, no facts, facts_verified false, "
-            "provenance.kind manual-curation. A duplicate MPN is refused (exit 2) and "
-            "points at `parts show`. The file is edited at the JSON-document level so "
-            "existing entries keep their exact bytes, backed up to a .tmp sibling first, "
-            "and re-parsed with the real validator before the write is called done."
+            "Two jobs in one flow. Identity only (`boardwise parts add <MPN> "
+            "--lcsc C1234`): append a candidate entry — no category, no facts, "
+            "facts_verified false, provenance.kind manual-curation. With facts "
+            "(`--facts <file.json>` / repeated `--fact KEY=JSON`): write those "
+            "facts onto the entry — the one already on the shelf when the "
+            "identity exists (that is the candidate `parts fetch` left behind), "
+            "otherwise a new one — and `--verified` is the engineer's explicit "
+            "declaration that they were checked, which is what makes them drive "
+            "rules. Without `--verified` the facts are a candidate's claim and "
+            "drive nothing. `--verified` is never implied. A duplicate insisted "
+            "on without facts is refused (exit 2) and points at `parts show`. "
+            "The file is edited at the JSON-document level so existing entries "
+            "keep their exact bytes, backed up to a .tmp sibling first, and "
+            "re-parsed with the real validator before the write is called done."
         ),
     )
     parts_add.add_argument("mpn", help="The manufacturer part number to add.")
     parts_add.add_argument("--lcsc", required=True, help="Its LCSC C-code (e.g. C2977777).")
     parts_add.add_argument(
         "--key", default=None, help="Shelf key (default: derived from the MPN)."
+    )
+    parts_add.add_argument(
+        "--facts", default=None, metavar="FILE",
+        help=(
+            "A JSON file holding the facts object (keys from the fact "
+            "vocabulary). `parts fetch`'s <stem>.candidate.json is accepted as "
+            "it stands. Every fact is validated by the same loader the shelf "
+            "uses, page-cited provenance included."
+        ),
+    )
+    parts_add.add_argument(
+        "--fact", action="append", default=None, metavar="KEY=JSON",
+        help=(
+            "One fact record, repeatable: --fact 'nc_pins={\"pins\":[\"2\"],"
+            "\"provenance\":\"file:ds.pdf p.3\"}'. The value is JSON because "
+            "every fact kind is a record, not a scalar."
+        ),
+    )
+    parts_add.add_argument(
+        "--verified", action="store_true",
+        help=(
+            "Declare the facts checked: writes the entry with facts a rule may "
+            "act on (needs facts, and the schema's uuid pair — see the note it "
+            "prints). Never implied, and never the default."
+        ),
+    )
+    parts_add.add_argument(
+        "--force", action="store_true",
+        help=(
+            "Replace facts an entry already carries (only meaningful with "
+            "--facts/--fact). Without it, an entry whose facts drive rules is "
+            "never overwritten."
+        ),
+    )
+    parts_add.add_argument(
+        "--category", default="", help="Shelf category (vocabulary-checked), e.g. ic.ldo."
+    )
+    parts_add.add_argument(
+        "--device-uuid", default="", help="Bridge device uuid (required with --verified)."
+    )
+    parts_add.add_argument(
+        "--library-uuid", default="", help="Bridge library uuid (required with --verified)."
     )
     parts_add.add_argument(
         "--library", default=None, help="The shelf to append to (default blocklib/parts.json)."
@@ -3925,6 +3980,15 @@ def _completion_body(
         if isinstance(by_reason, dict) and by_reason
         else unreviewed_counts_by_reason(unreviewed)
     )
+    # 186 §C: the same two-source reading for the class split — a report written
+    # before the split existed re-gates to a consistent pair of numbers instead of
+    # crashing on the missing key.
+    by_class = summary.get("unreviewedByClass")
+    by_class = (
+        dict(by_class)
+        if isinstance(by_class, dict) and by_class
+        else unreviewed_counts_by_class(unreviewed)
+    )
     # One per part however many pins it carries, and the facts seed it may also
     # have is *not* added again — `unreviewedParts` already counts that part and
     # 058 §二 says the same question is not counted twice (`marked_parts`).
@@ -4006,6 +4070,9 @@ def _completion_body(
         # completion section (the 欠账 line in report.md) does not have to go and
         # find the other section. Additive: every key that was here stays.
         "unreviewedByReason": by_reason,
+        # 186 §C: 「工具读不懂」 vs 「真缺资料」 — the same rows by what the reader
+        # does next. Additive, like the split above it.
+        "unreviewedByClass": by_class,
         # 185 B: `needsDatasheet` was carrying two jobs under one name — the
         # reviewer's hand-marks and the whole worklist the datasheet gate is about
         # — and a reader could tell neither which it had. It keeps its name and its
@@ -6037,6 +6104,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # different work (no MPN vs a value nobody can read vs no supplier) sent the
     # reader to the wrong job — and the split is already in every row below.
     summary["unreviewedByReason"] = unreviewed_counts_by_reason(unreviewed)
+    # 186 §C: the same rows again, split by **what the reader has to do next**
+    # (工具读不懂 vs 真缺资料). Two tables over one list, both read from the rows
+    # below them, so neither can disagree with the section it summarises.
+    summary["unreviewedByClass"] = unreviewed_counts_by_class(unreviewed)
     # **Narrow on purpose** (053 §2.2): this field answers exactly one question —
     # "did the datasheet gate leave any part unjudged?" — and the name is kept
     # (downstream and friends read it) rather than widened, because widening it
@@ -12539,20 +12610,22 @@ def _parts_library_path(args: argparse.Namespace, *, writable: bool = False) -> 
     return DEFAULT_LIBRARY_PATH if writable else default_library_path()
 
 
-def _shelf_entry(library: object, *, mpn: str, lcsc: str) -> object | None:
-    """One board part → its shelf entry, by exactly the rules' lookup order.
+def _shelf_entry(
+    library: object, *, mpn: str, lcsc: str, name: str = ""
+) -> tuple[object | None, str]:
+    """One board part → ``(shelf entry, matched by)`` — the review's own chain.
 
-    MPN first, then the C-number, exact match only: this is
-    :func:`boardwise.core.parts.find_facts`' contract on purpose. `missing`
-    must report the part the **review** will find, and a near-miss here would
-    call a part judgeable that the rules still answer UNKNOWN for.
+    MPN, then the C-number, then the **device name**
+    (:func:`boardwise.core.parts.resolve_facts`), each an exact match: this is
+    what the review itself does, and `missing` has to report the part the
+    **review** will find — a near-miss here would call a part judgeable that the
+    rules still answer UNKNOWN for. The name step (186 §B) is what lets a board
+    whose parts carry no MPN field be matched to the entry an engineer filed
+    under that name, and it is the same step the gate's own resolution makes.
     """
-    from boardwise.core.parts import find_facts
+    from boardwise.core.parts import resolve_facts
 
-    entry = find_facts(library, mpn=mpn) if mpn else None
-    if entry is None and lcsc:
-        entry = find_facts(library, lcsc=lcsc)
-    return entry
+    return resolve_facts(library, mpn=mpn, lcsc=lcsc, name=name)
 
 
 def _facts_in_file(entry: object | None) -> dict:
@@ -12597,6 +12670,7 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
 
     from boardwise.core.parts import (
         FACTS_KEYS,
+        IDENTITY_NAME,
         PartError,
         is_ic_designator,
         load_parts,
@@ -12626,7 +12700,12 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
         comp = model.components[designator]
         if not is_ic_designator(designator):
             continue
-        entry = _shelf_entry(library, mpn=comp.mpn, lcsc=comp.lcsc_part)
+        entry, matched_by = _shelf_entry(
+            library,
+            mpn=comp.mpn,
+            lcsc=comp.lcsc_part,
+            name=str(comp.props.get("device_name") or ""),
+        )
         facts = _facts_in_file(entry)
         missing = [key for key in FACTS_KEYS if key not in facts]
         datasheet = (entry.datasheetUrl if entry is not None else "") or comp.datasheet
@@ -12647,10 +12726,19 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
             "unverified": gate is False,
             "factsPresent": sorted(facts),
             "missing": missing,
+            # 186 §B: which identity step found the entry ("" when it is on no
+            # shelf). `name` means the entry was matched by what the board calls
+            # the device, which is weaker evidence than an MPN or a C-number.
+            "matchedBy": matched_by,
         })
         owed += 1 if missing else 0
 
         identity = comp.mpn or comp.lcsc_part or "(no MPN, no C-number)"
+        by_name = (
+            f" (matched by device name: {comp.props.get('device_name')})"
+            if matched_by == IDENTITY_NAME
+            else ""
+        )
         if entry is None:
             print(f"{designator} {identity} [no shelf entry] — missing {len(missing)} fact(s)")
         else:
@@ -12661,7 +12749,7 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
             )
             print(
                 f"{designator} {identity} [{entry.key}] category={entry.category or '-'} "
-                f"facts={len(facts)} missing={len(missing)} facts_verified={state}"
+                f"facts={len(facts)} missing={len(missing)} facts_verified={state}{by_name}"
             )
         print(
             f"    present: {', '.join(sorted(facts)) or '(none)'}"
@@ -12871,8 +12959,140 @@ def _candidate_key(mpn: str, lcsc: str) -> str:
     )
 
 
+def _facts_from_flags(args: argparse.Namespace) -> tuple[dict, str, str]:
+    """``(facts, source, error)`` from ``--facts <file.json>`` / ``--fact k=js``.
+
+    Two spellings for one thing (task 186 §A): a **file** is what an AI writes
+    after reading a datasheet (the whole object, reviewable in a diff), and a
+    repeated ``--fact`` is for one record typed at a time. ``--fact``'s value is
+    **JSON**, not a bare word, because every fact kind in the vocabulary is a
+    record rather than a scalar — ``--fact 'nc_pins={"pins":["2"],
+    "provenance":"file:ds.pdf p.3"}'`` — and a shorthand that only covered the
+    scalar-shaped keys would be a second, narrower schema to keep in step.
+
+    Nothing here validates the *content*: the facts go through
+    :func:`boardwise.core.parts.entry_from_json`, the same validator every entry
+    in the file passes, so a fact without a page-cited provenance is refused at
+    the same place whether it was typed, fetched or written by hand. What is
+    checked here is only what the validator cannot say: which sources the caller
+    used, and that a key is spelled the way the vocabulary spells it.
+    """
+    import json
+
+    from boardwise.core.parts import FACTS_KEYS
+
+    facts: dict = {}
+    sources: list[str] = []
+    if getattr(args, "facts", None):
+        path = Path(args.facts)
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            return {}, "", f"读不了 {path}: {exc}"
+        except ValueError as exc:
+            return {}, "", f"{path} 不是合法 JSON: {exc}"
+        if isinstance(raw, dict) and "facts" in raw and set(raw) >= {"facts"}:
+            # `parts fetch`'s own candidate sidecar (`<stem>.candidate.json`) has
+            # this shape, so what a fetch proposed can be handed straight back in
+            # — one handoff, no hand-written wrapper. A facts object can never
+            # carry a `facts` key of its own: FACTS_KEYS has none.
+            raw = raw["facts"]
+        if not isinstance(raw, dict) or not raw:
+            return {}, "", (
+                f"{path}: 期望一个非空的 facts 对象（键取自 {', '.join(FACTS_KEYS)}），"
+                f"拿到 {type(raw).__name__}"
+            )
+        facts.update(raw)
+        sources.append(f"--facts {path}")
+    for item in getattr(args, "fact", None) or []:
+        key, sep, value = str(item).partition("=")
+        key = key.strip()
+        if not sep or not key:
+            return {}, "", f"--fact 期望 KEY=JSON，拿到 {item!r}（例：--fact 'nc_pins={{\"pins\":[\"2\"],\"provenance\":\"file:ds.pdf p.3\"}}'）"
+        if key not in FACTS_KEYS:
+            return {}, "", (
+                f"--fact 的键 {key!r} 不在事实词表里；可用：{', '.join(FACTS_KEYS)}"
+            )
+        if key in facts:
+            return {}, "", f"fact {key!r} 给了两次（--facts 文件里也有），去重后再来"
+        try:
+            parsed = json.loads(value)
+        except ValueError as exc:
+            return {}, "", f"--fact {key}: 值必须是 JSON: {exc}"
+        facts[key] = parsed
+        sources.append(f"--fact {key}")
+    return facts, "; ".join(sources), ""
+
+
+def _uuid_requirement_note() -> str:
+    """Why `--verified` may need two more flags — the schema's own rule (039).
+
+    `entry_from_json` has demanded ``deviceUuid``+``libraryUuid`` of every entry
+    a rule acts on since 039, because the pair is what `sch.place_component`
+    needs; a verified entry without them cannot be placed. This batch does not
+    weaken that guard — it says so out loud instead of letting the validator's
+    one-line message be the whole story.
+    """
+    return (
+        "facts_verified=true 的条目必须可落板：schema 要求 deviceUuid + libraryUuid"
+        "（039 的既有校验，不是本命令加的）。两个 id 来自桥：\n"
+        "    boardwise parts select <MPN> --resolve --write   # 桥解析并落库\n"
+        "    或先建候选条目、再用 `--facts … --verified` 补（uuid 沿用条目里的）\n"
+        "    或直接给 --device-uuid <id> --library-uuid <id>"
+    )
+
+
+def _write_shelf_document(
+    library_path: Path, raw: dict, *, existed: bool, backup: Path
+) -> tuple[object | None, str]:
+    """Write the shelf document, then re-parse it with the **validator**.
+
+    ``(reloaded library, error)``. A refusal rolls the file back — to the backup
+    when there was one, to nothing when the file is new — because a file only its
+    writer can read is a broken shelf, and a curation tool that leaves one behind
+    has cost more than it saved.
+    """
+    import json
+    import shutil
+
+    from boardwise.core.parts import PartError, load_parts
+
+    try:
+        library_path.parent.mkdir(parents=True, exist_ok=True)
+        library_path.write_text(
+            json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        return None, f"cannot write {library_path}: {exc}"
+    try:
+        return load_parts(library_path), ""
+    except PartError as exc:
+        if existed:
+            shutil.copy2(backup, library_path)
+        else:
+            library_path.unlink(missing_ok=True)
+        return None, f"the entry was refused by the validator, rolled back: {exc}"
+
+
 def _cmd_parts_add(args: argparse.Namespace) -> int:
-    """WI-3: append a candidate entry — identity only, gate shut.
+    """WI-3 + 186 §A: scaffold a candidate, or **write facts into the shelf**.
+
+    Two jobs, one command, because they are one flow:
+
+    * **create** (039) — identity only, `facts_verified: false`, no category;
+    * **write facts** (186, the P4 一等入口) — `--facts <file.json>` /
+      `--fact KEY=JSON` put the datasheet's claims on the entry, and `--verified`
+      is the engineer's **declaration** that they have been checked. Without it
+      the facts land as a candidate's claim and drive nothing, exactly as
+      `parts fetch` writes them; with it the entry starts driving rules. The
+      flag is never implied: a machine that could set it by accident would make
+      "verified" mean "written".
+
+      Facts given for an identity already on the shelf **update that entry** —
+      the candidate `parts fetch` wrote is the case this exists for. An entry
+      whose facts already drive rules is never overwritten without `--force`
+      (the same guard `parts fetch` uses: an unreviewed claim does not replace
+      something a human vouched for).
 
     The write happens at the **JSON-document** level, not through `save_parts`:
     a library-wide re-serialisation reorders keys inside existing entries
@@ -12881,17 +13101,14 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
     backup and the re-parse are the price of that choice.
     """
     import json
-    import shutil
 
     from boardwise.core.parts import (
         PartEntry,
-        PartError,
         PartLibrary,
         PartProvenance,
         entry_to_json,
         library_from_json,
         library_to_json,
-        load_parts,
     )
 
     library_path = Path(_parts_library_path(args, writable=True))
@@ -12906,22 +13123,53 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
         library = PartLibrary()
         raw = library_to_json(library)
 
+    facts, facts_source, error = _facts_from_flags(args)
+    if error:
+        print(f"boardwise parts add: {error}", file=sys.stderr)
+        return 2
+    if args.verified and not facts:
+        print(
+            "boardwise parts add: --verified 要配 facts —— 核验一条没有 facts 的条目"
+            "没有意义（facts_verified=true 的语义是「这些事实我核过」，不是「我看过」）。"
+            "用 `--facts <file.json>` 或 `--fact KEY=JSON` 给 facts",
+            file=sys.stderr,
+        )
+        return 2
+
     # Identity is compared case-insensitively, deliberately stricter than the
     # shelf's own exact-match lookup: an entry differing only in case is a
     # duplicate to fix, not a second part to keep.
-    for existing in library.parts:
-        same_mpn = existing.mpn and existing.mpn.casefold() == args.mpn.casefold()
-        same_lcsc = existing.lcsc and existing.lcsc.casefold() == args.lcsc.casefold()
+    existing = None
+    for on_shelf in library.parts:
+        same_mpn = on_shelf.mpn and on_shelf.mpn.casefold() == args.mpn.casefold()
+        same_lcsc = on_shelf.lcsc and on_shelf.lcsc.casefold() == args.lcsc.casefold()
         if same_mpn or same_lcsc:
-            which = "mpn" if same_mpn else "lcsc"
-            identity = args.mpn if same_mpn else args.lcsc
-            print(
-                f"boardwise parts add: {which} {identity!r} is already on the shelf "
-                f"as {existing.key}; inspect it with "
-                f"`boardwise parts show {existing.key}`",
-                file=sys.stderr,
-            )
-            return 2
+            existing = on_shelf
+            if not facts:
+                which = "mpn" if same_mpn else "lcsc"
+                identity = args.mpn if same_mpn else args.lcsc
+                print(
+                    f"boardwise parts add: {which} {identity!r} is already on the shelf "
+                    f"as {existing.key}; inspect it with "
+                    f"`boardwise parts show {existing.key}`",
+                    file=sys.stderr,
+                )
+                return 2
+            break
+
+    backup = library_path.with_suffix(library_path.suffix + ".tmp")
+    existed = library_path.is_file()
+    if existing is not None:
+        return _fill_existing_entry(
+            args,
+            library_path=library_path,
+            raw=raw,
+            existing=existing,
+            facts=facts,
+            facts_source=facts_source,
+            backup=backup,
+            existed=existed,
+        )
 
     key = args.key or _candidate_key(args.mpn, args.lcsc)
     taken = library.get(key)
@@ -12932,60 +13180,78 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    device_uuid = str(getattr(args, "device_uuid", "") or "").strip()
+    library_uuid = str(getattr(args, "library_uuid", "") or "").strip()
+    if args.verified and not (device_uuid and library_uuid):
+        print(f"boardwise parts add: {_uuid_requirement_note()}", file=sys.stderr)
+        return 2
 
     candidate = PartEntry(
         key=key,
         mpn=args.mpn,
         lcsc=args.lcsc,
-        facts_verified=False,
+        category=str(getattr(args, "category", "") or "").strip(),
+        facts=facts or None,
+        facts_verified=bool(args.verified),
+        deviceUuid=device_uuid,
+        libraryUuid=library_uuid,
         provenance=PartProvenance(
             kind="manual-curation",
+            source=facts_source,
             note=(
+                "entry written by `parts add` (186): identity + the facts an "
+                "engineer supplied" if facts else
                 "candidate scaffolded by `parts add` (039): identity only — no "
                 "category, no facts, and the uuids the bridge fills have not been "
                 "resolved yet"
             ),
         ),
-        notes=[
-            "candidate: facts_verified is false, so no rule acts on this entry. "
-            "Fill category and facts from the datasheet (every fact cites its own "
-            "page), then flip the flag in review (task 039 §WI-4)."
-        ],
+        notes=(
+            [
+                f"facts written by `parts add --facts/--fact` ({facts_source}) and "
+                "declared verified by hand (`--verified`, 186 §A). Every fact cites "
+                "its own page — the validator refuses one that cannot."
+            ]
+            if facts and args.verified
+            else [
+                f"candidate facts written by `parts add` ({facts_source}): "
+                "facts_verified is false, so no rule acts on this entry. Check each "
+                "fact against the page it cites, then re-run with `--verified`."
+            ]
+            if facts
+            else [
+                "candidate: facts_verified is false, so no rule acts on this entry. "
+                "Fill category and facts from the datasheet (every fact cites its own "
+                "page), then flip the flag in review (task 039 §WI-4)."
+            ]
+        ),
     )
     raw.setdefault("parts", []).append(entry_to_json(candidate))
-
-    backup = library_path.with_suffix(library_path.suffix + ".tmp")
-    existed = library_path.is_file()
     if existed:
+        import shutil
+
         shutil.copy2(library_path, backup)
-    try:
-        library_path.parent.mkdir(parents=True, exist_ok=True)
-        library_path.write_text(
-            json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-    except OSError as exc:
-        print(f"boardwise parts add: cannot write {library_path}: {exc}", file=sys.stderr)
-        return 2
-    try:
-        # The validator, not the writer, is what makes the write done: a file
-        # that only the writer can read is a broken shelf.
-        reloaded = load_parts(library_path)
-    except PartError as exc:
-        if existed:
-            shutil.copy2(backup, library_path)
-        else:
-            library_path.unlink(missing_ok=True)
-        print(
-            f"boardwise parts add: the entry was refused by the validator, rolled "
-            f"back: {exc}",
-            file=sys.stderr,
-        )
+    reloaded, error = _write_shelf_document(
+        library_path, raw, existed=existed, backup=backup
+    )
+    if reloaded is None:
+        print(f"boardwise parts add: {error}", file=sys.stderr)
         return 2
 
-    print(f"candidate appended: {key} → {library_path} (now {len(reloaded.parts)} entries)")
+    written = reloaded.get(key)
+    if not facts:
+        gate = "false — curate the facts, then flip the flag in review"
+    elif args.verified:
+        gate = "true — 这些事实驱动规则"
+    else:
+        gate = "false — 候选不驱动规则；核过页号后重跑本命令加 --verified"
+    label = "entry" if facts else "candidate"
+    print(f"{label} appended: {key} → {library_path} (now {len(reloaded.parts)} entries)")
     if existed:
         print(f"  backup: {backup}")
-    print("  gate: facts_verified = false — curate the facts, then flip the flag in review")
+    if facts:
+        print(f"  facts: {', '.join(sorted(facts))} (source: {facts_source})")
+    print(f"  gate: facts_verified = {gate}")
     print(f"next: boardwise parts show {key}")
     if args.json_path:
         Path(args.json_path).write_text(
@@ -12998,7 +13264,152 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
                     "key": key,
                     "mpn": candidate.mpn,
                     "lcsc": candidate.lcsc,
-                    "factsVerified": False,
+                    "created": True,
+                    "facts": sorted(facts),
+                    "factsSource": facts_source,
+                    "category": candidate.category,
+                    "factsVerified": bool(written is not None and written.facts_verified),
+                    "entriesOnShelf": len(reloaded.parts),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"json: {args.json_path}")
+    return 0
+
+
+def _fill_existing_entry(
+    args: argparse.Namespace,
+    *,
+    library_path: Path,
+    raw: dict,
+    existing: object,
+    facts: dict,
+    facts_source: str,
+    backup: Path,
+    existed: bool,
+) -> int:
+    """Write ``facts`` onto an entry already on the shelf (186 §A).
+
+    The candidate `parts fetch` left behind is what this exists for: the facts
+    were extracted, a human read them, and there was no first-class way to say
+    so — the only route was editing the JSON by hand. The entry's identity
+    (key, MPN, C-number) is **not** touched here: this writes facts, and a
+    command that could also rewrite identity while appearing to write facts is
+    the accident the guard below refuses.
+
+    An entry whose facts already drive rules is never overwritten without
+    ``--force`` — the same rule `parts fetch` applies, for the same reason: an
+    unreviewed claim must not replace something a human vouched for.
+    """
+    import json
+    import shutil
+
+    from boardwise.core.parts import PartError, entry_from_json, entry_to_json
+
+    if existing.key != (args.key or existing.key):
+        print(
+            f"boardwise parts add: {existing.key} 是这颗料的条目，--key "
+            f"{args.key!r} 是另一个名字；改身份不是写 facts 的事",
+            file=sys.stderr,
+        )
+        return 2
+    if existing.lcsc and existing.lcsc.casefold() != args.lcsc.casefold():
+        print(
+            f"boardwise parts add: 条目 {existing.key} 的 C 码是 {existing.lcsc}，"
+            f"命令行给的是 {args.lcsc}；改身份不是写 facts 的事（要改 C 码请在货架里改）",
+            file=sys.stderr,
+        )
+        return 2
+    if existing.facts is not None and not args.force:
+        print(
+            f"boardwise parts add: {existing.key} 已经有核验过的 facts，"
+            "不覆盖它（要覆盖加 --force）",
+            file=sys.stderr,
+        )
+        return 2
+
+    body = entry_to_json(existing)
+    # The uuids the schema demands of an entry a rule acts on come from the
+    # entry when it has them and from the command line otherwise; a flag that is
+    # not given never clears what is already there.
+    for flag, field in (("device_uuid", "deviceUuid"), ("library_uuid", "libraryUuid")):
+        given = str(getattr(args, flag, "") or "").strip()
+        if given:
+            body[field] = given
+    category = str(getattr(args, "category", "") or "").strip()
+    if category:
+        body["category"] = category
+    if args.verified and not (body.get("deviceUuid") and body.get("libraryUuid")):
+        print(f"boardwise parts add: {_uuid_requirement_note()}", file=sys.stderr)
+        return 2
+    body["facts"] = facts
+    if args.verified:
+        body.pop("facts_verified", None)
+    else:
+        body["facts_verified"] = False
+    marker = (
+        f"facts written by `parts add` ({facts_source}) and declared verified by "
+        "hand (`--verified`, 186 §A)"
+        if args.verified
+        else f"candidate facts written by `parts add` ({facts_source}); "
+        "facts_verified stays false — no rule acts on them until a human says so"
+    )
+    body["notes"] = list(existing.notes) + [marker]
+    try:
+        updated = entry_from_json(body, f"add[{existing.key}]")
+    except PartError as exc:
+        print(f"boardwise parts add: 写进去的条目验证器不认：{exc}", file=sys.stderr)
+        return 2
+
+    for index, item in enumerate(raw.get("parts") or []):
+        if isinstance(item, dict) and item.get("key") == existing.key:
+            raw["parts"][index] = entry_to_json(updated)
+            break
+    if existed:
+        shutil.copy2(library_path, backup)
+    reloaded, error = _write_shelf_document(
+        library_path, raw, existed=existed, backup=backup
+    )
+    if reloaded is None:
+        print(f"boardwise parts add: {error}", file=sys.stderr)
+        return 2
+    on_shelf = reloaded.get(existing.key)
+    print(
+        f"entry updated: {existing.key} → {library_path} "
+        f"(now {len(reloaded.parts)} entries)"
+    )
+    if existed:
+        print(f"  backup: {backup}")
+    print(f"  facts: {', '.join(sorted(facts))} (source: {facts_source})")
+    if args.verified:
+        print("  gate: facts_verified = true — 这些事实现在驱动规则")
+        print("  核验是对文件内容的声明：facts_verified 为 true 的条目不会再写这个键（039）")
+    else:
+        print("  gate: facts_verified = false — 候选不驱动规则")
+        print(f"next: 核过页号后重跑 `boardwise parts add {args.mpn} --lcsc {args.lcsc} "
+              f"--facts {args.facts or '<facts.json>'} --verified`")
+    if args.json_path:
+        Path(args.json_path).write_text(
+            json.dumps(
+                {
+                    "command": "parts-add",
+                    "ok": True,
+                    "library": str(library_path),
+                    "backup": str(backup) if existed else "",
+                    "key": existing.key,
+                    "mpn": existing.mpn,
+                    "lcsc": existing.lcsc,
+                    "created": False,
+                    "facts": sorted(facts),
+                    "factsSource": facts_source,
+                    "category": on_shelf.category if on_shelf is not None else "",
+                    "factsVerified": bool(
+                        on_shelf is not None and on_shelf.facts_verified
+                    ),
                     "entriesOnShelf": len(reloaded.parts),
                 },
                 ensure_ascii=False,
@@ -13018,6 +13429,19 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
 #: Where the downloaded PDFs and their text dumps live. Under `.tmp_*`, which the
 #: repo ignores: a datasheet library is a cache, not an artifact.
 DATASHEET_DIR = ".tmp_datasheets"
+
+#: Printed when the extractor proposed **no** facts at all (task 186 §C, P3).
+#: The accident: a PDF that extracts to nothing is not a PDF this project
+#: refuses — it is a document whose language or structure is outside the narrow
+#: extractor (measured: a Chinese-language datasheet whose pin tables are
+#: images extracts to a page of headings and no records). Saying so, and naming
+#: the path that does work, is the whole difference between "the tool is broken"
+#: and "this document needs a human".
+EMPTY_FACTS_HINT = (
+    "facts 提取为空——文档语言/结构可能不在提取范围，可走人工路径："
+    "读全文（`text` 那个 dump）→ 写 facts JSON → "
+    "`boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`"
+)
 
 #: A browser-shaped UA: TI and LCSC both answer a bare urllib request with an
 #: error page (measured in 039 批①, where the "PDF" that came back was a 3 KB
@@ -13249,6 +13673,9 @@ def _cmd_parts_fetch(args: argparse.Namespace) -> int:
         )
         print(f"  candidate facts 写到 {sidecar}：库里没有这颗料，"
               "先 `parts add <mpn> --lcsc <C码>` 建条目再入库")
+        if not facts:
+            print(f"  {EMPTY_FACTS_HINT}")
+            result["emptyFacts"] = True
         result["candidateFile"] = str(sidecar)
     elif not facts:
         # Nothing proposed ⇒ nothing to write. An entry with `facts: {}` is not a
@@ -13257,6 +13684,12 @@ def _cmd_parts_fetch(args: argparse.Namespace) -> int:
         # meaningless. The text dump is the deliverable here.
         print("  自动提取没有提出任何候选事实：全文已落盘，请读全文再填（工具不猜）；"
               "这次没有改库")
+        # 186 §C (P3): say the next step out loud. "No facts were proposed" read
+        # as "this command failed"; the manual path is a first-class one now, and
+        # it is the only one that works when the document is outside the
+        # extractor's reach.
+        print(f"  {EMPTY_FACTS_HINT}")
+        result["emptyFacts"] = True
         result["notes"] = [
             *notes,
             "没有提出候选事实 ⇒ 没有写库（facts_verified 的语义是「有一条没人核验的声称」，"

@@ -91,6 +91,12 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
   审查结果由 AI 发给工程师——verdict 一句话 + ERROR 逐条点名 + 分诊建议 + 缺手册清单，
   工程师不翻文件；文件留档路径一句话带过）、架构走查（044 起强制环节）、
   triage 分诊口径，全在 `docs/review-sop.md`。
+- **缺手册 → 清闸**：给 PDF **不清闸**。`parts fetch --file` 只写 `facts_verified: false`
+  的候选（不驱动规则）；清闸 = 货架条目带**已核验 facts**：
+  `boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`（读完 PDF 写 facts
+  JSON 走这条；货架上已有候选条目则**原地补 facts**；不带 `--verified` 仍是候选）。
+  板上**只有器件名没有 MPN** 的器件，条目按器件名也能被认出来（报告标「按器件名匹配」）。
+  口径见 `docs/review-sop.md` §3.1②。
 - **无电压电源网**（`VCC`/`VCCA`/`VREF` 这类名字不带电压的轨）：`boardwise intent audit --file <导出.epro2>` 列待问清单（已答的列 settled 并点名出处）→ 逐条问工程师 →
   `boardwise intent set-rail <网名> --voltage <值> --file <合同>` 落设计意图合同，
   **问一次不再问**（065；口径与收据形态见 `docs/review-sop.md` §3.1b）。

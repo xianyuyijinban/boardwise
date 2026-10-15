@@ -59,7 +59,7 @@ import re
 from dataclasses import dataclass, field
 
 from .model import Component, DesignModel, is_ground_net
-from .parts import PartLibrary, category_of, find_facts
+from .parts import PartLibrary, category_of, resolve_component_facts
 from .power_domains import (
     domain_of,
     infer_net_domains,
@@ -570,14 +570,10 @@ def _part_text(component: Component) -> str:
 
 
 def _entry_for(component: Component, library: PartLibrary | None):
-    """The shelf entry for a part, exact-match identity only (find_facts' rule)."""
+    """The shelf entry for a part, by the identity chain (MPN → C码 → 器件名)."""
     if library is None:
         return None
-    entry = None
-    if component.mpn:
-        entry = find_facts(library, mpn=component.mpn)
-    if entry is None and component.lcsc_part:
-        entry = find_facts(library, lcsc=component.lcsc_part)
+    entry, _matched = resolve_component_facts(library, component)
     return entry
 
 

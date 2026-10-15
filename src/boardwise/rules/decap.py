@@ -118,6 +118,7 @@ def looks_like_capacitor(
     library=None,
     *,
     footprint: str = "",
+    name: str = "",
 ) -> bool:
     """Is this inventory item a capacitor? — one predicate, two callers.
 
@@ -129,7 +130,9 @@ def looks_like_capacitor(
     Three routes, strongest first, and the third one is 039 批①b's:
 
     1. the ``value`` parses as a capacitance;
-    2. the shelf says ``category: capacitor``;
+    2. the shelf says ``category: capacitor`` — the entry resolved by the
+       identity chain (:func:`boardwise.core.parts.resolve_facts`: MPN, then
+       C-number, then the ``name`` keyword's device name, 186 §B);
     3. positional + shape evidence: a **C-prefixed designator** *and* either a
        decodable MPN value code or a chip-size-only footprint.
 
@@ -144,7 +147,7 @@ def looks_like_capacitor(
     """
     if parse_capacitance_farads(value or "") is not None:
         return True
-    from ..core.parts import find_facts
+    from ..core.parts import resolve_facts
 
     entry = None
     if library is None:
@@ -161,10 +164,7 @@ def looks_like_capacitor(
                 or _CHIP_SIZE_FOOTPRINT.match((footprint or "").strip())
             )
         )
-    if mpn:
-        entry = find_facts(library, mpn=mpn)
-    if entry is None and lcsc:
-        entry = find_facts(library, lcsc=lcsc)
+    entry, _matched = resolve_facts(library, mpn=mpn, lcsc=lcsc, name=name)
     if entry is not None and entry.category == "capacitor":
         return True
     # The conjunction: a C-prefixed designator (positional evidence) *and* a
@@ -386,6 +386,7 @@ def _looks_like_capacitor(comp: Component, library) -> bool:
         comp.lcsc_part or "",
         library,
         footprint=comp.footprint or "",
+        name=str(comp.props.get("device_name") or ""),
     )
 
 

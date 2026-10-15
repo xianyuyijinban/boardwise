@@ -46,8 +46,11 @@ boardwise parts add TPL2981-30DBVR --lcsc C9900000001
 
 * **`missing`** lists every `U`-prefixed part of a project with the fact keys the
   shelf has not recorded for it, in vocabulary order, and the identity the rules
-  will look up (MPN first, then the C-number — `find_facts`' exact-match order, so
-  the list and the verdicts can never disagree). **Exit 0 always**: a non-empty
+  will look up (MPN first, then the C-number, then the **device name** —
+  `resolve_facts`' exact-match order, so the list and the verdicts can never
+  disagree; a name hit is labelled `matchedBy: name`, because it is weaker
+  evidence than an MPN or a C-number and must not read the same). **Exit 0
+  always**: a non-empty
   list is "the shelf owes work", not a failure. Exit 2 is reserved for an input
   that cannot be read. A part is owed until it records *every* key, which is the
   strict reading — an entry with three of seven keys still lists four. A gated
@@ -77,6 +80,46 @@ boardwise parts add TPL2981-30DBVR --lcsc C9900000001
   **JSON-document** edit — a library-wide re-serialisation would reorder keys
   inside existing entries — so it backs the file up to a `.tmp` sibling, re-parses
   the result with the real validator, and rolls back if the validator refuses.
+
+### The manual facts path: `parts add --facts … --verified` (186)
+
+039 built the gate; 186 built the **route through it**. An AI that reads a
+datasheet had no first-class way to put what it found into the shelf, so the only
+way to close a part's gate was to edit the JSON by hand — and the field reading of
+"feed it a PDF" (which only writes a candidate, §above) was that the gate could
+not be closed at all.
+
+```bash
+# one record at a time …
+boardwise parts add ACME-PWR-1000 --lcsc C9900000001 --category ic.ldo \
+  --fact 'nc_pins={"pins":["2"],"provenance":"file:acme.pdf p.4"}'
+# … or the whole object, which is what an AI writes after reading the PDF
+boardwise parts add ACME-PWR-1000 --lcsc C9900000001 --category ic.ldo \
+  --facts facts.json --verified \
+  --device-uuid <32 hex> --library-uuid <32 hex>
+```
+
+* `--facts <file.json>` takes the facts object; `parts fetch`'s
+  `<stem>.candidate.json` (`{"label","url","facts"}`) is accepted **as it stands**,
+  so what an extractor proposed can be handed straight back in. `--fact KEY=JSON`
+  is the same thing one record at a time; the value is JSON because every fact
+  kind is a record, not a scalar.
+* The facts go through `entry_from_json` — the same validator every entry in the
+  file passes — so a fact with no page-cited provenance is refused wherever it
+  came from, and a refused entry leaves no bytes behind.
+* **`--verified` is the declaration**, and it is never implied: without it the
+  facts are a candidate's claim and drive nothing. With it, the entry starts
+  driving rules. It needs facts (verifying nothing is not a statement) and, per
+  039's schema rule, the uuid pair — the entry must be placeable, so `add` prints
+  where those ids come from (`parts select --resolve`, or the entry already on the
+  shelf).
+* Facts given for an identity **already on the shelf** update that entry: the
+  candidate `parts fetch` left behind is the case this exists for. Identity is not
+  touched by that path (a differing C-number is refused), and an entry whose facts
+  already drive rules is not overwritten without `--force` — the same guard
+  `fetch` applies.
+
+The same flow is what the report's 未审器件 section points at: **给 PDF ≠ 清闸**.
 
 ### The gate
 

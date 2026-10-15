@@ -33,7 +33,7 @@ import re
 from dataclasses import dataclass
 
 from .model import DesignModel
-from .parts import PartEntry, PartLibrary, find_facts
+from .parts import PartEntry, PartLibrary, resolve_component_facts
 
 #: Domain states. KNOWN and CONFLICT/UNKNOWN mirror the harness's honesty
 #: split: KNOWN asserts, the other two explain why they cannot.
@@ -258,14 +258,10 @@ class DomainGuess:
 def _facts_entry(
     model: DesignModel, library: PartLibrary
 ) -> dict[str, PartEntry]:
-    """One exact-match shelf lookup per component, resolved once."""
+    """One shelf lookup per component, by the identity chain, resolved once."""
     entries: dict[str, PartEntry] = {}
     for comp in model.components.values():
-        entry = None
-        if comp.mpn:
-            entry = find_facts(library, mpn=comp.mpn)
-        if entry is None and comp.lcsc_part:
-            entry = find_facts(library, lcsc=comp.lcsc_part)
+        entry, _matched = resolve_component_facts(library, comp)
         if entry is not None:
             entries[comp.designator] = entry
     return entries

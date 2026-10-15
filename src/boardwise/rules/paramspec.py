@@ -51,7 +51,7 @@ from __future__ import annotations
 
 from ..core.designintent import INTENT_MISSING, IntentSource, write_path
 from ..core.model import Component, DesignModel, is_ground_net
-from ..core.parts import PartEntry, designator_category, find_facts
+from ..core.parts import PartEntry, designator_category, resolve_component_facts
 from ..core.power_domains import (
     domain_of,
     infer_net_domains,
@@ -213,11 +213,7 @@ def independent_rail_price(
         if designator == subject:
             continue
         comp = model.components[designator]
-        entry = None
-        if comp.mpn:
-            entry = find_facts(library, mpn=comp.mpn)
-        if entry is None and comp.lcsc_part:
-            entry = find_facts(library, lcsc=comp.lcsc_part)
+        entry, _matched = resolve_component_facts(library, comp)
         if entry is None or entry.category != "ic.ldo":
             continue
         out_pin = ldo_output_pin(entry)

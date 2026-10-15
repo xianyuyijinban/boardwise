@@ -1302,6 +1302,9 @@ def find_facts(
     identity feeding rules that then cite the wrong datasheet. A part whose
     identity cannot be resolved exactly is the rules' UNKNOWN case, not a
     best guess (task 011b §2.4).
+
+    Two keys, no third: :func:`resolve_facts` is the *chain* that adds the
+    device-name fallback, and it is the one a board component goes through.
     """
     if mpn:
         for part in library.parts:
@@ -1312,6 +1315,82 @@ def find_facts(
             if part.lcsc and part.lcsc == lcsc:
                 return part
     return None
+
+
+#: What a board part's shelf identity was resolved by, strongest evidence
+#: first. Reported beside a resolution so a reading can say **why** it believes
+#: an entry is this part — a name hit is weaker evidence than an MPN hit and
+#: must not read the same in a report (task 186 §B).
+IDENTITY_MPN = "mpn"
+IDENTITY_LCSC = "lcsc"
+IDENTITY_NAME = "name"
+
+
+def resolve_facts(
+    library: PartLibrary,
+    *,
+    mpn: str | None = None,
+    lcsc: str | None = None,
+    name: str | None = None,
+) -> tuple[PartEntry | None, str]:
+    """One board part → ``(shelf entry, what matched)`` — the identity **chain**.
+
+    ``mpn`` → ``lcsc`` → ``name``, each an **exact** match
+    (:func:`find_facts`' discipline; the name step is that same function, asked
+    for the device name). The name step exists because a real board carries
+    parts whose only identity is the device name — measured on the board of
+    `.tmp_bug98b/实板A.epro2` (岳 2026-10-15 现场反馈): `U3` has an
+    empty MPN and an empty supplier, and its device name is the only thing that
+    says what it is. A datasheet read for exactly that part could not be
+    attached to it, so the facts never reached a rule (P2/P4).
+
+    ``name`` is consulted **last**, and the answer says which step matched
+    (:data:`IDENTITY_MPN` / :data:`IDENTITY_LCSC` / :data:`IDENTITY_NAME`, or
+    ``""`` when nothing did): "the shelf holds this MPN" and "the shelf holds a
+    part whose MPN happens to be what this board calls the device" are not the
+    same claim, and a report that could not tell them apart would be claiming
+    the stronger one.
+
+    Callers that only have an MPN/C-number should keep using
+    :func:`find_facts` — passing no ``name`` makes this function's answer
+    identical to it.
+    """
+    if mpn:
+        entry = find_facts(library, mpn=mpn)
+        if entry is not None:
+            return entry, IDENTITY_MPN
+    if lcsc:
+        entry = find_facts(library, lcsc=lcsc)
+        if entry is not None:
+            return entry, IDENTITY_LCSC
+    if name:
+        named = find_facts(library, mpn=name)
+        if named is not None:
+            return named, IDENTITY_NAME
+    return None, ""
+
+
+def resolve_component_facts(
+    library: PartLibrary | None, component: object
+) -> tuple[PartEntry | None, str]:
+    """:func:`resolve_facts` for a **board component** — the one call rule authors make.
+
+    Reads the three identity fields off whatever object the caller has (``mpn``,
+    ``lcsc_part``, ``props["device_name"]``), duck-typed rather than imported: the
+    same call has to work for a parsed schematic :class:`~boardwise.core.model.Component`
+    and for the live page's own item. One place spells the field names, so a
+    reader cannot forget the device-name step and quietly disagree with the rest
+    of the report about the same shelf.
+    """
+    if library is None:
+        return None, ""
+    props = getattr(component, "props", None) or {}
+    return resolve_facts(
+        library,
+        mpn=str(getattr(component, "mpn", "") or ""),
+        lcsc=str(getattr(component, "lcsc_part", "") or ""),
+        name=str(props.get("device_name") or ""),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1633,6 +1712,9 @@ __all__ = [
     "CATEGORY_VOCABULARY",
     "FACTS_KEYS",
     "IC_DESIGNATOR_CATEGORY",
+    "IDENTITY_LCSC",
+    "IDENTITY_MPN",
+    "IDENTITY_NAME",
     "category_of",
     "corrections_from_json",
     "designator_category",
@@ -1655,5 +1737,7 @@ __all__ = [
     "quantity_slug",
     "resistance_of_declared_field",
     "resistance_query",
+    "resolve_component_facts",
+    "resolve_facts",
     "save_parts",
 ]

@@ -87,7 +87,12 @@ from ...core.measure import (
     point_segment_distance,
 )
 from ...core.model import is_ground_net
-from ...core.parts import designator_category, find_facts, is_ic_designator, load_parts
+from ...core.parts import (
+    designator_category,
+    is_ic_designator,
+    load_parts,
+    resolve_component_facts,
+)
 from ...core.power_domains import infer_net_domains
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on
@@ -251,8 +256,9 @@ def device_facts(comp: object, library=None) -> DeviceFacts:
 
     The shelf is the **same** :func:`boardwise.rules.facts.default_library_path`
     every other facts-reading rule uses, resolved through
-    :func:`~boardwise.core.parts.find_facts` (exact match on MPN then C-number,
-    never a prefix match — #202's lesson). A missing shelf reaches
+    :func:`~boardwise.core.parts.resolve_component_facts` (the identity chain:
+    MPN, then C-number, then the device name — each exact, never a prefix match
+    — #202's lesson). A missing shelf reaches
     :func:`boardwise.core.parts.load_parts` as a path that does not resolve,
     which that function already reads as an empty shelf, so this degrades to
     「the category half is absent」 rather than raising.
@@ -267,11 +273,9 @@ def device_facts(comp: object, library=None) -> DeviceFacts:
             library = load_parts(default_library_path())
         except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
             library = None
-    entry = find_facts(
-        library,
-        mpn=str(getattr(comp, "mpn", "") or ""),
-        lcsc=str(getattr(comp, "lcsc_part", "") or ""),
-    ) if library is not None else None
+    entry = (
+        resolve_component_facts(library, comp)[0] if library is not None else None
+    )
     props = getattr(comp, "props", {}) or {}
     text = " ".join(
         str(getattr(comp, name, "") or "")

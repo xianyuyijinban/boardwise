@@ -132,7 +132,9 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 
 ② **分模块 + 手册闸**：手册闸的唯一未知项清单是 `needs_datasheet[]`（⓪ 的两源合一）——
 `unreviewed_parts[]` 是它的 **facts 触发子集**，保留原名不动，三通道状态
-（`channels.engineer/lcsc/official`）就在那些条目里。遇到不熟的器件**不许跳过、不许涂绿**——
+（`channels.engineer/lcsc/official`）就在那些条目里；`summary.unreviewedByClass` 再按
+**下一步动作**分两栏——「工具读不懂」（值不可知，再喂手册也没用，要补的是读法）与
+「真缺资料」（手册真缺，去要资料）。遇到不熟的器件**不许跳过、不许涂绿**——
 按通道取手册：工程师给的 PDF 放 `.tmp_datasheets/`
 （`boardwise parts fetch <mpn> --file <PDF>` 落进去）；立创通道 `parts fetch <mpn>`
 自动从库条目链接下载并提取候选事实；官网通道永远是你的活
@@ -143,6 +145,10 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 `summary.mayClaimPassed` 就是这道闸（**窄义**：只回答"有没有器件缺手册未审"——没别的意思）；
 **完整结论/总闸看 `completion.verdict`**（`needsDatasheet > 0` ⇒ `incomplete`，与
 `unreviewedParts > 0` 一样让它进不了 `complete`）。
+**喂 PDF ≠ 清闸**（186）：`parts fetch` 只写出 `facts_verified: false` 的候选；清闸是
+`boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`——你读完 PDF 把
+facts 写进货架（每条带出处页码），**由人核验并声明**才驱动规则。板上只有器件名、没有 MPN 的
+器件，货架条目按**器件名**也能被认出来（报告里标「按器件名匹配」，证据级别低于 MPN）。
 
 ③ **整图布局（审美开关，默认关）**：开关开着报告才有 `layout_review` 节（五轴：
 拓扑可辨/流向明确/文字可读/分组合理/网络标识规范），对着 `canvas_images[]` 逐轴打 1–5 分
@@ -349,9 +355,13 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   （每条事实带出处页码）；`parts add <mpn> --lcsc <C码>` 追加候选条目；`parts fetch <mpn>`
   取手册（`--file <PDF>` 工程师通道 / 库条目立创链接自动下载 / 都没有就打印官网查询词让你去
   WebSearch），候选事实提取是**窄**的（"引脚表+规格行"同文档才 join，Infineon 那类排版一条
-  提不出、如实不改库，全文留给你读）。**`facts_verified: false` 的候选事实不驱动任何规则**
-  （规则视同无 facts 报 UNKNOWN）——核验的物理形态 = xianyuyijinban审 git diff
-  后翻 true。细则见 `docs/parts.md`。
+  提不出、如实不改库，全文留给你读——**提取为空时命令会直说，并给出人工路径**）。
+  **`facts_verified: false` 的候选事实不驱动任何规则**（规则视同无 facts 报 UNKNOWN）——
+  **给 PDF ≠ 清闸**。清闸 = 货架条目带**已核验 facts**：
+  `boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`（AI 读完 PDF 写
+  facts JSON 走这条；同一命令对货架上已有的候选条目**原地补 facts**，不加 `--verified` 就只
+  是候选）。板上的器件若**没有 MPN、只有器件名**，身份链按 `MPN → C码 → 器件名` 兜底匹配
+  （186；命中在报告里标「按器件名匹配」，证据级别低于 MPN）。细则见 `docs/parts.md`。
 - **无电压电源网问答（065 `intent` 工具链，纯离线）**：`boardwise intent audit --file <导出.epro2>`
   列待问清单（settled 段点名已答出处），`boardwise intent set-rail <网名> --voltage <值> --file <合同>`
   把答案落进 DesignIntent 合同。**这是 3.1b 架构走查的一步，不是可选命令**——口径、退出码与

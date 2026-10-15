@@ -120,7 +120,7 @@ from dataclasses import dataclass, field
 from ..base import Finding, FindingTarget
 from ...core.geometry import BoardGeometry
 from ...core.measure import pad_edge_distance
-from ...core.parts import find_facts, load_parts
+from ...core.parts import load_parts, resolve_component_facts
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on, same_net_capacitors_on
 from ..facts import default_library_path
@@ -292,23 +292,20 @@ def series_equivalent_load(farads: float) -> float:
 def _load_capacitance_spec(component: object, library) -> tuple[str, str]:
     """``(spec text, basis)`` for the crystal's declared load capacitance.
 
-    Read from the shelf's ``Load Capacitance`` **param** of the exact-matched
-    entry (:func:`boardwise.core.parts.find_facts`, exact MPN then LCSC — #202's
-    lesson), never from the MPN's size code and never from the board's fitted
-    capacitors. The two are different quantities and confusing them is the
-    mistake the three-column row exists to prevent.
+    Read from the shelf's ``Load Capacitance`` **param** of the entry the
+    identity chain resolves (:func:`boardwise.core.parts.resolve_component_facts`
+    — MPN, then C-number, then device name, each exact — #202's lesson), never
+    from the MPN's size code and never from the board's fitted capacitors. The
+    two are different quantities and confusing them is the mistake the
+    three-column row exists to prevent.
 
     Returns ``("", reason)`` when the shelf has no entry or the entry states no
     such param — an honest 「no spec on the shelf」, not a substituted value.
     """
-    entry = find_facts(
-        library,
-        mpn=str(getattr(component, "mpn", "") or ""),
-        lcsc=str(getattr(component, "lcsc_part", "") or ""),
-    )
+    entry, _matched = resolve_component_facts(library, component)
     if entry is None:
         return "", (
-            "no shelf entry for this crystal (exact MPN then LCSC both "
+            "no shelf entry for this crystal (MPN, C-number and device name all "
             "unmatched), so no 规格 CL is stated"
         )
     params = getattr(entry, "params", None) or {}
@@ -355,8 +352,8 @@ def _mcu_oscillators(
     """Every ``ic.mcu`` part, per board, with its oscillator pins read.
 
     The shelf is read once through :func:`boardwise.core.parts.load_parts` /
-    :func:`~boardwise.core.parts.find_facts` — the same exact-match lookup
-    131b and 131c use, asked directly so the category this rule's evidence
+    :func:`~boardwise.core.parts.resolve_component_facts` — the same identity
+    chain 131b and 131c use, asked directly so the category this rule's evidence
     quotes is the one the shelf states.
 
     ``schematic`` is this document's own schematic page (164b), carried on the
@@ -368,11 +365,7 @@ def _mcu_oscillators(
     components = getattr(model, "components", {}) or {}
     for designator in sorted(components):
         component = components[designator]
-        entry = find_facts(
-            library,
-            mpn=str(getattr(component, "mpn", "") or ""),
-            lcsc=str(getattr(component, "lcsc_part", "") or ""),
-        )
+        entry, _matched = resolve_component_facts(library, component)
         category = (entry.category or "") if entry is not None else ""
         if category not in MCU_CATEGORIES:
             continue

@@ -53,3 +53,10 @@ outputs/
 # `harvest_parts.py --check` and the source-reading tests work as before, and
 # neither this rule nor `tools/check_repo_hygiene.py` has anything to report.
 blocklib/sources/
+
+# The sensitive-word list (186 §D): one word per line, read by
+# `tools/check_repo_hygiene.py`'s second gate. It is the *owner's* list of names
+# that must not appear in this repository, so the file itself never enters it —
+# with the file present on your machine the gate scans every tracked file for
+# those words; without it (every clone, every CI run) the gate is off.
+.sensitive-words

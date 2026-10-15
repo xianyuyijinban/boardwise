@@ -130,7 +130,7 @@ from ...core.measure import (
     track_width_stats,
     vias_in_region,
 )
-from ...core.parts import find_facts, load_parts
+from ...core.parts import load_parts, resolve_component_facts
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on
 from ..facts import default_library_path
@@ -302,17 +302,14 @@ def gate_nets_of(board: BoardGeometry) -> list[str]:
 def _category_of(component: object, library) -> str:
     """The shelf category of one part, or ``""`` when the shelf says nothing.
 
-    Read through :func:`boardwise.core.parts.find_facts` (exact MPN then LCSC,
-    #202's lesson) so the category quoted in a row is the one the shelf states
+    Read through :func:`boardwise.core.parts.resolve_component_facts` (the
+    identity chain: MPN, then C-number, then device name — each exact, #202's
+    lesson) so the category quoted in a row is the one the shelf states
     rather than one inferred from a prefix.
     """
     if component is None:
         return ""
-    entry = find_facts(
-        library,
-        mpn=str(getattr(component, "mpn", "") or ""),
-        lcsc=str(getattr(component, "lcsc_part", "") or ""),
-    )
+    entry, _matched = resolve_component_facts(library, component)
     return (entry.category or "") if entry is not None else ""
 
 
