@@ -57,6 +57,8 @@ from .enet import NetlistShapeError, optional_object, shape_of
 
 from ..core.geometry import (
     ARTWORK_LAYER_TYPES,
+    FRAGMENT_KIND_EXTRA_RECORDS,
+    FRAGMENT_KIND_STROKE_PIECE,
     MULTI_LAYER_ID,
     MULTI_LAYER_TYPES,
     BoardGeometry,
@@ -462,10 +464,62 @@ def _is_simple_ring(points: Sequence[Point]) -> bool:
     return True
 
 
+def _is_board_shaped_ring(ring: Sequence[Point]) -> bool:
+    """Is ``ring`` a board-shaped ring, or a degenerate loop? (187A H1)
+
+    A ring a stitch produced is **not yet** a board, and this is the invariant
+    the two stitching paths of :func:`_stitch_outline` now share. Three ways a
+    loop stops being a shape, all of them measured on the 183 audit's probes
+    (``C:\\Users\\xiangyu\\.tmp_hole183\\``, probe3 / probe11):
+
+    * **zero area** — three stroked pieces whose centre lines run
+      ``(0,0) -> (2000,0) -> (1000,0)``: the line goes out and comes back, the
+      closure is real (every endpoint meets) and the several-crossing test of
+      :func:`_is_simple_ring` sees nothing, so before this check the ring was
+      ``stitched=True`` with area exactly 0 — and *every* part on the board was
+      then outside it. That is the 98-row bug98 storm arriving through the new
+      stitch;
+    * **a flat axis** — the ring's bbox is a line in x or y. The same statement
+      measured the other way, and it also catches a ring whose area cancels
+      without any single axis collapsing;
+    * **a repeated vertex** — an edge of zero length is not a drawn edge. The
+      comparison is **exact**: the 1-mil weld tolerance absorbs a sub-mil
+      mislocation when it drops the shared vertex, so a ring that still carries
+      one literally has the same point written twice, and no real frame does.
+
+    Fewer than three vertices answer ``False`` as well: two points are a doubled
+    line, not a ring. The invariant is deliberately *shape* only — it asks
+    nothing about size, curvature or board-ness, because those are the rule
+    layer's questions (:data:`boardwise.rules.pcb.distance.MIN_OUTLINE_CORNERS`
+    and the report's own disclosure).
+    """
+    count = len(ring)
+    if count < 3:
+        return False
+    area = 0.0
+    min_x = max_x = ring[0].x
+    min_y = max_y = ring[0].y
+    for index in range(count):
+        point = ring[index]
+        following = ring[(index + 1) % count]
+        if point.x == following.x and point.y == following.y:
+            return False
+        area += point.x * following.y - following.x * point.y
+        min_x = min(min_x, point.x)
+        max_x = max(max_x, point.x)
+        min_y = min(min_y, point.y)
+        max_y = max(max_y, point.y)
+    if area == 0.0:  # twice the shoelace sum; the sign is the ring's winding
+        return False
+    return max_x > min_x and max_y > min_y
+
+
 def _longest_closed_chain(
-    polylines: list[list[Point]], tolerance: float
-) -> tuple[list[Point], int] | None:
-    """``(ring, records used)`` of the longest closed chain, or ``None``.
+    polylines: list[list[Point]],
+    tolerance: float,
+    weld_floor: float = 1e-6,
+) -> tuple[list[Point], int, int] | None:
+    """``(ring, records used, welds)`` of the longest closed chain, or ``None``.
 
     A greedy walk from every polyline in turn: at each step any so-far-unused
     polyline whose **either** end meets the chain's **either** end is welded on
@@ -480,9 +534,13 @@ def _longest_closed_chain(
     (:func:`_is_simple_ring`): the weld that produces one is the tolerance
     joining two distinct frames, and a figure-eight is nobody's board.
     A ring whose welds are not all vertex-exact is still returned, but its
-    non-exact weld count rides along (the ``tolerance_welds`` third element):
+    non-exact weld count rides along (the ``welds`` third element):
     a 0.5-mil panel gap welds into a vertex-pinched ring that no crossing test
     can see, so the honest answer is to *say* the ring was welded across gaps.
+    ``weld_floor`` is the gap below which a join does not count as one — 187A M3
+    raises it for the **stroke-stitched** frame, whose joins are inexact by
+    construction (see :data:`OUTLINE_CAPSULE_WELD_FLOOR_MIL`); the caller
+    otherwise keeps the file's own arithmetic floor.
     """
     best: list[Point] | None = None
     best_used = 0
@@ -514,7 +572,7 @@ def _longest_closed_chain(
                     chain = list(reversed(piece))[:-1] + chain
                 else:
                     continue
-                if gap > 1e-6:  # 逐字相等不算焊缝；错开 0.5 mil 算
+                if gap > weld_floor:  # 逐字相等不算焊缝；错开 0.5 mil 算
                     welds += 1
                 used.add(index)
                 joined = True
@@ -576,6 +634,18 @@ OUTLINE_CAPSULE_MIN_STEP_MIL = 0.001
 #: -0.5 is the looser of the two and still refuses a turn of under 120 degrees,
 #: which no end of a stroked piece is).
 OUTLINE_CAPSULE_REVERSAL_DOT = -0.5
+
+#: 187A M3: how wide a capsule-frame join must be before it is a **weld** rather
+#: than the reading's own arithmetic. A centre-line end is the midpoint of a
+#: round cap, so two pieces of one drawn frame meet a hair apart rather than
+#: exactly: measured on the field board's 16 joins, the closest pair is off by
+#: 0.001 mil and the farthest by 0.011. Counting those — which is what the
+#: stitch does for the open-polylines path — would report a 16-piece board as 15
+#: welding hazards, so the capsule path counts nothing below this floor. 0.05 mil
+#: is five times the largest measured seam and two orders below the 4-mil pour
+#: clearance the same reader has to resolve; above it the two pieces were drawn
+#: apart and the ring was welded across a gap, which is a human's call.
+OUTLINE_CAPSULE_WELD_FLOOR_MIL = 0.05
 
 
 def _capsule_centerline(
@@ -826,15 +896,17 @@ def _capsule_point_at(
 def _capsule_frame(
     rings: Sequence[tuple[Sequence[Point], float]],
     tolerance: float = OUTLINE_STITCH_TOLERANCE_MIL,
-) -> list[Point] | None:
-    """The frame that stroked-outline pieces trace, or ``None``.
+) -> tuple[list[Point], int] | None:
+    """``(frame, welds)`` that stroked-outline pieces trace, or ``None``.
 
     ``rings`` are the **closed** ``BOARD_OUTLINE`` records with their widths and
     their **arc-expanded** vertices (:func:`_ring_points`); the answer is the
-    ring their centre lines join into. Four things must all hold, and any
-    failure is ``None`` — the caller keeps bug98-A's reading and says so
-    (bug98-B's guardrail then stops the off-board rule measuring against a piece
-    of a frame):
+    ring their centre lines join into, together with how many of its joins were
+    welded across a gap wider than :data:`OUTLINE_CAPSULE_WELD_FLOOR_MIL` (187A
+    M3: the reading's own sub-thousandth seams are not welds — see that
+    constant). Four things must all hold, and any failure is ``None`` — the
+    caller keeps bug98-A's reading and says so (bug98-B's guardrail then stops
+    the off-board rule measuring against a piece of a frame):
 
     * **every** ring reads as a stroke (:func:`_capsule_centerline`);
     * welding the centre lines' ends consumes **every** piece and leaves a
@@ -857,10 +929,10 @@ def _capsule_frame(
     if len(lines) < 2:
         return None
     widths = [width for _points, width in rings if width and width > 0]
-    stitched = _longest_closed_chain(lines, tolerance)
+    stitched = _longest_closed_chain(lines, tolerance, OUTLINE_CAPSULE_WELD_FLOOR_MIL)
     if stitched is None:
         return None
-    ring, used, _welds = stitched
+    ring, used, welds = stitched
     if used != len(lines) or not _is_simple_ring(ring):
         return None
     slack = 2.0 * max(widths) if widths else None
@@ -882,7 +954,7 @@ def _capsule_frame(
             abs(line_box[index] - drawn[index]) > slack for index in range(4)
         ):
             return None  # the centre line is not the board the pieces were drawn on
-    return ring
+    return ring, welds
 
 
 def _capsule_note(
@@ -893,9 +965,12 @@ def _capsule_note(
     The parser's own disclosure, carried on :attr:`BoardOutline.note` and
     printed verbatim by the report — the same job the ``outlineNote`` lines do
     for the readings that *failed*. It names the stroke width because that is
-    the number the centre line was inferred from, and it says that every record
-    went in, because 「全都用上了」 is exactly what the field report could not
-    say before bug98-B.
+    the number the centre line was inferred from, and it says how many records
+    went into the ring, because 「全都用上了」 is exactly what the field report
+    could not say before bug98-B. ``count`` is the number of records that really
+    went in — **not** how many ``BOARD_OUTLINE`` records the document carried
+    (187A M1): a record that was refused before the reading started is not part
+    of this sentence, it is part of ``fragments``.
     """
     widths = sorted({width for _points, width in rings if width and width > 0})
     spelled = "/".join(f"{width:g}" for width in widths) if widths else "未声明"
@@ -939,6 +1014,15 @@ def _stitch_outline(
     loose open ends, losing closed loops — is counted here so the report layer
     can say so.
 
+    Two gaps in that counting are 187A's (M1), and closing them is one
+    statement: **``fragments`` is ``len(segments)`` minus the records the answer
+    actually used**, on every path — the capsule path used to return a
+    hard-coded ``0`` (true only while every record in the document went into the
+    frame: a document carrying one extra ``BOARD_OUTLINE`` record read as
+    「all of them are in the ring」, note and all), and a record that is *closed*
+    but carries fewer than three points was **dropped in silence** between the
+    two readings, in nobody's arithmetic at all.
+
     ``source_id`` names the first record of the outline in file order, which for
     a stitched ring is its opening segment; ``segments`` says how many records
     the ring was built from, so a reader that needs the exact set can still see
@@ -966,6 +1050,17 @@ def _stitch_outline(
     (which for a document with no ``ARC`` commands is the same thing), and no
     width only costs the sanity check's scale.
 
+    **187A: a ring has to be a shape.** Both stitching paths (the capsule frame
+    and bug98-A's open-polylines chain) now hand their result to
+    :func:`_is_board_shaped_ring` before returning it. A ring that closes but has
+    zero area — a line drawn out and back, the 183 audit's probe3 — or a flat
+    axis, or a repeated vertex, is **not** a board: the answer is
+    ``(None, len(segments))``, the same 「板框没读出」 disclosure a chain that
+    never closed gets, and never ``stitched=True``. Without that check the
+    degenerate ring measured every part on the board as hanging off it — the
+    bug98 storm, reproduced through the *new* reading (probe3 and probe11 are
+    both this shape, one per path).
+
     The returned :class:`BoardOutline` carries the disclosure of *how* it was
     read: ``stitched`` is True when the ring was assembled by welding record
     ends (the capsule frame, or bug98-A's open-polylines stitch), **False** when
@@ -973,6 +1068,24 @@ def _stitch_outline(
     fallback that hands a piece of a frame to the off-board rule, which is what
     ``pcb-component-off-board`` refuses to measure against (bug98-B guardrail) —
     and ``None`` for a single record, where the question does not arise.
+
+    That ``False`` is not by itself evidence of a fragment, and 187A (M2) puts
+    what the winning ring **is** beside it on
+    :attr:`BoardOutline.fragment_kind`, because the two fallback shapes want
+    opposite answers:
+
+    * the ring in hand **reads as a stroke** (:func:`_capsule_centerline` on the
+      record's own arc-expanded ring) — it is a *piece* of a frame drawn as a
+      line, the bug98-B shape, and measuring parts against it is the storm the
+      guardrail exists for: ``"stroke_piece"``;
+    * the ring in hand is a **drawn outline** and the records beside it are
+      other closed loops — an inner slot, a second panel (bug98-A's own
+      ``max(perimeter)`` reading, unchanged): ``"extra_records"``. The frame is
+      whole, so the off-board rule runs; the leftovers are disclosed.
+
+    A stitched ring never carries a kind: ``fragments`` may be positive there
+    (the merged frame plus a stray record) and the rule runs on a frame it can
+    trust, which is bug98-A's 「照跑」 case.
     """
     if not segments:
         return None, 0
@@ -1001,6 +1114,12 @@ def _stitch_outline(
         if is_rectangle or _is_closed_ring(points, tolerance):
             if len(points) >= 3:
                 closed.append((list(points), width, drawn))
+            # else (187A M1): the record says "closed" — the ``R`` form, or a
+            # polyline that returns to its start — but carries fewer than three
+            # points, so there is no ring to read a centre line off. It stays out
+            # of ``closed``, and that is what makes the count below
+            # ``len(segments) - len(closed)``: it used to be dropped here in
+            # silence, and the report then said every record went in.
         else:
             open_polylines.append(list(points))
     # bug98-B: all of the records are closed rings and none is open — the shape
@@ -1014,8 +1133,15 @@ def _stitch_outline(
     # record's own vertices, bug98-A's reading byte for byte).
     if closed and not open_polylines:
         strokes = [(drawn, width) for _points, width, drawn in closed]
-        frame = _capsule_frame(strokes, tolerance)
-        if frame is not None:
+        framed = _capsule_frame(strokes, tolerance)
+        if framed is not None:
+            frame, welds = framed
+            if not _is_board_shaped_ring(frame):
+                # 187A H1: the centre lines joined — and into a degenerate loop
+                # (zero area, a flat axis, a repeated vertex). Not a board, and
+                # passing it on would measure every part on the document against
+                # a line: the bug98 storm from the new reading's side.
+                return None, len(segments)
             return (
                 BoardOutline(
                     points=frame,
@@ -1023,22 +1149,43 @@ def _stitch_outline(
                     segments=len(segments),
                     closed=True,
                     stitched=True,
-                    note=_capsule_note(strokes, len(segments)),
+                    tolerance_welds=welds,
+                    note=_capsule_note(strokes, len(closed)),
                 ),
-                0,
+                # 187A M1: only the records that went into the ring were used.
+                len(segments) - len(closed),
             )
-    closed_rings = [points for points, _width, _drawn in closed]
+    candidates: list[tuple[list[Point], list[Point] | None]] = [
+        (points, drawn) for points, _width, drawn in closed
+    ]
     stitched = _longest_closed_chain(open_polylines, tolerance) if open_polylines else None
     stitched_used = 0
     stitched_welds = 0
     if stitched is not None:
         stitched_ring, stitched_used, stitched_welds = stitched
-        closed_rings.append(stitched_ring)
-    if not closed_rings:
+        candidates.append((stitched_ring, None))
+    if not candidates:
         return None, len(segments)
-    longest = max(closed_rings, key=_perimeter)
+    longest, winner_drawn = max(candidates, key=lambda item: _perimeter(item[0]))
     joined = stitched is not None and longest is stitched_ring
+    if joined and not _is_board_shaped_ring(longest):
+        # 187A H1, bug98-A's path: open records that chain into a collinear /
+        # zero-area loop (probe11's first case) are a failed read, not a frame.
+        return None, len(segments)
     welds = stitched_welds if joined else 0
+    used = stitched_used if joined else 1
+    fragment_kind = None
+    if not joined:
+        # 187A M2: the ring in hand is one record's own ring, and whether it is
+        # a *piece* is a question about the record — asked of the record's own
+        # arc-expanded outline (the same reading the capsule path would have
+        # made of it), never of a note string.
+        shape = winner_drawn if winner_drawn is not None else longest
+        fragment_kind = (
+            FRAGMENT_KIND_STROKE_PIECE
+            if _capsule_centerline(shape, tolerance) is not None
+            else FRAGMENT_KIND_EXTRA_RECORDS
+        )
     return (
         BoardOutline(
             points=longest,
@@ -1047,8 +1194,9 @@ def _stitch_outline(
             closed=True,
             stitched=joined,
             tolerance_welds=welds,
+            fragment_kind=fragment_kind,
         ),
-        len(segments) - (stitched_used if joined else 1),
+        len(segments) - used,
     )
 
 

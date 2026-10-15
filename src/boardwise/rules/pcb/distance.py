@@ -78,7 +78,12 @@ import re
 from dataclasses import dataclass
 
 from ..base import Finding, FindingTarget
-from ...core.geometry import BBox, BoardGeometry, Point
+from ...core.geometry import (
+    FRAGMENT_KIND_STROKE_PIECE,
+    BBox,
+    BoardGeometry,
+    Point,
+)
 from ...core.measure import (
     component_distance,
     pad_corners,
@@ -999,12 +1004,19 @@ class BoardOffEdge(PcbRule):
 
     **A frame that is a *piece* of one is not a frame either (bug98-B)**, and
     that case is loud rather than silent: when the parser's stitching fails and
-    it falls back to one record's own closed ring
-    (:attr:`BoardOutline.stitched` is ``False``) while other ``BOARD_OUTLINE``
-    records are left out (``outline_fragments > 0``), the ring in hand is a
-    fragment — the field board's case exactly — and this rule files **one WARN**
-    naming the counts instead of an ERROR per part. See
-    :meth:`BoardOffEdge._frame_is_a_piece`.
+    it falls back to one record's own closed ring while other ``BOARD_OUTLINE``
+    records are left out, the ring in hand is a fragment — the field board's
+    case exactly — and this rule files **one WARN** naming the counts instead of
+    an ERROR per part. See :meth:`BoardOffEdge._frame_is_a_piece`.
+
+    **But 「多段只认一环」 is not by itself 「碎片」 (187A M2).** That same
+    fallback also produces a *complete* frame: bug98-A's ``max(perimeter)``
+    reading on a plain frame with an inner slot or a second panel beside it
+    picks the whole frame and leaves the extra closed loop out, and suppressing
+    the check there swallowed a real ERROR with it (measured: outer ring +
+    inner slot + a part 220 mil off the board → one WARN, no ERROR). The
+    discriminator is the parser's own reading of the ring it kept
+    (:attr:`BoardOutline.fragment_kind`), not the fallback alone.
     """
 
     id = "pcb-component-off-board"
@@ -1028,9 +1040,24 @@ class BoardOffEdge(PcbRule):
         §6.2): a frame that arrives as several records and comes out of the
         parser as **one record's own closed ring** is a *piece* of a frame, and
         measuring parts against a piece is the bug bug98 exists to remove. The
-        parser says so on :attr:`BoardOutline.stitched` (False) and states how
-        many records were left out on
+        parser states that reading on :attr:`BoardOutline.fragment_kind` — it is
+        ``"stroke_piece"`` when the ring in hand reads as a stroke's centre
+        line, i.e. the record is one piece of a frame the editor drew as a
+        **line** — and states how many records were left out on
         :attr:`~boardwise.core.geometry.BoardGeometry.outline_fragments`.
+
+        **187A M2 收窄：只有那一档才抑制。** The fallback ``stitched`` is
+        ``False`` describes two opposite shapes, and until this batch the rule
+        read the fallback as the verdict:
+
+        * ring reads as a stroke → *piece* of a drawn frame → suppress (as
+          before);
+        * ring is a drawn outline with extra closed loops beside it (an inner
+          slot, a panel) → the winner is the **whole** frame, bug98-A's
+          ``max(perimeter)`` reading untouched → run, and let the report's
+          ``outlineNote`` disclose the leftover records. Suppressing here threw
+          away real per-part findings with the false ones (measured: a part
+          220 mil off the board came back as 「检查已抑制」).
 
         It must be a WARN and not a silence. 「did not run」 is a gap in the
         report, and this one is actionable — the frame is there, the pieces just
@@ -1040,18 +1067,23 @@ class BoardOffEdge(PcbRule):
         98 rows this replaced were the symptom.
 
         A single-record board is untouched (``stitched`` is None: the question
-        does not arise, and a board whose own ring is closed is a board). A ring
-        that *was* assembled from every record is untouched too — including the
-        bug98-A case of a stitched frame with a loose segment beside it, where
-        ``stitched`` is True and the loose piece is disclosed on the report's
-        ``outlineNote`` rather than suppressing the check.
+        does not arise, and a board whose own ring is closed is a board), an
+        outline built without the new field is untouched (no evidence, so the
+        check runs — see :attr:`BoardOutline.fragment_kind`), and a ring that
+        *was* assembled by stitching is untouched — including the bug98-A case
+        of a stitched frame with a loose segment beside it, where ``stitched`` is
+        True and the loose piece is disclosed on the report's ``outlineNote``
+        rather than suppressing the check.
         """
         outline = board.outline
         if outline is None or outline.stitched is not False:
             return None
-        fragments = int(getattr(board, "outline_fragments", 0) or 0)
-        if fragments <= 0:
+        if getattr(outline, "fragment_kind", None) != FRAGMENT_KIND_STROKE_PIECE:
             return None
+        # No ``fragments > 0`` guard here (187A L2: it was unreachable — the
+        # parser writes the stroke kind only where records were left out). The
+        # count is read for the row instead, and it is ≥ 1 by that contract.
+        fragments = int(getattr(board, "outline_fragments", 0) or 0)
         return Finding(
             rule_id=self.id,
             severity="WARN",
@@ -1064,9 +1096,11 @@ class BoardOffEdge(PcbRule):
             ),
             evidence=[
                 f"板框记录 {outline.segments} 段：{len(outline.points)} 角点的一环被采用，"
-                f"{fragments} 段未入环（板框是碎片，不是整板）",
+                f"{fragments} 段未入环（采用的那一环读出来是**描边**，"
+                "是画成一条线的板框的一段，不是整板）",
                 "判据：「器件出板框」需要一个**整板**板框才成立；"
-                "板框多段且拼不出整环时，逐器件判定一律不成立（bug98-B 护栏）",
+                "拿到手的一环读成描边（板框是一条线的一段）时，逐器件判定一律不成立"
+                "（bug98-B 护栏，187A 收窄到「描边碎片」这一档）",
             ],
         )
 

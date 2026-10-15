@@ -51,6 +51,8 @@ __all__ = [
     "PourShape",
     "ProhibitRegion",
     "BoardOutline",
+    "FRAGMENT_KIND_STROKE_PIECE",
+    "FRAGMENT_KIND_EXTRA_RECORDS",
     "NetGeometry",
     "ParseStats",
     "BoardGeometry",
@@ -890,6 +892,19 @@ class ProhibitRegion:
         return BBox.from_points(self.points)
 
 
+#: :attr:`BoardOutline.fragment_kind`: the ring in hand reads as a **stroke**'s
+#: centre line (:func:`boardwise.parsers.epru._capsule_centerline`), so it is one
+#: *piece* of a frame the editor drew as a line — the bug98-B field shape. The
+#: off-board rule refuses to measure parts against a piece (187A M2).
+FRAGMENT_KIND_STROKE_PIECE = "stroke_piece"
+
+#: :attr:`BoardOutline.fragment_kind`: the ring in hand is a **drawn outline** and
+#: the records left out of it are other closed loops — an inner slot, a second
+#: panel. That is bug98-A's ``max(perimeter)`` reading unchanged: the frame is
+#: whole and the rule runs against it, with the leftovers disclosed (187A M2).
+FRAGMENT_KIND_EXTRA_RECORDS = "extra_records"
+
+
 @dataclass
 class BoardOutline:
     """The board outline (``POLY`` records with ``polyType`` ``BOARD_OUTLINE``).
@@ -929,20 +944,33 @@ class BoardOutline:
     be a board must say ``closed=True``.
 
     ``stitched`` and ``note`` (bug98-B) carry the one reading ``segments`` and
-    ``closed`` cannot express: whether the ring **is** the frame or is a piece
-    of one. A frame drawn as a line arrives as one closed ring per piece
+    ``closed`` cannot express: whether the ring **is** the frame or could be a
+    piece of one. A frame drawn as a line arrives as one closed ring per piece
     (bug98-B's field board: 16 of them, every one closed, each the outline of a
     stroked **arc** or line), and when the pieces cannot be joined the parser
     falls back to bug98-A's ``max(perimeter)`` — the ring of one piece,
     ``closed=True`` and indistinguishable from a board by
-    ``segments``/``closed`` alone. ``stitched`` says which happened: True for a
-    ring assembled by welding record ends (the pieces' **centre lines**, which is
-    the frame a drawn line traces, or bug98-A's open-polylines stitch), **False**
-    for a frame that is one record's own closed ring chosen out of several, and
-    None for a single record, where the question does not arise. False is what
-    ``pcb-component-off-board`` consumes: a piece of a frame is not evidence
-    that a part hangs off the board, so that rule suppresses its per-part ERRORs
-    and files one WARN instead.
+    ``segments``/``closed`` alone. ``stitched`` says which of those two
+    happened: True when ``points`` is a **stitched product** — a ring assembled
+    by welding record ends (the pieces' **centre lines**, which is the frame a
+    drawn line traces, or bug98-A's open-polylines stitch; leftover records may
+    still be disclosed on ``fragments``/``fragment_kind``) — **False** when it
+    is one record's own closed ring chosen out of several, and None for a single
+    record, where the question does not arise.
+
+    ``stitched`` False is **not** by itself a verdict about the ring, and 187A
+    (M2) states what the ring is beside it on ``fragment_kind``. False reaches
+    ``pcb-component-off-board`` as evidence only for one of the two shapes it
+    covers:
+
+    * the ring in hand reads as a **stroke**'s centre line — it is a *piece* of
+      a frame drawn as a line (the bug98-B shape), and measuring parts against a
+      piece is the storm bug98 exists to remove → ``"stroke_piece"``, and the
+      rule suppresses its per-part ERRORs and files one WARN instead;
+    * the ring in hand is a **drawn outline** with other closed loops beside it
+      — an inner slot, a second panel, which is bug98-A's ``max(perimeter)``
+      reading unchanged → ``"extra_records"``, the frame is whole, and the rule
+      runs against it and files its per-part findings.
 
     ``note`` is the parser's own sentence for the same occasion and is printed
     verbatim by the report — 「16 段描边板框按描边中心线拼合成一个闭环」 and the
@@ -962,16 +990,28 @@ class BoardOutline:
     #: shared corner sits 0.5 mil apart into one pinched ring no crossing test
     #: can see — the honest answer is to count the inexact joins and let the
     #: report say so. 0 for a single record and for an exactly-joined ring.
-    #: **0 as well for a stroke-stitched ring** (bug98-B): every join of a
-    #: capsule frame is inexact *by construction* (the join is the centroid of
-    #: a cap, not a shared vertex), so counting them would report a 16-piece
-    #: board as 15 welding hazards; ``note`` says how that ring was assembled
-    #: instead.
+    #: For a **stroke-stitched** ring (bug98-B) the floor is different, not
+    #: absent (187A M3): a centre-line join is inexact *by construction* (it is
+    #: the midpoint of a cap, not a shared vertex — measured 0.001..0.011 mil on
+    #: the field board's 16 joins), so those seams are not welds, while a join
+    #: wider than
+    #: :data:`boardwise.parsers.epru.OUTLINE_CAPSULE_WELD_FLOOR_MIL` really is a
+    #: piece the editor drew apart and is counted here.
     tolerance_welds: int = 0
-    #: Whether **every** record was welded into ``points`` (bug98-B). See the
-    #: class docstring: True (stitched), False (one record's own ring chosen
-    #: among several — a piece of a frame), None (single record; not applicable).
+    #: Whether ``points`` is a **stitched product** rather than one record's own
+    #: ring (bug98-B). See the class docstring: True (welded together — the
+    #: capsule frame or bug98-A's open-polylines stitch), False (one record's own
+    #: closed ring chosen among several — a fragment until ``fragment_kind``
+    #: says what kind), None (single record; not applicable).
     stitched: bool | None = None
+    #: What the records left out of ``points`` were (187A M2), or ``None`` when
+    #: ``points`` is not a single record's ring among several. One of
+    #: :data:`FRAGMENT_KIND_STROKE_PIECE` (the ring reads as a stroke — a piece
+    #: of a frame drawn as a line) or :data:`FRAGMENT_KIND_EXTRA_RECORDS` (the
+    #: ring is a drawn outline with extra closed loops beside it). Written only
+    #: where the question exists, so a hand-built or decoded ``BoardOutline``
+    #: answers ``None`` and the off-board rule runs.
+    fragment_kind: str | None = None
     #: The parser's own sentence about a reading ``segments``/``closed`` cannot
     #: spell out (bug98-B), printed verbatim by the report's ``outlineNote``.
     #: Empty for every reading the fields above already describe.

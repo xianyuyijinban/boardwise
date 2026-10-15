@@ -364,7 +364,9 @@ Ordinary polygon (105 of 106 in the PCB document):
   **[confirmed on this fixture]** 一处一个的假设已被证伪（bug98）：圆角矩形
   板框会被编辑器拆成**多段**独立记录（现场板 16 段），解析层按端点拼合成环
   （`_stitch_outline`），拼不出则 `outline_fragments` 显性计数。
-  **[updated 2026-10-13]**
+  拼出来的环还要过**形状不变量**（面积非零、bbox 两轴非零、无重复顶点，
+  `_is_board_shaped_ring`）：闭合但退化的环（出去再原路折回）同样落
+  `outline=None` + `outline_fragments`，不当板框。 **[updated 2026-10-16]**
 - The `NORMAL` polygons on this board mostly have an empty `netName` and sit on
   layers such as 6 (bottom solder mask), so they are **not all copper** — some
   are mask openings / keep-out style shapes. **[inferred]**
