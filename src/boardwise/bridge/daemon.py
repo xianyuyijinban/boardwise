@@ -1802,6 +1802,14 @@ class BridgeDaemon:
             "role": connection.role,
             "protocol": PROTOCOL_VERSION,
             "serverTime": time.time(),
+            # The daemon's own version (187c), the same field `ping` carries and
+            # for the same reason: a caller must be able to tell the daemon that
+            # is *answering* from the one it was built from. `ping` alone made
+            # that a second round trip, and a caller that never takes it (every
+            # command that is not `status`) went on talking to a daemon whose
+            # action catalogue is a load-time constant. Present here, read by
+            # `bridge.client` on the handshake every command already performs.
+            "version": BOARDWISE_VERSION,
             # What the daemon has on file for this connector, so the editor can
             # show the same fingerprint in `About…` that `bridge status` shows.
             # A fingerprint and not the token: this frame is logged, and the

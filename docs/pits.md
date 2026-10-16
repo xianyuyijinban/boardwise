@@ -11,7 +11,7 @@
 | 5 | **保存是异步落盘**：`save` 回 `{saved:true}` 不等于已落盘（结构层 updateTime 刷新 + mtime 跳变有延迟） | 说"已保存"要有第二证据：结构层刷新 / 关闭重开回读 / 导出 #2 复查 |
 | 6 | `export.screenshot`（`bridge screenshot`）在 3.2.186 上返回**缓存空帧** | 截图证据用 `export.render`，或系统截图工具（Win+Shift+S）。出处 `docs/getting-started.md:197`、013 报告 |
 | 7 | `review.mark` 的 `clear` **没有 page 守卫**；`markers:false`／宿主无 marker API／画布拒绝 → 降级成 `mode:'list'` 跳转清单（**这是契约，不是错误路径**） | 清标记前先确认焦点；别把降级当成失败 |
-| 8 | **动作表是 daemon 加载期常量** | 改过代码/换过版本必须重启 daemon，否则明明实现好了却报 `UNKNOWN_ACTION` |
+| 8 | **动作表是 daemon 加载期常量**；**daemon 不自动换版**（187c 起由 CLI 在握手时点名）：CLI 升级/换 checkout 后旧 daemon 仍在跑，新动作报 `UNKNOWN_ACTION`、老错误码还留旧含义 | 改过代码/换过版本必须重启 daemon，否则明明实现好了却报 `UNKNOWN_ACTION`。187c 起**不需要自己判**：任何经桥的命令握手时比对 daemon 的 `version`（hello ack 带的，缺字段=更旧）与本 CLI 版本，不等就打一次 stderr WARN 并给重启命令；**不自动重启**（重启会切断在线 connector，真机动作）。看到那条 WARN 就重启，别当成噪音。出处 `docs/bridge.md` §3.3 + §10.29、`outputs/187c/evidence.md` |
 | 9 | `sch.place_netlabel` 在 3.2.186 上**根本不能用**（`createNetLabel` 是 v4 API）；`sch.place_text` 是**装饰性**的（编辑器网表不读它） | 网名靠 wire 承载 + text 给人看；别指望 text 建立连接 |
 | 10 | 写动作可能**超时但已经落件**（`sch.place_component` 首次解析库超 30 s） | 错误文案自己写着 do NOT retry——**先回读，不盲重试**（盲重试会把器件叠一堆） |
 | 11 | **坐标契约**：文件 ≡ 画布，y 向上；`.epro2` 存 `y = −canvas`，解析器只在边界取反一次；旋转 文件角 CCW、API 角 CW，`θ_file ≡ −θ_API` | 改任何坐标/角度前先读 `PROGRESS.md` 的 Coordinate contract（这项历史代价最大） |

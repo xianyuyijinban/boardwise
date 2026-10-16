@@ -93,7 +93,11 @@ not be closed at all.
 # one record at a time …
 boardwise parts add ACME-PWR-1000 --lcsc C9900000001 --category ic.ldo \
   --fact 'nc_pins={"pins":["2"],"provenance":"file:acme.pdf p.4"}'
-# … or the whole object, which is what an AI writes after reading the PDF
+# … or the whole object, which is what an AI writes after reading the PDF —
+# with the uuid pair resolved by the bridge in the same command (187c)
+boardwise parts add ACME-PWR-1000 --lcsc C9900000001 --category ic.ldo \
+  --facts facts.json --verified --resolve
+# the pair may still be given by hand instead (a machine with no bridge)
 boardwise parts add ACME-PWR-1000 --lcsc C9900000001 --category ic.ldo \
   --facts facts.json --verified \
   --device-uuid <32 hex> --library-uuid <32 hex>
@@ -111,8 +115,8 @@ boardwise parts add ACME-PWR-1000 --lcsc C9900000001 --category ic.ldo \
   facts are a candidate's claim and drive nothing. With it, the entry starts
   driving rules. It needs facts (verifying nothing is not a statement) and, per
   039's schema rule, the uuid pair — the entry must be placeable, so `add` prints
-  where those ids come from (`parts select --resolve`, or the entry already on the
-  shelf).
+  where those ids come from (`--resolve` on this command, `parts select
+  --resolve`, or the entry already on the shelf).
 * Facts given for an identity **already on the shelf** update that entry: the
   candidate `parts fetch` left behind is the case this exists for. Identity is not
   touched by that path (a differing C-number is refused), and an entry whose facts
@@ -120,6 +124,37 @@ boardwise parts add ACME-PWR-1000 --lcsc C9900000001 --category ic.ldo \
   `fetch` applies.
 
 The same flow is what the report's 未审器件 section points at: **给 PDF ≠ 清闸**.
+
+### The uuid pair, in the same command: `parts add --resolve` (187c)
+
+The 186 flow still had one step in it that needed the bridge by hand: the uuid
+pair 039's schema demands of an entry a rule acts on. `--resolve` asks the
+library for it **while writing the entry**, so the whole intake is one command:
+
+```bash
+boardwise parts add ACME-PWR-1000 --lcsc C9900000001 \
+  --facts facts.json --verified --resolve
+```
+
+* The search is `lib.device.search`, keyed on the **C-number first** (an exact
+  key: 013 F4 measured `supplierId` as the only property this host indexes) and
+  on the **MPN** when that finds nothing. Exactly one item must carry the term —
+  zero hits and several hits are both refusals, and the refusal **lists what the
+  search returned** (fields as the items spell them) rather than saying "no such
+  part". An item that carries only half the pair is refused too: the schema wants
+  both, and a half-pair written now is a refusal moved later with the reason lost.
+* **Offline is a refusal, never a guess** (exit 2, and the manual flags are named
+  in the message). An invented uuid passes the schema and fails on the board,
+  which is the one outcome nobody can debug from the shelf.
+* An explicitly given `--device-uuid` / `--library-uuid` **wins per field** — so
+  `--resolve` fills only the half that is missing, and with both given the bridge
+  is not asked at all (nothing to fill, so no reason to need a network). On an
+  entry that already carries the pair, the resolved ids write over it exactly as
+  the two flags would: the pair is the placement ids, not the identity, and
+  "identity is not touched by a facts write" is about key/MPN/C-number.
+* The same lookup is what `parts select <query> --resolve` does for an online
+  pick; the difference is the destination: `select --write` appends a
+  `catalog-select` entry, `add --resolve` writes the entry the AI is curating.
 
 ### The gate
 
@@ -416,6 +451,13 @@ from a catalog row would silently downgrade the provenance.
   implemented and stub-tested, and its item shape is pinned by the connector's
   documentation (`supplierId`, `footprintName`, `footprintUuid`) — which the
   same live run confirmed.
+* **`parts add --resolve` (187c) is offline-tested only.** Its C-number rung is
+  the same `lib.device.search` call `select --resolve` makes, and its MPN rung
+  reads `name` — the field 180 measured the host naming a *device* by (it found
+  `Ground-<net>` that way). Which fields a hit carries is **not** verified on
+  this host, so nothing is assumed: the field that matched is reported
+  (`matched_by` + `matched_key`), a refusal quotes every item's fields verbatim,
+  and half a uuid pair is refused rather than completed.
 * **`--rehome` has never run against a live editor.** It is implemented,
   stub-tested (including the three refusals: ambiguous hit, non-uuid answer,
   transport failure), and its two candidates are measured from the artifact. The

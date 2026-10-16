@@ -220,10 +220,24 @@ The connector sends `hello` with the fixed id `"hello"`; the daemon answers with
               "instanceId": "inst-112233445-9k2f0x1a"}}
 → {"id": "hello", "ok": true,
    "data": {"role": "connector", "protocol": "1.0", "serverTime": 1789000000.0,
+            "version": "0.5.13",
             "paired": true, "fingerprint": "53cd3b41",
             "minConnectorVersion": "0.4.10",
             "windowsOnline": 2, "windowKey": "inst-112233445-9k2f0x1a"}}
 ```
+
+`version` is the **daemon's own** build (`boardwise.__version__`), the same value
+`ping` carries under the same name, and it was added in **187c** for the one
+caller that never takes a second round trip. A daemon is a long-running process
+whose action catalogue is a **load-time constant** (§4, §10.29): a CLI upgraded
+underneath a running daemon talks to the previous table, so a new action answers
+`UNKNOWN_ACTION` and a fixed one keeps its old meaning. `boardwise doctor` has
+diagnosed this since 069c, but only when it is run; carrying the version on the
+handshake every command already makes lets `bridge/client.py` say so once, on
+stderr, on any of them. Like `connectorVersion`, it is **optional on the
+receiving side**: a daemon that predates the field answers without it, and that
+absence is itself the finding (reported as "版本未知" rather than as a
+comparison against a number nobody read). Nothing is refused on it.
 
 `connectorVersion` is the connector's **own** build (`__BOARDWISE_VERSION__`,
 baked in by `build.mjs`), not the editor's — the `client` field already names
@@ -1571,6 +1585,29 @@ Recorded rather than hidden, so a future session does not have to rediscover the
     **Superseded guess:** the review-mark indicator markers were one early hypothesis for the
     trigger. The measured cause is page activation, and no batch since has needed the marker story.
     **Three steps, not one (034).** `openDocument(uuid)` opens a **tab**; `activateDocument(tabId)` is what brings the document to the front, and its argument is the **tab id**, not the uuid; `getCurrentDocumentInfo()` is the readback that confirms it (`matchesRequest`). 0.4.22 performed only the first — its 149 acceptance failed (a bare `export.render` still timed out twice with 0.4.22 running, and succeeded in 2 s right after a `doc.open`). Since **0.4.23** the export calls the `doc.open` handler itself (one implementation, so the two cannot drift) and refuses to export unless activation returned true **and** the readback matches; the answer carries `activatedPageUuid` + `activated: true`. H1/H2 is settled: **activate before every export**, not once per page load.
+
+29. **The daemon does not change version when the CLI does, and it never will by itself
+    (187c).** `boardwise bridge start` runs a **long-lived process** that imports
+    `bridge.protocol.ACTIONS` once, at load: the action catalogue, the error codes and the
+    routing rules are all constants of that process. Install a new boardwise (or check out a
+    new revision) while a daemon is running and the CLI keeps talking to the **old** table —
+    a new action answers `UNKNOWN_ACTION`, an action whose behaviour was fixed goes on
+    behaving the old way, and an error code keeps a meaning the new build retired. Measured
+    2026-10-16 during the 0.5.13 release test: `boardwise doctor` named the mismatch, and
+    nothing else did, so the everyday commands (`bridge call`, `parts add --resolve`, the draw
+    chain) had no way to say why a documented action was unknown.
+    - **What is done instead of restarting anything.** The daemon's own version travels on the
+      `hello` ack (`version`, §3.3), the handshake every bridge command already performs, and
+      `bridge/client.py` compares it with the CLI's `boardwise.__version__`: a mismatch — **or a
+      daemon that reports no version at all**, which is the same finding, since the field is what
+      this build added — prints one WARN on **stderr**, once per process, pointing at
+      `boardwise bridge start`.
+    - **Why the fix is not automatic.** Restarting the daemon closes every online connector's
+      socket, and in EasyEDA it is the *window* that decides when to come back (the 151 s
+      measured for a backgrounded window, §10.1). That is a real-machine action with a visible
+      cost, so it stays the operator's — the command names it and stops. `boardwise doctor`'s
+      own version check (069c) is unchanged: this is the same fact, said on the path the other
+      commands take.
 
 ## 11. Relationship to `easyeda-agent` frames
 

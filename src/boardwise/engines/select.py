@@ -437,15 +437,21 @@ LCSC_ITEM_KEYS = (
 
 @dataclass
 class Resolution:
-    """What the bridge said about a C-number — or why it could not say."""
+    """What the bridge said about an identity — or why it could not say."""
 
     lcsc: str
     resolved: bool
     deviceUuid: str = ""
     libraryUuid: str = ""
     footprint_name: str = ""
+    #: Which term the accepted item was found by (``lcsc`` / ``mpn``), and the
+    #: item field that carried it. Both are **reported**, never assumed.
+    matched_by: str = ""
     matched_key: str = ""
     items_seen: int = 0
+    #: What a refused search *did* return, one line per item, so the refusal
+    #: ends in something the reader can act on instead of "no such part".
+    candidates: list[str] = field(default_factory=list)
     reason: str = ""
 
     def as_json(self) -> dict[str, Any]:
@@ -455,8 +461,10 @@ class Resolution:
             "deviceUuid": self.deviceUuid,
             "libraryUuid": self.libraryUuid,
             "footprint_name": self.footprint_name,
+            "matched_by": self.matched_by,
             "matched_key": self.matched_key,
             "items_seen": self.items_seen,
+            "candidates": list(self.candidates),
             "reason": self.reason,
         }
 
@@ -534,16 +542,186 @@ async def resolve_by_lcsc(client: Any, lcsc: str, *, limit: int = 8) -> Resoluti
     return result
 
 
+#: Fields a `lib.device.search` item may carry the manufacturer part number
+#: under. ``name`` is the one 180 measured the host answering with a **device's
+#: own name** (it looked up `Ground-<net>` that way), and it is what a device
+#: imported from JLC's catalogue is usually named after; the rest are the durable
+#: spellings the connector's four-level dump of the item could carry. As with
+#: `LCSC_ITEM_KEYS`, which one answered is reported rather than assumed.
+MPN_ITEM_KEYS = (
+    "mpn",
+    "partNumber",
+    "partCode",
+    "manufacturerPartNumber",
+    "name",
+)
+
+#: The fields a refusal quotes when it says what the search *did* return. The
+#: item's exact shape is not verified in this repo (it needs the live editor), so
+#: the line reports the fields it found instead of a fixed column order.
+CANDIDATE_FIELDS = (
+    "name",
+    "mpn",
+    "partNumber",
+    "supplierId",
+    "lcsc",
+    "footprintName",
+    "uuid",
+    "libraryUuid",
+)
+
+#: How many returned items a refusal quotes. Five, like `parts show`'s
+#: "did you mean" list — a search that returned 300 rows has already failed.
+CANDIDATE_LIMIT = 5
+
+
+def describe_item(item: Any) -> str:
+    """One search item as a line: the known fields it carries, as it spells them."""
+    if not isinstance(item, dict):
+        return str(item)[:120]
+    seen = [
+        f"{key}={_item_value(item, key)}" for key in CANDIDATE_FIELDS if _item_value(item, key)
+    ]
+    return ", ".join(seen) or "(no known field)"
+
+
+async def _search_items(client: Any, keyword: str, limit: int) -> tuple[list[Any], str]:
+    """``(items, error)`` — one ``lib.device.search``, with both failures named.
+
+    A bridge failure and an empty result list are deliberately **not** collapsed:
+    "the daemon could not answer" is not "the library has no such part", and only
+    the second one is evidence about the part.
+    """
+    try:
+        data = await client.call("lib.device.search", {"keyword": keyword, "limit": limit})
+    except Exception as exc:  # noqa: BLE001 — a bridge failure is one outcome here
+        return [], f"lib.device.search({keyword!r}) failed: {exc}"
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return [], f"lib.device.search({keyword!r}) returned no item list"
+    return items, ""
+
+
+async def resolve_identity(
+    client: Any, *, mpn: str = "", lcsc: str = "", limit: int = 8
+) -> Resolution:
+    """The ``deviceUuid`` + ``libraryUuid`` pair for one part, through the bridge.
+
+    Written for `parts add --resolve` (187c), whose caller has just read a
+    datasheet and wants **one** command to land the entry; it is stricter than
+    :func:`resolve_by_lcsc` in the two ways that follow from that destination:
+
+    * **both** uuids are required. The shelf's own validator refuses an entry a
+      rule acts on without the pair (`entry_from_json`, 039), so a half-answer
+      here would only move the refusal later and lose the reason;
+    * the record's two terms must agree: when the MPN search is the one that hit
+      and the item carries a C-number of its own, a disagreement with the
+      C-number on the command line is a refusal, not a preference for one.
+
+    The C-number is tried **first**: it is an exact key (013 F4 measured
+    `supplierId` as the only property 3.2.186 indexes), where the MPN is a
+    keyword whose hits must be compared by hand. Either term may be missing —
+    the search just does not happen for it. Zero hits and several hits are both
+    refusals, and both quote what the search returned in ``candidates``.
+    """
+    result = Resolution(lcsc=str(lcsc or "").strip(), resolved=False)
+    wanted_lcsc = result.lcsc.upper()
+    wanted_mpn = str(mpn or "").strip()
+    if not wanted_lcsc and not wanted_mpn:
+        result.reason = "no MPN and no C-number: nothing to resolve"
+        return result
+
+    attempts = [
+        (term, keyword)
+        for term, keyword in (("lcsc", wanted_lcsc), ("mpn", wanted_mpn))
+        if keyword
+    ]
+    refusals: list[str] = []
+    for term, keyword in attempts:
+        items, error = await _search_items(client, keyword, limit)
+        if error:
+            result.reason = error
+            return result
+        result.items_seen = len(items)
+        keys = LCSC_ITEM_KEYS if term == "lcsc" else MPN_ITEM_KEYS
+        hits: list[tuple[str, Any]] = []
+        for item in items:
+            for key in keys:
+                if _item_value(item, key).upper() == keyword.upper():
+                    hits.append((key, item))
+                    break
+        if not hits:
+            refusals.append(
+                f"no returned item carries {keyword} under any known key "
+                f"({', '.join(keys)})"
+            )
+            result.candidates = [describe_item(item) for item in items[:CANDIDATE_LIMIT]]
+            continue
+        if len(hits) > 1:
+            refusals.append(
+                f"{len(hits)} returned items carry {keyword}; an exact key must be unique"
+            )
+            result.candidates = [describe_item(item) for item in items[:CANDIDATE_LIMIT]]
+            continue
+
+        key, item = hits[0]
+        # Only an exact, self-evident key is cross-checked: a C-number is a
+        # C-number, so a hit whose own C-number differs is a different part and
+        # the entry would carry an identity nobody can place. The MPN is not
+        # compared that way — the host names devices by its own convention
+        # (`Ground-GND`), and a disagreement there would refuse real parts.
+        if term == "mpn" and wanted_lcsc:
+            carried_key = next(
+                (k for k in LCSC_ITEM_KEYS if _item_value(item, k)), ""
+            )
+            carried = _item_value(item, carried_key).upper()
+            if carried and carried != wanted_lcsc:
+                result.reason = (
+                    f"the MPN hit carries {carried_key}={_item_value(item, carried_key)}, "
+                    f"not the given {result.lcsc}; refusing a pair that disagrees"
+                )
+                result.candidates = [describe_item(item)]
+                return result
+        device_uuid = _item_value(item, "uuid") or _item_value(item, "deviceUuid")
+        library_uuid = _item_value(item, "libraryUuid") or _item_value(item, "library_uuid")
+        if not device_uuid or not library_uuid:
+            missing = "device uuid" if not device_uuid else "library uuid"
+            result.reason = (
+                f"the hit matched on {key!r} but carries no {missing} "
+                "(wanted: uuid/deviceUuid, libraryUuid/library_uuid); a shelf entry "
+                "a rule acts on needs both, so a half-pair is refused"
+            )
+            result.candidates = [describe_item(item)]
+            return result
+        result.resolved = True
+        result.matched_by = term
+        result.matched_key = key
+        result.deviceUuid = device_uuid
+        result.libraryUuid = library_uuid
+        result.footprint_name = _item_value(item, "footprintName") or _item_value(
+            item, "footprint_name"
+        )
+        return result
+
+    result.reason = "; ".join(refusals)
+    return result
+
+
 __all__ = [
+    "CANDIDATE_FIELDS",
+    "CANDIDATE_LIMIT",
     "Candidate",
     "IDENTITY_FIELDS",
     "LCSC_ITEM_KEYS",
+    "MPN_ITEM_KEYS",
     "PROSE_FIELDS",
     "Resolution",
     "SelectionResult",
     "candidate_from_entry",
+    "describe_item",
     "normalise",
     "resolve_by_lcsc",
+    "resolve_identity",
     "select",
     "select_offline",
     "select_online",

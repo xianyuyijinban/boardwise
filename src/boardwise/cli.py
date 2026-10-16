@@ -1941,7 +1941,10 @@ def build_parser() -> argparse.ArgumentParser:
             "on without facts is refused (exit 2) and points at `parts show`. "
             "The file is edited at the JSON-document level so existing entries "
             "keep their exact bytes, backed up to a .tmp sibling first, and "
-            "re-parsed with the real validator before the write is called done."
+            "re-parsed with the real validator before the write is called done. "
+            "`--resolve` (187c) fills the two uuids the verified gate demands "
+            "from the online bridge — one command from a datasheet to a landed "
+            "entry."
         ),
     )
     parts_add.add_argument("mpn", help="The manufacturer part number to add.")
@@ -1990,6 +1993,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parts_add.add_argument(
         "--library-uuid", default="", help="Bridge library uuid (required with --verified)."
+    )
+    parts_add.add_argument(
+        "--resolve", action="store_true",
+        help=(
+            "Fill --device-uuid/--library-uuid from the online bridge (187c): "
+            "lib.device.search on the C-number, then on the MPN. Offline is a "
+            "refusal, never an invented uuid; an explicitly given uuid wins."
+        ),
     )
     parts_add.add_argument(
         "--library", default=None, help="The shelf to append to (default blocklib/parts.json)."
@@ -13103,6 +13114,8 @@ def _uuid_requirement_note() -> str:
     return (
         "facts_verified=true 的条目必须可落板：schema 要求 deviceUuid + libraryUuid"
         "（039 的既有校验，不是本命令加的）。两个 id 来自桥：\n"
+        "    boardwise parts add <MPN> --lcsc <C码> --resolve --facts f.json --verified\n"
+        "      （--resolve 现查现填，一条命令清闸；需要在线 bridge）\n"
         "    boardwise parts select <MPN> --resolve --write   # 桥解析并落库\n"
         "    或先建候选条目、再用 `--facts … --verified` 补（uuid 沿用条目里的）\n"
         "    或直接给 --device-uuid <id> --library-uuid <id>"
@@ -13139,6 +13152,94 @@ def _write_shelf_document(
         else:
             library_path.unlink(missing_ok=True)
         return None, f"the entry was refused by the validator, rolled back: {exc}"
+
+
+def _resolve_add_uuids(args: argparse.Namespace) -> tuple[str, str, str]:
+    """``(device_uuid, library_uuid, error)`` for `parts add --resolve` (187c).
+
+    The one step the AI used to have to do by hand: read the datasheet, then ask
+    the library for the two ids `sch.place_component` needs and paste them onto
+    the command line. The search itself is
+    :func:`boardwise.engines.select.resolve_identity` — the same exact-key rule
+    `parts select --resolve` uses, extended to the MPN and to the **pair**, since
+    this destination is a shelf entry a rule will act on.
+
+    Discovery is left to `_open_cli` (so a missing daemon is auto-started exactly
+    as for every other bridge command), and a bridge that cannot answer is a
+    **refusal**: an invented uuid passes the schema and fails on the board, which
+    is the one outcome nobody can debug from the shelf. An explicitly given uuid
+    always wins — per field, so `--device-uuid X --resolve` fills only the
+    library half — and when **both** are given the bridge is not asked at all:
+    there is nothing left to fill, and a command that needs the network with
+    nothing to fetch fails offline for no reason.
+    """
+    from boardwise.engines.select import CANDIDATE_LIMIT, resolve_identity
+
+    explicit_device = str(getattr(args, "device_uuid", "") or "").strip()
+    explicit_library = str(getattr(args, "library_uuid", "") or "").strip()
+    if explicit_device and explicit_library:
+        print(
+            "  resolve: --device-uuid/--library-uuid 都是显式给的 —— 显式优先，"
+            "未查询桥"
+        )
+        return explicit_device, explicit_library, ""
+
+    import asyncio
+
+    from websockets.exceptions import WebSocketException
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    def refusal(reason: str, candidates: list[str] | None = None) -> str:
+        # The repair is named in full every time, because this is the one place
+        # the user is standing between "the AI read the datasheet" and "the entry
+        # landed" — and the manual flags are a complete answer to the refusal.
+        lines = [
+            f"--resolve 拿不到身份：{reason}",
+            f"  （--resolve 需要在线 bridge，127.0.0.1:{port} 上有 daemon 且 EasyEDA "
+            "里装着扩展；或手工 --device-uuid <id> --library-uuid <id>）",
+        ]
+        if candidates:
+            lines.append(f"  搜索返回的候选（前 {CANDIDATE_LIMIT} 条）：")
+            lines.extend(f"    - {line}" for line in candidates)
+        return "\n".join(lines)
+
+    async def run() -> tuple[str, str, str]:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, WebSocketException, BridgeError) as exc:
+            return "", "", refusal(f"bridge 不在（{type(exc).__name__}: {exc}）")
+        try:
+            resolved = await resolve_identity(client, mpn=args.mpn, lcsc=args.lcsc)
+        finally:
+            await client.close()
+        if not resolved.resolved:
+            return "", "", refusal(resolved.reason, resolved.candidates)
+        device_uuid = explicit_device or resolved.deviceUuid
+        library_uuid = explicit_library or resolved.libraryUuid
+        print(
+            f"  resolve: {resolved.matched_by}={resolved.matched_key} "
+            f"({resolved.items_seen} item(s) seen) → deviceUuid={device_uuid} "
+            f"libraryUuid={library_uuid}"
+            + (
+                "  footprint=" + resolved.footprint_name
+                if resolved.footprint_name
+                else ""
+            )
+        )
+        # A flag that was given keeps its field; saying so is what makes the
+        # printed pair the pair that was written.
+        for flag, given, found in (
+            ("--device-uuid", explicit_device, resolved.deviceUuid),
+            ("--library-uuid", explicit_library, resolved.libraryUuid),
+        ):
+            if given:
+                print(f"  resolve: {flag} 显式优先（搜索给的是 {found}）")
+        return device_uuid, library_uuid, ""
+
+    return asyncio.run(run())
 
 
 def _cmd_parts_add(args: argparse.Namespace) -> int:
@@ -13223,6 +13324,17 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
                 )
                 return 2
             break
+
+    # 187c: `--resolve` fills the uuid pair *before* either branch below reads
+    # it, so both the new entry and the facts-onto-an-existing-entry path see
+    # the same pair — one lookup, not one per branch.
+    if getattr(args, "resolve", False):
+        device_uuid, library_uuid, error = _resolve_add_uuids(args)
+        if error:
+            print(f"boardwise parts add: {error}", file=sys.stderr)
+            return 2
+        args.device_uuid = device_uuid
+        args.library_uuid = library_uuid
 
     backup = library_path.with_suffix(library_path.suffix + ".tmp")
     existed = library_path.is_file()
@@ -13335,6 +13447,11 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
                     "facts": sorted(facts),
                     "factsSource": facts_source,
                     "category": candidate.category,
+                    "deviceUuid": written.deviceUuid if written else device_uuid,
+                    "libraryUuid": written.libraryUuid if written else library_uuid,
+                    # Whether the bridge was asked — 187c: the uuids above say
+                    # what landed, this says where they came from.
+                    "resolveRequested": bool(getattr(args, "resolve", False)),
                     "factsVerified": bool(written is not None and written.facts_verified),
                     "entriesOnShelf": len(reloaded.parts),
                 },
@@ -13474,6 +13591,10 @@ def _fill_existing_entry(
                     "facts": sorted(facts),
                     "factsSource": facts_source,
                     "category": on_shelf.category if on_shelf is not None else "",
+                    "deviceUuid": on_shelf.deviceUuid if on_shelf is not None else "",
+                    "libraryUuid": on_shelf.libraryUuid if on_shelf is not None else "",
+                    # 187c: what landed, and whether the bridge supplied it.
+                    "resolveRequested": bool(getattr(args, "resolve", False)),
                     "factsVerified": bool(
                         on_shelf is not None and on_shelf.facts_verified
                     ),

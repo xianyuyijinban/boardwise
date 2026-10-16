@@ -24,7 +24,52 @@ from .protocol import (
     request_frame,
 )
 
-__all__ = ["BridgeClient", "connect_client"]
+__all__ = ["BridgeClient", "connect_client", "daemon_version_warning"]
+
+#: How a daemon that predates the field is named in the warning below. Not a
+#: version: the point of the wording is that nobody read one.
+UNKNOWN_DAEMON_VERSION = "未知（不上报版本）"
+
+#: The daemon versions this process has already complained about (187c). The
+#: finding is about *this machine's daemon*, not about one connection, so a
+#: command that opens a second socket (or retries) must not print it again —
+#: and keying on the version rather than on a boolean keeps the three states
+#: separable for a caller that talks to two daemons.
+_drift_reported: set[str] = set()
+
+
+def daemon_version_warning(daemon_version: Any) -> str | None:
+    """The warning for a daemon that is not this CLI's build, or ``None`` (187c).
+
+    The daemon is a **long-running process holding the action catalogue as a
+    load-time constant** (``bridge.protocol.ACTIONS``), so a CLI upgraded under a
+    running daemon talks to the old table: a new action answers
+    ``UNKNOWN_ACTION``, an old one keeps a meaning that has since been fixed, and
+    nothing on the wire says why. `boardwise doctor` has diagnosed this since
+    069c, but only when someone runs it — this is the same fact noticed on the
+    handshake **every** bridge command already performs.
+
+    A daemon that reports **no** version is the same finding: the field is what
+    this build added, so a daemon without it is older by construction. It is
+    named as unknown rather than as ``≠ <version>``, because printing a
+    comparison against a version nobody read would be inventing one.
+
+    The fix is never taken here. Restarting a daemon cuts every online
+    connector's socket, which is a real-machine action (and in EasyEDA it is the
+    window, not the daemon, that decides when to come back) — so this warns and
+    leaves the decision where it belongs.
+    """
+    from .. import __version__ as cli_version
+
+    reported = str(daemon_version or "").strip()
+    if reported == cli_version:
+        return None
+    running = reported or UNKNOWN_DAEMON_VERSION
+    return (
+        f"boardwise bridge: daemon 运行 {running} ≠ CLI {cli_version}"
+        "（动作表是加载期常量，新动作/修复在旧 daemon 里不存在）；"
+        "用 `boardwise bridge start` 重启 daemon"
+    )
 
 
 class BridgeClient:
@@ -48,11 +93,37 @@ class BridgeClient:
         websocket = await connect(uri, max_size=None, open_timeout=10, proxy=None)
         instance = cls(websocket, token, role, client)
         try:
-            await instance.hello()
+            greeting = await instance.hello()
         except BaseException:
             await websocket.close()
             raise
+        # 187c: the handshake every command already makes is where a daemon
+        # built from another revision becomes visible. See
+        # :func:`daemon_version_warning` for why this warns instead of acting.
+        instance.report_version_drift(greeting)
         return instance
+
+    @staticmethod
+    def report_version_drift(greeting: Any) -> None:
+        """Print the version-mismatch warning to stderr, once per process.
+
+        Once per *state*, not per call: a caller that opens two connections to
+        the same drifted daemon has one finding, and repeating the paragraph
+        would bury the command's own answer. stderr, because it is a
+        diagnostic about this machine and the command's answer is on stdout.
+        """
+        import sys
+
+        reported = str((greeting or {}).get("version") or "").strip() if isinstance(
+            greeting, dict
+        ) else ""
+        if reported in _drift_reported:
+            return
+        warning = daemon_version_warning(reported)
+        if warning is None:
+            return
+        _drift_reported.add(reported)
+        print(warning, file=sys.stderr, flush=True)
 
     async def hello(self) -> dict[str, Any]:
         return await self.call("hello", {
