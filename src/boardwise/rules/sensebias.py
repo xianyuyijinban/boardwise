@@ -50,7 +50,7 @@ from __future__ import annotations
 import re
 
 from ..core.model import Component, DesignModel, is_ground_net
-from ..core.parts import is_ic_designator
+from ..core.partkind import PartDeclarations, classify_part, declarations_of
 from ..core.pintable import port_pin_of
 from ..core.power_domains import infer_net_domains
 from ..core.values import parse_capacitance_farads, parse_resistance_ohms
@@ -257,20 +257,42 @@ class SamplingBias(FactsRule):
                     continue
             if _is_opamp_input_name(name):
                 category = self._entry_category(comp)
-                # 运放这一路也要求它是 IC 位号（仓库里"什么位号算 IC"只有
-                # `core.parts.is_ic_designator` 一份答案），或者货架说它是运放：
-                # 排针上一脚叫 `IN+` 是接线端子，不是放大器输入。
-                if not (is_ic_designator(comp.designator) or category == "ic.opamp"):
+                # 运放这一路要求它是 **IC**——而这个问句 190 起走公共判型入口
+                # （`core.partkind.classify_part`：声明优先、位号类目兜底），
+                # 货架 category 也交给它读，免得「什么是 IC」在仓库里有两份答案；
+                # `or category == "ic.opamp"` 那半按任务书原样保留（货架说是运放
+                # 时，脚名 `IN+` 就是放大器输入）。排针上一脚叫 `IN+` 依旧是接线
+                # 端子，不是放大器输入。
+                #
+                # **不报脚数**（`pins` 留 None）：本规则从来不数脚，190 也不给
+                # 它加——127b 的 3 脚地板是「这颗件要不要去耦 / 要不要手册」那两问
+                # 的必要条件，而这里问的是「这脚是不是放大器输入」。何况脚数读不出
+                # 是「模型没读到」，不是「这颗件只有两脚」，拿它否决一颗真运放是
+                # 静默丢件。所以这里把读到的那三造自己说出来，不带计数。
+                declared = declarations_of(comp)
+                read = classify_part(
+                    facts=PartDeclarations(
+                        designator=declared.designator,
+                        shelf_category=category,
+                        metadata=declared.metadata,
+                        text=declared.text,
+                    )
+                )
+                if not (read.is_ic or category == "ic.opamp"):
                     continue
                 if category == "ic.opamp":
                     basis = f"货架条目 category={category}（parts 库知识）"
                 elif category:
                     basis = (
                         f"货架条目 category={category}（不是 ic.opamp），"
-                        "位号是 IC；脚名按最小启发读"
+                        f"判型给的是 IC（{read.basis}: {read.reason}）；"
+                        "脚名按最小启发读"
                     )
                 else:
-                    basis = "货架里没有这条目（最小启发：位号是 IC + 只看符号脚名）"
+                    basis = (
+                        "货架里没有这条目（最小启发："
+                        f"{read.reason}）；脚名按最小启发读"
+                    )
                 found.append(
                     _Reach(
                         designator,

@@ -307,6 +307,45 @@ def _voltage_rating_tail(token: str) -> str | None:
 #: module gives every string it cannot read.
 _MAX_VOLTAGE_CODE_EXPONENT = 2
 
+#: The same field with the rating written in the **R notation** (190, 岳
+#: 2026-10-16 ⑦'s third small item): ``0603S226M6R3CT`` states 22 µF ±20 % at
+#: **6.3 V** as ``6R3`` — ``R`` as the decimal point, the same spelling the
+#: resistance and capacitance notations use (``4R7``, ``R050``). 188a's value-code
+#: reader already knows the shape (:data:`_CAP_VOLTAGE_TAIL_RE`'s second
+#: alternative); this is the *rating* reader learning it.
+#:
+#: **The anchor is the field, and it has to be this tight.** A loose
+#: ``\d{3}[A-Z]\d[Rr]\d`` scan reads ten tokens in this repository's own corpus
+#: **all ten of them false**: the shunts' and resistors' ohm notation
+#: (``RE1206F1R000`` -> ``1R0``, ``JER2512F3R005`` -> ``3R0``, ``FRC0805F4R70TS``
+#: -> ``4R7``), the dielectric codes (``CGA0603X7R104K500JT`` -> ``X7R1``) and
+#: TDK's field string (``C1608X5R1V225KT000E`` -> ``5R1``, a 35 V part read as
+#: 5.1 V — a false WARN on any 12 V rail). So the group has to be the **second**
+#: group of a whole field that ends the token (modulo the 2-4 packaging letters
+#: :data:`_CAP_VOLTAGE_TAIL_RE` already ignores), and the run in front of it must
+#: not be a package size — the same two guards :func:`_voltage_rating_tail` uses.
+#: Over the shelf's 109 MPNs, all 14 fixture boards and 实板A, the field shape
+#: reads exactly the one witness and refuses everything else (measured
+#: 2026-10-16; the scan is in `outputs/190/evidence.md`).
+_VOLTAGE_R_TAIL_RE = re.compile(r"(\d{3}[A-Z](\d[Rr]\d))(?:[A-Z]{2,4})?$")
+
+
+def _voltage_r_rating_tail(token: str) -> tuple[str, str] | None:
+    """``(field, rating group)`` for an R-notation rating field, or ``None``.
+
+    Scanned from every start position like :func:`_voltage_rating_tail`, with the
+    ``_PACKAGE_TAILS`` guard it also uses, so a token whose "field" is really a
+    package size plus a following group is refused rather than read.
+    """
+    for start in range(len(token)):
+        m = _VOLTAGE_R_TAIL_RE.match(token, start)
+        if m is None:
+            continue
+        if _digit_run(token, start) in _PACKAGE_TAILS:
+            continue
+        return m.group(1), m.group(2)
+    return None
+
 
 def mpn_voltage_rating(token: str) -> tuple[float, str] | None:
     """The rated voltage a capacitor's MPN states — ``(volts, the code field)``.
@@ -345,6 +384,15 @@ def mpn_voltage_rating(token: str) -> tuple[float, str] | None:
     relies on (``104K500``, ``106K250``, ``225K101``) keep reading, which
     :func:`test_the_shelf_and_the_code_reader_agree_on_every_catalogued_capacitor`
     and this reader's own pins both assert.
+
+    **190: the rating may also be spelled with ``R`` as its decimal point.** The
+    field is the same — ``<value><tolerance><voltage>``, ending the token modulo
+    its packaging letters — and the rating group is ``<digit>R<digit>``:
+    ``0603S226M6R3CT`` states 22 µF ±20 % at **6.3 V**. See
+    :data:`_VOLTAGE_R_TAIL_RE` for the anchor and for the ten false positive hits
+    the loose spelling produces over this repository's own corpus; the same tail
+    is tried **after** the three-figure one, so nothing this reader could read
+    before reads differently now.
     """
     if not token or _too_long(token):
         return None
@@ -352,16 +400,27 @@ def mpn_voltage_rating(token: str) -> tuple[float, str] | None:
     if _is_tdk_thickness_tail(text):
         return None
     found = _voltage_rating_tail(text)
-    if found is None:
+    if found is not None:
+        code = found[-3:]
+        mantissa, exponent = int(code[:2]), int(code[2])
+        if mantissa == 0 or exponent > _MAX_VOLTAGE_CODE_EXPONENT:
+            return None
+        volts = _finite(float(mantissa) * (10 ** exponent))
+        if volts is None:
+            return None
+        return volts, found
+    # 190: the rating may be written in the R notation (``6R3`` = 6.3 V). Checked
+    # **after** the three-figure tail, so no token this reader could already read
+    # changes its reading; a token the tail refuses gets the one other spelling of
+    # the same field, and one that is neither still answers None.
+    r_form = _voltage_r_rating_tail(text)
+    if r_form is None:
         return None
-    code = found[-3:]
-    mantissa, exponent = int(code[:2]), int(code[2])
-    if mantissa == 0 or exponent > _MAX_VOLTAGE_CODE_EXPONENT:
-        return None
-    volts = _finite(float(mantissa) * (10 ** exponent))
+    field, code = r_form
+    volts = _finite(float(f"{code[0]}.{code[2]}"))
     if volts is None:
         return None
-    return volts, found
+    return volts, field
 
 
 #: TDK's own ordered field string (issue #72): ``<size><dielectric><voltage

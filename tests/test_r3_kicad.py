@@ -323,7 +323,15 @@ def test_the_pcb_rules_measure_the_kicad_board():
     rows = _by_rule(findings)
     (spacing,) = rows["pcb-component-spacing"]
     assert spacing.severity == "WARN" and "C2 and R3 are 5.9 mil apart" in spacing.message
-    assert any(f.severity == "WARN" and "C2" in f.message for f in rows["pcb-decap-distance"])
+    # C2's row on U1's own **VOUT** rail is INFO since 190 (岳 2026-10-16): the
+    # over-the-limit distance is still reported, with the same threshold and the
+    # same measurement — the severity drops one step because a capacitor on a
+    # part's output rail is shared with whatever that rail feeds, and 「it must
+    # hug the pin」 is the input-side question. `pcb-decap-distance` is the only
+    # rule whose severity moved here.
+    decap = [f for f in rows["pcb-decap-distance"] if "C2" in f.message]
+    assert [f.severity for f in decap] == ["INFO"]
+    assert "VOUT" in decap[0].message and "567.2 mil" in decap[0].message
     assert not any(f.severity == "ERROR" for f in rows.get("pcb-footprint-consistency", [])), (
         "the KiCad library nickname no longer reads as a package family"
     )

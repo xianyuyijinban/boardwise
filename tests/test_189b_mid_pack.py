@@ -312,17 +312,22 @@ def test_declared_type_text_reads_the_metadata_fields_in_priority_order():
     assert declared_type_text(Component(uid="x", designator="x")) == ""
 
 
-def test_the_ic_judgement_that_still_reads_the_prefix_is_disclosed_not_changed():
-    """The measured remainder of ⑦, pinned so 190 inherits it with numbers.
+def test_the_ic_judgement_that_still_reads_the_prefix_was_rewritten_by_190():
+    """The measured remainder of ⑦, **flipped by 190** — deliberately.
 
-    `derating` reads declarations only. The schematic-side rule
-    ``decoupling-per-ic`` (``rules/connectivity.py``) still asks for a capacitor on
-    every part whose designator starts with ``U`` — its own message says so
-    (「matches designator prefixes only (U*/C*)」). 岳's ⑦ named the derating rule;
-    this batch was scoped to that one place, so the other judgement sites are
-    listed in the evidence instead of being changed here. This test is the claim's
-    counter-anchor: if a later batch makes it declaration-based, this test must be
-    rewritten deliberately, not by accident.
+    189B read declarations only (derating) and left the schematic-side judgement
+    ``decoupling-per-ic`` (``rules/connectivity.py``) asking for a capacitor on
+    every part whose designator starts with ``U``; its message said so itself
+    (「matches designator prefixes only (U*/C*)」), and this test pinned that as
+    the batch's claim's counter-anchor, with a note that **a later batch making
+    it declaration-based must rewrite this test deliberately, not by accident**.
+    190 is that batch: both halves of the judgement now go through
+    :func:`boardwise.core.partkind.classify_part`, so the same ``U``-designated
+    330 kΩ resistor is no longer asked for a capacitor, and the message says
+    which basis each side was read on instead of admitting a prefix test.
+
+    Kept in this file rather than moved, because it is the *same* case read
+    again: the part is the ⑦ part, and what changed is which batch's口径 owns it.
     """
     from boardwise.rules.connectivity import DecouplingPerIC
 
@@ -339,9 +344,37 @@ def test_the_ic_judgement_that_still_reads_the_prefix_is_disclosed_not_changed()
         },
         nets={"A": Net(name="A", pins=[("U1", "1")]), "B": Net(name="B", pins=[("U1", "2")])},
     )
-    rows = DecouplingPerIC().check(model)
+    assert DecouplingPerIC().check(model) == []
+
+    # …and the rule still fires on a part that really is one, with a message that
+    # no longer claims a prefix test it does not run.
+    rows = DecouplingPerIC().check(_decoupling_model_with_an_ic())
     assert [row.severity for row in rows] == ["WARN"]
-    assert "matches designator prefixes only" in rows[0].message
+    assert "matches designator prefixes only" not in rows[0].message
+
+
+def _decoupling_model_with_an_ic() -> DesignModel:
+    """One three-pin ``U`` part the declarations say nothing about, no capacitor:
+    the rule still fires, and the message must not claim a prefix test it no
+    longer runs."""
+    return DesignModel(
+        components={
+            "U2": Component(
+                uid="U2",
+                designator="U2",
+                pins=[
+                    Pin(number="1", name="VIN", net="A"),
+                    Pin(number="2", name="GND", net="GND"),
+                    Pin(number="3", name="OUT", net="B"),
+                ],
+            ),
+        },
+        nets={
+            "A": Net(name="A", pins=[("U2", "1")]),
+            "B": Net(name="B", pins=[("U2", "3")]),
+            "GND": Net(name="GND", pins=[("U2", "2")]),
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

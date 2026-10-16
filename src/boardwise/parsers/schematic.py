@@ -75,6 +75,7 @@ from boardwise.core.model import (
     Pin,
     ProjectModel,
 )
+from boardwise.core.partkind import METADATA_TYPE_KEYS
 
 from .epru_stream import (
     ParseStats,
@@ -463,8 +464,16 @@ DEVICE_ATTR_FIELDS: tuple[tuple[str, str], ...] = (
     ("Name", "name_template"),
 )
 
+#: Where the DEVICE's strings that declare *what the part is* travel in a
+#: ``device_meta`` entry (190f). A nested key rather than a flat one because
+#: these are **props keys**, not :class:`Component` fields, and the reader that
+#: wants them is :func:`boardwise.core.partkind.classify_part`, which reads
+#: ``props[METADATA_TYPE_KEYS]`` — the same spelling the PCB-side view uses, so
+#: a rule cannot see one vocabulary on one view and another on the other.
+DECLARED_TYPE_KEY = "declared_type"
 
-def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, str]]:
+
+def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, Any]]:
     """DEVICE doc uuid -> the library metadata that only the DEVICE has.
 
     Why this join exists (measured 2026-09-14, the 006b "library swap" root
@@ -488,8 +497,18 @@ def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, str]]:
     placement is supposed to have a name", which is what lets a parse say how
     many placements it could **not** name instead of silently dropping them
     (see :class:`boardwise.core.geometry.ParseStats`).
+
+    **190f: the 立创 type fields travel too** (:data:`DECLARED_TYPE_KEY`). They
+    are in the same ``META.attributes`` dict as everything above — 108 of them in
+    实板A's own archive — and until 190f no reader of the **schematic** view took
+    them, which is why the review's datasheet gate still asked about a
+    ``U``-designated 330 kΩ chip resistor: the声明 was in the file, one record
+    away, and the reading could not see it. Only
+    :data:`boardwise.core.partkind.METADATA_TYPE_KEYS`' three keys are carried,
+    not the whole ``attributes`` dict: the props a rule reads stay countable, and
+    which keys a judgement may use is a decision made in one place.
     """
-    out: dict[str, dict[str, str]] = {}
+    out: dict[str, dict[str, Any]] = {}
     uuid = ""
     for record in records:
         if record.type == "DOCHEAD":
@@ -502,7 +521,7 @@ def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, str]]:
             continue
         body = record.body or {}
         attributes = body.get("attributes") or {}
-        meta: dict[str, str] = {"title": str(body.get("title") or "").strip()}
+        meta: dict[str, Any] = {"title": str(body.get("title") or "").strip()}
         if isinstance(attributes, dict):
             for key, field in DEVICE_ATTR_FIELDS:
                 value = attributes.get(key)
@@ -518,6 +537,16 @@ def _collect_device_meta(records: list[Any]) -> dict[str, dict[str, str]]:
             symbol = str(attributes.get("Symbol") or "").strip()
             if symbol and symbol != "null":
                 meta["symbol"] = symbol
+            # 190f: the 立创 type fields, under their own names — the props keys
+            # `classify_part` reads (`METADATA_TYPE_KEYS`, imported below at the
+            # use site so `parsers -> core` stays the only arrow).
+            declared = {
+                key: str(attributes.get(key) or "").strip()
+                for key in METADATA_TYPE_KEYS
+                if str(attributes.get(key) or "").strip() not in ("", "null")
+            }
+            if declared:
+                meta[DECLARED_TYPE_KEY] = declared
             # Whether the *library* device is a part or a symbol (042 §WI-2):
             # a real part's META declares the designator it will be assigned
             # (``"R?"``/``"U?"``) and its ``Convert to PCB``/``Add into BOM``
@@ -1626,6 +1655,17 @@ def _fill_board_model(
         )
         if footprint_library_id:
             component.props["footprint_library_id"] = footprint_library_id
+        # 190f: the 立创 type fields the DEVICE declares, under their own names —
+        # the props keys :func:`boardwise.core.partkind.classify_part` reads.
+        # Only `DECLARED_TYPE_KEY`'s three keys are copied, never the whole
+        # `attributes` dict (see `_collect_device_meta`), and `setdefault` so a
+        # future instance-level source can win without a silent overwrite.
+        declared = meta.get(DECLARED_TYPE_KEY)
+        if isinstance(declared, dict):
+            for key in METADATA_TYPE_KEYS:
+                value = declared.get(key)
+                if value:
+                    component.props.setdefault(key, value)
         # The library device title (e.g. "CH340G") is what a keyword search
         # resolves when the part has no LCSC number of its own.
         device_name = meta.get("title", "")

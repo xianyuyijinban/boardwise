@@ -92,12 +92,16 @@ from ...core.measure import (
     point_segment_distance,
 )
 from ...core.model import is_ground_net
-from ...core.parts import (
-    designator_category,
-    is_ic_designator,
-    load_parts,
-    resolve_component_facts,
+from ...core.partkind import (
+    KIND_IC,
+    MIN_IC_PINS as _MIN_IC_PINS,
+    NON_IC_DESIGNATOR_PREFIXES as _NON_IC_DESIGNATOR_PREFIXES,
+    CONNECTOR_WORDS as _CONNECTOR_WORDS,
+    TRANSISTOR_WORDS as _TRANSISTOR_WORDS,
+    PartDeclarations,
+    classify_part,
 )
+from ...core.parts import load_parts, resolve_component_facts
 from ...core.pinrole import pin_role
 from ...core.power_domains import infer_net_domains
 from ...core.values import parse_capacitance_farads
@@ -180,51 +184,38 @@ MIN_OUTLINE_CORNERS = 3
 #: meaningful sense — and the designator table
 #: (:func:`~boardwise.core.parts.is_ic_designator`) is consulted **last**, as the
 #: fallback for a part the device says nothing about. Both halves are pinned.
-MIN_IC_PINS = 3
-
-#: A designator prefix that is never an IC, whatever the shelf says. The pin
-#: floor already excludes ``R`` / ``C`` / ``L`` (two pins), so this table is here
-#: for the parts that are **many**-pin and still not an IC — a four-diode TVS
-#: array, a multi-contact relay.
-NON_IC_DESIGNATOR_PREFIXES: frozenset[str] = frozenset(
-    {"D", "K", "T", "TVS", "RELAY", "XFMR"}
-)
-
-#: Footprint / value / MPN **words that name a header or a connector**, and are
-#: therefore never an IC. This is the 127b discipline-5 case made mechanical: the
-#: designator says ``U`` (so a designator table calls it an IC) and the part
-#: says ``PZ2.54-2*6`` / ``PZ2.54-2x6P TP`` / ``PZ254V-11-04P`` — a **排针**, a
-#: row of 2.54 mm holes. Measured on the fixture: U4 and U6 (PCB1) and U1 and
-#: U2 (PCB3) are all ``PZ2.54``-family parts and all four carry
-#: ``Designator: 'U?'``, which is precisely why the prefix cannot be trusted on
-#: its own.
 #:
-#: Matched case-insensitively as a **substring** of the part's own text, because
-#: these are the library's names and not ours: the same header family is spelled
-#: ``PZ2.54-2*6``, ``HX PZ2.54-2x6P TP``, ``PZ254V-11-04P`` and
-#: ``HDR-TH_4P-P2.54`` on four different parts.
-CONNECTOR_WORDS: tuple[str, ...] = (
-    "PZ2.54", "PZ254", "HDR", "HEADER", "CONN", "TYPE-C", "USB", "MX1.25", "XT60",
-)
+#: **190 moved this whole judgement (and the three word tables below) to**
+#: :mod:`boardwise.core.partkind`, where the 立创 metadata reading of
+#: ``rules/pcb/derating`` lives: two orders for one question was the口径 split
+#: 岳's ⑦ opened, and ``classify_part`` is now the one entry point, returning
+#: ``(kind, basis, reason)``. :func:`classify_device` below stays as this
+#: module's (and ``tests/test_126b`` / ``test_127b``'s) name for the
+#: ``(is_an_ic, why)`` pair, and the names it used are re-exported here so an
+#: importer does not have to know where the table moved.
+MIN_IC_PINS: int = _MIN_IC_PINS
 
-#: Words that name a **transistor** (MOSFET / BJT). A power MOSFET's drain sits
-#: on a supply rail and its gate on a driver output, so a pin-count IC test reads
-#: its ``+24V`` drain as 「an IC's supply net」 and asks for a bypass capacitor
-#: beside it — exactly the false positive 岳 ruled on (裁定 1). Matched against
-#: the same text, for the same reason.
-TRANSISTOR_WORDS: tuple[str, ...] = (
-    "MOS", "MOSFET", "N-CH", "P-CH", "2N7002", "MCAC", "DFN", "SOT-23", "SOT23",
-)
-#: ``TRANSISTOR_WORDS`` is scanned in order and the **first** hit is the reason
-#: quoted in the evidence, so the order is a priority order and not a set: a
-#: part named ``MCAC53N06Y-TP`` in an ``DFN(5x6)`` package must be reported as
-#: 「transistor (``MCAC``)」 rather than as its package, because the MPN is the
-#: part's identity and the package is a consequence of it.
+#: See :data:`boardwise.core.partkind.NON_IC_DESIGNATOR_PREFIXES`.
+NON_IC_DESIGNATOR_PREFIXES: frozenset[str] = _NON_IC_DESIGNATOR_PREFIXES
+
+#: See :data:`boardwise.core.partkind.CONNECTOR_WORDS`.
+CONNECTOR_WORDS: tuple[str, ...] = _CONNECTOR_WORDS
+
+#: See :data:`boardwise.core.partkind.TRANSISTOR_WORDS` — scanned in order, and
+#: the **first** hit is the reason quoted in the evidence, so the order is a
+#: priority order and not a set: a part named ``MCAC53N06Y-TP`` in an
+#: ``DFN(5x6)`` package must be reported as 「transistor (``MCAC``)」 rather than
+#: as its package, because the MPN is the part's identity and the package is a
+#: consequence of it.
+TRANSISTOR_WORDS: tuple[str, ...] = _TRANSISTOR_WORDS
 
 #: Words that name a **passive** — a part with no supply rail of its own and
 #: nothing to decouple. A two-pin passive never reaches the rule through the pin
 #: floor; this is here for a passive **array** that arrives on a ``U``
-#: designator.
+#: designator. 190 split 127b's one list into the kinds it actually named
+#: (:data:`boardwise.core.partkind.RESISTOR_WORDS` /
+#: ``CAPACITOR_WORDS`` / ``TRANSFORMER_WORDS``) so a caller asking 「is this a
+#: capacitor?」 gets an answer rather than 'a passive'.
 PASSIVE_WORDS: tuple[str, ...] = ("RES-", "RES_", "CAP-", "CAP_", "XFMR", "TRANSFORMER")
 
 
@@ -295,14 +286,6 @@ def device_facts(comp: object, library=None) -> DeviceFacts:
     )
 
 
-def _hit(text: str, words: tuple[str, ...]) -> str:
-    """The first word of ``words`` occurring in ``text``, or ``""``."""
-    for word in words:
-        if word.lower() in text:
-            return word
-    return ""
-
-
 def classify_device(facts: DeviceFacts, *, pins: int) -> tuple[bool, str]:
     """Is this part an IC, and **why** — the ``(answer, evidence)`` pair.
 
@@ -332,37 +315,29 @@ def classify_device(facts: DeviceFacts, *, pins: int) -> tuple[bool, str]:
     rule examines what it can establish and says so. That is the honest
     direction — it loses a real IC the shelf has never heard of, rather than
     filing a finding about a MOSFET.
+
+    **190: the steps are not spelled here any more.** They are
+    :func:`boardwise.core.partkind.classify_part` — one entry point shared with
+    the 立创 metadata reading that ``rules/pcb/derating`` had grown separately
+    (岳's ⑦ was exactly the two口径 disagreeing) — and this function is the
+    thinner name the two distance rules and their tests use for the
+    ``(is_an_ic, why)`` pair. ``facts`` (already resolved: the shelf category and
+    the part's own composed text) is handed over as the caller's own reading, so
+    the shared entry does **not** re-resolve the shelf or re-read the placement:
+    the answer and the evidence a fixture shows are the same strings 127b
+    pinned. The one behaviour 190 adds here is the pin floor being applied
+    **inside** the reading rather than before it, which is what makes the same
+    judgement usable by a caller with no pin count of its own.
     """
-    if pins < MIN_IC_PINS:
-        return False, f"{pins} pin(s) — below the {MIN_IC_PINS}-pin floor"
-    if facts.shelf_category:
-        category = facts.shelf_category
-        if category.startswith("ic"):
-            return True, f"shelf category {category!r} is an IC class"
-        return False, f"shelf category {category!r} is not an IC class"
-    text = facts.text
-    hit = _hit(text, CONNECTOR_WORDS)
-    if hit:
-        return False, f"the part's own name or footprint says connector/header ({hit!r})"
-    hit = _hit(text, TRANSISTOR_WORDS)
-    if hit:
-        return False, f"the part's own name or footprint says transistor ({hit!r})"
-    hit = _hit(text, PASSIVE_WORDS)
-    if hit:
-        return False, f"the part's own name or footprint says passive ({hit!r})"
-    prefix = re.match(r"^[A-Za-z]+", facts.designator or "")
-    if prefix and prefix.group(0).upper() in NON_IC_DESIGNATOR_PREFIXES:
-        return False, f"designator prefix {prefix.group(0)!r} never names an IC"
-    if is_ic_designator(facts.designator):
-        return True, (
-            f"no device fact classifies it either way, so the designator "
-            f"{facts.designator!r} is the fallback "
-            f"({designator_category(facts.designator)!r})"
+    read = classify_part(
+        facts=PartDeclarations(
+            designator=str(facts.designator or ""),
+            shelf_category=str(facts.shelf_category or ""),
+            text=str(facts.text or ""),
+            pins=pins,
         )
-    return False, (
-        f"no device fact names it an IC and its designator "
-        f"{facts.designator!r} does not either"
     )
+    return read.is_ic, read.reason
 
 
 #: A capacitor at or above this value is **bulk**: reservoir / inrush energy
@@ -613,7 +588,10 @@ class DecapDistance(PcbRule):
     supply nets (silence), no grounded capacitors on a net (one INFO), and no
     measurable candidate on a net (silence — the candidates exist, this PCB
     document does not carry them, and *that* is 126's per-board bookkeeping, not
-    a layout claim).
+    a layout claim). **190 moved one row between the two**: an over-the-limit
+    distance on the part's own VOUT side is INFO (see :meth:`_one_net`), so the
+    same reading can now be a disclosure rather than a complaint depending on
+    the side the rail sits on — the threshold is untouched.
 
     **What is an IC is now the schematic's own device facts**, not a pin
     count — see :func:`classify_device`, and 岳裁定 1 for the case that forced
@@ -707,8 +685,12 @@ class DecapDistance(PcbRule):
         therefore carries the side, read from the pin names through
         :func:`boardwise.core.pinrole.pin_role` — the same reader
         :mod:`boardwise.rules.pcb.regulator` uses, so the two rules cannot
-        disagree about which pin is a VIN. The severity is unchanged: this is a
-        disclosure (say which rail, and on which side), not a new threshold.
+        disagree about which pin is a VIN. 190 read that disclosure one step
+        further (岳 2026-10-16): a distance over the house rule on the **VOUT**
+        side of this part is INFO rather than WARN, because the capacitor there
+        is shared with whatever the rail feeds next. The threshold itself is
+        unchanged — the number is still the same 200 mil house rule, and 岳's
+        ruling on the per-rail split is still outstanding.
         """
         candidates = list(cap_candidates_on(ic_model, net))
         attribution = _rail_attribution(designator, net, side)
@@ -845,10 +827,20 @@ class DecapDistance(PcbRule):
         )
         if gap <= DECAP_DISTANCE_MIL:
             return []
+        # 190 (岳 10-16 裁决, ⑨ 的遗留): the *severity* depends on which side of
+        # the part the rail sits on. On the part's own **output** rail the
+        # capacitor that is "too far" is shared with whatever the rail feeds
+        # next, and the placement question is not the same one as on its input
+        # side (where the part is fed and *its* decoupling is the part's own
+        # business) — so an over-limit row on a declared VOUT side is INFO.
+        # The threshold and the measurement are untouched: this is the
+        # disclosure 189B added, read one step further. A rail whose pin names
+        # declare nothing, or both sides, keeps the WARN.
+        on_output = side == _SIDE_VOUT
         return [
             Finding(
                 rule_id=self.id,
-                severity="WARN",
+                severity="INFO" if on_output else "WARN",
                 level=self.level,
                 message=(
                     f"{designator}'s nearest decoupling capacitor on {net!r} is "
@@ -857,12 +849,30 @@ class DecapDistance(PcbRule):
                     f"{DECAP_DISTANCE_MIL:.0f} mil house rule — the loop it "
                     f"decouples is {_mil(gap) / DECAP_DISTANCE_MIL:.1f}x longer "
                     f"than the rule allows；{attribution.short}"
+                    + (
+                        "——**降一级为 INFO**：这条轨在这颗器件上是它自己**输出**的"
+                        "一侧（岳 2026-10-16 裁决），阈值与读数都没动，只把「输出侧"
+                        "的距离超限」按披露降级；VIN 侧与未声明侧别仍按 WARN"
+                        if on_output
+                        else ""
+                    )
                 ),
                 evidence=evidence
                 + [
                     f"candidates on {net}: {', '.join(sorted(candidates))}",
                     f"measured: {', '.join(f'{c}={_mil(d):.1f}' for c, d in sorted(measured, key=lambda p: p[1]))}",
-                ],
+                ]
+                + (
+                    [
+                        "severity rule (190): a distance over the house rule on the "
+                        "**VOUT** side of this part is INFO, because the capacitor "
+                        "there is shared with whatever the rail feeds next; the "
+                        "threshold is unchanged and the VIN / undeclared sides keep "
+                        "the WARN (岳 2026-10-16)"
+                    ]
+                    if on_output
+                    else []
+                ),
                 target=target,
             )
         ]
@@ -888,6 +898,11 @@ _SIDE_ROLE_LABELS = {"IN": "VIN", "OUT": "VOUT"}
 #: and ``PGOOD`` are supply-ish pins with no role, and 131a's ``pin_role``
 #: answering ``None`` means 「this name declares no role」 rather than 「no pin」.
 _SIDE_UNDECLARED = "脚名未声明侧别"
+
+#: The one side label that **moves a severity** (190, see :meth:`DecapDistance._one_net`).
+#: Named here rather than spelled at the comparison so the label the disclosure
+#: prints and the label the severity rule matches cannot drift apart.
+_SIDE_VOUT = "VOUT 侧"
 
 
 def _rail_side(component: object, net: str) -> str:
@@ -920,8 +935,10 @@ def _rail_attribution(designator: str, net: str, side: str) -> RailAttribution:
     one rail and reporting another. The second is the side, because 「贴着放」 is
     a different requirement on a part's input rail (fed by whatever produces it —
     that rail's capacitors may belong to the upstream stage) than on its own
-    output rail (where the part *is* the source). Both are disclosures: no
-    severity moves, no threshold is invented.
+    output rail (where the part *is* the source). The first is a disclosure; the
+    second became **one severity step** in 190 (an over-limit VOUT-side row is
+    INFO) — no threshold is invented either way, and 岳's number ruling is still
+    open.
     """
     return RailAttribution(
         short=(

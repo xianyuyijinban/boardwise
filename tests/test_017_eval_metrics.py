@@ -718,6 +718,16 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # board's NTC thermistor joins the recognised set; no WARN and no verdict
     # appears anywhere) — the diff is in `outputs/189b/fixture_diff_derating.txt`.
     # Anchors: `tests/test_189b_mid_pack.py`; the values are pinned in test_126a.
+    # 190 moved **both** — 5162fe2d/946e8610 -> cd5e433e/a31a7c03: one judgement
+    # (`boardwise.core.partkind.classify_part`: shelf category -> 立创 metadata ->
+    # the part's own name/footprint words -> the designator, with 127b's 3-pin
+    # floor refusing a two-pin IC) is now what every judgement site calls, so
+    # three **direct** files moved (`rules/connectivity.py`'s decoupling and
+    # shunt rules, `rules/facts.py`'s subject list, `rules/sensebias.py`'s op-amp
+    # half-gate) as well as two under `rules/pcb/` (`distance.py`: the judgement
+    # moved out and an over-limit decoupling row on a VOUT side became INFO;
+    # `derating.py`: the same reading plus NTC/PTC ruled a `thermistor` and left
+    # to the value-code path). Full per-board before/after: `outputs/190/`.
     # 187A/187B/189A1's entries live in test_126a only (this note is the pointer).
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.

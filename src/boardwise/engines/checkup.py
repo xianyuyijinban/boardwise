@@ -1186,7 +1186,18 @@ def unknown_parts(model: DesignModel) -> list[dict]:
     `question` is the same for all of them: the review's next step is "go and read
     the datasheet's typical application", whatever it was that made the part
     unfamiliar.
+
+    **A thermistor is not asked for an EIA value code** (190, 岳 10-16 裁决).
+    ``_VALUE_CODE_PREFIXES`` is the list of prefixes whose MPN is *expected* to
+    carry a value code — ``R`` among them — and an NTC/PTC is placed at an ``R``
+    designator with an MPN whose figures are a temperature curve
+    (``HNTC0603-103F3450FA``), so 「值不可知」 was being filed about a part whose
+    value this tool is not supposed to decode at all. ``classify_part`` says which
+    parts those are; the reason is simply not recorded for them, and the other
+    two identity signals (no MPN, no supplier) are untouched.
     """
+    from ..core.partkind import KIND_THERMISTOR, classify_part
+
     out: list[dict] = []
     for designator, component, boards in _parts_with_boards(model):
         reasons: list[str] = []
@@ -1194,7 +1205,11 @@ def unknown_parts(model: DesignModel) -> list[dict]:
         mpn = (component.mpn or "").strip()
         if not mpn:
             reasons.append(UNKNOWN_REASON_NO_MPN)
-        elif prefix in _VALUE_CODE_PREFIXES and not _value_decodable(prefix, component):
+        elif (
+            prefix in _VALUE_CODE_PREFIXES
+            and classify_part(component).kind != KIND_THERMISTOR
+            and not _value_decodable(prefix, component)
+        ):
             reasons.append(UNKNOWN_REASON_UNDECODABLE)
         if not (component.lcsc_part or "").strip():
             reasons.append(UNKNOWN_REASON_NO_SUPPLIER)
@@ -1571,7 +1586,9 @@ def unreviewed_parts(
     folder = Path(datasheet_dir) if datasheet_dir else None
     out: list[dict] = []
     for designator, component, boards in _parts_with_boards(model):
-        is_ic = is_ic_designator(designator)
+        # 190：位号前缀只是兜底。元数据/货架**声明**它是无源件（U 位号的 330 kΩ
+        # 电阻）就不按 IC 问手册；只豁免、不扩招——判型读错时只会多问，不会少问。
+        is_ic = is_ic_designator(designator) and not _declared_passive(component)
         name = str(component.props.get("device_name") or "").strip()
         entry = None
         matched_by = ""
@@ -1823,8 +1840,10 @@ def needs_datasheet_section(
 
     A folded row keeps its designator under ``part``, the identity fields of the
     **first** placement it saw (185-中1: ``channels``/``mpn``/``supplier``/
-    ``missingFacts``, unchanged), and — added by 185-中1 — a ``boards`` list
-    saying **which placements that one designator stands for**: ``{"board",
+    ``missingFacts``, unchanged; 190 adds ``shelfMatchedBy`` — the same key and
+    the same meaning as ``unreviewed_parts[].shelfMatchedBy``, which 186 had put
+    on the row and the fold was dropping), and — added by 185-中1 — a ``boards``
+    list saying **which placements that one designator stands for**: ``{"board",
     "mpn", "name", "value"}`` per board. It exists because the fold is by
     designator, and a project's designator is not one part: measured on the 3-board
     fixture, 15 of the folded designators are on more than one board with
@@ -1876,6 +1895,13 @@ def needs_datasheet_section(
             "mpn": (seed.get("mpn") or "") if seed is not None else "",
             "supplier": (seed.get("supplier") or "") if seed is not None else "",
             "missingFacts": list(seed.get("missingFacts") or []) if seed is not None else [],
+            # 190: the identity step that matched this part, carried through from
+            # the `unreviewed_parts` row (186 put it there; the folded worklist
+            # row was dropping it). Same name and same meaning as
+            # `unreviewed_parts[].shelfMatchedBy` and `reviewedByShelf[].shelfMatchedBy`
+            # — empty for a part on no shelf, and for the `marked` trigger a part
+            # the reviewer wrote down before any reading existed.
+            "shelfMatchedBy": (seed.get("shelfMatchedBy") or "") if seed is not None else "",
         }
 
     out: list[dict] = []
@@ -4433,3 +4459,19 @@ def _walk_leafs(group: dict) -> list[dict]:
     for child in group.get("children") or []:
         out.extend(_walk_leafs(child))
     return out
+
+
+def _declared_passive(component) -> bool:
+    """元数据或货架**声明**这颗是无源件（电阻/电容/电感/热敏）——190 未审闸的豁免条件。"""
+    from ..core.partkind import (
+        KIND_CAPACITOR,
+        KIND_INDUCTOR,
+        KIND_RESISTOR,
+        KIND_THERMISTOR,
+        classify_part,
+    )
+
+    kind = classify_part(component, pin_floor=False)
+    return kind.declared and kind.kind in (
+        KIND_RESISTOR, KIND_CAPACITOR, KIND_INDUCTOR, KIND_THERMISTOR,
+    )

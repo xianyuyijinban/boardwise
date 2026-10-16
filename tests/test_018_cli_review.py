@@ -252,10 +252,12 @@ def test_the_md_report_keeps_its_opening_and_gains_a_chinese_summary(tmp_path, c
         "- [提示] RC 截止频率（param-rc-cutoff）：位号 R34/C116；"
         "关键数值 10Ω、330uF、48 Hz、-3 dB" in text
     )
-    assert "共 28 条发现：0 错误 / 0 警告 / 28 提示" in text
+    # 28 until 190: the three `shunt-sense-link` INFO rows the phase shunts now
+    # produce (see the JSON pin below for why).
+    assert "共 31 条发现：0 错误 / 0 警告 / 31 提示" in text
 
     summary_at = text.index("## 中文摘要")
-    assert summary_at < text.index("## INFO (28)")
+    assert summary_at < text.index("## INFO (31)")
     assert summary_at < text.index("`param-rc-cutoff`")
     # The English finding line is still there, untranslated, in its own place.
     assert "- `param-rc-cutoff` [L2-facts] RC R34(10Ω) + C116(330uF) on 'VM'" in text
@@ -433,7 +435,11 @@ def test_the_json_schema_is_the_one_the_harness_reads(tmp_path, capsys):
     assert set(payload) == {"summary", "findings"}
     # 27 until 064: the board's D2 (SMCJ40CA) is a shelf-backed TVS on an
     # unpriced `VM`, and `sel-tvs-standoff-rail` reports that as UNKNOWN/INFO.
-    assert payload["summary"] == {"ERROR": 0, "WARN": 0, "INFO": 28}
+    # 28 until 190: the three `shunt-sense-link` INFO rows the phase shunts now
+    # produce — until 190 the two 2x6 headers at `U19`/`U21` counted as ICs and
+    # each shunt looked linked; the shared part-kind reading (127b's discipline)
+    # stopped that. Nothing else moved: still zero ERROR and zero WARN.
+    assert payload["summary"] == {"ERROR": 0, "WARN": 0, "INFO": 31}
     # `board` joined the finding schema in 040b (per-board runs). An `.enet`
     # input has no boards, so it stays empty here — the key is always present,
     # which is what a reader can rely on.

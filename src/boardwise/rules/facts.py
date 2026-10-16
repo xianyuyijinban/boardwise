@@ -7,13 +7,20 @@ the four-state protocol: a rule that cannot decide says UNKNOWN and names the
 missing fact — "no facts for U3" drives the library's intake priority, which
 is the whole point of the outcome vocabulary.
 
-Common subject rule: these rules look at **components the repository's
-designator table classifies as ICs** (``U``/``IC``/``DRV`` —
+Common subject rule: these rules look at **components the shared part-kind
+reading calls ICs** (:func:`boardwise.core.partkind.classify_part` as of 190;
+before that the repository's designator table,
 :func:`boardwise.core.parts.is_ic_designator`, which replaced this module's own
 ``IC_PATTERN`` in 128/#63). A component with a shelf entry whose category is not
 ``ic.*`` gets NOT_APPLICABLE; a component with no entry gets UNKNOWN, naming
 what the library lacks. Passive parts never reach the rules at all, so "no
-facts for R24" cannot flood the report with non-questions.
+facts for R24" cannot flood the report with non-questions — and as of 190 that
+sentence is true for the parts that *are* passives **however they are
+designated**: a 330 kΩ chip resistor at ``U4`` (岳 2026-10-16 ⑦) is a passive,
+so it is no longer examined as an IC with a missing datasheet. The two halves
+of that reading — what the shelf says and what the designator says — must not
+disagree, which is why :meth:`ShelfIntake.ics` hands the shelf in and the
+designator table is only the last step.
 
 Each rule documents where it decides from — ``source`` is a datasheet citation
 or ``house rule``; an empty source is a debt (task 011 sec.3), and none of
@@ -27,6 +34,7 @@ import re
 from dataclasses import dataclass, field
 
 from ..core.model import Component, DesignModel, Net
+from ..core.partkind import KIND_IC, classify_part
 from ..core.parts import (
     PartEntry,
     PartLibrary,
@@ -48,8 +56,10 @@ from .unproven import (
 )
 
 LEVEL = "L2-facts"
-#: What "is this an IC" means for every rule in this module: **the repository's
-#: own designator table**, `boardwise.core.parts.is_ic_designator`.
+#: What "is this an IC" means for every rule in this module: **the shared
+#: part-kind reading**, :func:`boardwise.core.partkind.classify_part` (190), of
+#: which the designator table `boardwise.core.parts.is_ic_designator` is the
+#: **last** step rather than the whole answer.
 #:
 #: This used to be a private ``^U\d`` regex (``IC_PATTERN``, retired in 128,
 #: issue #63 §2). It was narrower than the table sitting thirty lines away in
@@ -66,6 +76,11 @@ LEVEL = "L2-facts"
 #: not an IC. :data:`boardwise.engines.review.DESIGNATOR_PREFIXES` is the same
 #: table plus the few non-shelf families, and ``tests/test_128_*`` is what keeps
 #: the two classifiers from drifting apart again.
+#:
+#: 190 added the other two steps in front of it — the shelf category (the entry
+#: this module already resolves for every rule) and the part's own declarations
+#: — so that this module and the PCB-side rules cannot answer the same question
+#: two ways, which is what 岳's ⑦ measured on the ``U``-designated resistors.
 #:
 #: Where the lazy library loads from when a test does not inject one, spelled
 #: relative to the repository root — the CLI's documented working directory and
@@ -236,10 +251,54 @@ class FactsRule(OutcomeRule):
 
     def ics(self, model: DesignModel) -> list[Component]:
         return [
-            comp
-            for comp in model.components.values()
-            if is_ic_designator(comp.designator)
+            comp for comp in model.components.values() if self._is_ic_subject(comp)
         ]
+
+    def _is_ic_subject(self, comp: Component) -> bool:
+        """Whether this module's rules are **about** one component.
+
+        ``is_ic_designator`` (the repository's designator table) used to be the
+        whole answer, and 190 replaced it with
+        :func:`boardwise.core.partkind.classify_part` so that every judgement
+        site speaks one language: the shelf entry for this component is read
+        first (with the 039 gate), then what the part declares about itself
+        (立创 metadata, then its own footprint/value/MPN/device name), and only
+        then the designator. The measured case is 岳's ⑦: a ``U``-designated
+        330 kΩ resistor is not an IC, so "no facts for U4" is not a question this
+        module should be asking about it — and a ``U``-designated header whose
+        own name says ``PZ2.54`` is not one either.
+
+        The shelf passed here is the **same** one :meth:`entry_for` resolves
+        through, so the kind a rule sorts a part by and the entry it then reads
+        cannot come from two different shelves (186's hole, one level down).
+
+        **The one part that stays a subject without being an IC**: a part the
+        *designator table* calls an IC while the shelf *explicitly* classifies it
+        as something else. It is listed so the rules can **say so** —
+        ``_category_state`` turns it into 039's NOT_APPLICABLE 「this rule speaks
+        to ICs only」 row, and a reader who wonders why ``U9`` gets no judgement
+        finds the sentence instead of a hole. A part dropped from a gate is a work
+        item nobody sees; the four-state protocol exists because 「looked and not
+        my subject」 is a statement, not silence. Both halves of that clause are
+        load-bearing: it takes a *designator* the table calls an IC (otherwise
+        every shelf-classified connector on every board would enter the states
+        view for no reason) **and** an entry whose category is explicitly not an
+        IC (an unverified entry declares nothing — no partial trust).
+
+        ``pin_floor=False``, and why: 127b's three-pin necessary condition was
+        written for 「does this part need a bypass capacitor?」, and this module's
+        question is 「can the shelf judge this part?」 — where a part that
+        *vanishes* is the failure the whole protocol exists to prevent. A model
+        that read one pin of a part has not established that the part is not an
+        IC (107's truncated placements are the same shape), and this module's
+        anchors build one-pin components on purpose.
+        """
+        if classify_part(comp, library=self.library, pin_floor=False).kind == KIND_IC:
+            return True
+        if not is_ic_designator(comp.designator):
+            return False
+        entry = self.entry_for(comp)
+        return entry is not None and _category_state(entry) == _NON_IC
 
     def findings_from(self, rows: list[tuple]) -> list[Finding]:
         """VIOLATION rows become findings; the rest is silence with reasons.
@@ -746,7 +805,15 @@ class LibraryPinConsistency(OutcomeRule):
             )]
         rows: list[tuple[Outcome, str | None]] = []
         for comp in model.components.values():
-            if not is_ic_designator(comp.designator):
+            # 190: the same shared part-kind reading as :meth:`ShelfIntake.ics`
+            # — no shelf is handed over here (this rule is an ``OutcomeRule``
+            # with a bridge resolver and no library), so the reading is the
+            # declarations plus the designator, which is exactly what this
+            # rule's subject was before and without the ``U``-letter being
+            # the last word. ``pin_floor=False``: this rule's subject *is* a
+            # pin list (the board's pins against the symbol's), so "this
+            # model read two of them" cannot be a reason to skip the part.
+            if classify_part(comp, pin_floor=False).kind != KIND_IC:
                 continue
             library_pins = self._resolver(comp)
             if library_pins is None:

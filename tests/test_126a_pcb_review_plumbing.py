@@ -1188,9 +1188,32 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 渲染兜底两层 / 元数据优先判型 + 前缀不是门 / 轨归因披露 / skill 备份窗 3 份 +
     # 回收站）。变异 2 组 CAUGHT（④ 接缝改回读 `facts["stale"]`、⑦ 判型改回只读
     # `Type`）。
+    # **190 moved BOTH** — recursive 5162fe2d -> cd5e433e，direct 946e8610 ->
+    # `a31a7c03`（第二十四批；量在一棵**只合着 190 自己的未提交改动**的树上——
+    # 190S 的 `rules/pcb/silk.py` / `core/geometry.py` 当时与 HEAD 逐字节相同，
+    # 两者 sha256 分别是 `b92fd20a…` / `44792b47…`；190S 落地后 recursive 会再
+    # 动一次，由后落地的那批按同一规矩再量）。direct 被移动的原因是 190 改了
+    # **三个 `rules/` 直下文件**：`connectivity.py`（`DecouplingPerIC` /
+    # `ShuntSenseLink` 两处判型改走公共入口，`decoupling-per-ic` 的 message 不再
+    # 自称「matches designator prefixes only」）、`facts.py`（`ics()` 逐件回路
+    # 改走 `classify_part(library=…, pin_floor=False)` + 保留 039 的 NOT_APPLICABLE
+    # 披露）、`sensebias.py`（运放半门的位号那半改走判型，货架 category 也交给
+    # 它读）。recursive 另多 `rules/pcb/` 两个文件：`distance.py`（`classify_device`
+    # 变成 `core.partkind.classify_part` 的薄封装，判据与词表搬去 `core/partkind.py`；
+    # `pcb-decap-distance` 的超限行在 **VOUT 侧降一级为 INFO**）与
+    # `derating.py`（判型走公共入口 + NTC/PTC 按 thermistor 放行）。
+    # **判决语义**：14 块夹具 + 实板A 的全量对拍（finding 逐条 message/evidence
+    # 比对：`outputs/190/fixture_compare.txt`）逐块可见——`decoupling-per-ic`
+    # 实板A 3 条 WARN → 0；`board24v.enet`/KiCad 两块夹具的读数变化与原因见
+    # `outputs/190/evidence.md` 的对照表。行为锚：新建 `tests/test_190_part_kind.py`
+    # （24 条：读序/basis/039 门/3 脚地板/⑦ 两向/U 位号电阻不再要电容/
+    # C 位号连接器不算电容/分流与 IC 两半/facts 主体面/NOT_APPLICABLE 披露保留/
+    # thermistor 独立 kind 与值码/热敏不进 unknown_parts/VOUT 降级与阈值不动/
+    # 6R3 电压码与 EIA 字母码清单/shelfMatchedBy）。变异 2 组 CAUGHT（见
+    # `outputs/190/evidence.md` §变异）。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "946e8610"
-    assert recursive == "5162fe2d", (
+    assert old_digest == "a31a7c03"
+    assert recursive == "cd5e433e", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

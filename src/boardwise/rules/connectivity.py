@@ -4,6 +4,18 @@ All rules in this module are heuristics over the normalized netlist model.
 They look at designator prefixes, value strings and net membership only —
 no schematic geometry, no datasheet knowledge. Each finding message states
 the heuristic's limits so readers can judge how much to trust it.
+
+**Which parts count as what is not this module's own table any more (190).**
+The two rules that have to decide 「is this an IC / a capacitor / a resistor?」
+ask :func:`boardwise.core.partkind.classify_part`, the same entry point
+``rules/facts``, ``rules/sensebias`` and the PCB rules read — 岳 2026-10-16 ⑦
+was the measured cost of a `U`-prefix test disagreeing with what the part's own
+declaration says (three 330 kΩ resistors at ``U`` designators each asked for a
+decoupling capacitor). The rules here call it **without a shelf**, deliberately:
+this module's contract is the netlist, and a rule that silently read
+``blocklib/parts.json`` would be claiming a datasheet it never opened — the
+reading reports which basis it used (``prefix`` for these callers, and the
+finding says so).
 """
 
 from __future__ import annotations
@@ -11,6 +23,7 @@ from __future__ import annotations
 import re
 
 from ..core.model import Component, DesignModel, is_ground_net
+from ..core.partkind import KIND_CAPACITOR, KIND_IC, KIND_RESISTOR, classify_part
 from .base import Finding, Outcome, OutcomeRule, Rule
 
 LEVEL = "L1-connectivity"
@@ -30,15 +43,6 @@ def parse_resistance_ohms(value: str) -> float | None:
     return _parse(value)
 
 
-def _nets_with_prefix(model: DesignModel, prefix: str) -> set[str]:
-    """Names of nets that contain at least one member with that designator prefix."""
-    return {
-        net.name
-        for net in model.nets.values()
-        if any(designator.startswith(prefix) for designator, _ in net.pins)
-    }
-
-
 def _pin_net_evidence(comp: Component) -> list[str]:
     return [
         f"{comp.designator} pin{pin.number} @ {pin.net}"
@@ -48,21 +52,52 @@ def _pin_net_evidence(comp: Component) -> list[str]:
 
 
 class DecouplingPerIC(Rule):
-    """Every IC (``U`` prefix) should share at least one pin net with a capacitor."""
+    """Every IC should share at least one pin net with a capacitor.
+
+    **Both halves of the sentence are judged by the shared 判型 entry point**
+    (:func:`boardwise.core.partkind.classify_part`), not by a designator letter
+    (190, 岳 2026-10-16 ⑦). Until 190 this rule was the ``U``/``C`` prefix test
+    its own message apologised for — 「matches designator prefixes only (U*/C*),
+    any C-prefixed part (including connectors) counts as a capacitor」 — and the
+    measured cost was on 实板A: three ``U``-designated 330 kΩ chip resistors
+    (``FRC1206J334 TS``) were each asked for a decoupling capacitor because
+    nothing else could be read about them. What decides now:
+
+    * **an IC** is a part the reading calls one (:data:`KIND_IC`) — a
+      declaration (shelf category, 立创 metadata, the part's own name/footprint
+      words) when there is one, and otherwise the designator's own family with
+      the 3-pin floor applied (a two-pin part is never asked for a bypass
+      capacitor — 127b's necessary condition, reused rather than re-argued);
+    * **a capacitor** is a part the same reading calls one (:data:`KIND_CAPACITOR`),
+      so a ``C``-designated connector stops counting and a capacitor declared by
+      metadata counts wherever it is placed.
+
+    The rule is L1 and reads **no shelf**: this module's contract is heuristics
+    over the normalized netlist, and :func:`classify_part` is called without a
+    library so its shelf step is simply absent. That is why the message says
+    which basis each side was read on instead of claiming a datasheet it never
+    opened.
+    """
 
     id = "decoupling-per-ic"
     title = "Each IC should share at least one net with a decoupling capacitor"
     level = LEVEL
     source = ""
 
-    ic_prefix = "U"
-    capacitor_prefix = "C"
-
     def check(self, model: DesignModel) -> list[Finding]:
         findings: list[Finding] = []
-        cap_nets = _nets_with_prefix(model, self.capacitor_prefix)
+        cap_nets: set[str] = set()
+        capacitor_count = 0
         for comp in model.components.values():
-            if not comp.designator.startswith(self.ic_prefix):
+            if classify_part(comp).kind != KIND_CAPACITOR:
+                continue
+            capacitor_count += 1
+            cap_nets |= {
+                pin.net for pin in comp.pins if pin.net is not None
+            }
+        for comp in model.components.values():
+            read = classify_part(comp)
+            if read.kind != KIND_IC:
                 continue
             pin_nets = {
                 pin.net
@@ -78,12 +113,22 @@ class DecouplingPerIC(Rule):
                     level=self.level,
                     message=(
                         f"{comp.designator}: none of its pin nets contains a "
-                        "capacitor. Heuristic limits: matches designator "
-                        "prefixes only (U*/C*), cannot tell supply pins from "
-                        "signal pins, and any C-prefixed part (including "
-                        "connectors) counts as a capacitor."
+                        "capacitor. Heuristic limits: both halves of the "
+                        "judgement are the shared part-kind reading — an IC is "
+                        "a part that reading calls one, a capacitor is a part it "
+                        "calls one — so a two-pin part is never asked (127b's "
+                        "pin floor) and a declaration wins over the designator "
+                        "letter in both directions (a 330 kΩ resistor at a U "
+                        "designator is not an IC; a connector at a C designator "
+                        "is not a capacitor). Supply pins still cannot be told "
+                        "from signal pins here."
                     ),
-                    evidence=_pin_net_evidence(comp),
+                    evidence=_pin_net_evidence(comp)
+                    + [
+                        f"part-kind reading: {read.kind} (basis {read.basis or 'none'}"
+                        f" — {read.reason})",
+                        f"capacitors counted on this board: {capacitor_count}",
+                    ],
                 )
             )
         return findings
@@ -305,9 +350,15 @@ class CrystalLoadCaps(Rule):
 class ShuntSenseLink(Rule):
     """Milliohm shunt resistors should connect to an IC's sense pins.
 
-    Smoke check only: passes if *some* U-prefixed component has pins on both
+    Smoke check only: passes if *some* IC-classified component has pins on both
     terminal nets of the shunt. Series resistors / filter networks between
     shunt and IC are invisible at L1 and produce an INFO, not a WARN.
+
+    **Both halves are the shared part-kind reading** (190): the shunt is a part
+    :func:`boardwise.core.partkind.classify_part` calls a resistor, and the IC is
+    one it calls an IC — not an ``R``/``U`` designator letter. The ohms test
+    below is a different question and stays here: whether a *resistor* is a
+    milliohm **shunt** is what its value says.
 
     The 50 mΩ ceiling names the *differential* shunt domain, and its distance
     from ``path-sampling-bias``'s 0.5 Ω (176) is a boundary between two
@@ -326,13 +377,11 @@ class ShuntSenseLink(Rule):
     level = LEVEL
     source = ""
 
-    resistor_prefix = "R"
-    ic_prefix = "U"
     #: Upper bound for "milliohm-level" shunts, in milliohms.
     max_shunt_milliohms = 50.0
 
     def _is_shunt(self, comp: Component) -> bool:
-        if not comp.designator.startswith(self.resistor_prefix):
+        if classify_part(comp).kind != KIND_RESISTOR:
             return False
         ohms = parse_resistance_ohms(comp.value or "")
         if ohms is None or ohms <= 0:  # 0Ω jumpers are not sense shunts
@@ -344,7 +393,7 @@ class ShuntSenseLink(Rule):
         ics = [
             comp
             for comp in model.components.values()
-            if comp.designator.startswith(self.ic_prefix)
+            if classify_part(comp).kind == KIND_IC
         ]
         for comp in model.components.values():
             if not self._is_shunt(comp):
@@ -368,11 +417,13 @@ class ShuntSenseLink(Rule):
                         severity="INFO",
                         level=self.level,
                         message=(
-                            f"{comp.designator} ({comp.value}): no IC pins found "
-                            f"on its terminal nets {terminals[0]} / {terminals[1]}. "
-                            "L1 capability boundary: the sense link may run "
-                            "through series resistors or a filter network, "
-                            "which a connectivity-only check cannot see."
+                            f"{comp.designator} ({comp.value}): no IC has pins on "
+                            f"**both** of its terminal nets {terminals[0]} / "
+                            f"{terminals[1]} — an IC pin on one end alone is not "
+                            "the sense link this rule smokes for. L1 capability "
+                            "boundary: the link may run through series resistors "
+                            "or a filter network, which a connectivity-only check "
+                            "cannot see."
                         ),
                         evidence=_pin_net_evidence(comp),
                     )

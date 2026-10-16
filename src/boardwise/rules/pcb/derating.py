@@ -20,7 +20,10 @@ specification，Table 2 下方的 RATED VOLTAGE 段）。所以一颗 0603 的 1
   器件库的 ``Type`` 词（``薄膜电阻``/``电阻``），加 PCB 侧 FOOTPRINT 文档的名字
   （``R0603``）里的**尺寸码**。**不从形状、焊盘数、位号字母猜器件类型**：
   位号 ``R`` 起头只是命名习惯，本规则的门是「值字段读得出欧姆」或「库件的 Type
-  说的是电阻」（见 :func:`resistance_ohms_of`）。
+  说的是电阻」（见 :func:`resistance_ohms_of`）。**190 起这门由公共判型入口
+  （:func:`boardwise.core.partkind.classify_part`）说了算**，本模块只把「元数据说
+  的是不是电阻」这一问交给它，并多了一条否决：声明说热敏电阻（NTC/PTC）的件按
+  ``thermistor`` 这个独立 kind 放行，既不判降额也不记「值码解不出」（岳 10-16 裁决）。
 * **它两端有多少伏**——由**两侧网名电压差**算出：每个网的电价来自 139 的双读机制
   （:func:`boardwise.rules.pcb.ipc.declared_voltages`：设计意图合同
   ``requirements.rails[net=…].voltage`` / ``targetVoltage`` 优先，其次是图纸自己的
@@ -116,6 +119,14 @@ from .base import PcbReviewContext, PcbRule
 from .footprint import chip_size_code
 from .ipc import declared_voltages
 from ...core.model import is_ground_net
+from ...core.partkind import (
+    KIND_RESISTOR,
+    KIND_THERMISTOR,
+    METADATA_TYPE_KEYS,
+    PartDeclarations,
+    classify_part,
+    declarations_of,
+)
 from ...core.values import parse_resistance_ohms, states_package_size
 
 __all__ = [
@@ -131,6 +142,7 @@ __all__ = [
     "SeriesString",
     "board_link_note",
     "chip_limit",
+    "declared_kind",
     "declared_type_text",
     "resistance_ohms_of",
     "schematic_board_of",
@@ -303,15 +315,14 @@ def chip_limit(footprint_name: str) -> tuple[str, ChipLimit] | None:
 #: **不与电容词表共享**：``无极性电容`` 里没有这两个词，本规则就不认它是电阻。
 RESISTOR_TYPE_WORDS: tuple[str, ...] = ("电阻", "resistor")
 
-#: 立创元数据里「这颗件是什么」的字段，**按读取优先级**（189B ⑦）：
-#: ``Type`` 是器件库自己的电气分类（薄/厚膜电阻、合金电阻…），
-#: ``LCSC Part Name`` 是立创商城那一串商品名（实板实测把类型写在这里——``330kΩ
-#: ±1% 1/4W 厚膜电阻``——而 ``Type`` 有时是空的），``Supplier Footprint`` 是供应商
-#: 的封装串（自己不含类型词，读它是为了让「元数据面」在一次调用里取全，别再按字段
-#: 名猜第三个入口）。**位号前缀不在这张表里，也永远不会是判型门**：
-#: ``U`` 位号的 330 kΩ 电阻（``FRC1206J334TS``）是实板反馈的原始案例，位号字母是
-#: 命名习惯，不是电气事实（架构决策 5、127b 的 U3 教训、151 的同一口径）。
-METADATA_TYPE_KEYS: tuple[str, ...] = ("Type", "LCSC Part Name", "Supplier Footprint")
+#: 立创元数据里「这颗件是什么」的字段，**按读取优先级**（189B ⑦）。
+#:
+#: **190 起这个表住在** :data:`boardwise.core.partkind.METADATA_TYPE_KEYS`，本模块
+#: 转出同一份对象（`delcared_type_text` 也搬过去当了
+#: :func:`boardwise.core.partkind.declarations_of` 的一半）——判型面收成一处说了算，
+#: 「元数据三格」这条口径不能有两个副本。这里保留名字是因为它是本模块的公开面
+#: （``__all__``、文档、证据行都引它），值就是那一份 tuple。
+METADATA_TYPE_KEYS: tuple[str, ...] = METADATA_TYPE_KEYS
 
 #: 位号是不是电阻族（``R12``/``R3``）。**这不是判定门，只是报告门的原料**：
 #: 小结里把「位号像电阻、但值字段与库件都没说它是电阻」的件点名出来——那是
@@ -404,10 +415,12 @@ def declared_type_text(component: object) -> str:
     用来**对值**（184/188A 的口径），不用来定类型。
 
     位号前缀既不进这段文本，也不进任何判型门（见 :func:`_is_resistor`）。
+
+    **190 起这个读数就是** :func:`boardwise.core.partkind.declarations_of` 的
+    ``metadata`` 一半（同一个循环、同一个优先级），本函数留作本模块的公开面与既有
+    调用点；判型面收成一处说了算之后，这里不再有自己的副本。
     """
-    props = getattr(component, "props", {}) or {}
-    parts = [str(props.get(key) or "") for key in METADATA_TYPE_KEYS]
-    return " ".join(part.strip() for part in parts if part.strip())
+    return declarations_of(component).metadata
 
 
 def _looks_like_ohms(value: str, footprint: str = "") -> bool:
@@ -428,8 +441,22 @@ def _looks_like_ohms(value: str, footprint: str = "") -> bool:
     return False
 
 
+def declared_kind(type_word: str) -> tuple[str, str]:
+    """``(kind, reason)`` for the 立创 metadata alone — the shared 判型入口's answer.
+
+    190's one-line call into :func:`boardwise.core.partkind.classify_part` for a
+    caller that has the metadata *text* and nothing else (this module's own
+    situation: derating reads the PCB-side placement, whose ``props`` carry the
+    立创 fields, and never the designator). No component is handed over, so no
+    field is read behind the caller's back and no shelf is consulted — the
+    reading is exactly the metadata the caller read.
+    """
+    read = classify_part(facts=PartDeclarations(metadata=str(type_word or "")))
+    return read.kind, read.reason
+
+
 def _is_resistor(value: str, footprint: str, type_word: str) -> tuple[bool, str]:
-    """``(是不是电阻, 凭什么)``——两条门，理由原样写进证据。
+    """``(是不是电阻, 凭什么)``——两条门 + 一条否决，理由原样写进证据。
 
     门一：**值字段是欧姆的写法**（``10K``/``5mΩ``/``0R``）——图上写着欧姆，这颗
     就是电阻。门二：**立创元数据说的是电阻**（``type_word`` 是
@@ -441,11 +468,21 @@ def _is_resistor(value: str, footprint: str, type_word: str) -> tuple[bool, str]
     「元数据优先、位号前缀**不参与**」——前缀在本模块里只有一处用法，而且只是报告
     口（:data:`RESISTOR_DESIGNATOR` 点名「位号像电阻、却没有一条声明说它是电阻」的
     件），它从不把一颗件判成或判不是电阻。
+
+    **否决（190, 岳 10-16 的裁决）：声明说的是热敏电阻（NTC/PTC）时两条门一起关。**
+    热敏电阻的物理本体确实是片式电阻（封装档对它同样成立），但它的值是一条温度
+    曲线：把 ``10K`` 当欧姆读下去，得到的「阻值」与「P=U²/R」都不是它这一路的问题
+    ——本规则按 thermistor 这个**独立 kind** 放行它，既不判降额也不记「值码解不出」
+    （:func:`declared_kind` 是那一次判型的读数）。顺序是「否决优先」而不是
+    「值字段优先」：一条声明说它是热敏，值字段长得像欧姆也不改变它是什么。
     """
     value_text = str(value or "").strip()
+    kind, reason = declared_kind(type_word)
+    if kind == KIND_THERMISTOR:
+        return False, reason
     if _looks_like_ohms(value_text, footprint):
         return True, f"值字段是欧姆的写法（{value_text!r}）"
-    if any(word.lower() in str(type_word).lower() for word in RESISTOR_TYPE_WORDS):
+    if kind == KIND_RESISTOR:
         return True, f"器件库 Type = {type_word!r} 说的是电阻"
     return False, ""
 
@@ -699,6 +736,7 @@ class DeratingPackage(PcbRule):
         readings: list[tuple[str, ResistiveEdge, str, str]] = []
         unpriced: list[tuple[str, tuple[str, ...]]] = []
         unidentified: list[str] = []
+        thermistors: list[str] = []
         jumper: list[str] = []
         divergent: list[str] = []
         for designator in sorted(getattr(pcb_model, "components", {}) or {}):
@@ -725,7 +763,14 @@ class DeratingPackage(PcbRule):
                 continue
             is_resistor, why = _is_resistor(value, footprint, type_word)
             if not is_resistor:
-                if RESISTOR_DESIGNATOR.match(str(designator)):
+                if declared_kind(type_word)[0] == KIND_THERMISTOR:
+                    # 190 (岳 10-16 裁决): NTC/PTC 是一个独立 kind，不进电阻的
+                    # 降额/值码路径——所以它既不是本规则的题，也不是「本规则
+                    # 没认出来的位号像电阻的件」：它被认出来了，只是不是电阻。
+                    thermistors.append(
+                        f"{designator} (value {value!r}, 声明 {type_word!r})"
+                    )
+                elif RESISTOR_DESIGNATOR.match(str(designator)):
                     unidentified.append(
                         f"{designator} (value {value!r}, footprint {footprint!r})"
                     )
@@ -757,7 +802,7 @@ class DeratingPackage(PcbRule):
         findings.append(
             self._summary(
                 ctx, readings, strings, unpriced, unidentified, jumper, divergent,
-                volts, link_note,
+                volts, link_note, thermistors,
             )
         )
         return findings
@@ -1146,6 +1191,7 @@ class DeratingPackage(PcbRule):
         divergent: list[str],
         volts: dict[str, tuple[float, str]],
         link_note: str = "",
+        thermistors: list[str] | None = None,
     ) -> Finding:
         """本板读数小结：几颗电阻、几颗判得了、几颗读不出（含要问的网名）。"""
         priced = [
@@ -1198,6 +1244,13 @@ class DeratingPackage(PcbRule):
             evidence.append(
                 "位号像电阻但本规则没有认它（值字段不是欧姆写法，库件 Type 也没说"
                 "电阻——本规则不从位号字母猜器件类型）：" + ", ".join(unidentified)
+            )
+        if thermistors:
+            evidence.append(
+                f"声明是热敏电阻（NTC/PTC）的 {len(thermistors)} 颗——判型为 "
+                "thermistor（独立 kind，190 岳 10-16 裁决），**不进电阻的降额/"
+                "值码路径**：耐压与功率两条判定都不做，值码解不出也不记「读不出」"
+                "（它的值是温度曲线，不是欧姆读数）：" + ", ".join(thermistors)
             )
         if divergent:
             evidence.append(

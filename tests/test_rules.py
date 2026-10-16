@@ -60,16 +60,38 @@ def test_xtal_on_fixture(fixture_model):
 
 
 def test_shunt_on_fixture(fixture_model):
+    """The fixture's phase shunts are INFO rows, not silence (190).
+
+    ``board24v.enet``'s ``R39``/... sit between ``PGND`` and ``IA+``, and until
+    190 the rule counted the two **2x6 headers** at ``U19``/``U21``
+    (``HX PZ2.54-2x6P TP``) as 「an IC's pins」 on both ends, so the smoke check
+    passed. The shared part-kind reading (127b's own discipline: a 2.54 mm pin
+    row is not an IC) stops that, and what is left is the honest reading — the
+    driver's ``SLA`` pin is on ``IA+`` alone, and no single IC straddles the
+    shunt. The rows are INFO by contract (the sense link may run through parts
+    L1 cannot see), which is the point of this test: a *quiet* fixture became a
+    *readable* one.
+    """
     findings = ShuntSenseLink().check(fixture_model)
-    assert findings == []
+    assert [f.severity for f in findings] == ["INFO", "INFO", "INFO"]
+    assert {f.rule_id for f in findings} == {"shunt-sense-link"}
+    assert all("no IC has pins on" in f.message for f in findings)
 
 
 # --- Negative paths on synthetic models ---
 
 
 def test_decoupling_flags_ic_without_caps():
+    """**Three** pins, since 190: a two-pin part is not asked for a capacitor.
+
+    127b established the necessary condition for the PCB-side rule (「a two-pin
+    part cannot have a decoupling requirement」) and 190 gave it to the L1 rule
+    too, because 「U1」 alone was making 实板A's 330 kΩ chip resistors ask for
+    bypass caps. This synthetic part therefore needs the third pin it would have
+    on a real board; the rest of the anchor is unchanged.
+    """
     model, add = make_model()
-    add("U1", pins=[("1", "VCC"), ("2", "GND")])
+    add("U1", pins=[("1", "VCC"), ("2", "GND"), ("3", "OUT")])
     findings = DecouplingPerIC().check(model)
     assert len(findings) == 1
     f = findings[0]
@@ -77,6 +99,14 @@ def test_decoupling_flags_ic_without_caps():
     assert f.rule_id == "decoupling-per-ic"
     assert f.severity == "WARN"
     assert "U1 pin1 @ VCC" in f.evidence
+
+    # A two-pin part is not this rule's subject whatever its designator says.
+    two_pin = DesignModel()
+    two_pin.components["U1"] = Component(
+        uid="u1", designator="U1",
+        pins=[Pin(number="1", name="1", net="VCC"), Pin(number="2", name="2", net="GND")],
+    )
+    assert DecouplingPerIC().check(two_pin) == []
 
     add("C1", "100nF", [("1", "VCC"), ("2", "GND")])
     assert DecouplingPerIC().check(model) == []
@@ -98,7 +128,7 @@ def test_xtal_flags_missing_load_caps():
 def test_shunt_without_ic_link_is_info():
     model, add = make_model()
     add("R1", "10mΩ", [("1", "PGND"), ("2", "ISNS")])
-    add("U1", pins=[("1", "VCC"), ("2", "GND")])
+    add("U1", pins=[("1", "VCC"), ("2", "GND"), ("3", "OUT")])
     findings = ShuntSenseLink().check(model)
     assert len(findings) == 1
     f = findings[0]
@@ -106,7 +136,10 @@ def test_shunt_without_ic_link_is_info():
     assert f.severity == "INFO"
     assert "R1 pin2 @ ISNS" in f.evidence
 
-    add("U2", pins=[("1", "ISNS"), ("2", "PGND")])
+    # The IC that closes the link needs three pins too (190's necessary
+    # condition reaches this rule as well: a two-pin part is not an IC whose
+    # sense pins could straddle a shunt).
+    add("U2", pins=[("1", "ISNS"), ("2", "PGND"), ("3", "OUT")])
     assert ShuntSenseLink().check(model) == []
 
 
