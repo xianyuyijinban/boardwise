@@ -738,8 +738,19 @@ def run_pcb_review(
     modules: list[dict] | None = None,
     *,
     rules: list[PcbRule] | None = None,
+    boards_out: list[Any] | None = None,
 ) -> tuple[list[Finding], dict | None]:
     """Run every PCB rule over **every PCB document** of ``source_path``.
+
+    ``boards_out`` (189C) is the **optional** out-parameter for a caller that needs the
+    geometry itself and not only the section: one :class:`~boardwise.core.geometry.
+    BoardGeometry` per board, appended in the same order as ``boards[]`` (so
+    ``boards_out[i]`` is the board ``boards[i]`` was read from and measured on).
+    ``checkup --file`` passes a list and renders ``canvas-<board>.svg`` from it; a
+    caller that passes nothing is unaffected and the parse count is unchanged —
+    which is the whole reason it is an out-parameter rather than a second reader
+    (a canvas that re-parsed the archive would be a third parse per run and could
+    in principle disagree with the board the findings came from).
 
     ``source_path`` is any readable ``.epro2`` backup, and **166** is why that
     sentence is worth spelling out: the online `checkup` calls this function too,
@@ -831,6 +842,8 @@ def run_pcb_review(
 
     for title, board_uuid, read_board, read_pcb_model in units:
         board = read_board()
+        if boards_out is not None:
+            boards_out.append(board)
         pcb_model = read_pcb_model(board)
         ctx = PcbReviewContext(
             board=board,

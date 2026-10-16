@@ -26,13 +26,21 @@ from boardwise.engines import pcbreview
 
 
 class _Recorder:
-    """A stand-in for the real runner: counts calls, returns a marked reading."""
+    """A stand-in for the real runner: counts calls, returns a marked reading.
+
+    It carries the runner's whole call signature, ``boards_out`` included (189C):
+    the wrapper must forward that out-parameter untouched, so a stand-in that
+    could not receive it would hide exactly the bug the pin below is for.
+    """
 
     def __init__(self):
         self.calls: list[tuple] = []
 
-    def __call__(self, source_path, model=None, intent=None, modules=None, *, rules=None):
+    def __call__(self, source_path, model=None, intent=None, modules=None, *,
+                 rules=None, boards_out=None):
         self.calls.append((str(source_path), model, intent, modules, rules))
+        if boards_out is not None:
+            boards_out.append("geometry")
         return (
             [{"call": len(self.calls), "model": model, "board": str(source_path)}],
             {"available": True, "call": len(self.calls)},
@@ -235,3 +243,22 @@ def test_the_default_list_named_explicitly_is_the_default_list(recorder, board):
     pcbreview.run_pcb_review(board, model={"u1": 1})
     pcbreview.run_pcb_review(board, model={"u1": 1}, rules=pcbreview.BUILTIN_PCB_RULES)
     assert len(recorder.calls) == 1
+
+
+def test_a_caller_that_asks_for_the_geometry_is_never_cached(recorder, board):
+    """189C: ``boards_out`` is a **side channel** — a hit would silently drop it.
+
+    The cached value is the answer pair (findings + section). A caller that hands
+    in ``boards_out`` is asking for the parsed geometry as well, and a cache hit
+    returns without running the runner, so that list would come back empty: the
+    offline canvas would draw nothing on a board that has copper, and look like a
+    board with nothing to draw rather than like a bug. So the wrapper forwards
+    that call to the real runner, and the geometry arrives twice for two calls.
+    """
+    geometry: list = []
+    pcbreview.run_pcb_review(board, model={"u1": 1}, boards_out=geometry)
+    pcbreview.run_pcb_review(board, model={"u1": 1}, boards_out=geometry)
+
+    assert len(recorder.calls) == 2, "the second call was served from the cache"
+    assert _pcb_cache.stats["bypassed"] == 2
+    assert geometry == ["geometry", "geometry"], "the out-parameter never reached the runner"

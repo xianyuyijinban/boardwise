@@ -41,6 +41,11 @@ keeps every ``rules=[...]`` call in the suite (the polarity, silk, derating,
 keepout, supply-view and online-silk callers) out of the cache by construction:
 those tests are about *one rule*, not about the whole engine.
 
+**A caller that wants the geometry is never cached either** (189C): the cached
+answer is the findings and the section, so a call carrying ``boards_out`` goes to
+the real runner — see that parameter's own note in
+:func:`_cached_run_pcb_review`.
+
 The comparison has to be against the captured object and not against the
 attribute, and that is a measured point rather than a stylistic one: both of
 those tests pass ``rules=None``, and ``None`` resolves to *whatever the
@@ -174,13 +179,27 @@ def _cached_run_pcb_review(
     modules: list[dict] | None = None,
     *,
     rules: list | None = None,
+    boards_out: list | None = None,
 ) -> tuple[list, dict | None]:
     """``pcbreview.run_pcb_review``, served from the session cache.
 
     Signature-compatible with the real runner (the same one this module
     replaced), so every call site — the tests' own, and ``cli._run_pcb_runner``'s
     lazy import — reaches it unchanged.
+
+    **``boards_out`` bypasses the cache** (189C). It is not part of the answer
+    this cache holds (which is the findings plus the section, deep-copied): a call
+    that asks for the *geometry* goes to the real runner because a hit would
+    return the cached pair and leave the caller's list empty — the canvas would be
+    silently missing its boards and look like a board with nothing to draw. The
+    cache keeps its whole value here: one caller per `checkup --file` run passes
+    it, and every other call in the suite is unaffected.
     """
+    if boards_out is not None:
+        stats["bypassed"] += 1
+        return _REAL(
+            source_path, model, intent, modules, rules=rules, boards_out=boards_out
+        )
     rule_list = pcbreview.BUILTIN_PCB_RULES if rules is None else rules
     if rule_list is not _BUILTIN:
         stats["bypassed"] += 1

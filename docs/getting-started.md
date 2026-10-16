@@ -280,7 +280,9 @@ boardwise checkup --out checkup
 `checkup/review-summary.md`（**审查总结骨架**：每条问题一行，定位链（工程 → 板 → 页 → 器件/网）
 已经按机器账预填好，「分析」「建议」两栏空着等 AI 填——**收尾必须补全这一份，工程师只看它**；
 **每次 checkup 覆盖**，填完的那份要交付出去，别留在目录里）和
-`checkup/canvas-*.png`（画布图）。
+`checkup/canvas-*.png`（画布图；**离线 `--file` 档位出的是 `canvas-<board>.svg`**——
+按归档几何画的 SVG，`source: geometry-render`，不是编辑器截图：它不是实物照片，
+丝印压焊盘类判定未建模阻焊开窗，分歧以实物为准）。
 
 预期：终端先打一行结论（ERROR 几条），再打模块、槽位和两份报告的路径。
 退出码 `1` 表示**发现了** ERROR（不是命令失败）、`0` 表示没有、`2` 表示参数/文件不可用、

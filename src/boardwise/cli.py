@@ -5342,6 +5342,17 @@ def _pcb_online_not_run(*, tier: str, reason: str) -> dict:
     }
 
 
+#: 189C: what the offline `canvas_images` slot says its pictures are. The online
+#: tier's pictures are editor screenshots (`export.render`); these are drawn from
+#: the archive's own parsed geometry, and a reader who confuses the two would
+#: take a rendering for the board. The per-entry `note` carries the finer caveat
+#: (`engines.canvasrender.CANVAS_NOTE`).
+CANVAS_GEOMETRY_NOTE = (
+    "离线路径（--file）不连编辑器，因此没有编辑器截图；改为按归档几何渲染 SVG"
+    "（canvas-<board>.svg，source: geometry-render）——图不替规则下结论，口径见每条 note"
+)
+
+
 def _run_pcb_runner(
     path: str | Path,
     *,
@@ -5350,8 +5361,15 @@ def _run_pcb_runner(
     modules: list[dict] | None,
     notes: list[str],
     rules: list | None = None,
+    boards_out: list | None = None,
 ) -> tuple[list, dict | None, bool]:
     """Run the PCB review over one backup: ``(findings, section, had_documents)``.
+
+    ``boards_out`` (189C) is passed straight through to
+    :func:`boardwise.engines.pcbreview.run_pcb_review` and collects the geometry one
+    board per ``section["boards"]`` entry — the offline canvas renderer reads it, so
+    the picture is drawn from the very board the findings were measured on and the
+    archive is not parsed a third time.
 
     166 lifted this out of :func:`_cmd_checkup`'s body because the **online** path
     needs it too, over the archive `sys.get_project_file` returned. Two callers,
@@ -5401,6 +5419,7 @@ def _run_pcb_runner(
             intent=intent,
             modules=modules,
             rules=rules,
+            boards_out=boards_out,
         )
     except Exception as exc:  # noqa: BLE001 — a report must still be written
         notes.append(
@@ -5458,6 +5477,45 @@ def _note_cross_view_lonely(notes: list[str], pcb_review: dict | None) -> None:
           "两侧都不是天然权威，逐条人工核"
           "（逐条读数见 report.json 的 pcb_review.boards[].crossView.lonely）"
     )
+
+
+def _geometry_canvas_images(
+    boards: list,
+    section: dict | None,
+    findings: list,
+    out_dir: Path,
+    *,
+    notes: list[str],
+) -> list[dict]:
+    """189C: the offline canvas — one ``canvas-<board>.svg`` per PCB document.
+
+    ``boards`` is what the runner handed back through its ``boards_out``
+    out-parameter (same order as ``section["boards"]``), ``findings`` the runner's
+    own list, and each board's marks are read from **that board's own**
+    ``boards[].findings`` indices. Called before the merge loop shifts those
+    indices, which is why the reads here and the merge there cannot disagree.
+
+    The board title comes from the section entry (the document's own ``META``, 钉 4)
+    and never from the runner's English sentence — the file name is built from it
+    (:func:`~boardwise.engines.canvasrender.canvas_file_name`), so a title with a
+    slash in it cannot write outside ``--out``.
+    """
+    from .engines.canvasrender import marks_from_findings, write_canvases
+
+    entries = list((section or {}).get("boards") or [])
+    pairs: list[tuple[str, object]] = []
+    marks: list[list] = []
+    for index, board in enumerate(boards):
+        entry = entries[index] if index < len(entries) else {}
+        title = str(entry.get("title") or "") or f"board{index + 1}"
+        pairs.append((title, board))
+        rows = [
+            findings[position]
+            for position in (entry.get("findings") or [])
+            if isinstance(position, int) and 0 <= position < len(findings)
+        ]
+        marks.append(marks_from_findings(rows))
+    return write_canvases(pairs, out_dir=out_dir, marks=marks, notes=notes)
 
 
 # ---------------------------------------------------------------------------
@@ -5740,7 +5798,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             "pages": page_attribution_from_archive(path),
         }
         canvas: list[dict] = []
-        canvas_note = "离线路径（--file）不连编辑器，因此不出画布图；要图就给一个在线工程"
+        canvas_note = (
+            "离线路径（--file）没有 PCB 文档（或 PCB 审查未出结果），没有可渲染的版面"
+            "几何；要编辑器截图需在线工程"
+        )
         print(f"boardwise checkup: {path} ({CHECKUP_TIERS['file']})")
     else:
         loaded = _load_model_online(
@@ -6097,12 +6158,32 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # is a disclosure and not a verdict gate.
     pcb_not_run: dict | None = None
     pcb_findings: list = []
+    # 189C: the geometry the offline canvas is drawn from. Filled by the runner below
+    # (one board per `pcb_review.boards[]` entry) — a list, not a return value, so
+    # `run_pcb_review`'s own two-value contract and its callers stay as they are.
+    pcb_boards: list = []
     if tier == "file" and (
         str(path).lower().endswith(".epro2") or Path(path).suffix.lower() in (".kicad_pro", ".kicad_sch", ".kicad_pcb")
     ):
         pcb_findings, pcb_review, pcb_had_documents = _run_pcb_runner(
-            path, model=model, intent=contract, modules=modules, notes=notes
+            path, model=model, intent=contract, modules=modules, notes=notes,
+            boards_out=pcb_boards,
         )
+        # --- 阶段 D（离线几何渲染，189C）: one `canvas-<board>.svg` per PCB document.
+        #
+        # It sits **here**, immediately after the runner and before the finding-merge
+        # loop below, because that loop shifts each `boards[].findings` index by the
+        # schematic walk's count — read after the shift, the per-board selection
+        # would pick the wrong rows. Reading them here also means the marks come from
+        # the same finding objects the runner returned.
+        if pcb_review is not None and pcb_boards:
+            canvas = _geometry_canvas_images(
+                pcb_boards, pcb_review, pcb_findings, out_dir, notes=notes
+            )
+            failed = [image for image in canvas if image.get("error")]
+            canvas_note = CANVAS_GEOMETRY_NOTE + (
+                f"（其中 {len(failed)} 块渲染失败，原因见 source.notes）" if failed else ""
+            )
     elif tier == "project-file" and online_artifacts.get("pcbArchive"):
         import tempfile
 

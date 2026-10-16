@@ -4354,11 +4354,24 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
         lines.append(f"无图。{slots.get('canvas_images_note', '')}")
     else:
         for image in images:
+            # 189C: a geometry rendering is named by its **board** (the PCB document's
+            # own title); an online screenshot is named by its page. The board key is
+            # read first so an entry that carries both says the more specific one.
+            label = image.get("board") or image.get("page") or image.get("pageUuid")
             if image.get("file"):
-                lines.append(f"- [{image.get('page') or image.get('pageUuid')}]({image['file']})"
-                             f"（{image.get('bytes', '?')} B）")
+                detail = f"（{image.get('bytes', '?')} B）"
+                if image.get("source") == "geometry-render":
+                    detail = (
+                        f"（几何渲染，{image.get('findings', 0)} 条 finding 叠加，"
+                        f"{image.get('bytes', '?')} B）"
+                    )
+                lines.append(f"- [{label}]({image['file']}){detail}")
             else:
-                lines.append(f"- {image.get('page') or image.get('pageUuid')}：取图失败 —— {image.get('error')}")
+                lines.append(f"- {label}：取图失败 —— {image.get('error')}")
+        note = str(slots.get("canvas_images_note") or "")
+        if note:
+            lines.append("")
+            lines.append(note)
     lines.append("")
 
     lines.append("### 3. 总结模板（原样留槽，由模型填写）")

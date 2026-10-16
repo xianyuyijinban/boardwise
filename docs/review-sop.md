@@ -171,7 +171,10 @@ facts 写进货架（每条带出处页码），**由人核验并声明**才驱�
 （`layout_review.visionRequired` 说死了）。**首次为用户服务时问一次**"要不要开布局审美评分"，
 把选择写进 `boardwise config set review.aesthetics on|off`，不问第二次；
 单次想开用 `checkup --aesthetics`（单次覆盖赢配置）。画布图在 `--out` 里，
-打开 `report.md` 点链接即可。
+打开 `report.md` 点链接即可。**`--file` 离线档位没有编辑器截图**：它出的是
+`canvas-<board>.svg`（`source: geometry-render`，按归档几何画的两个视窗 + finding 高亮）——
+它能读摆放/位号可读性/网络标识，但**不是实物照片**（丝印压焊盘类判定未建模阻焊开窗，
+分歧以实物为准），也不含主机 ERC 的逐条文本。
 
 最后 `summary_template` —— 按模板**原样留槽**填四段（结论先行 / 错误与归因 / 警告提醒 /
 建议动作），把上面的结论写进去，别重述 `report.json` 的全部内容。
