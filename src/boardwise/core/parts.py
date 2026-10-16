@@ -685,13 +685,24 @@ class PartEntry:
 
 @dataclass
 class PartLibrary:
-    """The whole shelf."""
+    """The whole shelf.
+
+    ``origins`` (191B) is the **reading** half of a merged shelf and never a
+    file: ``{entry key: "user" | "builtin" | "user-overrides-builtin"}``, filled
+    only by :func:`merge_libraries` — a single-file shelf leaves it empty, which
+    is the honest shape for "one shelf, nothing was merged". It is deliberately
+    *not* an entry field: a `source` key inside an entry would have to be
+    validated by the loader, written by ``entry_to_json`` and would change the
+    bytes of every shelf file, while "which shelf did this entry come from" is a
+    property of *this read*, not of the part.
+    """
 
     parts: list[PartEntry] = field(default_factory=list)
     kind: str = PART_LIBRARY_KIND
     version: int = SCHEMA_VERSION
     sources: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    origins: dict[str, str] = field(default_factory=dict)
 
     def by_key(self) -> dict[str, PartEntry]:
         return {part.key: part for part in self.parts}
@@ -701,6 +712,122 @@ class PartLibrary:
 
     def get(self, key: str) -> PartEntry | None:
         return self.by_key().get(key)
+
+    def origin_of(self, part: PartEntry | str) -> str:
+        """Which shelf ``part`` (an entry or a key) came from — or ``""``.
+
+        Empty means "this shelf was read from one file", not "unknown": a
+        single-file read has no second shelf for an entry to have come from.
+        """
+        key = part if isinstance(part, str) else part.key
+        return self.origins.get(key, "")
+
+
+#: The three answers :meth:`PartLibrary.origin_of` can give (191B). One name
+#: each, because `parts list` prints them and a report reads them: `user` is an
+#: entry only the user's shelf has, `builtin` one only the exe's copy has, and
+#: ``user-overrides-builtin`` is the *same part* on both shelves with the user's
+#: entry winning — the case a plain "user" label would misdescribe as "builtin
+#: never had it", which is exactly the difference a reader needs to see before
+#: trusting a fact.
+SHELF_USER = "user"
+SHELF_BUILTIN = "builtin"
+SHELF_USER_OVERRIDES = "user-overrides-builtin"
+
+SHELF_ORIGINS: tuple[str, ...] = (SHELF_USER, SHELF_BUILTIN, SHELF_USER_OVERRIDES)
+
+
+def _identity_keys(entry: PartEntry) -> set[str]:
+    """The keys an entry can be **the same part** under (191B's merge key).
+
+    The shelf's own ``key``, the MPN and the C-number — the three the task book
+    names ("MPN / LCSC") plus the key, because two shelves can only disagree
+    about a part if they address it differently, and a user entry that renamed
+    a curated key while keeping the MPN is still the same part. Values are
+    normalized the way identity is compared everywhere else in this module
+    (:func:`find_facts`): exact, with the C-number upper-cased, since every
+    stored C-number is upper-case and a shelf that spelled it lower would
+    otherwise silently not merge.
+    """
+    keys = {f"key:{entry.key}"} if entry.key else set()
+    if entry.mpn:
+        keys.add(f"mpn:{entry.mpn}")
+    if entry.lcsc:
+        keys.add(f"lcsc:{entry.lcsc.strip().upper()}")
+    return keys
+
+
+def merge_libraries(user: PartLibrary, builtin: PartLibrary) -> PartLibrary:
+    """``user`` over ``builtin``, by identity — the two shelves as one (191B).
+
+    The hole this closes: the frozen exe reads the user's shelf once it exists
+    (186-H2), so an entry the *upgrade* brought into the bundled shelf is
+    invisible to every rule — the user's file, written before the upgrade, is a
+    snapshot that shadows the whole shelf. Merging keeps both halves: the user's
+    entries win, the bundled entries the user never touched stay visible.
+
+    "The same part" is :func:`_identity_keys` — the shelf key, the MPN or the
+    C-number. A builtin entry is dropped when **any** of its keys is taken by a
+    user entry, and the user entry is labelled
+    :data:`SHELF_USER_OVERRIDES` (otherwise :data:`SHELF_USER`, and the
+    surviving builtin entries are :data:`SHELF_BUILTIN`). A user entry that
+    overrides nothing is *not* a rename of anything: it is an entry the exe's
+    shelf simply does not have.
+
+    Order is by key, as :func:`library_from_json` sorts, so two runs over the
+    same pair write the same list. Merging is **not** a write: nothing here
+    touches a file, and the builtin shelf keeps every byte.
+    """
+    taken: set[str] = set()
+    for entry in user.parts:
+        taken |= _identity_keys(entry)
+    kept_builtin = [e for e in builtin.parts if not (_identity_keys(e) & taken)]
+
+    # A user entry "overrides" only if the builtin shelf really had that part —
+    # if not, the label says `user`, and a reader can tell "I added this" from
+    # "I changed what the exe ships".
+    builtin_keys: set[str] = set()
+    for entry in builtin.parts:
+        builtin_keys |= _identity_keys(entry)
+
+    origins: dict[str, str] = {}
+    for entry in user.parts:
+        origins[entry.key] = (
+            SHELF_USER_OVERRIDES
+            if _identity_keys(entry) & builtin_keys
+            else SHELF_USER
+        )
+    for entry in kept_builtin:
+        origins[entry.key] = SHELF_BUILTIN
+
+    parts = sorted([*user.parts, *kept_builtin], key=lambda p: p.key)
+    return PartLibrary(
+        parts=parts,
+        kind=user.kind if user.parts else builtin.kind,
+        version=user.version if user.parts else builtin.version,
+        sources=sorted({*user.sources, *builtin.sources}),
+        notes=[*builtin.notes, *user.notes],
+        origins=origins,
+    )
+
+
+def load_libraries(paths: list[str | Path] | tuple[str | Path, ...]) -> PartLibrary:
+    """Read several shelves and merge them — **first path wins** (191B).
+
+    ``load_parts`` per path (a missing file is an empty shelf, unchanged), then
+    :func:`merge_libraries` from the back: the *last* path is the base and each
+    earlier one is layered over it, so the caller writes the priority order the
+    way it reads ("the user's shelf, then the copy the exe carries"). One path
+    is returned as the plain single-file read — no merge, no `origins`, so every
+    existing caller's answer is byte-identical.
+    """
+    loaded = [load_parts(path) for path in paths]
+    if not loaded:
+        return PartLibrary()
+    merged = loaded[-1]
+    for overlay in reversed(loaded[:-1]):
+        merged = merge_libraries(overlay, merged)
+    return merged
 
 
 _ENTRY_KEYS = (
@@ -1339,7 +1466,7 @@ def resolve_facts(
     (:func:`find_facts`' discipline; the name step is that same function, asked
     for the device name). The name step exists because a real board carries
     parts whose only identity is the device name — measured on the board of
-    `.tmp_bug98b/实板A.epro2` (岳 2026-10-15 现场反馈): `U3` has an
+    实板A（`.tmp_bug98b/` 下的企业归档） (岳 2026-10-15 现场反馈): `U3` has an
     empty MPN and an empty supplier, and its device name is the only thing that
     says what it is. A datasheet read for exactly that part could not be
     attached to it, so the facts never reached a rule (P2/P4).
@@ -1709,6 +1836,10 @@ __all__ = [
     "PartProvenance",
     "ResistanceQuery",
     "SCHEMA_VERSION",
+    "SHELF_BUILTIN",
+    "SHELF_ORIGINS",
+    "SHELF_USER",
+    "SHELF_USER_OVERRIDES",
     "CATEGORY_VOCABULARY",
     "FACTS_KEYS",
     "IC_DESIGNATOR_CATEGORY",
@@ -1727,9 +1858,11 @@ __all__ = [
     "library_from_json",
     "library_to_json",
     "load_corrections",
+    "load_libraries",
     "load_parts",
     "looks_like_library_uuid",
     "make_key",
+    "merge_libraries",
     "package_slug",
     "save_corrections",
     "parse_resistance_field",

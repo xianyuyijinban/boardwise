@@ -493,9 +493,17 @@ def test_the_worklist_of_a_three_board_project_names_the_boards(tmp_path, monkey
 
     placements: dict[str, set[tuple[str, str, str, str]]] = {}
     for row in report["unreviewed_parts"]:
-        for title in row.get("boards") or [""]:
+        # 191B: `unreviewed_parts[].boards` and `needs_datasheet[].boards` are one
+        # shape now — placement rows, each one `{board, mpn, name, value}` — so the
+        # comparison below is dict-to-dict, not title-to-dict as it was in 187B.
+        for entry in row.get("boards") or [{}]:
             placements.setdefault(str(row["designator"]), set()).add(
-                (title, row.get("mpn") or "", row.get("name") or "", row.get("value") or "")
+                (
+                    str(entry.get("board") or ""),
+                    str(entry.get("mpn") or ""),
+                    str(entry.get("name") or ""),
+                    str(entry.get("value") or ""),
+                )
             )
     worklist = report["needs_datasheet"]
     assert worklist, "3 板工程应该有未审位号"

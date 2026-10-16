@@ -19,9 +19,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+import pytest
 
 from boardwise.cli import _cmd_checkup
 from boardwise.core.geometry import (
@@ -47,6 +50,7 @@ from boardwise.engines.canvasrender import (
     write_canvases,
 )
 from boardwise.rules.base import Finding, FindingTarget
+from boardwise.rules.pcb.silk import DEFAULT_ADVANCE
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 #: A small real archive that **does** carry a PCB document (the ch340 golden has
@@ -123,6 +127,53 @@ def _panels(svg: str) -> list[tuple[float, float]]:
         )
     ]
     return sorted(frames)
+
+
+def _drawn_text_transform(svg: str, label: str) -> tuple[float, float, tuple]:
+    """一条文字画出来的 ``(锚点 x, 锚点 y, 矩阵)``。
+
+    三种写法，都读成同一件事——字形坐标先过矩阵、再搬到锚点：
+
+    * 底层：``translate(锚点) [matrix(...)]``，属性坐标写死 0,0；矩阵省略即单位阵；
+    * 顶层带角度：``rotate(θ cx cy)``，等价于矩阵 ``[[cos θ, -sin θ], [sin θ, cos θ]]``；
+    * 顶层零角度：连 transform 都不写，锚点就是属性坐标。
+    """
+    match = re.search(
+        r'<text x="([-\d.]+)" y="([-\d.]+)"( transform="([^"]*)")?[^>]*>'
+        + re.escape(label) + r"</text>",
+        svg,
+    )
+    assert match, f"文字 {label} 没画出来"
+    attr = (float(match.group(1)), float(match.group(2)))
+    transform = match.group(4) or ""
+    t = re.search(r"translate\(([-\d.]+) ([-\d.]+)\)", transform)
+    if t:
+        m = re.search(
+            r"matrix\(([-\d.]+) ([-\d.]+) ([-\d.]+) ([-\d.]+) 0 0\)", transform
+        )
+        matrix = tuple(float(g) for g in m.groups()) if m else (1.0, 0.0, 0.0, 1.0)
+        return float(t.group(1)), float(t.group(2)), matrix
+    r = re.search(r"rotate\(([-\d.]+) ([-\d.]+) ([-\d.]+)\)", transform)
+    if r:
+        rad = math.radians(float(r.group(1)))
+        matrix = (math.cos(rad), math.sin(rad), -math.sin(rad), math.cos(rad))
+        return float(r.group(2)), float(r.group(3)), matrix
+    assert transform == "", f"{label} 的 transform 读不懂：{transform!r}"
+    return attr[0], attr[1], (1.0, 0.0, 0.0, 1.0)
+
+
+def _frame_axes_from_corners(text) -> tuple[tuple[float, float], tuple[float, float]]:
+    """从 ``SilkText.corners()`` 的输出反解字形基向量 ``(u, v)``（LEFT_BOTTOM 原点）。
+
+    反解而不是问 ``frame_axes()``：这条测试要证明的正是**图与规则读的是同一份方向**，
+    基向量必须来自规则那条路。
+    """
+    width = len(text.text) * DEFAULT_ADVANCE * text.font_size
+    height = text.font_size
+    c = text.corners(DEFAULT_ADVANCE)
+    u = ((c[1].x - text.x) / width, (c[1].y - text.y) / width)
+    v = ((c[3].x - text.x) / height, (c[3].y - text.y) / height)
+    return u, v
 
 
 # ---------------------------------------------------------------------------
@@ -205,56 +256,85 @@ def test_the_bottom_panel_mirrors_x():
     assert order[1][0] > order[1][1]
 
 
-def test_bottom_silk_text_is_mirrored_with_the_panel_not_just_moved():
-    """底层文字跟着视窗一起镜像：落墨范围必须和规则量的那块地方重合。
+def test_bottom_silk_text_ink_lands_on_the_box_the_rule_measures():
+    """底层文字的落墨范围必须和规则量的是同一块地方（190S 定标后的那条口径）。
 
-    实板形状（189C 的触发例）：``pcb-silk-designator`` 报 R22 的位号丝印压在 EC3 的
-    焊盘上，而 R22 的位号记录在 ``BOT_SILK``——只镜像锚点、字形照正读，字就跑到锚点
-    另一边去了，图会和规则顶牛。
+    实板形状：``pcb-silk-designator`` 曾报 R22 的位号丝印压在 EC3 的焊盘上，而 R22 的
+    位号记录在 ``BOT_SILK``——190S 用编辑器自己的 primitive bbox 把底层记录的方向量了
+    出来（底层位号的角度是「底层视图角」，不是板面角），那个警告随之消失。
+
+    本测试不重述方向，而是钉**图与规则不会各写各的**：从 ``SilkText.corners()`` 的
+    输出里反解出字形基向量 ``(u, v)``，再要求 SVG 里那条 transform 恰好把它按视窗映到
+    屏幕上。两边任一处改了符号，这条就红。
     """
-    svg = render_board_svg(_small_board(), title="TEXT")
-    _top, bottom = _panels(svg)
-    # C2 的位号在 BOT_SILK 上，只出现在底层（右）视窗，且带字形镜像
-    assert svg.count(">C2</text>") == 1
-    match = re.search(
-        r'<text x="([\d.]+)" y="([\d.]+)" transform="translate\(([\d.]+) ([\d.]+)\) '
-        r'scale\(-1,1\)"[^>]*>C2</text>',
-        svg,
-    )
-    assert match, "底层文字要带 scale(-1,1)"
-    # 有效锚点 = 属性坐标先过 scale(-1,1) 再过 translate。属性必须是 0,0，否则锚点被
-    # 甩到 (tx - x, ty + y)——189C 首版就是这样，整层底面位号画出了视窗。
-    ax, ay, tx, ty = (float(g) for g in match.groups())
-    assert (ax, ay) == (0.0, 0.0), "属性坐标会在 transform 内被镜像，必须写 0,0"
-    assert bottom[0] <= tx - ax <= bottom[0] + bottom[1], "有效锚点画在底层视窗里"
-    # R1 的位号在顶层丝印上：不镜像（零角度时连 transform 都不需要）
-    assert re.search(r'<text x="[\d.]+" y="[\d.]+" font-size="[\d.]+"[^>]*>R1</text>', svg)
+    board = _small_board()
+    text = board.silk_texts[1]
+    assert text.layer_kind == "BOT_SILK"
+    svg = render_board_svg(board, title="TEXT")
+    assert svg.count(">C2</text>") == 1, "C2 的位号只落在底层（右）视窗"
+    assert not re.search(r'<text[^>]*>R1</text>[^>]*transform="scale', svg)
+
+    tx, ty, matrix = _drawn_text_transform(svg, "C2")
+    assert (tx, ty) != (0.0, 0.0), "锚点由 translate 给出"
+    # 属性坐标必须是 0,0：它在 transform 之内被解释，写 x,y 会把锚点再翻一次
+    # （189C 首版就是这样，整层底面位号画出了视窗）。
+    assert re.search(r'<text x="0\.00" y="0\.00" transform="translate\(', svg)
+
+    u, v = _frame_axes_from_corners(text)
+    a, b, c, d = matrix
+    assert a == pytest.approx(-u[0]) and b == pytest.approx(-u[1])
+    assert c == pytest.approx(v[0]) and d == pytest.approx(v[1])
+
+    # 同一份口径下，零角度底层记录在底层视窗里是**正字**：屏幕上的字向就是 +x，
+    # 也就是矩阵为单位阵（translate 之外的 transform 不出现）。
+    assert (a, b, c, d) == (1.0, 0.0, 0.0, 1.0)
+    assert "matrix" not in re.search(r'<text[^>]*>C2</text>', svg).group(0)
 
 
-def test_an_angled_bottom_text_keeps_its_anchor_and_mirrors_its_glyphs():
-    """带角度的底层文字：transform 的**顺序**决定锚点跑不跑。
+@pytest.mark.parametrize("layer_kind", ["TOP_SILK", "BOT_SILK"])
+@pytest.mark.parametrize("angle", [0.0, 90.0, 180.0, 270.0])
+@pytest.mark.parametrize("source", ["designator", "footprint"])
+def test_text_transform_carries_the_frame_axes_of_every_face_and_source(
+    layer_kind, angle, source
+):
+    """每一个「面 × 源」的画法都必须由 ``corners()`` 反解出来的基向量决定。
 
-    SVG 的 ``transform`` 列表从右往左作用，所以必须是
-    ``translate(锚点) rotate(角) scale(-1,1)``——把 ``rotate`` 放最前面会把锚点也
-    绕原点转走（对照：顶层用 ``rotate(角, cx, cy)``，旋转中心写在参数里）。
+    * 底层：``translate(锚点)`` **永远要在**（属性坐标写死 0,0，锚点只由它给），
+      矩阵是 ``[[-u.x, v.x], [-u.y, v.y]]``——矩阵恰好是单位阵时也不许省 translate；
+    * 顶层：``rotate(-角, cx, cy)``，等价矩阵 ``[[u.x, -v.x], [-u.y, v.y]]``，零角度
+      连 transform 都不写。
+
+    覆盖两种源是有意的：``source == "footprint"`` 的文字由器件位姿求出锚点与角度，
+    它的帧**不是**底层视图帧（``SilkText.mirrored_frame`` 对它为假），所以它画出来的
+    矩阵与位号那一路不同——那不是漏改，是两套坐标。
     """
     board = BoardGeometry(
         outline=BoardOutline(points=[Point(0, 0), Point(400, 0), Point(400, 200),
                                      Point(0, 200)], closed=True),
-        silk_texts=[SilkText(component="R9", text="R9", source="designator", x=100.0,
-                             y=50.0, angle=90.0, layer_kind="BOT_SILK",
+        silk_texts=[SilkText(component="R9", text="R9", source=source, x=100.0,
+                             y=50.0, angle=angle, layer_kind=layer_kind,
                              font_size=40.0, origin="LEFT_BOTTOM")],
     )
+    text = board.silk_texts[0]
     svg = render_board_svg(board, title="ANGLED")
-    match = re.search(r'<text x="([\d.]+)" y="([\d.]+)"( transform="[^"]*")?[^>]*>R9</text>', svg)
+    tx, ty, matrix = _drawn_text_transform(svg, "R9")
+    u, v = _frame_axes_from_corners(text)
+    a, b, c, d = matrix
 
-    assert match, "文字得画出来"
-    transform = match.group(3) or ""
-    assert 'transform="translate(' in transform
-    assert "rotate(90.000)" in transform
-    assert "scale(-1,1)" in transform
-    assert transform.index("translate") < transform.index("rotate") < transform.index("scale")
-    assert (match.group(1), match.group(2)) == ("0.00", "0.00"), "锚点只由 translate 给出"
+    if layer_kind == "BOT_SILK":
+        assert re.search(r'<text x="0\.00" y="0\.00" transform="translate\(', svg), \
+            "底层属性坐标写 0,0，锚点靠 translate"
+        assert a == pytest.approx(-u[0]) and b == pytest.approx(-u[1])
+        assert c == pytest.approx(v[0]) and d == pytest.approx(v[1])
+    else:
+        assert re.search(r'<text x="[\d.]+" y="[\d.]+"', svg)
+        assert a == pytest.approx(u[0]) and b == pytest.approx(-u[1])
+        assert c == pytest.approx(-v[0]) and d == pytest.approx(v[1])
+        if angle:
+            assert re.search(
+                rf'rotate\({-angle:.3f} {tx:.2f} {ty:.2f}\)', svg
+            ), f"顶层用 rotate(-角) 绕锚点：{angle}"
+    assert text.mirrored_frame is (layer_kind == "BOT_SILK" and source == "designator")
 
 
 def test_each_panel_draws_the_copper_of_its_own_side():

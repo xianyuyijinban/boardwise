@@ -109,27 +109,33 @@ __all__ = [
     "DesignIntentError",
     "INTENT_VERSION",
     "INTENT_MISSING",
+    "IntentAccepted",
     "IntentBlock",
     "IntentBus",
     "IntentDecision",
     "IntentRail",
     "IntentSignal",
     "IntentSource",
+    "PART_TOKEN_SOURCES",
     "REQUIRED_SLOTS",
+    "SECTION_ACCEPTED",
     "SECTION_BLOCKS",
     "SECTION_BUSES",
     "SECTION_DECISIONS",
     "SECTION_RAILS",
     "SECTION_SIGNALS",
+    "accept_unknown",
     "classify_slots",
     "closure_hints",
     "default_contract_path",
     "empty_entry",
     "intent_sha256",
     "merge",
+    "part_token",
     "render_json",
     "render_markdown",
     "reuse_slots",
+    "revoke_unknown",
     "validate",
     "weakest_provenance",
     "write_path",
@@ -174,6 +180,20 @@ SECTION_SIGNALS = "signals"
 SECTION_BUSES = "buses"
 SECTION_BLOCKS = "blocks"
 SECTION_DECISIONS = "decisions"
+#: 191A: the **accepted-unknown** section — the second top-level list beside the
+#: four above, and the one an engineer writes by declaring a device's unknowns
+#: acceptable (`boardwise parts accept-unknown`). It is deliberately **not** a
+#: `requirements` section and **not** one of :data:`ENTRY_SECTIONS`: an acceptance
+#: is not a requirement about the board, it is an accounting of what a review may
+#: skip, so it must not enter the document's provenance / draft arithmetic (an
+#: entry with no stated basis here would otherwise turn a fully-stated contract
+#: into a draft, and a `user_stated` one would silently *raise* it).
+#:
+#: The key is written **only when the list is non-empty** (rule 1, applied to a
+#: top-level section): every contract written before this batch keeps its exact
+#: bytes and its exact digest, which is what lets the rules that pin a contract
+#: sha256 keep pinning it.
+SECTION_ACCEPTED = "acceptedUnknown"
 REQUIREMENT_SECTIONS: tuple[str, ...] = (SECTION_RAILS, SECTION_SIGNALS, SECTION_BUSES)
 ENTRY_SECTIONS: tuple[str, ...] = (
     SECTION_RAILS, SECTION_SIGNALS, SECTION_BUSES, SECTION_BLOCKS, SECTION_DECISIONS,
@@ -187,10 +207,31 @@ IDENTITY_KEYS: dict[str, str] = {
     SECTION_BUSES: "family",
     SECTION_BLOCKS: "id",
     SECTION_DECISIONS: "subject",
+    SECTION_ACCEPTED: "part",
 }
 
-_TOP_KEYS: tuple[str, ...] = ("intentVersion", "requirements", "blocks", "decisions")
+_TOP_KEYS: tuple[str, ...] = (
+    "intentVersion", "requirements", "blocks", "decisions", SECTION_ACCEPTED,
+)
 _REQUIREMENT_KEYS: tuple[str, ...] = ("rails", "signals", "buses")
+
+#: 191A: the row keys an acceptance's token is matched against. Two, because the
+#: command's own synopsis takes `<MPN|designator>` and the 未审 list names every
+#: row with exactly these two (`unreviewed_parts[].designator` / `.mpn`). Here
+#: rather than in the engine so the writer (`parts accept-unknown`), the reader
+#: (`checkup`) and the report cannot drift about what an acceptance matches.
+PART_TOKEN_SOURCES: tuple[str, ...] = ("designator", "mpn")
+
+
+def part_token(text: Any) -> str:
+    """One part token, normalized — the form every acceptance match compares.
+
+    Stripped and case-folded: the same MPN typed ``ch340n`` is the same MPN, and a
+    designator is upper case by convention but not by guarantee (imports carry
+    what a person typed). The *spelling the engineer wrote* is what is stored
+    (this function never rewrites the document); only the comparison is folded.
+    """
+    return str(text or "").strip().casefold()
 
 
 def _unique(*groups: Iterable[str]) -> tuple[str, ...]:
@@ -224,6 +265,13 @@ ENTRY_KEYS: dict[str, tuple[str, ...]] = {
     SECTION_BUSES: ("family", *BUS_SLOT_KEYS, "provenance", "stale"),
     SECTION_BLOCKS: ("id", "kind", "parts", "requires", "feeds", "provenance", "stale"),
     SECTION_DECISIONS: ("subject", "decision", "rationale", "value", "provenance", "stale"),
+    #: 191A: `part` is the **token the engineer typed** — an MPN or a designator —
+    #: and `reason` is required with it: an acceptance with no reason is exactly
+    #: the silent green light this section exists to prevent. `who`/`when` are the
+    #: audit half; `board` scopes the acceptance on a multi-board project.
+    SECTION_ACCEPTED: (
+        "part", "reason", "who", "when", "board", "provenance", "stale",
+    ),
 }
 
 #: The question each section answers, printed in the rendered view and in the
@@ -234,6 +282,7 @@ SECTION_TITLES: dict[str, str] = {
     SECTION_BUSES: "总线（每一类的成员是否完整）",
     SECTION_BLOCKS: "功能块（由谁实现、闭合关系）",
     SECTION_DECISIONS: "决策（为什么是它——修复时那一半依据）",
+    SECTION_ACCEPTED: "接受未审（工程师明示「这颗的未知我接受」）",
 }
 
 #: The slots a section **must** answer for its entry to be judged at all, by the
@@ -489,6 +538,75 @@ class IntentDecision:
         return _with_meta(body, self.provenance, self.stale)
 
 
+@dataclass
+class IntentAccepted:
+    """One device whose unknowns an **engineer** accepts (191A).
+
+    The gate this closes: a part the shelf cannot judge stops the review
+    (`unreviewed_parts` → `completion.verdict = incomplete`), and until now the
+    only way out was to feed the shelf verified facts — so a part whose unknowns
+    are *acceptable* (a jumper, a part the engineer has already characterised by
+    other means, a variable the board does not depend on) either blocked the
+    verdict forever or got a datasheet nobody needed.
+
+    An entry is therefore an **accounting of a skipped judgement**, not a fact
+    about the part: ``part`` is the token the engineer typed (an MPN or a
+    designator — the same two things the 未审 list names a row with), ``reason``
+    is what they accepted and why, ``who``/``when`` are the audit half, and
+    ``board`` scopes it on a multi-board project (empty = every board).
+
+    It never says "this part is fine": the report moves the row to its own
+    `accepted_unknown[]` section, keeps the count in the verdict's open items and
+    says 「另有 N 颗工程师接受未审」 in the quotable conclusion, so the acceptance
+    is visible exactly where a pass would otherwise be quoted.
+    """
+
+    part: str
+    reason: str
+    who: str = ""
+    when: str = ""
+    board: str = ""
+    provenance: str = DEFAULT_PROVENANCE
+    stale: bool = False
+
+    @property
+    def identity(self) -> str:
+        return self.part
+
+    def value(self, key: str) -> str:
+        return ""
+
+    def to_jsonable(self) -> dict[str, Any]:
+        body: dict[str, Any] = {"part": self.part, "reason": self.reason}
+        if self.who:
+            body["who"] = self.who
+        if self.when:
+            body["when"] = self.when
+        if self.board:
+            body["board"] = self.board
+        return _with_meta(body, self.provenance, self.stale)
+
+    def matches(self, token: str, board: str = "") -> bool:
+        """Is this entry **the** acceptance for `token` on `board` — the clerk's key?
+
+        The matching rule the writer shares with the rewriter
+        (:func:`accept_unknown` / :func:`revoke_unknown`), in one place: the token
+        is compared through :func:`part_token` (stripped, case-folded — an MPN
+        typed in lower case is the same MPN) and the board scope must be equal,
+        **including the empty scope**. That last equality is the whole reason this
+        is not the same question the *report* asks: a boardless acceptance covers
+        every board when a review pairs it with a row (see
+        `boardwise.engines.checkup.accepted_unknown_section`, which owns that
+        reading), while as a **key** it is its own answer — so `accept --board B2`
+        on a document that already accepts the token everywhere adds the scoped
+        entry rather than silently narrowing the broad one, and `--revoke` (no
+        board) takes back exactly the broad one.
+        """
+        if part_token(self.part) != part_token(token):
+            return False
+        return part_token(self.board) == part_token(board)
+
+
 def _write_slots(body: dict[str, Any], slots: dict[str, str], keys: tuple[str, ...]) -> None:
     """Write the stated answers, in the vocabulary's own order, nothing empty.
 
@@ -524,6 +642,9 @@ class DesignIntent:
     buses: list[IntentBus] = field(default_factory=list)
     blocks: list[IntentBlock] = field(default_factory=list)
     decisions: list[IntentDecision] = field(default_factory=list)
+    #: 191A: the accepted-unknown list — beside the four requirement sections, not
+    #: among them (see :data:`SECTION_ACCEPTED`).
+    accepted_unknown: list[IntentAccepted] = field(default_factory=list)
     intent_version: int = INTENT_VERSION
 
     # ------------------------------------------------------------ lookups
@@ -588,8 +709,15 @@ class DesignIntent:
     # --------------------------------------------------------------- JSON
 
     def to_jsonable(self) -> dict[str, Any]:
-        """The normal form: three sections, no empty field, provenance on a row."""
-        return {
+        """The normal form: three sections, no empty field, provenance on a row.
+
+        191A: `acceptedUnknown` is written **only when the list is non-empty** —
+        rule 1 one level up, and the reason a contract written before this batch
+        comes back byte-identical (its digest is what several rules pin as their
+        source). An empty key would have moved every existing document's sha256
+        for a section it does not have.
+        """
+        body: dict[str, Any] = {
             "intentVersion": self.intent_version,
             "requirements": {
                 SECTION_RAILS: [entry.to_jsonable() for entry in self.rails],
@@ -599,6 +727,11 @@ class DesignIntent:
             "blocks": [entry.to_jsonable() for entry in self.blocks],
             "decisions": [entry.to_jsonable() for entry in self.decisions],
         }
+        if self.accepted_unknown:
+            body[SECTION_ACCEPTED] = [
+                entry.to_jsonable() for entry in self.accepted_unknown
+            ]
+        return body
 
     @classmethod
     def from_dict(cls, payload: Any) -> DesignIntent:
@@ -639,9 +772,12 @@ class DesignIntent:
         )
         blocks = _entries_from(root.get("blocks"), "blocks", IntentBlock)
         decisions = _entries_from(root.get("decisions"), "decisions", IntentDecision)
+        accepted = _entries_from(
+            root.get(SECTION_ACCEPTED), SECTION_ACCEPTED, IntentAccepted
+        )
         return cls(
             rails=rails, signals=signals, buses=buses,
-            blocks=blocks, decisions=decisions,
+            blocks=blocks, decisions=decisions, accepted_unknown=accepted,
         )
 
     def dump(self, path: str | Path) -> None:
@@ -685,6 +821,7 @@ class DesignIntent:
                 for entry in self.blocks
             ],
             decisions=[replace(entry) for entry in self.decisions],
+            accepted_unknown=[replace(entry) for entry in self.accepted_unknown],
         )
 
     def set_entry(self, section: str, entry: Any) -> None:
@@ -877,6 +1014,7 @@ _ENTRY_CLASSES: dict[str, Any] = {
     SECTION_BUSES: IntentBus,
     SECTION_BLOCKS: IntentBlock,
     SECTION_DECISIONS: IntentDecision,
+    SECTION_ACCEPTED: IntentAccepted,
 }
 
 
@@ -1018,6 +1156,140 @@ def validate(document: DesignIntent, slots: Iterable[dict]) -> dict:
     never a document it refuses (090 §一).
     """
     return merge(document, slots)[1]
+
+
+# ---------------------------------------------------------------------------
+# the clerk: one accepted-unknown answer at a time (191A)
+# ---------------------------------------------------------------------------
+
+
+def accepted_entry(
+    document: DesignIntent, part: str, board: str = ""
+) -> IntentAccepted | None:
+    """The acceptance this document carries for ``(part, board)`` — first match.
+
+    The clerk's key, in :meth:`IntentAccepted.matches`' strict sense: the same
+    token **and** the same board scope. It is what makes the writer idempotent and
+    what `--revoke` removes.
+    """
+    for entry in document.accepted_unknown:
+        if entry.matches(part, board):
+            return entry
+    return None
+
+
+def accept_unknown(
+    document: DesignIntent,
+    part: str,
+    *,
+    reason: str,
+    who: str = "",
+    when: str = "",
+    board: str = "",
+) -> tuple[DesignIntent, str]:
+    """``(updated document, what changed)`` — record one acceptance.
+
+    The write is deliberately small, the same discipline
+    :func:`boardwise.core.railquery.set_rail_voltage` follows: it appends one
+    entry (or replaces the one this document already carries for the same token
+    and board) and **touches nothing else** — no other entry, no other section, no
+    line order. A repeat of the same acceptance is an **update** rather than a
+    second row (the merge key is `(part, board)` through
+    :func:`accepted_entry`), so running the command twice changes the reason and
+    the timestamp and nothing else.
+
+    Two refusals, both by name, because a stored acceptance nobody can act on is
+    worse than a refused one:
+
+    * an empty ``part`` — there would be nothing for the report to match against;
+    * an empty ``reason`` — the whole point of the section is that a skipped
+      judgement is *stated*; an acceptance with no reason is the silent green
+      light this batch exists to prevent.
+
+    ``provenance`` is :data:`PROVENANCE_USER_STATED` and not the draft default:
+    the engineer said it, and this command is the clerk that writes it down. The
+    caller owns the clock — ``when`` is passed in rather than read here, so a test
+    (and a replay) writes what it meant to write.
+    """
+    token = str(part or "").strip()
+    if not token:
+        raise DesignIntentError(
+            "the part token is empty — name the device to accept (an MPN or a "
+            "designator)"
+        )
+    text = str(reason or "").strip()
+    if not text:
+        raise DesignIntentError(
+            f"{token!r} 的接受必须写明 --reason：「这颗的哪些未知我接受、为什么」——"
+            "没有理由的接受就是静默变绿，本通道不准"
+        )
+    updated = document.copy()
+    existing = accepted_entry(updated, token, board)
+    entry = IntentAccepted(
+        part=token,
+        reason=text,
+        who=str(who or "").strip(),
+        when=str(when or "").strip(),
+        board=str(board or "").strip(),
+        provenance=PROVENANCE_USER_STATED,
+    )
+    if existing is None:
+        # Appended, not inserted at the front: the list is a log of what was
+        # accepted, and appending leaves every existing line (and the diff) where
+        # it was.
+        updated.accepted_unknown.append(entry)
+        return updated, f"new acceptance: {token}" + (f"（{entry.board}）" if entry.board else "")
+    if existing.to_jsonable() == entry.to_jsonable():
+        return updated, f"{token}: 已存在且逐字相同（重复执行，没改任何东西）"
+    index = updated.accepted_unknown.index(existing)
+    # A `stale` mark on the entry is **carried over**: the tool never writes one
+    # (the report derives it per run), so if it is there, a human or another tool
+    # put it there — and an acceptance update is not the place to clear somebody
+    # else's mark.
+    entry.stale = existing.stale
+    updated.accepted_unknown[index] = entry
+    return updated, f"{token}: 已存在，已更新 reason/who/when" + (
+        f"（{entry.board}）" if entry.board else ""
+    )
+
+
+def revoke_unknown(
+    document: DesignIntent, part: str, *, board: str = ""
+) -> tuple[DesignIntent, str]:
+    """``(updated document, what changed)`` — take one acceptance back.
+
+    The entry whose `(part, board)` key is exactly this one is removed — the
+    strict key :meth:`IntentAccepted.matches` defines, so `--revoke <token>` takes
+    back the boardless acceptance and leaves a board-scoped one alone (the caller
+    names that one with `--board`; the CLI reports what was removed, and what is
+    still there, rather than leaving the reader to guess which it was).
+
+    No match at all returns the document **unchanged** with an empty description,
+    and the caller refuses on that rather than reporting a successful revoke:
+    撤销一条不存在的接受记录是「目标缺失」，不许读成「已经撤销干净」（R3）。
+
+    Removing is the one operation this section allows on an existing entry, and it
+    is deliberately the *only* one: an acceptance is either there or not, and an
+    entry's reason is corrected by accepting again (see :func:`accept_unknown`).
+    """
+    token = part_token(part)
+    if not token:
+        raise DesignIntentError(
+            "the part token is empty — name the device to revoke (an MPN or a "
+            "designator)"
+        )
+    updated = document.copy()
+    kept: list[IntentAccepted] = []
+    removed: list[str] = []
+    for entry in updated.accepted_unknown:
+        if entry.matches(part, board):
+            removed.append(entry.part + (f"（{entry.board}）" if entry.board else ""))
+            continue
+        kept.append(entry)
+    if not removed:
+        return updated, ""
+    updated.accepted_unknown = kept
+    return updated, "撤销 " + "、".join(removed)
 
 
 def _missing_row(section: str, identity: str, key: str, record: dict) -> dict:
@@ -1263,6 +1535,32 @@ def render_markdown(
                 + f"（{decision.provenance}）"
             )
         lines.append("")
+    accepted = document.accepted_unknown
+    if accepted:
+        # 191A: the acceptance list is *not* slot rows (it answers no slot), so it
+        # renders as prose beside `blocks`/`decisions` — and it renders as prose
+        # that says what it does to the review, because a reader who finds this
+        # list has to know that these parts are the ones 「另有 N 颗工程师接受未审」
+        # is about.
+        lines.append(f"### {SECTION_TITLES[SECTION_ACCEPTED]}（{len(accepted)}）")
+        lines.append("")
+        lines.append(
+            "> 这些件 checkup 会给它们单独一节 `accepted_unknown[]`：不再算在"
+            "`unreviewed_parts` 里、也不再让 `completion.verdict` 停在 `incomplete`，"
+            "但报告会一直把数量和理由说在明面上（结论里那句「另有 N 颗工程师接受未审」）。"
+            "撤销用 `boardwise parts accept-unknown <MPN|位号> --reason … --revoke`。"
+        )
+        lines.append("")
+        for entry in accepted:
+            lines.append(
+                f"- `{entry.part}`"
+                + (f"（{entry.board}）" if entry.board else "")
+                + f"：{entry.reason}"
+                + (f" —— {entry.who}" if entry.who else "")
+                + (f" @{entry.when}" if entry.when else "")
+                + f"（{entry.provenance}）"
+            )
+        lines.append("")
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
@@ -1286,6 +1584,10 @@ _TYPED_FIELDS: dict[type, tuple[str, ...]] = {
     IntentBus: ("family",),
     IntentBlock: ("id",),
     IntentDecision: ("subject", "decision"),
+    #: 191A: identity **and** reason are required here, so a hand-written
+    #: acceptance with no reason is refused by the same reader that reads it
+    #: (`reason is required and missing`) rather than arriving as a blank field.
+    IntentAccepted: ("part", "reason"),
 }
 
 _LIST_FIELDS: dict[type, tuple[str, ...]] = {

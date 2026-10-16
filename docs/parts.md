@@ -30,6 +30,39 @@ Two properties are deliberately *tri-state* (`true` / `false` / `null`). "No
 evidence" and "no" are different answers, and a library whose `basic: false`
 means "we never looked" is worse than one that says `null`.
 
+### Two shelves, one reading (191B)
+
+A frozen exe has **two** shelves: the copy it carries
+(`resources/blocklib/parts.json`, inside the PyInstaller extraction directory —
+read-only, and dead when the process exits) and the user's own
+`~/.boardwise/parts.json` (`BOARDWISE_HOME` wins over `~`), which is what
+`parts add` / `parts fetch` write. 186-H2 made the first write copy the bundled
+file there and made the read side prefer it — which fixed "the curation went to
+a file no rule opens" and left the next hole: the user's file is a **snapshot**
+of the bundled shelf, so every entry a later **upgrade** adds to the exe's copy
+was shadowed by the whole shelf.
+
+191B closes it by merging, not by choosing:
+
+* the **read** is the pair — the user's shelf first, the bundled one underneath
+  (`rules.facts.default_library_paths()` → `read_default_library()`);
+* the **write** target stays one file, the user's
+  (`default_library_path()`), because that is the path `report.json` quotes back
+  in its clearing instruction;
+* the merge key is the **part**, not the file: shelf key, MPN or C-number. The
+  user's entry wins for the same part; everything else on the exe's shelf stays
+  visible. An explicit `--library` names **one** shelf and is never merged;
+* `parts list` shows what the merge did — one row per entry, with `user`,
+  `builtin` or `user-overrides-builtin` in the last column (`-` from a checkout,
+  where there is one shelf and a label would invent a second). `--json` carries
+  the same labels under `entries[].source`, plus `shelfPaths` / `originCounts`.
+
+```bash
+boardwise parts list                    # the shelf this install reads, labelled
+boardwise parts list --query CH340N     # one part, either shelf
+boardwise parts list --category ic --json
+```
+
 ## The fact intake: `missing` → `add` → curation → the gate (039)
 
 The rules cannot decide anything about a part the shelf knows no facts for, and
@@ -41,6 +74,7 @@ boardwise parts missing --file board.epro2          # what the shelf owes this b
 boardwise parts missing --file board.eprj3 --json report.json
 boardwise parts show CH340N                         # one entry, in full
 boardwise parts show ic.ch340n --json entry.json
+boardwise parts list                               # every entry + which shelf it came from (191B)
 boardwise parts add TPL2981-30DBVR --lcsc C9900000001
 ```
 

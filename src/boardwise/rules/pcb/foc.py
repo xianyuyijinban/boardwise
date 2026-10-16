@@ -130,10 +130,10 @@ from ...core.measure import (
     track_width_stats,
     vias_in_region,
 )
-from ...core.parts import load_parts, resolve_component_facts
+from ...core.parts import resolve_component_facts
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on
-from ..facts import default_library_path
+from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
 from .distance import _mil, _measurement
 
@@ -203,6 +203,18 @@ MULTILAYER_THRESHOLD = 4
 #: which side of the line the board is on. The *number* is TI's, the *ruling*
 #: that it grades is 岳's, and both are named on the row rather than merged into
 #: one attribution.
+#:
+#: **191D read this figure against the per-rail tiers and left it alone**
+#: (:data:`boardwise.rules.pcb.distance.DECAP_TIER_MIL`, 岳 2026-10-17). The
+#: pins this rule measures are the driver's **own** supply pins — ``VM`` /
+#: ``DVDD`` / ``VCC``, the names it finds a role on through 131a's classifier —
+#: which is the *消费端供电脚* side of the split, and that tier's threshold **is**
+#: this figure (asserted in ``tests/test_191d_decap_tiers.py``). So the two
+#: rules still grade one pin one way, and no row in this pack moved when 191D
+#: landed (measured over the 15 boards: ``outputs/191d/evidence.md``). A driver
+#: that ever declared a ``VIN`` or a ``VOUT`` pin would be the case that needs
+#: the tier read *here*; the corpus has none, and inventing that path before a
+#: board asks for it would be the same 「先建后测」 this pack refuses elsewhere.
 TI_DECAP_REFERENCE_MIL = 0.2 * 1000.0
 
 #: TI SLVA959B §4's gate-trace width figure, in mils. **Reference only**, and
@@ -747,7 +759,7 @@ class FocDecapProximity(PcbRule):
     )
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None
@@ -757,7 +769,7 @@ class FocDecapProximity(PcbRule):
         Same contract as 131b's and 131d's: ``library=None`` degrades to an empty
         shelf, so a synthetic test injects a two-entry library rather than
         monkeypatching the project's own
-        :func:`boardwise.rules.facts.default_library_path`.
+        :func:`boardwise.rules.facts.read_default_library`.
 
         **The schematic page is resolved once here** (:func:`schematic_page_of`)
         and threaded into the one value read this rule makes — 「the capacitor's
@@ -1627,7 +1639,7 @@ class FocPowerLoopArea(PcbRule):
     source = "TI SLVA959B §6.3.2 / §1.4（出数不出判定，口径待岳裁）"
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None

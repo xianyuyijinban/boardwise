@@ -84,6 +84,10 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
   在多板上的身份并不相同，`C2` 一块板无 MPN、另一块板带值码）。所以
   「还差几份手册」= 去重位号数，**但要按「位号 × 板」估工作量**：一块板上一颗料要一份
   手册，多板同位号要逐块核。`report.md` 的未知项节会把多板位号逐条列出来。
+  **191B 起两处同形**：`unreviewed_parts[].boards` / `reviewedByShelf[].boards` /
+  `accepted_unknown[].boards` 与 `needs_datasheet[].boards` 是**同一个形状**——每条
+  `{board, mpn, name, value}`（placement 行，不是板名列表），所以任一节的 `boards` 都能
+  直接读成「这块板上的这颗料是什么」；旧报告里的板名列表仍可读（`board_titles`/`board_rows`）。
 - **退出码**：`0` 无 ERROR / `1` 有 ERROR（主机 ERC fatalError/error、主机 PCB DRC 逐条、
   自有规则 ERROR 任一命中）/ `2` 输入不可用 / `3` 说不清——在线状态不可陈述（daemon 不通、
   没 connector、三级数据路全被拒）**或 `completion.verdict` 是 `incomplete`**（073：审查没看全——
@@ -164,6 +168,11 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 `boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`——你读完 PDF 把
 facts 写进货架（每条带出处页码），**由人核验并声明**才驱动规则。板上只有器件名、没有 MPN 的
 器件，货架条目按**器件名**也能被认出来（报告里标「按器件名匹配」，证据级别低于 MPN）。
+**第三通道：工程师明示接受**（191A）——`boardwise parts accept-unknown <MPN|位号> --reason "<为什么接受>" [--board <板名>]`
+把「这颗的未知我接受」写进设计意图合同；下一轮 checkup 里该件从 `unreviewed_parts`
+移到报告的 `accepted_unknown[]`，`completion.verdict` 不再因它停在 `incomplete`
+（成 `complete-with-open-items`），但结论那句里一直有「另有 N 颗工程师接受未审」——
+**它不是「审过了」**，`mayQuotePassed` 仍为 false。撤销加 `--revoke`。
 
 ③ **整图布局（审美开关，默认关）**：开关开着报告才有 `layout_review` 节（五轴：
 拓扑可辨/流向明确/文字可读/分组合理/网络标识规范），对着 `canvas_images[]` 逐轴打 1–5 分
@@ -378,7 +387,10 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   **给 PDF ≠ 清闸**。清闸 = 货架条目带**已核验 facts**：
   `boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`（AI 读完 PDF 写
   facts JSON 走这条；同一命令对货架上已有的候选条目**原地补 facts**，不加 `--verified` 就只
-  是候选）。板上的器件若**没有 MPN、只有器件名**，身份链按 `MPN → C码 → 器件名` 兜底匹配
+  是候选）。**另一条清闸通道是工程师明示接受**（191A）：
+  `boardwise parts accept-unknown <MPN|位号> --reason "<为什么接受>" [--board <板名>]`
+  写进设计意图合同，checkup 把该件移到 `accepted_unknown[]` 并在结论里报数（`--revoke` 撤销）。
+  板上的器件若**没有 MPN、只有器件名**，身份链按 `MPN → C码 → 器件名` 兜底匹配
   （186；命中在报告里标「按器件名匹配」，证据级别低于 MPN）。细则见 `docs/parts.md`。
 - **无电压电源网问答（065 `intent` 工具链，纯离线）**：`boardwise intent audit --file <导出.epro2>`
   列待问清单（settled 段点名已答出处），`boardwise intent set-rail <网名> --voltage <值> --file <合同>`

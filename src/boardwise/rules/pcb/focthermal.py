@@ -149,8 +149,7 @@ from ...core.measure import (
     via_layers,
     vias_on_pad,
 )
-from ..facts import default_library_path
-from ...core.parts import load_parts
+from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
 from .distance import _measurement
 from .foc import _motor_drivers
@@ -511,7 +510,7 @@ class FocThermalViaStyle(PcbRule):
     )
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None
@@ -671,7 +670,7 @@ class FocThermalViaArray(PcbRule):
     )
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None
@@ -1025,7 +1024,7 @@ class FocThermalExitPath(PcbRule):
     source = "TI SLVA959B §2.2 图 2-2（到大面积平面的连续出口；出数不出判定）"
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None

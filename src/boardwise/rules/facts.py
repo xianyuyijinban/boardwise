@@ -131,6 +131,58 @@ def default_library_path() -> str:
         return DEFAULT_LIBRARY_PATH
 
 
+def default_library_paths() -> tuple[str, ...]:
+    """**Every** shelf this process reads, strongest first (191B).
+
+    Frozen, that is the pair ``(user, bundled)`` once the user's shelf exists,
+    ``(bundled,)`` before it does, and ``(DEFAULT_LIBRARY_PATH,)`` when the
+    bootstrap cannot name its extraction root — :func:`default_library_path`'s
+    three answers, spelled as a *list* so the whole shelf can be read rather
+    than the front of it. From a checkout it is the one repo-relative path,
+    unchanged.
+
+    Why a second function instead of a second return value: 186-H2's
+    ``default_library_path()`` is also the **write** target and the path
+    `report.json` quotes back in its clearing instruction ("write verified facts
+    into this shelf"). That answer must stay one file — the user's — while the
+    *reading* becomes the pair, and collapsing the two would send a reader to
+    curate a file inside the exe's extraction directory, which is 186-H2's hole
+    over again.
+    """
+    from .. import resources
+
+    primary = default_library_path()
+    if not resources.is_frozen() or primary == DEFAULT_LIBRARY_PATH:
+        return (primary,)
+    try:
+        bundled = str(resources.parts_library())
+    except RuntimeError:
+        return (primary,)
+    if bundled == primary:
+        return (primary,)
+    return (primary, bundled)
+
+
+def read_default_library() -> "PartLibrary":
+    """The process's shelf, **merged** across :func:`default_library_paths`.
+
+    The one call every reader that means "the shelf this process reads" should
+    make (191B). Before it, the readers each did ``load_parts(default_library_path())``,
+    which is exactly the bundled shelf from a checkout and *only* the user's
+    shelf when frozen — so an entry an exe upgrade added to the bundled shelf was
+    invisible to every rule until somebody happened to write. Merging is by
+    identity (MPN / C-number / shelf key), the user's entry wins, and the labels
+    the merge produces are readable through :meth:`PartLibrary.origin_of`
+    (`parts list` prints them).
+
+    An explicitly named ``--library`` is **one** shelf: the user said which file,
+    and merging a second one into it would answer a question nobody asked.
+    """
+    from ..core.parts import load_libraries
+
+    return load_libraries(default_library_paths())
+
+
 # Subject category classification. A shelf entry can be an IC, explicitly
 # something else, or carry no category at all (measured: the golden board's
 # U3 resolves to C2907329, an old v1-era entry with `category: null`) — and
@@ -209,9 +261,10 @@ class FactsRule(OutcomeRule):
     """Base for rules that read the curated shelf.
 
     The library is injectable (tests pass a tiny synthetic shelf); without
-    injection it loads lazily from :func:`default_library_path` — this process's
-    shelf — because module-level BUILTIN_RULES instances outlive any single run
-    and are built at import, long before a frozen process could resolve anything.
+    injection it loads lazily from :func:`read_default_library` — this process's
+    shelf, merged across :func:`default_library_paths` since 191B — because
+    module-level BUILTIN_RULES instances outlive any single run and are built at
+    import, long before a frozen process could resolve anything.
 
     ``library_path`` is the *override*: empty means "whatever shelf this process
     reads" (``""`` rather than the constant, so that resolving it stays a
@@ -229,7 +282,15 @@ class FactsRule(OutcomeRule):
         if self._library is None:
             from ..core.parts import load_parts
 
-            self._library = load_parts(self.library_path or default_library_path())
+            if self.library_path:
+                self._library = load_parts(self.library_path)
+            else:
+                # 191B: an un-injected rule reads the **merged** shelf this
+                # process reads (user over bundled), not the front of it — a
+                # rule that judged against the user's snapshot while the
+                # report's 未审 list came from the merged one would be two
+                # answers to one question.
+                self._library = read_default_library()
         return self._library
 
     def entry_for(self, comp: Component) -> PartEntry | None:
@@ -239,7 +300,7 @@ class FactsRule(OutcomeRule):
         (:func:`boardwise.core.parts.resolve_facts`; 186 §B added the third
         step). The device name is what a board carries when its parts have no
         MPN field filled in at all: measured on
-        `.tmp_bug98b/实板A.epro2` (岳 2026-10-15), 26 of 98 parts have
+        实板A（`.tmp_bug98b/` 下的企业归档） (岳 2026-10-15), 26 of 98 parts have
         an empty MPN **and** an empty supplier, and their device name is the
         only identity they have. Without the third step the shelf could hold the
         datasheet facts for such a part and every rule here would still answer
@@ -1735,6 +1796,8 @@ class UsbCcPulldown(FactsRule):
 __all__ = [
     "DEFAULT_LIBRARY_PATH",
     "default_library_path",
+    "default_library_paths",
+    "read_default_library",
     "DomainVsRange",
     "FactsRule",
     "LdoDropout",

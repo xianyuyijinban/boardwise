@@ -130,12 +130,11 @@ from ..base import Finding, FindingTarget
 from ...core.geometry import BoardGeometry
 from ...core.measure import component_distance
 from ...core.model import is_ground_net
-from ...core.parts import load_parts
 from ...core.pinrole import pin_role
 from ...core.power_domains import domain_of, infer_net_domains
 from .focground import DrawValue, _placed_on, _value_ohms, schematic_board_of
 from ..decap import CapCandidate, cap_candidates_on
-from ..facts import default_library_path
+from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
 from .distance import _board_models, _mil, _measurement
 from .regulator import (
@@ -345,7 +344,7 @@ def fb_dividers(
     """
     if library is None:
         try:
-            library = load_parts(default_library_path())
+            library = read_default_library()
         except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
             library = None
 
@@ -652,7 +651,7 @@ class RegulatorFbPlacement(PcbRule):
     source = "house rule（岳 2026-10 待裁）"
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None
@@ -663,7 +662,7 @@ class RegulatorFbPlacement(PcbRule):
         :meth:`~boardwise.rules.pcb.regulator.RegulatorCapDistance.
         check_with_library` publishes, for the same reason: the synthetic tests
         can inject a shelf without monkeypatching the project's own
-        :func:`boardwise.rules.facts.default_library_path`.
+        :func:`boardwise.rules.facts.read_default_library`.
 
         **The schematic page is resolved once here** (:func:`schematic_board_of`,
         151/153's board chain off the document's declared ``META.board``) and
@@ -678,7 +677,7 @@ class RegulatorFbPlacement(PcbRule):
             return []
         if library is None:
             try:
-                library = load_parts(default_library_path())
+                library = read_default_library()
             except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
                 library = None
         schematic = schematic_board_of(ctx)

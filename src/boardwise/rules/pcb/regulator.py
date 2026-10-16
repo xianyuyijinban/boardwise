@@ -96,11 +96,11 @@ from dataclasses import dataclass
 from ..base import Finding, FindingTarget
 from ...core.geometry import BoardGeometry
 from ...core.measure import component_distance
-from ...core.parts import load_parts, resolve_component_facts
+from ...core.parts import resolve_component_facts
 from ...core.pinrole import pin_role
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on
-from ..facts import default_library_path
+from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
 from .distance import _board_models, _mil, _measurement
 from .focground import DrawValue, _placed_on, _value_ohms, schematic_board_of
@@ -291,7 +291,7 @@ def _regulator_readings(model: object, library=None) -> list[RegulatorReading]:
     """
     if library is None:
         try:
-            library = load_parts(default_library_path())
+            library = read_default_library()
         except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
             library = None
     readings: list[RegulatorReading] = []
@@ -365,7 +365,7 @@ class RegulatorCapDistance(PcbRule):
     source = "house rule（岳 2026-10 待裁）"
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None
@@ -376,7 +376,7 @@ class RegulatorCapDistance(PcbRule):
         reading is a narrower one" contract
         :func:`_regulator_readings` already honours, so the synthetic tests can
         inject a two-entry library without monkeypatching the project's own
-        :func:`boardwise.rules.facts.default_library_path` (which
+        :func:`boardwise.rules.facts.read_default_library` (which
         :func:`~boardwise.rules.pcb.distance._supply_nets` shares).
         """
         board = ctx.board

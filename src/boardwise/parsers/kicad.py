@@ -53,9 +53,22 @@ module to them. The measured facts this module depends on:
   ``Net-(REF-PadN)`` with the lowest ``(REF, pin)`` member — kicad-cli's own
   name shape for an unnamed net. (The fixture draws no unnamed net, so this is
   KiCad's documented convention plus this module's own unit assertion, **not**
-  a measurement.) A net id carrying no name — the pre-6 ``(net 3)`` form — is
-  refused by name rather than read as a net called ``"3"``: this reader targets
-  the KiCad ≥ 6 forms ``(net "NAME")`` and ``(net N "NAME")``.
+  a measurement.)
+* **A net id alone is read against the file's own net table (191C).** A pad,
+  track, via or zone may state a bare ``(net 3)`` — the id without the name
+  KiCad 10 writes inline. The name is then looked up in the board's top-level
+  ``(net N "NAME")`` table, which is where such a file keeps it. An id that
+  table does not name is kept as ``net#3`` and counted
+  (:data:`UNNAMED_NET_PREFIX`, :func:`unnamed_net_names`): a ``net#`` shape is
+  not one KiCad's netlister ever writes, so it cannot be mistaken for a name
+  the designer typed, and the alternative — inventing a plausible name —
+  would hand the rules a net that does not exist. The count is disclosed on the
+  board entry (``netIdNote``) because nets are recognised *by name*: a board
+  whose ids lost their names is a board the name-driven checks cannot see.
+  The fixture ``kicad_min/kicad_bare_net.kicad_pcb`` is **hand-written** for
+  this shape — no KiCad-written file in this repository carries it — so this
+  branch rests on this module's reading of the published grammar, not on a
+  measurement against KiCad itself. Before 191C the form was refused by name.
 * **The board is explicit.** KiCad 10 ids copper layers 0 (F.Cu), 2 (B.Cu),
   4, 6 … (inner); units are mm with y pointing down. A pad's ``at`` is its
   position in the **footprint's unrotated frame** with its **absolute**
@@ -128,6 +141,7 @@ from ..core.model import (
 
 __all__ = [
     "KICAD_SUFFIXES",
+    "UNNAMED_NET_PREFIX",
     "Atom",
     "KicadFormatError",
     "NetClassDecl",
@@ -142,9 +156,17 @@ __all__ = [
     "read_kicad_schematic_model",
     "read_project_net_settings",
     "schematic_connectivity",
+    "unnamed_net_names",
 ]
 
 KICAD_SUFFIXES = frozenset({".kicad_pro", ".kicad_sch", ".kicad_pcb"})
+
+#: 191C: the name this reader gives a net id the file states **without** a name
+#: — a bare ``(net N)`` whose id no ``(net N "NAME")`` row explains. Not a shape
+#: KiCad's netlister ever writes, so a ``net#N`` in a report cannot be read as a
+#: name the designer typed; see :func:`_net_name` and
+#: :func:`unnamed_net_names`.
+UNNAMED_NET_PREFIX = "net#"
 
 #: 1 mm in mil. Every KiCad length is mm; every boardwise length is mil.
 MM_TO_MIL = 1.0 / 0.0254
@@ -1030,25 +1052,97 @@ def _mil(x_mm: float, y_mm: float) -> Point:
     return Point(x_mm * MM_TO_MIL, -y_mm * MM_TO_MIL)
 
 
-def _net_name(node: list) -> str | None:
-    """``(net "GND")`` (KiCad 10) or ``(net 3 "GND")`` (KiCad 6–9).
+def _net_id(value: Any) -> int | None:
+    """A bare ``(net 3)`` argument as an int, or ``None`` when it is not an id.
 
-    A bare pre-6 ``(net 3)`` id carries no name, and this reader does not read
-    the top-level ``(net N "NAME")`` table those boards kept their names in —
-    so it is refused by name rather than handed to the rules as a net called
-    ``"3"`` (the capability matrix used to claim both forms were read; the
-    fixture ``kicad_min`` has no such id and cannot tell the two apart).
+    ``Atom`` only: a quoted ``"3"`` is a *name* that happens to be digits (KiCad
+    writes one for a net the designer called ``3``), and reading it as an id
+    would look it up in the table and drop the name.
+    """
+    if not isinstance(value, Atom):
+        return None
+    text = str(value)
+    return int(text) if text.isdigit() else None
+
+
+def _net_table(tree: list) -> dict[int, str]:
+    """The board's own top-level ``(net N "NAME")`` table: id → name (191C).
+
+    KiCad 6–9 wrote this table beside the inline name on every pad and track;
+    a file whose elements carry only the bare ``(net N)`` form states the names
+    here and nowhere else. An id the table gives an **empty** name to —
+    ``(net 0 "")``, KiCad's own 「no net」 — is recorded as ``""`` rather than
+    dropped, so :func:`_net_name` can tell 「the file says this id has no name」
+    apart from 「the file says nothing about this id」: the first is a net that
+    is not there, the second is a name that was lost.
+    """
+    table: dict[int, str] = {}
+    for node in _kids(tree, "net"):
+        if len(node) < 3:
+            continue
+        ident = _net_id(node[1])
+        if ident is None:
+            continue
+        name = node[-1]
+        table[ident] = "" if isinstance(name, Atom) else str(name)
+    return table
+
+
+def _net_name(
+    node: list,
+    table: dict[int, str] | None = None,
+    unnamed: dict[int, int] | None = None,
+) -> str | None:
+    """The net one board element states, in any of KiCad's three written forms.
+
+    * ``(net "GND")`` (KiCad 10) — the name inline, no id;
+    * ``(net 3 "GND")`` (KiCad 6–9) — the id and the name inline;
+    * ``(net 3)`` (191C) — **the id alone**. ``table`` is the file's own
+      top-level ``(net N "NAME")`` table (:func:`_net_table`) and the name is
+      looked up there. An id the table does not name is kept as ``net#3`` and
+      counted in ``unnamed`` (id → how many elements stated it): the file lost
+      that name, and inventing a plausible one would hand the rules a net that
+      does not exist. An id the table names with the **empty** string is
+      ``None`` — the file said this id is not a net, which is a different
+      answer from 「the name was lost」 and is not counted.
+
+    A bare argument that is neither an id nor a name (``(net abc)``) is refused
+    by name: it is none of the three forms, and reading it as a net called
+    ``"abc"`` would be a guess.
     """
     child = _first(node, "net")
     if child is None or len(child) < 2:
         return None
     name = child[-1]
-    if isinstance(name, Atom):
+    if not isinstance(name, Atom):
+        return str(name) if str(name) else None
+    ident = _net_id(name)
+    if ident is None:
         raise KicadFormatError(
-            f"a bare (net {name}) id with no name: this reader targets KiCad 6+ "
-            '(net "NAME") / (net N "NAME"); upgrade the board (kicad-cli pcb upgrade)'
+            f"a bare (net {name}) that is neither a net id nor a quoted name: this reader "
+            'targets KiCad 6+ (net "NAME") / (net N "NAME") / (net N)'
         )
-    return str(name) if str(name) else None
+    if table is not None and ident in table:
+        return table[ident] or None
+    if unnamed is not None:
+        unnamed[ident] = unnamed.get(ident, 0) + 1
+    return f"{UNNAMED_NET_PREFIX}{ident}"
+
+
+def unnamed_net_names(board: BoardGeometry) -> list[str]:
+    """The board's nets whose name the file never stated, sorted (191C).
+
+    Exactly the nets :func:`_net_name` fell back to ``net#N`` for — the shape
+    KiCad's netlister cannot write, so a name in this list is this reader's own
+    marker for a lost name and not something the designer typed. Empty for a
+    board whose every net id the file named, and for every board not read by
+    this module (nothing else writes that shape).
+
+    The *count* is this list's length; it rides into the report as the board
+    entry's ``netIdNote`` (``engines.pcbreview._board_entry``), because the
+    rules that recognise a net by its name cannot see these nets at all.
+    """
+    return sorted(name for name in board.nets if name.startswith(UNNAMED_NET_PREFIX))
 
 
 _PAD_SHAPES = {"circle": "ELLIPSE", "oval": "OVAL", "rect": "RECT", "roundrect": "RECT",
@@ -1150,6 +1244,9 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
     if not tree or tree[0] != "kicad_pcb":
         raise KicadFormatError(f"{path.name}: not a kicad_pcb document")
     layers = _read_layers(tree)
+    # 191C: the board's own net table, read once — every element that states a
+    # bare `(net N)` is resolved through it (see `_net_name`).
+    net_table = _net_table(tree)
     name = path.name
     components: list[ComponentPlacement] = []
     pads: list[PadGeometry] = []
@@ -1198,7 +1295,7 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
                 component=ref or None,
                 component_id=uid,
                 pin_number=str(pad[1]) if len(pad) > 1 else None,
-                net=_net_name(pad),
+                net=_net_name(pad, net_table),
                 footprint_layer_id=MULTI_LAYER_ID if "*.Cu" in layer_names or kind == "thru_hole" else (copper[0] if copper else None),
                 effective_layer_ids=copper,
                 x=point.x, y=point.y,
@@ -1215,7 +1312,7 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
         a = _coord(seg, "start", what)
         b = _coord(seg, "end", what)
         tracks.append(TrackSegment(
-            id=str(_arg(seg, "uuid", default="")), net=_net_name(seg),
+            id=str(_arg(seg, "uuid", default="")), net=_net_name(seg, net_table),
             layer_id=layers.by_name.get(str(_arg(seg, "layer", default=""))),
             start=_mil(*a), end=_mil(*b),
             width=_num_arg(seg, "width", what) * MM_TO_MIL,
@@ -1225,7 +1322,7 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
         pts = _arc_points(_coord(arc, "start", what), _coord(arc, "mid", what), _coord(arc, "end", what))
         for i, (a, b) in enumerate(zip(pts, pts[1:])):
             tracks.append(TrackSegment(
-                id=f"{_arg(arc, 'uuid', default='')}#{i}", net=_net_name(arc),
+                id=f"{_arg(arc, 'uuid', default='')}#{i}", net=_net_name(arc, net_table),
                 layer_id=layers.by_name.get(str(_arg(arc, "layer", default=""))),
                 start=_mil(*a), end=_mil(*b), width=_num_arg(arc, "width", what) * MM_TO_MIL,
             ))
@@ -1246,7 +1343,7 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
             unused = []
         point = _mil(*at)
         vias.append(ViaGeometry(
-            id=str(_arg(via, "uuid", default="")), net=_net_name(via), x=point.x, y=point.y,
+            id=str(_arg(via, "uuid", default="")), net=_net_name(via, net_table), x=point.x, y=point.y,
             hole_diameter=_num_arg(via, "drill", what) * MM_TO_MIL,
             via_diameter=_num_arg(via, "size", what) * MM_TO_MIL,
             via_type=next((str(v) for v in via[1:] if str(v) in ("blind", "micro")), ""),
@@ -1257,7 +1354,7 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
         if _first(zone, "keepout") is not None:
             continue  # rule areas are not copper (not read in the minimum loop)
         uid = str(_arg(zone, "uuid", default=""))
-        net = _net_name(zone)
+        net = _net_name(zone, net_table)
         zone_layers = [str(v) for v in (_first(zone, "layers") or _first(zone, "layer") or [])[1:]]
         outline = [_mil(*p) for p in _pts(_first(_first(zone, "polygon"), "pts"), f"{name}: zone polygon")]
         for layer_name in zone_layers:
@@ -1291,9 +1388,19 @@ def read_kicad_board_model(path: str | Path, board: BoardGeometry | None = None)
     Same repeated-designator contract as the schematic view (first footprint
     kept). Pin names come from the pads' ``pinfunction`` (written by KiCad's
     "update PCB from schematic"); a pad without one has an empty name.
+
+    A pad that states only a bare ``(net N)`` is resolved through the file's own
+    net table (:func:`_net_name`); the ids the table does not name are counted in
+    ``raw["netIdsWithoutNames"]`` (id → how many pads stated it), which is absent
+    — not empty — when the file lost no name. This view reads pads only, so its
+    count is the **pads'**; the board's own count is
+    :func:`unnamed_net_names` over the board's nets, which is what the report's
+    board entry discloses.
     """
     path = Path(path)
     tree = parse_sexpr(path.read_text(encoding="utf-8"))
+    net_table = _net_table(tree)
+    unnamed: dict[int, int] = {}
     model = DesignModel()
     nets: dict[str, Net] = {}
     seen: dict[str, int] = {}
@@ -1313,7 +1420,7 @@ def read_kicad_board_model(path: str | Path, board: BoardGeometry | None = None)
             number = str(pad[1]) if len(pad) > 1 else ""
             if not number:
                 continue
-            net_name = _net_name(pad)
+            net_name = _net_name(pad, net_table, unnamed)
             if keep and not any(p.number == number for p in model.components[ref].pins):
                 model.components[ref].pins.append(Pin(number=number, name=str(_arg(pad, "pinfunction", default="")), net=net_name))
             if not net_name or net_name.startswith("unconnected-"):
@@ -1335,6 +1442,8 @@ def read_kicad_board_model(path: str | Path, board: BoardGeometry | None = None)
             "the 2nd and later footprint of " + " and ".join(repr(r) for r in sorted(refs)) + " are not in this netlist",
         )
     model.raw = {"source": "kicad-board", "file": str(path)}
+    if unnamed:
+        model.raw["netIdsWithoutNames"] = {str(ident): count for ident, count in sorted(unnamed.items())}
     return model
 
 

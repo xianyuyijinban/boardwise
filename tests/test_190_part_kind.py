@@ -569,7 +569,7 @@ def test_a_thermistor_gets_no_value_code_reason():
 
 
 # ---------------------------------------------------------------------------
-# C2. the decoupling row's severity depends on the side it measured
+# C2. the decoupling row's severity: 190's VOUT step, retired by 191D
 # ---------------------------------------------------------------------------
 
 
@@ -603,19 +603,28 @@ def _decap_ctx(pin_name: str, *, cap_x: float) -> PcbReviewContext:
     return PcbReviewContext(board=board, board_title="SYNTH", model=model)
 
 
-def test_an_over_limit_row_on_the_parts_own_output_rail_is_info():
-    """岳 10-16: 只做披露 + VOUT 侧降一级；阈值与读数都不动.
+def test_the_output_side_carries_a_threshold_now_instead_of_a_downgrade():
+    """191D (岳 2026-10-17): 190's 「VOUT 超限降一级为 INFO」 被换成真正的分档阈值.
 
-    The row still names the gap, the rail and the side; what changed is one step
-    of severity, because a capacitor on a part's *output* rail is shared with
-    whatever that rail feeds next.
+    190 reached for the right distinction and answered with a severity step
+    because the threshold was the same 200 mil everywhere. 191D gives the output
+    side a number of its own (500 mil, ``DECAP_TIER_MIL``), so the step is gone:
+    a 360 mil gap on this IC's ``VOUT`` rail is now **inside its tier** and the
+    rule says nothing at all, while the same gap on a ``VCC`` pin is over the
+    200 mil consumer line. The four tiers have their own anchors in
+    ``tests/test_191d_decap_tiers.py``; what this pins is that the downgrade
+    text is not produced any more.
     """
-    rows = DecapDistance().check(_decap_ctx("VOUT", cap_x=400.0))
-    (row,) = rows
-    assert row.severity == "INFO"
-    assert "VOUT" in row.message and "降一级为 INFO" in row.message
-    assert row.target.measurement["value"] == 360.0, "the reading itself is untouched"
-    assert any("threshold is unchanged" in line for line in row.evidence)
+    assert DecapDistance().check(_decap_ctx("VOUT", cap_x=400.0)) == [], (
+        "360 mil is inside the 稳压器输出档 500 mil line — 190's INFO row was a "
+        "stand-in for a threshold, and the threshold is here"
+    )
+    # Over the output tier's own line it is a WARN now, like every other tier.
+    (row,) = DecapDistance().check(_decap_ctx("VOUT", cap_x=600.0))
+    assert row.severity == "WARN"
+    assert "稳压器输出档 500 mil，实测 560.0 mil" in row.message
+    assert "降一级为 INFO" not in row.message
+    assert row.target.measurement["value"] == 560.0
 
 
 def test_a_vin_side_and_an_undeclared_side_keep_the_warn():
@@ -623,9 +632,12 @@ def test_a_vin_side_and_an_undeclared_side_keep_the_warn():
         (row,) = DecapDistance().check(_decap_ctx(pin_name, cap_x=400.0))
         assert row.severity == "WARN", pin_name
         assert "降一级为 INFO" not in row.message
+    # ``VIN`` grades at 300 (稳压器输入档) and the undeclared name at 200, so both
+    # of those rows are over their own line while the VOUT row above is not.
 
-    # Both sides declared on one net: neither input nor output alone, so the
-    # WARN stays (the downgrade is the *declared* output side only).
+    # Both sides declared on one net: the most demanding tier wins (191D keeps
+    # 190's direction — a rail that declared both sides kept the WARN), so the
+    # 300 mil input tier grades it and the side label still says both.
     ic = _comp("U1", pins=[
         ("1", "VIN", "3V3"), ("2", "OUT", "3V3"), ("3", "GND", "GND"),
     ])
@@ -639,7 +651,12 @@ def test_a_vin_side_and_an_undeclared_side_keep_the_warn():
 
 
 def test_the_threshold_did_not_move():
-    """The house rule is still the house rule: 200 mil, no per-rail numbers."""
+    """The base house rule is still 200 mil — 191D wrote the other tiers against it.
+
+    191D added per-rail numbers (300 / 500), so the old 「no per-rail numbers」
+    framing is gone; what is pinned here is that the constant itself is unmoved
+    and that both of these rails are inside their own tier at 160 mil.
+    """
     assert DECAP_DISTANCE_MIL == 200.0
     assert DecapDistance().check(_decap_ctx("VOUT", cap_x=200.0)) == []
     assert DecapDistance().check(_decap_ctx("VIN", cap_x=200.0)) == []

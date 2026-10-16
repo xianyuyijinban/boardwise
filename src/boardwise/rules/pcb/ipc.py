@@ -85,7 +85,6 @@ from ..base import Finding, FindingTarget
 from ...core.architecture import generate_architecture
 from ...core.measure import net_clearance, track_width_stats
 from ...core.model import is_ground_net
-from ...core.parts import load_parts
 from ...core.values import parse_current_amps, parse_voltage_volts
 from .base import PcbReviewContext, PcbRule
 
@@ -549,7 +548,7 @@ def _architecture_rails(
     Read through the public enumeration, with the shelf — the same shelf
     :func:`boardwise.rules.decap.cap_candidates_on` and 126b's supply-net
     inference read, through
-    :func:`boardwise.rules.facts.default_library_path`, because the regulator
+    :func:`boardwise.rules.facts.read_default_library`, because the regulator
     half of the voltage inference is a shelf fact and a rule that read a
     different shelf would give a different answer.
 
@@ -574,10 +573,10 @@ def _architecture_rails(
     """
     if model is None:
         return [], []
-    from ..facts import default_library_path  # noqa: PLC0415 — read at call time
+    from ..facts import read_default_library  # noqa: PLC0415 — read at call time
 
     try:
-        library = load_parts(default_library_path())
+        library = read_default_library()
     except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
         library = None
     try:

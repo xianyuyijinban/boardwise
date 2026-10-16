@@ -1224,19 +1224,84 @@ def unknown_parts(model: DesignModel) -> list[dict]:
             "supplier": component.lcsc_part,
             "reasons": reasons,
             "question": UNKNOWN_PART_QUESTION,
-            **_board_field(boards),
+            **_board_field(
+                boards,
+                mpn=mpn,
+                name=str(component.props.get("device_name") or component.value or ""),
+                value=component.value,
+            ),
         })
     return out
 
 
-def _board_field(boards: list[str]) -> dict:
+def board_titles(boards) -> list[str]:
+    """The board titles a row's ``boards`` field names — **either shape** (191B).
+
+    The canonical shape is a list of placement rows (``{"board", "mpn", "name",
+    "value"}``); a bare list of titles is the shape every row used before 191B
+    and is still what ``unknown_parts`` (among others) carries, so a reader that
+    only needs "which boards" asks this function instead of assuming. An entry
+    that is neither (a caller's garbage) is skipped rather than crashed on: the
+    report must not lose a row because one field had the wrong type.
+    """
+    out: list[str] = []
+    for item in boards or ():
+        if isinstance(item, dict):
+            title = str(item.get("board") or "")
+        elif isinstance(item, str):
+            title = item
+        else:
+            continue
+        if title and title not in out:
+            out.append(title)
+    return out
+
+
+def board_rows(
+    boards, *, mpn: str = "", name: str = "", value: str = ""
+) -> list[dict]:
+    """A row's ``boards`` field normalized to the canonical rows (191B) — the
+    compatibility read for the title-list shape.
+
+    One shape for `unreviewed_parts[]` and `needs_datasheet[]` (187B's finding
+    was that the two said "which boards" in two different shapes, so a reader
+    had two cases to get right and a fold had one of them wrong): a list of
+    ``{"board", "mpn", "name", "value"}``, **the placement's** identity per
+    board. A title-list entry has no per-board identity of its own, so it is
+    expanded with the row's own fields — which is what the 185-中1 fold did with
+    them, and why an old report still reads the same.
+    """
+    out: list[dict] = []
+    for item in boards or ():
+        if isinstance(item, dict):
+            row = {
+                "board": str(item.get("board") or ""),
+                "mpn": str(item.get("mpn") or ""),
+                "name": str(item.get("name") or ""),
+                "value": str(item.get("value") or ""),
+            }
+        elif isinstance(item, str):
+            row = {"board": item, "mpn": mpn, "name": name, "value": value}
+        else:
+            continue
+        if row not in out:
+            out.append(row)
+    return out
+
+
+def _board_field(
+    boards, *, mpn: str = "", name: str = "", value: str = ""
+) -> dict:
     """``{"boards": [...]}`` for a multi-board model, ``{}`` for one board.
 
     Added, never renamed (the schema rule): a single-board report's rows are
     byte-for-byte what they were, and a project's rows say which board they are
-    about.
+    about. **191B**: the list is :func:`board_rows`' canonical shape — the same
+    one `needs_datasheet[]` has carried since 185-中1 — and an old title list is
+    still read (:func:`board_titles`, :func:`board_rows`).
     """
-    return {"boards": boards} if boards else {}
+    rows = board_rows(boards, mpn=mpn, name=name, value=value)
+    return {"boards": rows} if rows else {}
 
 
 def unreviewed_counts_by_reason(unreviewed: list[dict] | None) -> dict[str, int]:
@@ -1340,8 +1405,7 @@ def unreviewed_counts_by_class(unreviewed: list[dict] | None) -> dict[str, int]:
 #: — `boardwise parts add <MPN> --lcsc <C码> --category <类别> --facts
 #: <facts.json> --verified` closes it, and `boardwise need-datasheet` is the
 #: *other* channel (the reviewer's own "cannot establish"), which makes this
-#: section longer rather than emptying it. There is no `accept-unknown` command in
-#: this CLI, and the line does not pretend there is one.
+#: section longer rather than emptying it.
 #:
 #: 188B added two things to that command line, both because the instruction was
 #: incomplete rather than wrong:
@@ -1354,6 +1418,15 @@ def unreviewed_counts_by_class(unreviewed: list[dict] | None) -> dict[str, int]:
 #:   already know how to get a C-number is exactly the reader this line is for,
 #:   and "search 立创商城" is the honest first step (the shelf's own
 #:   `parts select` / `--resolve` come after it).
+#:
+#: 191A appended the **third** channel, and it is the one 186 could only write
+#: about: `boardwise parts accept-unknown` (`--reason` required) records the
+#: engineer's 「这颗的未知我接受」 in the design-intent contract, and the part
+#: leaves this section for the report's own `accepted_unknown[]` — where the
+#: reason, the who/when and the count in the verdict keep it from being a silent
+#: pass. The earlier wording said this CLI had no such command; it has one now,
+#: and a clearing instruction that omits the channel it *does* have sends the
+#: reader back to the shuttered gate.
 UNREVIEWED_CLEARING_NOTE = (
     "给 PDF ≠ 清闸。清闸 = 货架条目带**已核验 facts**"
     "（`boardwise parts add <MPN> --lcsc <C码> --category <类别> "
@@ -1361,6 +1434,11 @@ UNREVIEWED_CLEARING_NOTE = (
     "——喂 PDF（`parts fetch --file`）只写出 `facts_verified: false` 的候选，"
     "候选不驱动规则、也不清闸；另一条通道是审查者自己标记未知"
     "（`boardwise need-datasheet`），它只会让本节变长，不会让它变空。"
+    "**第三通道**（191A）：工程师明示接受这颗的未知——"
+    "`boardwise parts accept-unknown <MPN|位号> --reason \"<为什么接受>\" "
+    "[--board <板名>] [--intent <合同>]`，写进设计意图合同；"
+    "该件从本节移到报告的 `accepted_unknown[]`（不再让 verdict 停在 incomplete，"
+    "但结论里一直写着「另有 N 颗工程师接受未审」），撤销加 `--revoke`。"
 )
 
 
@@ -1580,7 +1658,7 @@ def unreviewed_parts(
     )
 
     known = {
-        (entry["designator"], tuple(entry.get("boards") or [])): entry
+        (entry["designator"], tuple(board_titles(entry.get("boards")))): entry
         for entry in unknown_parts(model)
     }
     folder = Path(datasheet_dir) if datasheet_dir else None
@@ -1695,7 +1773,12 @@ def unreviewed_parts(
                 [key for key in FACTS_KEYS if key not in facts] if is_ic else []
             ),
             "channels": channels,
-            **_board_field(boards),
+            **_board_field(
+                boards,
+                mpn=mpn,
+                name=str(component.props.get("device_name") or component.value or ""),
+                value=component.value,
+            ),
         })
     return out
 
@@ -1739,9 +1822,243 @@ def reviewed_by_shelf(model: DesignModel, *, library: object | None = None) -> l
             "category": str(entry.category or ""),
             "factsVerified": bool(entry.facts_verified),
             "factsPresent": sorted(entry.facts or {}),
-            **_board_field(boards),
+            **_board_field(
+                boards,
+                mpn=str(component.mpn or "").strip(),
+                name=str(component.props.get("device_name") or component.value or ""),
+                value=component.value,
+            ),
         })
     return out
+
+
+# --------------------------------------------------------------------------
+# accepted_unknown — 工程师明示「这颗的未知我接受」(191A)
+# --------------------------------------------------------------------------
+
+#: The three states one `accepted_unknown[]` row can carry. One name per row,
+#: because the three send the reader to different places and a row that collapsed
+#: them would be unanswerable ("the contract says U7 — but is U7 even on this
+#: board?"):
+#:
+#: * ``accepted`` — the acceptance moved this part off `unreviewed_parts` on this
+#:   run: it is on the board, the shelf cannot judge it, and the engineer said so;
+#: * ``not-unreviewed`` — the contract still carries the acceptance, but the part
+#:   is not on this run's 未审 list (the shelf can judge it now, or the acceptance
+#:   names a board the part is not on): nothing was skipped, so nothing is owed —
+#:   the row and its reason stay visible because an acceptance is not deleted by
+#:   a shelf update;
+#: * ``stale`` — the part is **not on the board at all** (or not on the board the
+#:   acceptance names). Same discipline as a stale intent slot: the entry keeps
+#:   every byte, gains `stale: true`, and is reported rather than removed (189B's
+#:   path, one section over).
+STATE_ACCEPTED = "accepted"
+STATE_ACCEPTED_NOT_UNREVIEWED = "not-unreviewed"
+STATE_ACCEPTED_STALE = "stale"
+
+ACCEPTED_STATES: tuple[str, ...] = (
+    STATE_ACCEPTED, STATE_ACCEPTED_NOT_UNREVIEWED, STATE_ACCEPTED_STALE,
+)
+
+
+def _board_part_tokens(model) -> dict[str, set[str]]:
+    """``{normalized token: board titles}`` for every placement on the board.
+
+    The index the stale test reads, and only that: matching an acceptance against
+    an 未审 **row** reads the row's own fields (it already carries `designator` /
+    `mpn` / `boards`), while a contract entry whose token moved no row has no row
+    to read — so "is this part still on the board?" is answered from the drawing.
+    A token from a one-board model maps to an **empty set** ("no board names on
+    this model"), which is not the same as "not on the board".
+    """
+    from ..core.designintent import part_token
+
+    out: dict[str, set[str]] = {}
+    for designator, component, boards in _parts_with_boards(model):
+        for token in (part_token(designator), part_token(component.mpn)):
+            if not token:
+                continue
+            out.setdefault(token, set()).update(boards)
+    return out
+
+
+def _accepted_matches_row(entry: object, row: dict) -> bool:
+    """Does this acceptance name one of the row's tokens — and its board?"""
+    from ..core.designintent import part_token
+
+    token = part_token(getattr(entry, "part", ""))
+    if not token or token not in {
+        part_token(row.get("designator")), part_token(row.get("mpn"))
+    }:
+        return False
+    scoped = str(getattr(entry, "board", "") or "")
+    if not scoped:
+        return True
+    boards = [part_token(title) for title in board_titles(row.get("boards"))]
+    # A row that names no board is a one-board model (040b's shape): the token is
+    # the whole identity there, and refusing the match would silently disable
+    # `--board` on every single-board project.
+    return (not boards) or part_token(scoped) in boards
+
+
+def _accepted_row(entry: object, row: dict, matched_by: str) -> dict:
+    """One acceptance that moved a row: the row's own fields + the reason."""
+    return {
+        "part": str(getattr(entry, "part", "")),
+        "state": STATE_ACCEPTED,
+        "matchedBy": matched_by,
+        "designator": row.get("designator", ""),
+        "name": row.get("name", ""),
+        "value": row.get("value", ""),
+        "mpn": row.get("mpn", ""),
+        "supplier": row.get("supplier", ""),
+        "reasons": list(row.get("reasons") or []),
+        "reason": str(getattr(entry, "reason", "")),
+        "who": str(getattr(entry, "who", "")),
+        "when": str(getattr(entry, "when", "")),
+        "board": str(getattr(entry, "board", "") or ""),
+        "stale": False,
+        **_board_field(
+            row.get("boards"),
+            mpn=str(row.get("mpn") or ""),
+            name=str(row.get("name") or ""),
+            value=str(row.get("value") or ""),
+        ),
+    }
+
+
+def _accepted_absent_row(entry: object, tokens: dict[str, set[str]]) -> dict:
+    """One acceptance that moved **no** row — with which of the two reasons why."""
+    from ..core.designintent import part_token
+
+    token = part_token(getattr(entry, "part", ""))
+    scoped = str(getattr(entry, "board", "") or "")
+    boards = tokens.get(token)
+    if boards is None:
+        stale, why = True, "图纸上没有这颗件（合同里记着，只标 stale，不删）"
+    elif scoped and boards and part_token(scoped) not in {part_token(name) for name in boards}:
+        stale, why = True, f"这颗件不在 {scoped} 上（在 {'、'.join(sorted(boards))}）"
+    else:
+        stale, why = False, "这颗件这一轮不在未审清单里（货架已能判，或它已被接受过）"
+    return {
+        "part": str(getattr(entry, "part", "")),
+        "state": STATE_ACCEPTED_STALE if stale else STATE_ACCEPTED_NOT_UNREVIEWED,
+        "matchedBy": "",
+        "designator": "",
+        "name": "",
+        "value": "",
+        "mpn": "",
+        "supplier": "",
+        "reasons": [],
+        "reason": str(getattr(entry, "reason", "")),
+        "who": str(getattr(entry, "who", "")),
+        "when": str(getattr(entry, "when", "")),
+        "board": scoped,
+        "stale": stale,
+        "why": why,
+    }
+
+
+def accepted_unknown_section(
+    model,
+    unreviewed: list[dict] | None,
+    accepted: Iterable[object] | None,
+) -> tuple[list[dict], list[dict]]:
+    """``(unreviewed without the accepted parts, accepted_unknown rows)`` — 191A.
+
+    The move the batch is about, in one function: an engineer's acceptance takes a
+    part **out of** `unreviewed_parts` (so the datasheet gate no longer owes it,
+    and `completion.verdict` may stop being `incomplete`) and **into** a section of
+    its own, where the reason, the who, the when and — when the drawing moved under
+    it — the `stale` mark are all still readable. Nothing is dropped silently: a
+    contract entry that matched nothing still comes back as a row, saying which of
+    the three states it is in.
+
+    The pairing is by the row's own `designator`/`mpn` and the entry's `board`
+    scope (:func:`_accepted_matches_row`), the *first* matching entry wins on a
+    duplicated token, and the order of both lists is preserved — the report reads
+    the way the two sources read.
+    """
+    rows: list[dict] = []
+    remaining: list[dict] = []
+    entries = list(accepted or [])
+    if not entries:
+        return list(unreviewed or []), []
+    from ..core.designintent import part_token
+
+    tokens = _board_part_tokens(model)
+    used = [False] * len(entries)
+    for row in unreviewed or []:
+        found = None
+        for index, entry in enumerate(entries):
+            if used[index] or not _accepted_matches_row(entry, row):
+                continue
+            found = index
+            break
+        if found is None:
+            remaining.append(row)
+            continue
+        used[found] = True
+        entry = entries[found]
+        matched_by = (
+            "designator"
+            if part_token(row.get("designator")) == part_token(getattr(entry, "part", ""))
+            else "mpn"
+        )
+        rows.append(_accepted_row(entry, row, matched_by))
+    for index, entry in enumerate(entries):
+        if not used[index]:
+            rows.append(_accepted_absent_row(entry, tokens))
+    return remaining, rows
+
+
+def part_on_board(model, token: str, board: str = "") -> bool:
+    """Is ``token`` a designator or MPN of a placement on this board (191A)?
+
+    The one reading `parts accept-unknown` uses to tell a typo from an acceptance
+    that precedes the drawing: the same token rule and the same board scope the
+    report pairs rows with, asked of the drawing directly. Public because the CLI
+    is another layer and a private helper crossing that line is what
+    `tests/test_layer_rules.py` refuses — and because the answer belongs to the
+    engine that owns the walk (`_parts_with_boards`), not to the command.
+    """
+    from ..core.designintent import part_token
+
+    wanted = part_token(token)
+    if not wanted:
+        return False
+    scope = part_token(board)
+    for designator, component, boards in _parts_with_boards(model):
+        if wanted not in {part_token(designator), part_token(component.mpn)}:
+            continue
+        if scope and boards and scope not in {part_token(name) for name in boards}:
+            continue
+        return True
+    return False
+
+
+def accepted_unknown_counts(rows: list[dict] | None) -> dict:
+    """``{state: rows}`` over one `accepted_unknown[]` list, sorted keys.
+
+    Counted from the rows themselves (never from a second read of the contract),
+    so the verdict, the conclusion and the section cannot disagree. `accepted` is
+    the number the verdict's open items and the quotable conclusion use: it is the
+    count of parts this run **skipped a judgement on** — a `not-unreviewed` entry
+    skipped nothing, and a `stale` one is not on the board to skip.
+    """
+    counts = {state: 0 for state in ACCEPTED_STATES}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        state = str(row.get("state") or "")
+        if state in counts:
+            counts[state] += 1
+    return dict(sorted(counts.items()))
+
+
+def accepted_unknown_count(rows: list[dict] | None) -> int:
+    """`len(accepted_unknown[])` — every row, whatever state (191A)."""
+    return sum(1 for row in rows or [] if isinstance(row, dict))
 
 
 # --------------------------------------------------------------------------
@@ -1855,6 +2172,11 @@ def needs_datasheet_section(
     placements with identical identity on one board read as one line; ``boards``
     is empty for a model with no board identity at all (a plain ``DesignModel``),
     never omitted.
+
+    **191B**: that dict shape is now the shape ``unreviewed_parts[].boards`` and
+    the other part rows use too — one shape, one reader
+    (:func:`board_rows` / :func:`board_titles`), and the old title list is still
+    read for a report written before it.
     """
     seed_by_part: dict[str, dict] = {}
     boards_by_part: dict[str, list[dict]] = {}
@@ -1866,13 +2188,17 @@ def needs_datasheet_section(
             continue
         seed_by_part.setdefault(part, row)
         placements = boards_by_part.setdefault(part, [])
-        for title in row.get("boards") or []:
-            placement = {
-                "board": str(title),
-                "mpn": str(row.get("mpn") or ""),
-                "name": str(row.get("name") or ""),
-                "value": str(row.get("value") or ""),
-            }
+        # 191B: the seed row's own `boards` is already the canonical dict shape
+        # on a 191B report; `board_rows` is the compatibility read for a title
+        # list (an older report, or a caller that built the seed by hand — the
+        # 187B test does), which it expands with the row's identity exactly as
+        # this fold did before.
+        for placement in board_rows(
+            row.get("boards"),
+            mpn=str(row.get("mpn") or ""),
+            name=str(row.get("name") or ""),
+            value=str(row.get("value") or ""),
+        ):
             if placement not in placements:
                 placements.append(placement)
 
@@ -2996,6 +3322,10 @@ def _board_links(report: dict) -> list[dict]:
             "components": board.get("components"),
             "copperLayers": (pcb or {}).get("copperLayers"),
             "outlineNote": (pcb or {}).get("outlineNote"),
+            # 191C 遗留：`netIdNote` 和 `outlineNote` 是同一个披露通道的两句话
+            # （「这块板的读数里丢了什么」），所以它跟着走同一条路——不过滤、不改写，
+            # 一路带到人读的 report.md 与 board-report.md。
+            "netIdNote": (pcb or {}).get("netIdNote"),
         })
     for board in pcb_boards:
         if id(board) in claimed:
@@ -3007,6 +3337,7 @@ def _board_links(report: dict) -> list[dict]:
             "components": board.get("components"),
             "copperLayers": board.get("copperLayers"),
             "outlineNote": board.get("outlineNote"),
+            "netIdNote": board.get("netIdNote"),
         })
     return links
 
@@ -3480,6 +3811,7 @@ def board_report_section(
             "components": link["components"],
             "copperLayers": link["copperLayers"],
             "outlineNote": link.get("outlineNote"),
+            "netIdNote": link.get("netIdNote"),
             "counts": _severity_counts([row[3] for row in rows]),
             "groups": groups,
         })
@@ -3594,6 +3926,12 @@ def render_board_report(report: dict, section: dict | None = None) -> str:
             # bug98：板框没读出/未闭环/有碎段/含容差焊缝——「没跑」必须写在
             # 人读的报告上，不是只埋在 report.json。
             lines.append(f"> ⚠️ {board['outlineNote']}")
+        if board.get("netIdNote"):
+            # 191C 遗留（191A 交付）：KiCad 裸 `(net N)` 查不到名字 → 保留成
+            # `net#N` 并计数披露。和上一条同一个道理、同一个位置：**按网名读的
+            # 检查**（差分对清单、按轨分档）看不见那些网，这句话只埋在
+            # report.json 里，读 Markdown 的人就以为那些网的名字是完整的。
+            lines.append(f"> ⚠️ {board['netIdNote']}")
         lines.append("")
         for group in board.get("groups") or []:
             gcounts = group.get("counts") or {}
@@ -3771,6 +4109,17 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
             f"{completion.get('warningsPendingTriage', 0)} · 架构槽位 stale "
             f"{architecture_slots.get('stale', 0)}（槽位 {architecture_slots.get('total', 0)}，"
             f"已填 {architecture_slots.get('filled', 0)}，TODO {completion.get('openTodos', 0)}）"
+            # 191A: the engineer's accepted-unknown parts are **not** a debt, but
+            # they are read beside the row they left, so the ledger says the number
+            # rather than leaving a reader to reconstruct it from the section.
+            + (
+                f" · 工程师接受未审 {completion.get('acceptedUnknown', 0)}"
+                if completion.get("acceptedUnknown") else ""
+            )
+            + (
+                f"（另有 {completion.get('acceptedUnknownStale', 0)} 条指向的件已不在图纸上）"
+                if completion.get("acceptedUnknownStale") else ""
+            )
         )
         # #30's gate, rendered from the section's own numbers — `render only what
         # the JSON says`, and absent (not "all clean") when the section is older
@@ -3927,6 +4276,65 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
         lines.append("")
         lines.append(f"每个器件问同一件事：{UNKNOWN_PART_QUESTION}")
     lines.append("")
+
+    # --- 191A: the accepted-unknown list, right after 未审器件 because it is the
+    # other half of that section's answer ("these parts left the list — and here
+    # is who said they could"). Rendered from the rows' own fields, always
+    # printed when non-empty (a report that hid it would be the silent green
+    # light this batch exists to prevent), and silent by absence when the
+    # contract accepted nothing.
+    accepted_rows = report.get("accepted_unknown") or []
+    if accepted_rows:
+        counts = accepted_unknown_counts(accepted_rows)
+        lines.append(f"## 工程师接受未审（accepted_unknown：{len(accepted_rows)}）")
+        lines.append("")
+        lines.append(
+            "这些件**这一轮没有判**：工程师明示「这颗的未知我接受」，理由写在下面。"
+            f"其中 {counts.get(STATE_ACCEPTED, 0)} 颗本轮真的从「未审器件」里移了出来"
+            "——它们不再让 `completion.verdict` 停在 `incomplete`，但报告把数量和理由"
+            "一直说在明面上，**不算「审过了」**。"
+        )
+        lines.append("")
+        lines.append("| 位号/令牌 | 状态 | MPN | 理由 | 谁 | 何时 |")
+        lines.append("|---|---|---|---|---|---|")
+        state_labels = {
+            STATE_ACCEPTED: "本轮接受（已从 未审 移出）",
+            STATE_ACCEPTED_NOT_UNREVIEWED: "不在本轮未审清单",
+            STATE_ACCEPTED_STALE: "stale（图纸上已没有）",
+        }
+        for row in accepted_rows:
+            lines.append(
+                f"| {_cell(row.get('part'))} "
+                f"| {_cell(state_labels.get(str(row.get('state')), row.get('state')))} "
+                f"| {_cell(row.get('mpn') or '—')} "
+                f"| {_cell(row.get('reason') or '—')} "
+                f"| {_cell(row.get('who') or '—')} "
+                f"| {_cell(row.get('when') or '—')} |"
+            )
+        lines.append("")
+        stale_rows = [row for row in accepted_rows if row.get("stale")]
+        if stale_rows:
+            # 189B's discipline, one section over: the entry is kept and marked,
+            # never removed, and the reader is told why it no longer says anything
+            # about this board.
+            lines.append(
+                f"**合同里记着、图纸里已没有的件（{len(stale_rows)}，不删只标）**："
+                + "、".join(f"`{row.get('part')}`" for row in stale_rows)
+                + "——撤销用 `boardwise parts accept-unknown <MPN|位号> --reason … "
+                "--revoke`（合同里那几条值保留，只标 `stale`）。"
+            )
+            lines.append("")
+        orphans = [
+            row for row in accepted_rows
+            if str(row.get("state")) == STATE_ACCEPTED_NOT_UNREVIEWED
+        ]
+        if orphans:
+            lines.append(
+                f"另有 {len(orphans)} 条接受记录本轮没派上用场（那些件不在本轮未审清单里）："
+                + "、".join(f"`{row.get('part')}`" for row in orphans)
+                + "——合同里的条目继续保留，货架更新不会替工程师删掉他的判断。"
+            )
+            lines.append("")
 
     # --- 058 ⓪: what the report still depends on. It sits right after 未审器件
     # because it *contains* that section (the facts trigger) plus the reviewer's

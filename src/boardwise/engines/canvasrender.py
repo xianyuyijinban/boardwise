@@ -20,12 +20,13 @@
 **底层按 x 镜像**（板左↔右对调，上下方向与顶层一致，便于逐件对照）。配色**按层**
 （不是每网一色：网名上百个，按层成本低且可复现），图例印在标题栏里。
 
-**底层视窗里的文字也一起镜像**（字形：``rotate(a) scale(-1,1)``）。这不是装饰性选择：
-文字与焊盘在同一套板面坐标里，规则量的是**文字包围盒**与焊盘相交——文字只镜像位置而
-字形照正读的话，落墨范围会跑到锚点另一边，图就和规则说的对不上（实板上正是这种形状：
-``pcb-silk-designator`` 报 R22 的位号丝印压在 EC3 的焊盘上，R22 的位号记录在
-``BOT_SILK``）。镜不镜像的**字面**是正是反，取决于文件怎么存底层丝印，这里照抄不改写
-（标题栏把这条口径写出来了）。
+**底层视窗里的文字按 `SilkText.frame_axes()` 画**（`:func:`_text_transform``）：底层视窗
+位置按 x 镜像，文字方向也用同一份实测轴向，所以图的落墨范围与 `SilkText.corners()`、
+也就是规则量焊盘相交时用的那个盒子逐点一致（190S 实测：底层位号的 anchoring 角是
+**底层视图角**，于是在底层视窗里读起来是正字、在顶层视窗里是反的——「实物从底面看是
+正字」这句话现在有读数兜底，不再是「照抄不猜」）。实板上 `pcb-silk-designator` 曾报
+R22 的位号压 EC3 焊盘，正是那版把底层文字画到锚点另一边的模型带出来的；标题栏把这条
+口径写出来了。
 
 **finding 叠加**是这张图的用处所在：规则点到的东西（``target.component_ref`` /
 ``counterpart_ref`` / ``net_refs``）在本板上描边高亮并打 ``#n`` 标号，标题栏按
@@ -201,8 +202,8 @@ class _Viewport:
     def rotate(self, angle: float) -> float:
         """板面角（度，y 向上、逆时针为正）→ SVG 的 ``rotate()`` 角（y 向下）。
 
-        两者方向相反，所以是**取负**（顶层视窗用；底层视窗的角走
-        :func:`_text_transform`，那里还要带镜像）。
+        两者方向相反，所以是**取负**（顶层视窗用；底层视窗不带字形镜像，角走
+        :func:`_text_transform` 的矩阵，那里用的是 ``SilkText.frame_axes()``）。
         """
         return -float(angle)
 
@@ -221,9 +222,9 @@ def render_board_svg(
     不是一回事**。
 
     两个视窗的一切（含文字字形）都是**同一套板面坐标的两种看法**：顶层原样、底层按 x
-    镜像。文字跟着镜像是有意的——文字与焊盘同坐标，规则量的就是它们的相交，落墨范围
-    必须和规则量的是同一块地方（见 :func:`_text_transform`）。镜像后文字读起来是正是
-    反取决于文件怎么存底层丝印，标题栏写明这条口径，让人自己去编辑器核。
+    镜像。文字的落墨范围必须和规则量的是同一块地方（见 :func:`_text_transform`），所以
+    两个视窗都从 ``SilkText.frame_axes()`` 取方向；底层视窗读起来是正字——这与「实物从
+    底面看是正字」同一件事（190S 实测：底层位号的 anchoring 角本来就是底层视图角）。
     """
     if scale <= 0:
         raise ValueError(f"scale must be positive, got {scale!r}")
@@ -516,11 +517,11 @@ def _artwork(parts, board, vp, highlight) -> None:
 def _texts(parts, board, vp, highlight) -> None:
     """丝印文字（位号 + 封装印字 + 板上自由文字）。
 
-    **底层视窗里的文字是整个图形按 x 镜像的**（``rotate(a) scale(-1,1)``，见
-    :func:`_text_transform`）：文字与焊盘在同一套坐标里，规则量的是文字包围盒与焊盘
-    相交——文字跑反方向，图就和规则说的对不上（「R22 丝印压没压 EC3 焊盘」正是这种
-    对不上）。把字形一起镜像之后，落墨范围与文件一致；至于读起来是正是反，取决于
-    文件自己怎么存底层丝印（照抄，不猜）。
+    **底层视窗里的文字按同一份实测轴向画**（:func:`_text_transform`）：文字与焊盘在同一
+    套坐标里，规则量的是文字包围盒与焊盘相交——落墨范围必须和规则量的那块地方重合
+    （「R22 丝印压没压 EC3 焊盘」正是这种重合问题）。方向不再是未知数：190S 实测底层
+    位号（与板上自由文字）的角度是**底层视图角**，于是底层视窗里读起来是正字，与实物
+    从底面看一样。
     """
     for text in board.silk_texts:
         kind = str(getattr(text, "layer_kind", "") or "")
@@ -537,7 +538,7 @@ def _texts(parts, board, vp, highlight) -> None:
         x, y = vp.x(text.x), vp.y(text.y)
         anchor = _text_anchor(str(text.origin or ""))
         # 底层的 transform 自带 translate(锚点)，属性位置必须写 0,0：属性坐标在
-        # transform 之内解释，写成 x,y 会先被 scale(-1,1) 翻成 -x 再平移，锚点落到
+        # transform 之内解释，写成 x,y 会先被矩阵的 x 镜像翻成 -x 再平移，锚点落到
         # (0, 2y)——整层底面位号被甩出视窗（189C 落账时漏掉的洞）。
         ax, ay = (0.0, 0.0) if vp.view == "bottom" else (x, y)
         parts.append(
@@ -550,25 +551,35 @@ def _texts(parts, board, vp, highlight) -> None:
 def _text_transform(text, vp: _Viewport, x: float, y: float) -> str:
     """一段文字的 ``transform`` 属性（空串＝不需要）。
 
-    顶层视窗：板面逆时针角 ``a`` 在屏幕上成了 ``-a``（y 轴翻转），字形不镜像——这就是
-    文件里那条墨迹的样子。
+    两个视窗都用 :meth:`boardwise.core.geometry.SilkText.frame_axes` —— 规则量的是
+    **文字盒 ∩ 焊盘**，图上的落墨范围必须与 ``SilkText.corners()`` 算的是同一块地方，
+    所以这里不另立一套方向约定，只把同两个轴向量按视窗映到屏幕：
 
-    底层视窗：**整块图形是 x 镜像的**，所以文字的落墨范围也要镜像，否则「文字在哪」
-    与焊盘对不上。写成 ``rotate(a) scale(-1,1)`` 等价于整个平面按 x 镜像（推导：屏幕
-    偏移应为 ``(-u·cos a + w·sin a, -u·sin a - w·cos a)``，``u`` 是字向、``w`` 是字高，
-    而 ``scale(-1,1)`` 后再 ``rotate(a)`` 给出的正是这个）。读起来是正是反，取决于文件
-    怎么存底层丝印，这里照抄不改写。
+    * 顶层视窗：屏幕 x 与板面 x 同向、屏幕 y 反向，于是 ``(u, v)`` 映成
+      ``[[u.x, -v.x], [-u.y, v.y]]`` = 板面逆时针角 ``a`` 的 ``rotate(-a)``；
+    * 底层视窗：屏幕 x 是板面 x 的镜像，同一个矩阵再按 x 取反（``-u.x`` / ``-u.y``），
+      写成 ``matrix(...)``。对一条**非镜像帧**的底层记录（封装自带印字）这正好等于
+      189C 那版的 ``rotate(a) scale(-1,1)``，一字节不差；对一条镜像帧的记录（位号、
+      板上自由文字）它给出的才是实测的位置——那个字形镜像在 189C 里是从**未定标的**
+      ``corners()`` 反推的，190S 用编辑器自己的 primitive bbox 把它量出来了：
+      底层位号的 anchoring 角是「底层视图」角，不是板面角。
+
+    屏幕上读起来是正是反，因此也不再是未知数：镜像帧的记录在**底层视窗里是正字**
+    （这与「实物从底面看是正字」是同一件事），在顶层视窗里才是反的；非镜像帧的记录
+    相反。标题栏照这条口径写。
     """
-    angle = float(getattr(text, "angle", 0.0) or 0.0) % 360
+    (u_x, u_y), (v_x, v_y) = text.frame_axes()
     if vp.view == "bottom":
-        # 顺序要紧：SVG 的 transform 列表**从右往左**作用，所以是
-        # 「先 scale（字形镜像）→ 再绕自己的锚点 rotate → 最后搬到锚点」，
-        # 写成 rotate 在最前会把锚点也绕原点转走。
-        parts = [f"translate({x:.2f} {y:.2f})"]
-        if angle:
-            parts.append(f"rotate({angle:.3f})")
-        parts.append("scale(-1,1)")
-        return ' transform="' + " ".join(parts) + '"'
+        a, b, c, d = -u_x, -u_y, v_x, v_y
+        # ``translate`` **一律不能省**：底层视窗把属性 ``x``/``y`` 写死成 0,0（见
+        # :func:`_texts`），锚点只由这里给出——矩阵恰好是单位阵时省掉它，文字会落到
+        # 视窗左上角去。顺序同样要紧：SVG 的 transform 列表**从右往左**作用，所以矩阵
+        # 在 translate 之后只绕自己的锚点转；矩阵的列就是屏幕上的 ``u``/``w`` 两个轴。
+        transform = f"translate({x:.2f} {y:.2f})"
+        if (a, b, c, d) != (1.0, 0.0, 0.0, 1.0):
+            transform += f" matrix({a:.6f} {b:.6f} {c:.6f} {d:.6f} 0 0)"
+        return f' transform="{transform}"'
+    angle = float(getattr(text, "angle", 0.0) or 0.0) % 360
     if angle:
         return f' transform="rotate({vp.rotate(angle):.3f} {x:.2f} {y:.2f})"'
     return ""
@@ -742,8 +753,10 @@ def _caption_lines(
         f"颜色 {_COLOURS['highlight']}，编号与下面的清单一一对应",
         "口径：" + CANVAS_NOTE,
         "底层视窗：位置与字形都按 x 镜像（板左↔右）——与规则量丝印/焊盘用的那套板面"
-        "坐标一致，文字落墨范围才和焊盘对得上；因此底层丝印文字看上去可能是反的，"
-        "本图不替文件改写文字方向（正反以编辑器底层视图为准）",
+        "坐标一致，文字落墨范围才和焊盘对得上。文字方向取同一份实测口径（190S）："
+        "底层**位号与板上自由文字**记录的角度是「底层视图角」，所以它们在本图底层视窗里"
+        "读起来是**正字**、在顶层视窗里是反的；封装自带印字那一路记录的角度已经是板面角"
+        "（它的锚点由器件位姿求出），在本图里相反。要改文字方向请改文件，本图只照读数画",
     ]
     lines.extend(_undrawn_lines(board))
     if marks:

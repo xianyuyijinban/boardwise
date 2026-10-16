@@ -37,10 +37,15 @@ from .engines.checkup import (
     PAGE_ATTRIBUTION_ARCHIVE,
     PAGE_ATTRIBUTION_PER_PAGE,
     PAGE_ATTRIBUTION_UNRESOLVED,
+    STATE_ACCEPTED,
+    STATE_ACCEPTED_STALE,
     TRIAGE_VERDICTS,
     TRIGGER_FACTS,
     TRIGGER_MARKED,
     UNREVIEWED_DATASHEET_DIR,
+    accepted_unknown_counts,
+    accepted_unknown_count,
+    accepted_unknown_section,
     board_report_section,
     conclusion_section,
     disambiguated_triage_keys,
@@ -53,6 +58,7 @@ from .engines.checkup import (
     needs_datasheet_section,
     order_modules_by_warnings,
     page_attribution_from_archive,
+    part_on_board,
     render_board_report,
     render_report_markdown,
     render_review_summary,
@@ -1922,6 +1928,41 @@ def build_parser() -> argparse.ArgumentParser:
     parts_show.add_argument(
         "--json", dest="json_path", metavar="PATH", help="Write the entry as JSON."
     )
+    parts_list = parts_sub.add_parser(
+        "list",
+        help="One line per shelf entry, each labelled with the shelf it came from (191B).",
+        description=(
+            "The shelf as a list: key, MPN, C-number, value, category and the **source** of "
+            "the row. On a frozen exe the review reads the user's shelf *and* the copy the "
+            "exe carries, merged by identity (the user's entry wins for the same part), so "
+            "an entry an upgrade brought into the bundle is visible without the user "
+            "re-curating anything — and every row says which of the three it is: `user` "
+            "(only the user's shelf has it), `builtin` (only the exe's copy has it) or "
+            "`user-overrides-builtin` (both have the part and the user's entry won). From a "
+            "checkout, or with an explicit `--library`, there is one shelf and every row "
+            "reads `-` instead of a label that would invent a second one. Exit 0 read / 2 "
+            "the shelf cannot be read."
+        ),
+    )
+    parts_list.add_argument(
+        "--library", default=None,
+        help="The shelf to list (default: the shelf this install reads).",
+    )
+    parts_list.add_argument(
+        "--category", default="", metavar="词",
+        help="Only entries whose category contains this text（如 ic / resistor）。",
+    )
+    parts_list.add_argument(
+        "--query", default="", metavar="文本",
+        help="Only entries whose key / MPN / C-number / value contains this text（大小写不敏感）。",
+    )
+    parts_list.add_argument(
+        "--limit", type=int, default=0, metavar="N",
+        help="At most N rows (default 0 = all).",
+    )
+    parts_list.add_argument(
+        "--json", action="store_true", help="Print the machine-readable list.",
+    )
     parts_add = parts_sub.add_parser(
         "add",
         help=(
@@ -2008,6 +2049,65 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parts_add.add_argument(
         "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
+    )
+    parts_accept = parts_sub.add_parser(
+        "accept-unknown",
+        help=(
+            "工程师明示接受一颗器件的未知（写进设计意图合同）—— "
+            "该件不再让 completion.verdict 停在 incomplete，但报告一直写着这个数。"
+        ),
+        description=(
+            "191A: the datasheet gate's second exit. A part the shelf cannot judge "
+            "stops the review (`unreviewed_parts` → `verdict: incomplete`); the other "
+            "way out is to **state that it need not be judged**. The acceptance is "
+            "written into the DesignIntent contract "
+            "(`acceptedUnknown[]`: part / reason / who / when / board), which is the "
+            "file `checkup` already reads — so the next run moves that part out of "
+            "`unreviewed_parts` into the report's `accepted_unknown[]`, stops being "
+            "`incomplete` because of it, and still says 「另有 N 颗工程师接受未审」 in "
+            "the quotable conclusion. `--reason` is mandatory (an acceptance with no "
+            "reason would be a silent pass); `--revoke` takes one back. A contract "
+            "entry whose part the drawing no longer has is kept and marked `stale` "
+            "rather than deleted. Exit 0 written / 2 unusable input, a missing "
+            "`--reason`, or a `--revoke` with nothing to revoke."
+        ),
+    )
+    parts_accept.add_argument("part", help="MPN 或位号（checkup 的未审清单用这两个键认件）。")
+    parts_accept.add_argument(
+        "--reason", default="", metavar="TEXT",
+        help=(
+            "这颗的哪些未知被接受、为什么。接受时**必填**（撤销不需要）：没有理由的接受"
+            "就是静默变绿，本通道不准。"
+        ),
+    )
+    parts_accept.add_argument(
+        "--board", default="", metavar="名",
+        help="只在这个板上接受（多板工程用；单板工程可省，省了就是全板）。",
+    )
+    parts_accept.add_argument(
+        "--revoke", action="store_true",
+        help="撤销接受：从合同里删掉这条记录。合同里没有它 → exit 2（目标缺失就停，不算已撤销）。",
+    )
+    parts_accept.add_argument(
+        "--file", default="", metavar="PATH",
+        help=(
+            "工程（.epro2 / .eprj3 目录）——只读：用它解析合同默认路径"
+            "（和 checkup 同一份），并核对令牌是否真在这块板上。"
+        ),
+    )
+    parts_accept.add_argument(
+        "--intent", default="", metavar="PATH",
+        help="显式指定合同路径（优先于 --file 推出的默认路径）。",
+    )
+    parts_accept.add_argument(
+        "--who", default="", help="谁接受的（默认取本机用户名，纯审计字段）。"
+    )
+    parts_accept.add_argument(
+        "--library", default=None, help="解析默认合同路径时用的货架（默认 blocklib/parts.json）。"
+    )
+    parts_accept.add_argument(
+        "--json", dest="json_path", metavar="PATH",
+        help="Write the machine-readable result（`-` = stdout）。",
     )
     parts_fetch = parts_sub.add_parser(
         "fetch",
@@ -3420,6 +3520,7 @@ def _checkup_report(
     intent: dict | None = None,
     completion: dict | None = None,
     pcb_review: dict | None = None,
+    accepted_unknown: list[dict] | None = None,
     shelf_path: str = "",
 ) -> dict:
     """Assemble the report: what was read (batch 2), what was found (batch 3),
@@ -3467,6 +3568,12 @@ def _checkup_report(
     the same walk (`checkup.engines.checkup.reviewed_by_shelf`), no existing key
     changes meaning, and the gate (`completion`, `mayClaimPassed`, the exit code)
     never reads it.
+
+    191A added `accepted_unknown` — the parts an **engineer** declared acceptable
+    (`boardwise parts accept-unknown`), which leave `unreviewed_parts` the same way
+    and are the only rows that move `completion.verdict` (from `incomplete` to
+    `complete-with-open-items`, never past it: the part was not judged). Same deal
+    as `reviewedByShelf` — a reading of the same walk, always present, no bump.
     """
     body: dict = {
         "schema": CHECKUP_SCHEMA,
@@ -3491,6 +3598,15 @@ def _checkup_report(
         # it answers is "why is U3 not on the 未审 list?" and it is answerable
         # only if the report kept the answer.
         "reviewedByShelf": list(reviewed_by_shelf or []),
+        # 191A: the **other** half of the datasheet gate's answer — the parts an
+        # engineer declared acceptable, with the reason, the who/when and the
+        # stale mark. Always present (an empty list is the honest "nobody accepted
+        # anything"), because the question it answers — "this part left the 未审
+        # list; who said it could?" — is answerable only if the report kept the
+        # answer. The schema id stays `/7`: like `reviewedByShelf` above, this is a
+        # reading of the same walk, no existing key changes meaning, and the gate
+        # it moves (`completion`) is where the movement is recorded.
+        "accepted_unknown": list(accepted_unknown or []),
         # 058: always present, empty list included — the reviewer's mark channel
         # exists from the first report on (`boardwise need-datasheet` fills it).
         "needs_datasheet": list(needs_datasheet or []),
@@ -3998,6 +4114,7 @@ def _completion_body(
     architecture: dict | None,
     needs_datasheet: list[dict] | None = None,
     coverage: dict | None = None,
+    accepted: list[dict] | None = None,
 ) -> dict:
     """`completion` from counts a caller already has — one shape, two callers.
 
@@ -4047,6 +4164,16 @@ def _completion_body(
     marks), ``reviewerMarked`` (the same number under its own name) and
     ``needsDatasheetTotal`` (every row of the worklist). See the comment on the
     return value for why the old key stays.
+
+    191A added ``accepted`` — the report's own ``accepted_unknown[]`` rows, i.e.
+    the parts an engineer declared acceptable. They are **not** unreviewed parts
+    any more (the caller has already moved them out of ``unreviewed``), so the
+    run may stop being ``incomplete`` because of them — but they are not "nothing"
+    either: a part nobody judged is an open item, so the verdict is capped at
+    ``complete-with-open-items`` while one is outstanding, and ``verdictWhy`` says
+    so by name. The move from `incomplete` to an open item is the whole point of
+    the channel (186 documented it as a way to clear the gate); calling it
+    `complete` would be the silent green light the batch forbids.
     """
     errors = int(summary.get("errorCount", 0) or 0)
     # The gate below is the one `drc.summarise` already used to decide `exitCode`:
@@ -4092,6 +4219,13 @@ def _completion_body(
     } if architecture is not None else dict(empty)
     open_todos = max(architecture_slots["total"] - architecture_slots["filled"], 0)
     coverage = dict(_clean_coverage() if coverage is None else coverage)
+    # 191A: the accepted-unknown reading, from the section's own rows (never from
+    # a second look at the contract): how many parts this run accepted off the
+    # 未审 list, and how many of the contract's acceptances point at a part the
+    # drawing no longer has.
+    accepted_counts = accepted_unknown_counts(accepted)
+    accepted_count = int(accepted_counts.get("accepted", 0))
+    accepted_stale = int(accepted_counts.get("stale", 0))
 
     why: list[str] = []
     if errors:
@@ -4111,6 +4245,12 @@ def _completion_body(
         why.append(f"{unreviewed_count} 颗器件缺手册未审")
     if marked_count:
         why.append(f"{marked_count} 项管脚/器件待手册（审查者标记）")
+    if accepted_count:
+        # 191A: not a debt the reviewer can pay off by reading a datasheet — the
+        # engineer already decided — so the clause says whose call it was. It is
+        # what keeps `complete-with-open-items` from rendering as
+        # 「无 ERROR、无未审、无 stale、无待分诊、无覆盖缺口」.
+        why.append(f"{accepted_count} 颗器件工程师明示接受未审（设计意图合同）")
     if architecture_slots["stale"]:
         why.append(f"{architecture_slots['stale']} 个架构槽位的图纸已变（stale）")
     if pending:
@@ -4141,7 +4281,14 @@ def _completion_body(
         or coverage.get("pcbReviewMissing")
     ):
         verdict = "incomplete"
-    elif architecture_slots["stale"] or pending or coverage_reasons:
+    elif (
+        architecture_slots["stale"] or pending or coverage_reasons
+        # 191A: an accepted-unknown part is an **open item**, not a closed one —
+        # the review did not judge it and says so, which is `complete-with-open-items`
+        # exactly (an open item is a statement *about* the board with a hole named
+        # in it; `incomplete` is the absence of a statement).
+        or accepted_count
+    ):
         verdict = "complete-with-open-items"
     else:
         verdict = "complete"
@@ -4190,6 +4337,15 @@ def _completion_body(
         "warningsPendingTriage": pending,
         "architectureSlots": architecture_slots,
         "openTodos": open_todos,
+        # 191A: the accepted-unknown reading. `acceptedUnknown` is the count the
+        # verdict and the conclusion both read (parts this run skipped a judgement
+        # on), `acceptedUnknownTotal` is the section's own length (the contract may
+        # also carry acceptances that moved nothing — a part the shelf judges now, a
+        # part the drawing no longer has), and `acceptedUnknownStale` names the last
+        # of those. Three keys, one source (the rows above), additive.
+        "acceptedUnknown": accepted_count,
+        "acceptedUnknownTotal": accepted_unknown_count(accepted),
+        "acceptedUnknownStale": accepted_stale,
         "coverage": coverage,
         "sourceVersions": {
             "ruleset": ruleset_fingerprint(rule_ids),
@@ -4209,6 +4365,7 @@ def _completion_section(
     architecture: dict | None,
     needs_datasheet: list[dict] | None = None,
     coverage: dict | None = None,
+    accepted: list[dict] | None = None,
 ) -> dict:
     """`completion` for a **live run** — the coverage counts come from the model.
 
@@ -4238,6 +4395,7 @@ def _completion_section(
         architecture=architecture,
         needs_datasheet=needs_datasheet,
         coverage=coverage,
+        accepted=accepted,
     )
 
 
@@ -4245,6 +4403,42 @@ def _builtin_rule_count() -> int:
     from .engines.review import BUILTIN_RULES
 
     return len([rule.id for rule in BUILTIN_RULES])
+
+
+def _fold_accepted_stale(intent_section_payload: dict, stale_rows: list[dict]) -> None:
+    """Add the accepted-unknown **stale** marks to the report's `intent` section.
+
+    189B's path, one section over (191A). A contract acceptance whose part the
+    drawing no longer has is a stale mark exactly like a stale intent slot: the
+    entry keeps every byte in the contract and is *reported*, never removed. The
+    report's `intent` section is where a reader already goes for that sentence
+    (「合同里记着、图纸里已没有的对象」, rendered by
+    :func:`boardwise.engines.checkup.stale_mark_rows`), so the rows are folded
+    into its two shapes here — ``staleEntries`` (the ``{section, object}`` rows the
+    renderer names a slot with) and ``stale`` (the ``section:identity`` strings the
+    count is taken over) — and the two counts are kept in step with them.
+
+    Called **once**, right after the accepted-unknown rows are computed and before
+    the section reaches the report (the single writer of this dict, which is why
+    this is a fold and not a second pass). It never raises on a section that is
+    missing or hand-built: an accepted-stale row that cannot be added is not worth
+    losing the report over.
+    """
+    if not isinstance(intent_section_payload, dict) or not stale_rows:
+        return
+    entries = intent_section_payload.get("staleEntries")
+    entries = entries if isinstance(entries, list) else []
+    marks = intent_section_payload.get("stale")
+    marks = marks if isinstance(marks, list) else []
+    for row in stale_rows:
+        part = str(row.get("part") or "")
+        entries.append({"section": "acceptedUnknown", "object": part})
+        marks.append(f"acceptedUnknown:{part}")
+    intent_section_payload["staleEntries"] = entries
+    intent_section_payload["stale"] = marks
+    totals = intent_section_payload.get("totals")
+    if isinstance(totals, dict):
+        totals["staleEntries"] = len(marks)
 
 
 def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dict:
@@ -4283,6 +4477,12 @@ def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dic
         architecture=report.get("architecture"),
         needs_datasheet=needs_datasheet,
         coverage=coverage,
+        # 191A: the section is carried over like `coverage` and for the same
+        # reason — a re-gate must not be a way to lose an accepted-unknown count
+        # a run recorded (the re-gate's own `--revoke` is the CLI's, not this
+        # path's: `need-datasheet` and `triage` observe nothing about the
+        # contract).
+        accepted=report.get("accepted_unknown") or [],
     )
 
 
@@ -4398,6 +4598,7 @@ def _review_conclusion(
     coverage_missing: bool = False,
     coverage_gaps: int = 0,
     pcb_review_missing: bool = False,
+    accepted_unknown: int = 0,
 ) -> str:
     """`summary.conclusion` — the one line that may be quoted as the verdict.
 
@@ -4423,7 +4624,12 @@ def _review_conclusion(
     whose coverage is missing in some narrower way (pages that never arrived,
     withheld conclusions, dropped records, a rule that crashed).
     `pcb_review_missing` is the eighth (126d), the offline-only PCB gate — see
-    the clause it adds below.
+    the clause it adds below. `accepted_unknown` is the ninth (191A): the device
+    count an engineer declared acceptable, which leaves `unreviewed_parts` and
+    still owes a sentence here — 「另有 N 颗工程师接受未审」 is the phrase the
+    batch's own acceptance asks for, and it is what keeps the line from reading
+    as a plain 「无 ERROR」 while N parts were never judged by anyone but the
+    engineer who said they need not be.
 
     The invariant the eight clauses buy, and the reason every gate has one:
     **the conclusion is exactly "无 ERROR" if and only if the verdict is
@@ -4431,7 +4637,11 @@ def _review_conclusion(
     a gate added there and not here is a bug — `tests/test_039c_review_flow.py`
     asserts the pairing over every combination of them, and
     `tests/test_072_coverage_gate.py` extends it over the coverage section, and
-    `tests/test_126d_pcb_verdict_gate.py` over the PCB gate.
+    `tests/test_126d_pcb_verdict_gate.py` over the PCB gate. 191A's gate holds it
+    the same way: `accepted_unknown` caps the verdict at
+    `complete-with-open-items` there, so the clause appears exactly when the line
+    may no longer be "无 ERROR" (and a `not-unreviewed` acceptance, which skipped
+    nothing, adds neither).
     """
     errors = int(summary.get("errorCount", 0) or 0)
     verdict = "无 ERROR" if not errors else f"{errors} 项 ERROR"
@@ -4445,6 +4655,11 @@ def _review_conclusion(
         text = verdict
     if marked_count:
         text += f"；另有 {marked_count} 项管脚待手册（已标记）"
+    if accepted_unknown:
+        text += (
+            f"；另有 {accepted_unknown} 颗工程师接受未审"
+            "（设计意图合同 `accepted_unknown[]`：**不是审过**，是工程师明示不查）"
+        )
     if skeleton_missing:
         text += "；架构骨架未生成（报告里没有 architecture 一节，未审项不可枚举）"
     if stale_slots:
@@ -4553,6 +4768,9 @@ def _apply_needs_datasheet(report: dict, needs_datasheet: list[dict]) -> dict:
         unreviewed_count=len(report.get("unreviewed_parts") or []),
         marked_count=len(marked_parts(needs_datasheet)),
         pending_triage=int(report["completion"].get("warningsPendingTriage") or 0),
+        # 191A: read from the section just rebuilt, which carried the report's
+        # own accepted-unknown rows through `_completion_from_report`.
+        accepted_unknown=int(report["completion"].get("acceptedUnknown") or 0),
         **_conclusion_skeleton_gates(
             architecture=report.get("architecture"), completion=report["completion"]
         ),
@@ -4677,6 +4895,9 @@ def _apply_warning_triage(report: dict, triage: list[dict]) -> dict:
         unreviewed_count=len(report.get("unreviewed_parts") or []),
         marked_count=len(marked_parts(report.get("needs_datasheet") or [])),
         pending_triage=int(report["completion"].get("warningsPendingTriage") or 0),
+        # 191A: same read as the other re-gate — a verdict that moves must not
+        # drop the accepted-unknown clause on the way (075's drift, one key over).
+        accepted_unknown=int(report["completion"].get("acceptedUnknown") or 0),
         **_conclusion_skeleton_gates(
             architecture=report.get("architecture"), completion=report["completion"]
         ),
@@ -5262,14 +5483,25 @@ def _checkup_shelf(args: argparse.Namespace):
     A missing or unreadable shelf is **reported**, never silently treated as
     empty: `未审器件` would then say "the shelf has nothing" about every part,
     which is a different claim from "the shelf could not be read".
+
+    An explicit ``--library`` is that one file; the default is the **merged**
+    shelf this process reads (191B: the user's shelf with the copy the exe
+    carries underneath it, so an entry an upgrade added is visible). The merge
+    is reported in a note whenever it happened, because a review that judged
+    against two files and named one would leave the reader guessing which.
     """
     from boardwise.core.parts import PartError, load_parts
 
     path = _checkup_shelf_path(args)
-    try:
-        return load_parts(path), ""
-    except PartError as exc:
-        return None, f"货架 {path} 读不了（{exc}）：未审器件节按「没有货架」计算，不是「货架为空」"
+    if getattr(args, "library", None):
+        try:
+            return load_parts(path), ""
+        except PartError as exc:
+            return None, f"货架 {path} 读不了（{exc}）：未审器件节按「没有货架」计算，不是「货架为空」"
+    library, note = _read_default_shelf(args)
+    if library is None:
+        return None, f"{note}：未审器件节按「没有货架」计算，不是「货架为空」"
+    return library, note
 
 
 def _checkup_aesthetics(args: argparse.Namespace) -> tuple[bool, str]:
@@ -6347,10 +6579,37 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     unreviewed = unreviewed_parts(
         model, library=shelf, datasheet_dir=Path(UNREVIEWED_DATASHEET_DIR)
     )
+    # 191A: the engineer's accepted-unknown list moves parts **out of** that
+    # section and into one of their own. Read from the contract this run already
+    # has in hand (never a second file, never a second read of the board), and
+    # computed here rather than earlier because it is that section's other half.
+    accepted_entries = list(getattr(contract, "accepted_unknown", []) or [])
+    accepted_rows: list[dict] = []
+    if accepted_entries:
+        unreviewed, accepted_rows = accepted_unknown_section(
+            model, unreviewed, accepted_entries
+        )
+        if accepted_rows:
+            moved = accepted_unknown_counts(accepted_rows).get(STATE_ACCEPTED, 0)
+            notes.append(
+                f"工程师接受未审（设计意图合同 accepted_unknown）{len(accepted_rows)} 条："
+                f"其中 {moved} 颗本轮从「未审器件」移出（verdict 不再因它是 incomplete，"
+                "但结论与本报告一直写着这个数——见 accepted_unknown 节）；"
+                f"另有 {accepted_unknown_counts(accepted_rows).get(STATE_ACCEPTED_STALE, 0)} "
+                "条指向的件已不在图纸上（stale，不删只标）"
+            )
+        # 189B's stale path, one section over: a contract entry whose part the
+        # drawing no longer has is a *stale mark*, and report.md already knows how
+        # to print one (`intent.staleEntries` → 「合同里记着、图纸里已没有的对象」).
+        # Folded into the section built a few lines above, before it reaches the
+        # report — the one reader of it, so no second writer exists.
+        stale_rows = [row for row in accepted_rows if row.get("stale")]
+        if stale_rows and intent_report is not None:
+            _fold_accepted_stale(intent_report, stale_rows)
     # 188B (186 中1): the same walk, the other half of the answer — the parts the
     # shelf *judged*, and by which identity step. It is what makes "why is this
     # part not on the list?" checkable, and it is where a name-matched judgement
-    # (`shelfMatchedBy: name`, the weaker claim) stays visible instead of
+    # (`shelfMatchedBy: name`, the weaker claim) survives instead of
     # vanishing with the row.
     reviewed = reviewed_by_shelf(model, library=shelf)
     summary["unreviewedParts"] = len(unreviewed)
@@ -6470,6 +6729,9 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         architecture=architecture_section,
         needs_datasheet=needs_datasheet,
         coverage=coverage,
+        # 191A: the accepted-unknown rows are the datasheet gate's other half, so
+        # the verdict reads them here — the same list the report carries.
+        accepted=accepted_rows,
     )
     # 073, decided **once**, here: the verdict now decides the exit code, and the
     # report carries `summary.exitCode` — so writing it back into the summary the
@@ -6493,6 +6755,9 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         unreviewed_count=len(unreviewed),
         marked_count=len(marked_parts(needs_datasheet)),
         pending_triage=int(completion.get("warningsPendingTriage") or 0),
+        # 191A: the ninth clause, read from the section the report carries (one
+        # arithmetic, two renderings — the same rule every clause above follows).
+        accepted_unknown=int(completion.get("acceptedUnknown") or 0),
         **_conclusion_skeleton_gates(
             architecture=architecture_section, completion=completion
         ),
@@ -6514,6 +6779,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         intent=intent_report,
         completion=completion,
         pcb_review=pcb_review,
+        accepted_unknown=accepted_rows,
         shelf_path=shelf_path,
     )
     # issue #69 条 1（机器侧）: the chains are built **before** anything is written,
@@ -12763,14 +13029,14 @@ def _cmd_parts_select(args: argparse.Namespace) -> int:
     import asyncio
     import json
 
-    from boardwise.core.parts import PartError, load_parts
     from boardwise.engines.select import resolve_by_lcsc, select
-    from boardwise.rules.facts import default_library_path
 
-    try:
-        library = load_parts(args.library or default_library_path())
-    except PartError as exc:
-        print(f"boardwise parts select: {exc}", file=sys.stderr)
+    # 191B: the ranking reads the **merged** shelf this process reads (user over
+    # bundled); the write below re-reads the one file it edits, so a merge never
+    # materialises the exe's entries into the user's file behind their back.
+    library, shelf_note = _read_default_shelf(args)
+    if library is None:
+        print(f"boardwise parts select: {shelf_note}", file=sys.stderr)
         return 2
 
     catalog = None
@@ -12859,10 +13125,19 @@ def _cmd_parts_select(args: argparse.Namespace) -> int:
                 # own shelf (seeded from the bundled copy on first use) when
                 # frozen — never a file the review would not read back.
                 shelf_path = _parts_library_path(args, writable=True)
-                library.parts.append(entry)
-                library.parts.sort(key=lambda p: p.key)
-                save_parts(library, shelf_path)
-                print(f"  written: {shelf_path} now holds {len(library.parts)} entries")
+                # 191B: re-read the file about to be edited, so what is written
+                # is that file **plus** the new entry — never the merged view
+                # (the exe's entries would otherwise be materialised into the
+                # user's shelf by a command that never asked to rewrite it).
+                from boardwise.core.parts import load_parts as _load_parts
+
+                write_library = _load_parts(shelf_path)
+                write_library.parts.append(entry)
+                write_library.parts.sort(key=lambda p: p.key)
+                save_parts(write_library, shelf_path)
+                print(
+                    f"  written: {shelf_path} now holds {len(write_library.parts)} entries"
+                )
             return 0 if resolved.resolved else 1
 
         return asyncio.run(run())
@@ -12879,6 +13154,152 @@ def _cmd_parts_select(args: argparse.Namespace) -> int:
 # and `facts` from the datasheet — each fact citing its own page — and
 # `facts_verified` keeps that claim from driving a rule while it is still only a
 # claim. Nothing here touches the bridge.
+
+
+def _read_default_shelf(args: argparse.Namespace):
+    """``(library, note)`` — the shelf a **read-only** command reads (191B).
+
+    An explicit ``--library`` is that one file, untouched: the user named a
+    shelf and merging a second one into it would answer a question nobody asked.
+    Otherwise it is :func:`boardwise.rules.facts.read_default_library` — the
+    process's shelves merged, user over bundled — which is the pair
+    ``parts list`` labels and the review judges against.
+
+    A shelf that cannot be read is returned as ``(None, why)``, never as an empty
+    one: "the shelf could not be read" and "the shelf is empty" are different
+    answers, and every caller here reports the first.
+    """
+    from boardwise.core.parts import PartError, load_libraries
+    from boardwise.rules.facts import default_library_paths
+
+    if getattr(args, "library", None):
+        paths: tuple[str, ...] = (args.library,)
+    else:
+        paths = default_library_paths()
+    try:
+        library = load_libraries(paths)
+    except PartError as exc:
+        return None, f"货架 {paths[0]} 读不了（{exc}）"
+    if len(paths) > 1:
+        origins = library.origins
+        note = (
+            f"货架：{paths[0]}（用户架）优先，{paths[1]}（内置架）补足——"
+            f"191B 按 MPN/LCSC 合并，共 {len(library.parts)} 条"
+            f"（user {sum(1 for v in origins.values() if v == 'user')}"
+            f" / builtin {sum(1 for v in origins.values() if v == 'builtin')}"
+            f" / 覆盖 {sum(1 for v in origins.values() if v == 'user-overrides-builtin')}）"
+        )
+        return library, note
+    return library, ""
+
+
+def _cmd_parts_list(args: argparse.Namespace) -> int:
+    """``boardwise parts list`` — the shelf, one line per entry, with its source.
+
+    191B's human window onto the merge. Every row carries the label
+    :func:`boardwise.core.parts.merge_libraries` computed
+    (:data:`SHELF_USER` / :data:`SHELF_BUILTIN` / :data:`SHELF_USER_OVERRIDES`),
+    and a single-file shelf prints ``-`` rather than a label — a checkout has one
+    shelf, and inventing "builtin" for it would be a claim about a merge that did
+    not happen.
+    """
+    import json
+
+    from boardwise.core.parts import (
+        SHELF_BUILTIN,
+        SHELF_ORIGINS,
+        SHELF_USER,
+        SHELF_USER_OVERRIDES,
+    )
+
+    library, note = _read_default_shelf(args)
+    if library is None:
+        print(f"boardwise parts list: {note}", file=sys.stderr)
+        return 2
+    if note:
+        print(f"note: {note}", file=sys.stderr)
+
+    query = str(getattr(args, "query", "") or "").casefold()
+    category = str(getattr(args, "category", "") or "").casefold()
+    rows = []
+    for part in library.parts:
+        if category and category not in str(part.category or "").casefold():
+            continue
+        if query and not any(
+            query in str(field or "").casefold()
+            for field in (part.key, part.mpn, part.lcsc, part.value)
+        ):
+            continue
+        rows.append({
+            "key": part.key,
+            "mpn": part.mpn,
+            "lcsc": part.lcsc,
+            "value": part.value,
+            "category": part.category,
+            "source": library.origin_of(part),
+            "factsVerified": part.facts_verified,
+            "hasFacts": part.facts is not None or part.candidate_facts is not None,
+        })
+    limit = int(getattr(args, "limit", 0) or 0)
+    shown = rows[:limit] if limit > 0 else rows
+
+    if getattr(args, "json", False):
+        print(json.dumps(
+            {
+                "shelfPaths": list(
+                    (args.library,) if getattr(args, "library", None)
+                    else _default_shelf_paths()
+                ),
+                "shelfPath": (
+                    args.library if getattr(args, "library", None)
+                    else _default_shelf_path()
+                ),
+                "merged": bool(library.origins),
+                "originCounts": {
+                    label: sum(1 for value in library.origins.values() if value == label)
+                    for label in SHELF_ORIGINS
+                },
+                "total": len(rows),
+                "shown": len(shown),
+                "entries": shown,
+            },
+            indent=2,
+            ensure_ascii=False,
+        ))
+        return 0
+
+    by_source: dict[str, int] = {label: 0 for label in SHELF_ORIGINS}
+    for row in rows:
+        by_source[row["source"]] = by_source.get(row["source"], 0) + 1
+    header = f"{len(rows)} entries"
+    if library.origins:
+        header += (
+            f"（user {by_source[SHELF_USER]} / builtin {by_source[SHELF_BUILTIN]}"
+            f" / user-overrides-builtin {by_source[SHELF_USER_OVERRIDES]}）"
+        )
+    else:
+        header += f" — {_default_shelf_path() if not getattr(args, 'library', None) else args.library}"
+    print(header)
+    for row in shown:
+        print(
+            f"  {row['key']:<28} {row['mpn'] or '-':<22} {row['lcsc'] or '-':<12} "
+            f"{row['value'] or '-':<12} {row['category'] or '-':<14} {row['source'] or '-'}"
+        )
+    if limit > 0 and len(rows) > len(shown):
+        print(f"  … {len(rows) - len(shown)} more（--limit 0 看全部）")
+    return 0
+
+
+def _default_shelf_path() -> str:
+    from boardwise.rules.facts import default_library_path
+
+    return default_library_path()
+
+
+def _default_shelf_paths() -> tuple[str, ...]:
+    from boardwise.rules.facts import default_library_paths
+
+    return default_library_paths()
 
 
 def _parts_library_path(args: argparse.Namespace, *, writable: bool = False) -> str:
@@ -13001,16 +13422,13 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
     from boardwise.core.parts import (
         FACTS_KEYS,
         IDENTITY_NAME,
-        PartError,
         is_ic_designator,
-        load_parts,
     )
 
     library_path = _parts_library_path(args)
-    try:
-        library = load_parts(library_path)
-    except PartError as exc:
-        print(f"boardwise parts missing: {exc}", file=sys.stderr)
+    library, _shelf_note = _read_default_shelf(args)
+    if library is None:
+        print(f"boardwise parts missing: {_shelf_note}", file=sys.stderr)
         return 2
 
     project = Path(args.file)
@@ -13188,13 +13606,10 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
     """
     import json
 
-    from boardwise.core.parts import PartError, load_parts
-
     library_path = _parts_library_path(args)
-    try:
-        library = load_parts(library_path)
-    except PartError as exc:
-        print(f"boardwise parts show: {exc}", file=sys.stderr)
+    library, _shelf_note = _read_default_shelf(args)
+    if library is None:
+        print(f"boardwise parts show: {_shelf_note}", file=sys.stderr)
         return 2
 
     query = args.query
@@ -14360,6 +14775,261 @@ def _cmd_parts_fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parts_accept_who(explicit: str) -> str:
+    """Who accepted this — ``--who``, else the machine's user name.
+
+    An audit field with a default rather than a required flag: the command's own
+    synopsis asks the engineer for a **reason**, and a tool that demanded a name
+    pattern as well would be one more reason not to record the acceptance at all.
+    ``getpass.getuser()`` reads the environment (`USERNAME` on Windows), so this
+    never raises on a machine with no login record.
+    """
+    name = str(explicit or "").strip()
+    if name:
+        return name
+    try:
+        import getpass
+
+        return str(getpass.getuser() or "").strip() or "engineer"
+    except Exception:  # noqa: BLE001 — an audit name must not stop the write
+        return "engineer"
+
+
+def _accept_unknown_contract_path(args: argparse.Namespace, notes: list[str]) -> tuple[Path | None, object | None, str]:
+    """``(contract path, the model | None, project uuid)`` — where the write lands.
+
+    The one rule this command must not get wrong: it writes the file **the next
+    `checkup` reads**. So the resolution is `checkup`'s own, in the same order —
+    ``--intent PATH`` explicit, else the user-level default for the project's
+    ``projectUuid`` — and the uuid comes from the **enumeration** (092 A2b: offline
+    that is the archive digest), not from `_snapshot_identity`, whose docstring is
+    explicit that a ``.epro2`` carries no uuid and whose answer would put every
+    contract in the same `project.json`.
+
+    ``--file`` is optional because a caller may already know the contract path
+    (`--intent`); it is what makes the default path resolvable, and it is also what
+    lets the command say whether the token is even on that board.
+    """
+    from .core import designintent as di
+
+    explicit = str(getattr(args, "intent", "") or "").strip()
+    project = str(getattr(args, "file", "") or "").strip()
+    if explicit:
+        if project:
+            notes.append("--intent 与 --file 同时给了：合同路径以 --intent 为准（--file 只用于核对器件）")
+        return Path(explicit), None, ""
+    if not project:
+        print(
+            "boardwise parts accept-unknown: 要写哪份合同？给 `--file <导出.epro2|工程目>"
+            "录>`（按工程 projectUuid 解析用户级默认合同，和 checkup 读的是同一份）"
+            "或 `--intent <合同路径>`",
+            file=sys.stderr,
+        )
+        return None, None, ""
+    path = Path(project)
+    try:
+        model, _board = _load_model(path, view=CHECKUP_VIEW)
+    except (EncryptedProjectError, ValueError, OSError) as exc:
+        print(f"boardwise parts accept-unknown: cannot read {path}: {exc}", file=sys.stderr)
+        return None, None, ""
+    project_uuid, _page, _host, more = _snapshot_identity(path)
+    notes.extend(more)
+    from .core.architecture import generate_architecture
+
+    shelf, shelf_note = _architecture_shelf_evidence(args)
+    if shelf_note:
+        notes.append(shelf_note)
+    try:
+        enumeration = generate_architecture(model, library=shelf, project_uuid=project_uuid)
+        project_uuid = str(
+            (enumeration.section.get("intent") or {}).get("projectUuid") or project_uuid
+        )
+    except Exception as exc:  # noqa: BLE001 — the default path is still derivable
+        notes.append(
+            f"架构枚举失败（{type(exc).__name__}: {exc}）：合同默认路径按 "
+            f"{project_uuid or '（无名）'} 解析"
+        )
+    if not project_uuid:
+        print(
+            f"boardwise parts accept-unknown: 从 {path} 解不出 projectUuid —— "
+            f"合同默认路径无法命名（写 `project.json` 会落到别人的合同上）。"
+            "显式给 `--intent <合同路径>`",
+            file=sys.stderr,
+        )
+        return None, model, ""
+    return di.default_contract_path(project_uuid), model, project_uuid
+
+
+def _cmd_parts_accept_unknown(args: argparse.Namespace) -> int:
+    """``boardwise parts accept-unknown`` — 工程师明示「这颗的未知我接受」(191A).
+
+    The channel 186 could only *describe*: the datasheet gate stops a review on
+    every part no rule can judge, and the honest ways out of it are to judge the
+    part (verified facts) or to **state that it need not be judged**. This is the
+    second one, and it is a design-intent answer — so it is written into the
+    contract (JSON is the source, `boardwise.core.designintent` is the only
+    writer), where `checkup`, the rules and the rendered `design-intent.md` all
+    already read from.
+
+    Read-modify-write of that one file through
+    :func:`boardwise.core.designintent.accept_unknown` /
+    :func:`~boardwise.core.designintent.revoke_unknown`, re-parsed before the write
+    is called done and written atomically — the same three calls `intent set-rail`
+    makes, because a second writer is how 052 §2.2's accident comes back wearing a
+    different hat. Nothing on the board is touched, no review is re-run.
+
+    Exit 0 written / 2 the input (project, contract, token, reason) cannot be used
+    or a `--revoke` names an acceptance that is not there (R3: 目标缺失就停下来问，
+    不算「已经撤销干净」).
+    """
+    import json
+    import os
+
+    from .core import designintent as di
+
+    notes: list[str] = []
+    token = str(args.part or "").strip()
+    if not token:
+        print("boardwise parts accept-unknown: 组件令牌为空——给 MPN 或位号", file=sys.stderr)
+        return 2
+    path, model, project_uuid = _accept_unknown_contract_path(args, notes)
+    if path is None:
+        for item in notes:
+            print(f"note: {item}", file=sys.stderr)
+        return 2
+    board = str(getattr(args, "board", "") or "").strip()
+    revoke = bool(getattr(args, "revoke", False))
+    reason = str(getattr(args, "reason", "") or "").strip()
+    if not revoke and not reason:
+        print(
+            "boardwise parts accept-unknown: --reason 必填——写清「这颗的哪些未知我接受、"
+            "为什么」；没有理由的接受就是静默变绿，本通道不准（撤销加 --revoke）",
+            file=sys.stderr,
+        )
+        return 2
+    existed = path.is_file()
+    document = di.DesignIntent()
+    if existed:
+        try:
+            document = di.DesignIntent.load(path)
+        except di.DesignIntentError as exc:
+            print(f"boardwise parts accept-unknown: {exc}", file=sys.stderr)
+            return 2
+    try:
+        if revoke:
+            updated, change = di.revoke_unknown(document, token, board=board)
+        else:
+            updated, change = di.accept_unknown(
+                document, token,
+                reason=reason,
+                who=_parts_accept_who(getattr(args, "who", "")),
+                when=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                board=board,
+            )
+    except di.DesignIntentError as exc:
+        print(f"boardwise parts accept-unknown: {exc}", file=sys.stderr)
+        return 2
+    if revoke and not change:
+        print(
+            f"boardwise parts accept-unknown: 合同 {path} 里没有 {token!r} 的接受记录"
+            + (f"（板 {board}）" if board else "（不限定板）")
+            + "——撤销的目标缺失，什么都没改（合同一个字没动）",
+            file=sys.stderr,
+        )
+        return 2
+    if revoke:
+        # The key is `(part, board)`, so a revoke for one board leaves another
+        # board's acceptance of the same token in place. Say so: "revoked" next to
+        # a part that is still accepted elsewhere would be the reader's guess.
+        remaining = [
+            entry.part + (f"（{entry.board}）" if entry.board else "（不限板）")
+            for entry in updated.accepted_unknown
+            if di.part_token(entry.part) == di.part_token(token)
+        ]
+        if remaining:
+            notes.append(
+                f"{token} 还有 {len(remaining)} 条接受记录留着（键是 (令牌, 板)）："
+                + "、".join(remaining)
+                + "——要一起撤销就分别指名 `--board`，或对那条不带板的执行 `--revoke`"
+            )
+    text = di.render_json(updated)
+    # Re-read through the reader before the write: an acceptance the writer
+    # accepted and the parser refuses would be a contract nobody can read.
+    try:
+        di.parse_json(text, where=str(path))
+    except di.DesignIntentError as exc:  # pragma: no cover — writer/parser drift
+        print(f"boardwise parts accept-unknown: {exc}", file=sys.stderr)
+        return 2
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        print(f"boardwise parts accept-unknown: {path}: {exc}", file=sys.stderr)
+        return 2
+    # A typo that disappears into the gate is worse than one that is refused
+    # (`need-datasheet`'s rule): the write is not blocked — an acceptance may
+    # legitimately precede the drawing — but it is never silent.
+    on_board = None
+    if model is not None:
+        on_board = part_on_board(model, token, board)
+        if not on_board:
+            notes.append(
+                f"这台工程里没有 {token!r}（按位号与 MPN 比对"
+                + (f"，板 {board}" if board else "")
+                + "）：接受记录照写，请核对令牌；如果这件确实不在图纸上，"
+                "checkup 会把它标 stale（不删只标）"
+            )
+    for item in notes:
+        print(f"note: {item}", file=sys.stderr)
+    print(f"intent contract: {path}{'（新建）' if not existed else ''}")
+    print(
+        f"  acceptedUnknown: {change}"
+        if revoke
+        else f"  acceptedUnknown: {token}（{reason}）—— {change}"
+    )
+    print(
+        "  下一次 checkup 读的就是这份合同：该件从 `unreviewed_parts` 移到 "
+        "`accepted_unknown[]`，verdict 不再因它是 `incomplete`"
+        "（成 `complete-with-open-items`），结论里一直写着这个数——**不是审过**。"
+    )
+    if not revoke:
+        print(
+            f"  撤销：boardwise parts accept-unknown {token} --revoke "
+            + (f"--board {board} " if board else "")
+            + f"--intent {path}"
+        )
+    json_path = getattr(args, "json_path", "")
+    if json_path:
+        payload = json.dumps(
+            {
+                "command": "parts-accept-unknown",
+                "ok": True,
+                "contract": str(path),
+                "created": not existed,
+                "projectUuid": project_uuid,
+                "part": token,
+                "board": board,
+                "revoke": revoke,
+                "reason": reason if not revoke else "",
+                "onBoard": on_board,
+                "change": change,
+                "acceptedUnknown": [entry.to_jsonable() for entry in updated.accepted_unknown],
+                "sha256": updated.sha256(),
+                "notes": notes,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        if json_path in ("", "-"):
+            print(payload)
+        else:
+            Path(json_path).write_text(payload + "\n", encoding="utf-8")
+            print(f"json: {json_path}")
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # config (039 批② WI-3): the user-level settings file
 # ---------------------------------------------------------------------------
@@ -14381,10 +15051,15 @@ def _architecture_shelf_evidence(args: argparse.Namespace):
     from boardwise.rules.facts import default_library_path
 
     path = getattr(args, "library", None) or default_library_path()
-    try:
-        return load_parts(path), ""
-    except PartError as exc:
-        return None, f"货架 {path} 读不了（{exc}）：架构骨架按「没有货架证据」生成"
+    if getattr(args, "library", None):
+        try:
+            return load_parts(path), ""
+        except PartError as exc:
+            return None, f"货架 {path} 读不了（{exc}）：架构骨架按「没有货架证据」生成"
+    library, note = _read_default_shelf(args)
+    if library is None:
+        return None, f"{note}：架构骨架按「没有货架证据」生成"
+    return library, note
 
 
 def _cmd_arch(args: argparse.Namespace) -> int:
@@ -24034,7 +24709,9 @@ PARTS_COMMANDS = {
     "select": _cmd_parts_select,
     "missing": _cmd_parts_missing,
     "show": _cmd_parts_show,
+    "list": _cmd_parts_list,
     "add": _cmd_parts_add,
+    "accept-unknown": _cmd_parts_accept_unknown,
     "fetch": _cmd_parts_fetch,
 }
 

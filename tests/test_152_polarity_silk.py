@@ -88,6 +88,13 @@ def _rows(section: dict, findings: list, title: str) -> list:
     raise AssertionError(f"no board {title!r} in {[b['title'] for b in section['boards']]}")
 
 
+def _board_texts(path: Path) -> list:
+    """一块板的丝印文字记录（公开的 ``parse_epro2``，与规则读的是同一份记录）。"""
+    from boardwise.parsers.epru import parse_epro2
+
+    return parse_epro2(path).silk_texts
+
+
 def _silk_text(
     component: str,
     text: str,
@@ -1041,8 +1048,21 @@ def test_the_llc_fixture_finds_real_defects_in_both_families():
 
     Measured: four SMB diodes placed in two directions (``D1``/``D2`` at 90°,
     ``D3``/``D4`` at 270°), ``C3``'s designator wholly inside ``U8``'s body
-    outline, and ``D2``/``R2``'s ink over their own pads. ``D3``'s designator
-    is 2/4 corners inside ``C5``'s body — the partial case, filed as a reading.
+    outline. ``D3``'s designator is 2/4 corners inside ``C5``'s body — the
+    partial case, filed as a reading.
+
+    **190S moved the silk half of this golden.** ``D1``/``D2``/``R1``/``R2``
+    are ``BOT_SILK`` records, and this test used to expect two WARNs for them
+    (``D2``/``R2``'s ink over their *own* pads, plus a wide-band reading for
+    ``R1``). Those boxes came from the pre-190S model, which ran a bottom
+    record's text from its anchor along the record's own angle; the editor
+    measures the ink on the **mirrored** side instead (12 live placements,
+    ``SilkText.mirrored_frame``). With the calibrated box ``D2``'s ink sits
+    from ``x=4075`` to ``4129`` — clear of its own pad column at ``x=4010``
+    — and ``R1``'s box at ``x=2483..2537`` no longer reaches ``D1``'s pad at
+    ``x=2620``. Both were artefacts of the old direction, which is the same
+    defect that made the rule report ``R22`` over ``EC3`` on the real board
+    and that the engineer rejected on sight.
     """
     findings, section = _run(LLC)
     rows = _rows(section, findings, "PCB1")
@@ -1053,11 +1073,16 @@ def test_the_llc_fixture_finds_real_defects_in_both_families():
     assert "D3: 极性轴 270.0°" in "\n".join(polarity_warns[0].evidence)
 
     silk_warns = [f for f in rows if f.rule_id == SILK_ID and f.severity == "WARN"]
-    assert len(silk_warns) == 3
+    assert len(silk_warns) == 1
     texts = " | ".join(f.message for f in silk_warns)
-    assert "D2 的位号丝印压在焊盘上" in texts
-    assert "R2 的位号丝印压在焊盘上" in texts
     assert "C3 的位号丝印被 U8 的器件本体完全压住" in texts
+    assert "压在焊盘上" not in texts, texts
+    bottom = [
+        t for t in _board_texts(LLC)
+        if t.layer_kind == "BOT_SILK" and t.text in {"D1", "D2", "R1", "R2"}
+    ]
+    assert len(bottom) == 4
+    assert all(t.mirrored_frame for t in bottom), "这四条都在底层，方向角是底层视图角"
     partial = [f for f in rows if "部分" in f.message and f.rule_id == SILK_ID]
     assert partial and "D3 落在 C5 本体轮廓内 2/4 角" in partial[0].evidence[0]
 

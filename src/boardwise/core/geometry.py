@@ -718,10 +718,15 @@ class SilkText:
       ``CLK`` / ``DIO`` / ``GND`` next to PCB1's programming header, at
       ``fontSize`` 40–50, rotated to the connector's axis).
 
-    ``angle`` is in **degrees, in the same frame and convention as
-    :meth:`ComponentPlacement.transform`** (y-up, positive = anticlockwise) —
-    the two are directly comparable, which is what lets a rule ask whether a
-    designator still points the same way as the part it names. The raw stored
+    ``angle`` is in **degrees** (y-up, positive = anticlockwise), but **the frame
+    it is measured in depends on the face** (190S measured it): on the top face
+    it is :meth:`ComponentPlacement.transform`'s own frame, so the two are
+    directly comparable — which is what lets a rule ask whether a designator
+    still points the same way as the part it names. On the **bottom** face the
+    record's angle is the *bottom view's* angle instead, i.e. a mirror of the
+    board frame, and the placement's ``angle`` is not: the editor's own
+    auto-placement writes ``180° − rotation`` there. Compare the two through
+    :meth:`frame_axes`, never by subtracting the raw numbers. The raw stored
     value is kept in :attr:`stored_angle` because EasyEDA accumulates whole
     turns (measured values include 810, 1710, 2250 — i.e. 90°, 270°, 90°), and
     a reader that printed the raw number without reducing it would report
@@ -769,21 +774,97 @@ class SilkText:
     def is_silk(self) -> bool:
         return self.layer_kind in SILK_LAYER_TYPES
 
+    @property
+    def mirrored_frame(self) -> bool:
+        """Whether this record's box is laid out in the **bottom view's** frame.
+
+        Measured, not assumed (190S, editor 3.2.186, 2026-10-17): a
+        PCB-document silk record on the bottom face carries an ``angle`` and an
+        ``x``/``y`` in **two different frames** — the anchor is in board
+        coordinates, the direction is in the *bottom view's*, i.e. the frame
+        whose x axis is the mirror of the board's. Twelve placements
+        (``{top,bottom} × {0°,90°,180°,270°}`` of one 0603, plus four more
+        bottom ones for a second sample) were placed through
+        `pcb.place_component` and each designator's own record read out of the
+        PCB source beside the host's own primitive bbox
+        (`pcb.geometry --bboxIds`, one id per call); the raw readings are in
+        ``outputs/190s/live/A_bbox_*.json`` and ``A_pcb_source_12.txt``, the
+        table in ``outputs/190s/evidence.md``. On every bottom record the
+        measured box is the top-face box **reflected in x about the anchor**,
+        which is what :meth:`frame_axes` returns for this property.
+
+        It is a property of the *record*, so it covers the sources whose
+        ``x``/``y``/``angle`` come straight off the PCB document — a
+        designator ``ATTR`` (measured) and a board-level free ``STRING`` (the
+        same record family on the same layer; **not** separately measured —
+        the bridge has no action that creates free text). A
+        ``source == "footprint"`` string is *excluded on purpose*: its anchor
+        is posed by :meth:`ComponentPlacement.transform` and its angle
+        composed with the placement's, so it is already board-frame geometry,
+        and the measurement above says nothing about that path.
+
+        The same predicate is what :func:`boardwise.engines.canvasrender.
+        _text_transform` renders with, so the picture and the rule cannot
+        disagree about which side of the anchor the ink is on.
+        """
+        return str(self.layer_kind or "") == "BOT_SILK" and self.source in (
+            "designator",
+            "board",
+        )
+
+    def frame_axes(self) -> tuple[tuple[float, float], tuple[float, float]]:
+        """``(u, v)`` — the advance axis and the "up" axis, **in board coordinates**.
+
+        ``u`` runs from the anchor toward the end of the text, ``v`` from the
+        baseline toward the top of the glyphs; both are unit vectors, and
+        :meth:`corners` is ``anchor + lx·u + ly·v``. On a bottom-face record
+        whose frame is the mirrored one (:attr:`mirrored_frame`) both axes
+        have their x component negated — see that property for the readings
+        that fix it.
+        """
+        rad = math.radians(self.angle)
+        cos_a, sin_a = math.cos(rad), math.sin(rad)
+        u = (cos_a, sin_a)
+        v = (-sin_a, cos_a)
+        if self.mirrored_frame:
+            return (-u[0], u[1]), (-v[0], v[1])
+        return u, v
+
     def corners(self, advance: float) -> list[Point]:
         """The text's **frame**: the origin-anchored box, rotated onto the board.
 
         The box is ``len(text) * advance * font_size`` wide and
         ``font_size`` tall, anchored at :attr:`origin` (for every designator on
-        the measured boards that is ``LEFT_BOTTOM``) and rotated by
-        :attr:`angle` — so the box runs from the anchor along the text
-        direction, rising by the font size across it.
+        the measured boards that is ``LEFT_BOTTOM``) and laid out along
+        :meth:`frame_axes` — so the box runs from the anchor along ``u``,
+        rising by the font size along ``v``.
 
-        **The width is a model, not a reading, which is why it is a parameter
-        and not a constant here.** ``.epru`` carries no glyph advance, so the
-        parser cannot know it and does not claim to; the caller states the
-        ratio it uses. See :data:`boardwise.rules.pcb.silk.ADVANCE_BAND` for
-        the band the rule measures with and why an overlap is only reported
-        when it survives the narrowest end of that band.
+        **Which way ``u`` points is a reading, not a convention** (190S): on
+        the top face it is the record's own ``angle`` direction, on the bottom
+        face it is that direction reflected in x, i.e. the angle as the
+        **bottom view** — not the board — draws it. The eight-plus placements
+        behind that are named on :attr:`mirrored_frame`; the short version is
+        that a bottom designator the editor auto-placed at component rotation
+        0 carries ``angle 180`` and its ink runs **+x** from the anchor, not
+        -x. On the six fixture boards this is the difference between the
+        modelled box reaching the part it names and running away from it: it
+        reproduces both extremes of the measured statistics exactly (实板A
+        29/29 bottom designators need the run in the record-angle's ``-u``,
+        毕设FOC 0/3 — and those two are precisely the boards whose bottom
+        designators sit at 0° and 90°). It is also what retires the
+        ``R22 压在 EC3`` warning: with the reflected box R22's own designator
+        stays over R22 (see ``outputs/190s/evidence.md``).
+
+        **The width is still a model, not a reading, which is why it is a
+        parameter and not a constant here.** ``.epru`` carries no glyph
+        advance, so the parser cannot know it and does not claim to; the caller
+        states the ratio it uses. See
+        :data:`boardwise.rules.pcb.silk.ADVANCE_BAND` for the band the rule
+        measures with and why an overlap is only reported when it survives the
+        narrowest end of that band. (The host's own ink box shows why the model
+        stays an estimate even with the direction right: the glyphs have no
+        shared advance — measured ink widths for the same 45 mil font run from
+        23.1 mil for "R" to 30.1 mil for "4".)
         """
         width = len(self.text) * advance * self.font_size
         height = self.font_size
@@ -800,17 +881,11 @@ class SilkText:
             y0, y1 = -height / 2.0, height / 2.0
         else:  # *_BOTTOM
             y0, y1 = 0.0, height
-        rad = math.radians(self.angle)
-        cos_a, sin_a = math.cos(rad), math.sin(rad)
-        out: list[Point] = []
-        for lx, ly in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):
-            out.append(
-                Point(
-                    self.x + lx * cos_a - ly * sin_a,
-                    self.y + lx * sin_a + ly * cos_a,
-                )
-            )
-        return out
+        (u_x, u_y), (v_x, v_y) = self.frame_axes()
+        return [
+            Point(self.x + lx * u_x + ly * v_x, self.y + lx * u_y + ly * v_y)
+            for lx, ly in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))
+        ]
 
 
 @dataclass

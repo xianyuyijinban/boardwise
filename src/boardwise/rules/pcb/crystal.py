@@ -120,10 +120,10 @@ from dataclasses import dataclass, field
 from ..base import Finding, FindingTarget
 from ...core.geometry import BoardGeometry
 from ...core.measure import pad_edge_distance
-from ...core.parts import load_parts, resolve_component_facts
+from ...core.parts import resolve_component_facts
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on, same_net_capacitors_on
-from ..facts import default_library_path
+from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
 from .distance import _mil, _measurement
 from .focground import _placed_on, _value_ohms, schematic_board_of
@@ -428,7 +428,7 @@ class McuCrystalPlacement(PcbRule):
     source = "house rule（岳 2026-10 待裁）"
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None
@@ -438,7 +438,7 @@ class McuCrystalPlacement(PcbRule):
         ``library=None`` degrades to an empty shelf — the same "shelfless
         reading is a narrower one" contract 131b and 131c honour, so the
         synthetic tests can inject a two-entry library without monkeypatching
-        the project's own :func:`boardwise.rules.facts.default_library_path`.
+        the project's own :func:`boardwise.rules.facts.read_default_library`.
         A shelfless crystal is still recognised
         (:func:`is_crystal_member` reads the part's own words), and a shelfless
         crystal has no 规格 CL, which the row then says.

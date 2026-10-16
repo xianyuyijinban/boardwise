@@ -499,6 +499,11 @@ def _outline_aspect_ratio(outline: Any) -> float | None:
 #: 框进来，又不碰真细长板。
 OUTLINE_SLENDER_ASPECT_RATIO = 20.0
 
+#: 191C：`netIdNote` 里最多列出几个丢了名字的网序号。披露的是**计数**，列名只是
+#: 让人能去文件里找——一块序号全丢的板可以有几百个 `net#N`，全列出来会把这条
+#: 披露本身淹掉，所以超出就截断（`…`）。
+NET_ID_NOTE_LIMIT = 8
+
 
 def cross_view_section(
     schematic_board: Any, pcb_model: Any
@@ -590,6 +595,16 @@ def _board_entry(
     leaves alone on a net the PCB view says has company. See
     :func:`cross_view_section` for the two shapes it carries and why a missing
     key would have been the wrong way to say 「没配对」.
+
+    ``netIdNote`` (191C) is present only on a KiCad board that lost net names —
+    a pad, track, via or zone stating a bare ``(net N)`` whose id no
+    ``(net N "NAME")`` row of the file's own table explains. The reader keeps
+    those as ``net#N`` and never invents a name
+    (:func:`boardwise.parsers.kicad.unnamed_net_names`), and the note states the
+    count, because the checks that find a net **by name** — the differential-pair
+    inventory, the per-rail decap bands — cannot see such a net at all. Absent,
+    not empty, when every id was named: a board that lost nothing must not grow a
+    line saying it lost nothing.
     """
     info = read_stackup(board)
     entry = {
@@ -680,6 +695,21 @@ def _board_entry(
             )
     if outline_notes:
         entry["outlineNote"] = "；".join(outline_notes)
+    # 191C：KiCad 的焊盘/走线可以只写裸 `(net N)`——名字在文件自己的
+    # `(net N "NAME")` 表里，查不到就按 `net#N` 保留（parsers.kicad）。那是一条
+    # **丢名字**的记录，必须在报告上说出来：网是**按名字**认的，一块序号全丢的板
+    # 正是按网名读的检查（差分对清单、按轨分档）看不见的板。门只对 KiCad 读数开
+    # ——`net#N` 是 KiCad 读盘器自己写的形状，EasyEDA 板的网名不是它造的。
+    from ..parsers.kicad import UNNAMED_NET_PREFIX, is_kicad_path
+
+    if is_kicad_path(str(getattr(board, "source", "") or "")):
+        unnamed = sorted(name for name in board.nets if name.startswith(UNNAMED_NET_PREFIX))
+        if unnamed:
+            shown = "、".join(unnamed[:NET_ID_NOTE_LIMIT]) + ("…" if len(unnamed) > NET_ID_NOTE_LIMIT else "")
+            entry["netIdNote"] = (
+                f"文件里有 {len(unnamed)} 个网序号查不到名字（{shown}），已按 net#N 保留"
+                "——按网名认网的检查（差分对清单、按轨分档）看不到这些网"
+            )
     return entry
 
 

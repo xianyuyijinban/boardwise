@@ -114,7 +114,12 @@ _MALFORMED_BOARDS = {
         '(footprint "X:R_0402" (layer "F.Cu") (uuid "fp") (at 0 0) (property "Reference" "R1")'
         ' (pad "1" smd roundrect (at q 0) (size 1 1) (layers "F.Cu") (net "GND")))'
     ),
-    "a bare pre-6 (net N) id": '(segment (start 0 0) (end 1 0) (layer "F.Cu") (width 0.25) (net 3))',
+    # 191C: the **numeric** bare id — the case this dict used to carry as
+    # 「a bare pre-6 (net N) id」 — is no longer malformed: it is read against
+    # the file's own `(net N "NAME")` table, and an id that table does not name
+    # is kept as `net#N` and counted (tests/test_191c_kicad_bare_net.py). What
+    # is still refused is a bare argument that is neither an id nor a name.
+    "a bare (net abc) that is neither an id nor a name": '(segment (start 0 0) (end 1 0) (layer "F.Cu") (width 0.25) (net abc))',
 }
 
 

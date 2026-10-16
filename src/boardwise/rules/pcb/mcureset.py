@@ -67,9 +67,9 @@ from dataclasses import dataclass, field
 from ..base import Finding, FindingTarget
 from ...core.measure import component_distance
 from ...core.model import is_ground_net
-from ...core.parts import category_of, load_parts, resolve_component_facts
+from ...core.parts import category_of, resolve_component_facts
 from ..decap import looks_like_capacitor
-from ..facts import default_library_path
+from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
 from .crystal import MCU_CATEGORIES
 from .distance import _measurement, _mil
@@ -305,7 +305,7 @@ class McuResetBoot(PcbRule):
     source = "house rule（岳 2026-10 待裁）"
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None

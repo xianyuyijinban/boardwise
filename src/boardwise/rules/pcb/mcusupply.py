@@ -95,11 +95,11 @@ from dataclasses import dataclass, field
 from ..base import Finding, FindingTarget
 from ...core.measure import component_distance
 from ...core.model import is_ground_net
-from ...core.parts import load_parts, resolve_component_facts
+from ...core.parts import resolve_component_facts
 from ...core.pinrole import pin_role
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on, looks_like_capacitor
-from ..facts import default_library_path
+from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
 from .crystal import MCU_CATEGORIES
 from .distance import HF_FARADS, _measurement, _mil
@@ -517,7 +517,7 @@ class McuSupplyGroups(PcbRule):
     source = "house rule（岳 2026-10 待裁）"
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None
@@ -527,7 +527,7 @@ class McuSupplyGroups(PcbRule):
         ``library=None`` degrades to an empty shelf — the same contract 131b,
         131c and 131d honour, so a synthetic test can inject a two-entry library
         without monkeypatching the project's own
-        :func:`boardwise.rules.facts.default_library_path`. An empty shelf means
+        :func:`boardwise.rules.facts.read_default_library`. An empty shelf means
         no part reads as an ``ic.mcu``, which this rule then reports as silence:
         MCU identity comes from a stated field (131a's whole argument), and a
         part the shelf has never heard of is UNKNOWN rather than guessed.

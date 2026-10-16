@@ -728,6 +728,8 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # moved out and an over-limit decoupling row on a VOUT side became INFO;
     # `derating.py`: the same reading plus NTC/PTC ruled a `thermistor` and left
     # to the value-code path). Full per-board before/after: `outputs/190/`.
+    # 190S/191B/191D merged moved both again — cd5e433e/a31a7c03 -> 9b1fcf61/6ad63b13
+    # (see the 126a ledger entry of the same name).
     # 187A/187B/189A1's entries live in test_126a only (this note is the pointer).
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.

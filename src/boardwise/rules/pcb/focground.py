@@ -139,8 +139,7 @@ from ...core.measure import (
 )
 from ...core.model import GROUND_NET_PREFIXES, is_ground_net
 from ...core.values import parse_resistance_ohms
-from ..facts import default_library_path
-from ...core.parts import load_parts
+from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
 from .distance import _mil, _measurement
 from .foc import (
@@ -1235,7 +1234,7 @@ class FocGroundTie(PcbRule):
     )
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None
@@ -1244,7 +1243,7 @@ class FocGroundTie(PcbRule):
 
         ``library=None`` degrades to an empty shelf, so a synthetic test injects
         a library rather than monkeypatching
-        :func:`boardwise.rules.facts.default_library_path`.
+        :func:`boardwise.rules.facts.read_default_library`.
 
         **The schematic page is resolved once here** (:func:`schematic_board_of`,
         153's board chain) and threaded into every value read below, so all three
@@ -2033,7 +2032,7 @@ class FocReturnPath(PcbRule):
     source = "TI SLVA959B §1.2 / §1.3.1 + 岳裁定③（投影分析；出数不出判定）"
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None

@@ -1211,9 +1211,20 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # thermistor 独立 kind 与值码/热敏不进 unknown_parts/VOUT 降级与阈值不动/
     # 6R3 电压码与 EIA 字母码清单/shelfMatchedBy）。变异 2 组 CAUGHT（见
     # `outputs/190/evidence.md` §变异）。
+    # **190S + 191B + 191D merged (主代理统一重钉)** — recursive cd5e433e ->
+    # 9b1fcf61，direct a31a7c03 -> 6ad63b13（第二十五批；量在合着四批未提交改动
+    # 的同一棵树上）。三批落点：190S 只动 `rules/pcb/silk.py` 一句证据文案（底层
+    # 文字框的几何改在 `core/geometry.py::SilkText`，不在指纹里）；191D 动
+    # `rules/pcb/distance.py`（去耦四档阈值 200/300/500/200 mil、撤 190 的 VOUT
+    # 降 INFO，超限恒 WARN）与 `rules/pcb/foc.py`（只改注释）；191B 动
+    # `rules/facts.py`（读侧 `read_default_library()`：用户架 + 内置架合并读）与
+    # `rules/pcb/` 十一个文件的读架口（`load_parts(default_library_path())` ->
+    # `read_default_library()`，判决语义只多「内置新条目可见」）。191A/191C 未动
+    # `rules/`。逐批对拍与变异见 `outputs/{190s,191b,191d}/evidence.md`。
+    # 合并时另把 `rules/facts.py` 一处 docstring 里的企业归档文件名换成「实板A」（186 带入的保密洞，纯散文）。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "a31a7c03"
-    assert recursive == "cd5e433e", (
+    assert old_digest == "6ad63b13"
+    assert recursive == "9b1fcf61", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

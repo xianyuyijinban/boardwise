@@ -65,8 +65,7 @@ from __future__ import annotations
 from ..base import Finding, FindingTarget
 from ...core.geometry import BBox, BoardGeometry
 from ...core.measure import pad_corners, read_stackup, region_copper
-from ...core.parts import load_parts
-from ..facts import default_library_path
+from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
 from .crystal import _mcu_oscillators, is_crystal_member
 from .focground import _placed_on, _value_ohms, schematic_board_of
@@ -244,7 +243,7 @@ class McuCrystalKeepout(PcbRule):
     )
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
-        return self.check_with_library(ctx, load_parts(default_library_path()))
+        return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
         self, ctx: PcbReviewContext, library=None

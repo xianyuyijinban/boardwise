@@ -11,7 +11,9 @@ re-derivation:
   schematic model's own connectivity, through
   :func:`boardwise.rules.decap.cap_candidates_on` — the *same* predicate
   ``decap-required-caps`` uses) and measure the edge-to-edge gap to the nearest
-  one. Too far is a WARN; a net with no grounded capacitor at all is an INFO
+  one. Too far — over the threshold of **the tier this rail falls in on this
+  part** (191D: :data:`DECAP_TIER_MIL`) — is a WARN; a net with no grounded
+  capacitor at all is an INFO
   that **names the net and the IC**, not a silence.
 * :class:`ComponentSpacing` (``pcb-component-spacing``) — **do any two parts
   collide?** Every pair of placed components in the same PCB document is
@@ -59,9 +61,13 @@ a hundred that say nothing).
 **Every threshold here is a house rule, not a standard.** Neither 200 mil nor
 20 mil comes from IPC-2221 (that is 126c's job, and the two are deliberately
 kept in separate files so the standards never launder a guess). Both constants
-carry the provenance inline — and 岳's **2026-10-11** ruling has now fixed both
-as graded lines (「以内 INFO、以外 WARN」, numbers kept), so these two rules are
-the house-rule pair whose thresholds are no longer 待裁.
+carry the provenance inline — and 岳's **2026-10-11** ruling fixed both
+as graded lines (「以内 INFO、以外 WARN」, numbers kept). **191D split the
+decoupling one per rail** (:data:`DECAP_TIER_MIL`: 200 / 300 / 500 / 200 mil),
+and those numbers are **starting values expected to move with real-board
+feedback** — the status the single figure carried before the ruling, inherited
+rather than upgraded (SCHEDULE's 待岳拍板 lists them). The spacing rule's 20 mil
+is unmoved and still not 待裁.
 
 **Empty input never raises.** A board with no ICs, no capacitors, or no
 outline produces no findings — except the one case where "no outline" is itself
@@ -101,7 +107,7 @@ from ...core.partkind import (
     PartDeclarations,
     classify_part,
 )
-from ...core.parts import load_parts, resolve_component_facts
+from ...core.parts import resolve_component_facts
 from ...core.pinrole import pin_role
 from ...core.power_domains import infer_net_domains
 from ...core.values import parse_capacitance_farads
@@ -109,12 +115,19 @@ from ..decap import cap_candidates_on
 from .base import PcbReviewContext, PcbRule
 
 #: How far a decoupling capacitor may sit from the IC it decouples, edge to
-#: edge, in mils. Over this is a WARN — **the line is graded, and 岳 confirmed it
-#: on 2026-10-11**: 「以内 INFO、以外 WARN」, with the number kept at the value this
-#: constant already carried (200 mil). The same ruling upgraded the FOC pack's
-#: driver-level reading of the same figure
-#: (:data:`~boardwise.rules.pcb.foc.TI_DECAP_REFERENCE_MIL`), so the two rules now
-#: grade the same distance consistently.
+#: edge, in mils. Over the line its tier allows is a WARN — **the line is graded,
+#: and 岳 confirmed it on 2026-10-11**: 「以内 INFO、以外 WARN」, with the number
+#: kept at the value this constant already carried (200 mil). The same ruling
+#: upgraded the FOC pack's driver-level reading of the same figure
+#: (:data:`~boardwise.rules.pcb.foc.TI_DECAP_REFERENCE_MIL`), so the two rules
+#: grade the same pin the same way.
+#:
+#: **191D (岳 2026-10-17: 去耦阈值按电源轨分档) made this the base of a set
+#: rather than the one line.** It is now the value of two of the four tiers in
+#: :data:`DECAP_TIER_MIL` — 消耗端供电脚 (the part eats this rail) and 侧别读不出
+#: (the pin names declare neither side) — while a regulator's input rail carries
+#: 300 mil and a rail the part produces carries 500. The constant itself did not
+#: move, so the figure the FOC pack quotes is still one number in one place.
 #:
 #: **source: house rule（岳 2026-10 待裁 → 2026-10-11 裁：以内 INFO、以外 WARN）**
 #: — not a standard. Nothing in
@@ -127,6 +140,119 @@ from .base import PcbReviewContext, PcbRule
 #: board the threshold is not what decides anything — which is exactly the
 #: evidence needed to say the number is a starting point, not a measurement.
 DECAP_DISTANCE_MIL = 200.0
+
+#: The four tier labels, in the **precedence order** a reading resolves them in:
+#: when one part has more than one of these pin families on one net (``VIN`` and
+#: ``VCC`` both tied to ``+5V``, say), the **most demanding** tier wins — the
+#: strictest question about that rail is the one the capacitor has to answer, and
+#: it is the direction 190 already chose for a rail that declared both sides
+#: (that row kept the WARN). The order is the table's, not the numbers': a later
+#: re-tuning of 200/300/500 must not silently re-order the reading.
+DECAP_TIER_CONSUMER = "消耗端供电脚档"
+DECAP_TIER_REGULATOR_IN = "稳压器输入档"
+DECAP_TIER_REGULATOR_OUT = "稳压器输出档"
+DECAP_TIER_UNDECLARED = "侧别读不出档"
+
+#: **The tier a decoupling rail is graded by, and what puts it there (191D,
+#: 岳 2026-10-17 裁).** The one line of 126b/190 became four, decided by **which
+#: pin of this part the rail lands on** — 「为什么要贴着放」 is not one question:
+#:
+#: * :data:`DECAP_TIER_CONSUMER` — 消耗端供电脚: the part *eats* this rail
+#:   (``VDD``/``VCC``/``AVDD``/``DVDD``/``VDDA``/``VBAT``/``VS``…). The bypass is
+#:   the part's own business and the shortest line of the four holds.
+#: * :data:`DECAP_TIER_REGULATOR_IN` — 稳压器输入: the part is a regulator and this
+#:   rail feeds it (``VIN``/``PVIN``). The capacitor is sited for a stage that
+#:   does not end at this pin — the rail is the upstream stage's output too — so
+#:   the line is looser.
+#: * :data:`DECAP_TIER_REGULATOR_OUT` — 稳压器输出: the rail is one the part
+#:   **produces** (``VOUT``/``SW``). The capacitor is that rail's storage and
+#:   serves everything downstream, which is the same reason 190 called it a
+#:   disclosure; 191D gives it a number instead.
+#: * :data:`DECAP_TIER_UNDECLARED` — 侧别读不出: the pin names say none of the
+#:   above (``RON``-class names, a bare pin number, a name not in
+#:   :data:`DECAP_TIER_PINS` *and* with no role in
+#:   :func:`boardwise.core.pinrole.pin_role`). Untouched at
+#:   :data:`DECAP_DISTANCE_MIL`: a name that declares nothing buys nothing.
+#:
+#: **Every number here is a house rule and every number is a starting value, not
+#: a measurement — 可随反馈调.** That status is the one the single figure always
+#: carried and it is inherited rather than upgraded: 200 / 300 / 500 are the
+#: main agent's initial split, the corpus under them is measured (see
+#: ``outputs/191d/evidence.md``), and SCHEDULE's 待岳拍板 lists the four numbers
+#: as the thing real-board feedback is expected to move.
+#:
+#: **191D also retires 190's temporary downgrade.** 190 moved an over-limit row on
+#: a declared ``VOUT`` side to INFO precisely because the threshold was the same
+#: 200 mil everywhere and the output side deserved a different answer; the answer
+#: is now a threshold of its own, so the severity is one rule again — over the
+#: tier's line is a WARN, on **every** tier.
+DECAP_TIER_MIL: dict[str, float] = {
+    DECAP_TIER_CONSUMER: DECAP_DISTANCE_MIL,
+    DECAP_TIER_REGULATOR_IN: 300.0,
+    DECAP_TIER_REGULATOR_OUT: 500.0,
+    DECAP_TIER_UNDECLARED: DECAP_DISTANCE_MIL,
+}
+
+#: The graded tiers in precedence order. :data:`DECAP_TIER_UNDECLARED` is
+#: deliberately absent: it is the **absence** of a reading rather than one of the
+#: readings that compete, and a caller that iterates this tuple is asking "which
+#: pin family spoke", not "what is the answer".
+DECAP_TIER_ORDER: tuple[str, ...] = (
+    DECAP_TIER_CONSUMER,
+    DECAP_TIER_REGULATOR_IN,
+    DECAP_TIER_REGULATOR_OUT,
+)
+
+#: The pin names that put a rail in a tier, read on the whole normalised name and
+#: then on each ``[/,_ ]``-separated token of it (so ``AVDD_1`` and ``VIN/VCC``
+#: are read too). **Only the names that need deciding by name are here**: a name
+#: with no entry falls back to :func:`boardwise.core.pinrole.pin_role`, which is
+#: the reader :meth:`DecapDistance._one_net`'s rail attribution already uses —
+#: role ``OUT``/``SW`` is the regulator-output tier, role ``IN`` is the consumer
+#: tier (every ``IN``-role name that is *not* a regulator input is a supply pin
+#: something eats), and no role at all is 侧别读不出.
+#:
+#: Which names need the table: ``VIN``/``PVIN`` are the only ``IN``-role names
+#: that mean *the part produces this rail's counterpart*, so they and the
+#: ``VOUT``/``SW`` family are the split. ``AVDD``/``PVIN``/``VS``/``AVDD_1`` are
+#: names :func:`~boardwise.core.pinrole.pin_role` answers ``None`` for (its table
+#: is a whole-name one and it declines a name it has never seen), and the task
+#: book's 消耗端 list names them; the rest are the measured consumer spellings
+#: from that classifier's own docstring.
+DECAP_TIER_PINS: dict[str, str] = {
+    # 消耗端供电脚 — the part eats this rail.
+    "VCC": DECAP_TIER_CONSUMER,
+    "VDD": DECAP_TIER_CONSUMER,
+    "AVDD": DECAP_TIER_CONSUMER,
+    "DVDD": DECAP_TIER_CONSUMER,
+    "VDDA": DECAP_TIER_CONSUMER,
+    "VDDIO": DECAP_TIER_CONSUMER,
+    "IOVDD": DECAP_TIER_CONSUMER,
+    "VCCI": DECAP_TIER_CONSUMER,
+    "VBAT": DECAP_TIER_CONSUMER,
+    "BAT": DECAP_TIER_CONSUMER,
+    "VBUS": DECAP_TIER_CONSUMER,
+    "VM": DECAP_TIER_CONSUMER,
+    "VS": DECAP_TIER_CONSUMER,
+    "V+": DECAP_TIER_CONSUMER,
+    # 稳压器输入 — the part is a regulator and this rail feeds it.
+    "VIN": DECAP_TIER_REGULATOR_IN,
+    "PVIN": DECAP_TIER_REGULATOR_IN,
+    "VINP": DECAP_TIER_REGULATOR_IN,
+    # 稳压器输出 — the rail is one this part produces.
+    "VOUT": DECAP_TIER_REGULATOR_OUT,
+    "VO": DECAP_TIER_REGULATOR_OUT,
+    "SW": DECAP_TIER_REGULATOR_OUT,
+    "VSW": DECAP_TIER_REGULATOR_OUT,
+    "LX": DECAP_TIER_REGULATOR_OUT,
+}
+
+#: What a compound pin name is split on to find a tier. The alphabet is
+#: :mod:`boardwise.core.pinrole`'s own (``/``, ``,``, ``_``, space) and ``-`` is
+#: out of it for that module's reason: a ``PH0-OSC_IN`` split on ``-`` would make
+#: every STM32 port pin a candidate, and no name in :data:`DECAP_TIER_PINS` is
+#: ever spelled with a hyphen in its own right.
+_TIER_SEPARATORS = re.compile(r"[/,_ ]+")
 
 #: The smallest edge-to-edge gap two placed components may have, in mils.
 #: Below this is a WARN — **岳 re-affirmed the line on 2026-10-11**: this is the
@@ -251,7 +377,7 @@ class DeviceFacts:
 def device_facts(comp: object, library=None) -> DeviceFacts:
     """Read :class:`DeviceFacts` off one schematic :class:`Component`.
 
-    The shelf is the **same** :func:`boardwise.rules.facts.default_library_path`
+    The shelf is the **same** :func:`boardwise.rules.facts.read_default_library`
     every other facts-reading rule uses, resolved through
     :func:`~boardwise.core.parts.resolve_component_facts` (the identity chain:
     MPN, then C-number, then the device name — each exact, never a prefix match
@@ -263,11 +389,11 @@ def device_facts(comp: object, library=None) -> DeviceFacts:
     ``library`` is an injection point for the tests and for a caller that has
     already read the shelf; the default reads the project's own.
     """
-    from ..facts import default_library_path  # noqa: PLC0415 — read at call time
+    from ..facts import read_default_library  # noqa: PLC0415 — read at call time
 
     if library is None:
         try:
-            library = load_parts(default_library_path())
+            library = read_default_library()
         except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
             library = None
     entry = (
@@ -485,7 +611,7 @@ def _supply_nets(model: object) -> set[str]:
     A net is one when :func:`~boardwise.core.power_domains.infer_net_domains`
     returns a ``KNOWN`` domain for it. The shelf is read through
     ``blocklib/parts.json`` (the same default every facts rule uses, via
-    :func:`boardwise.rules.facts.default_library_path`) because a regulator's
+    :func:`boardwise.rules.facts.read_default_library`) because a regulator's
     output is one of the two things that makes a net's voltage knowable. The
     reader degrades on its own terms here and nothing is wrapped around it: an
     absent shelf reaches :func:`load_parts` as a path that does not resolve,
@@ -496,9 +622,9 @@ def _supply_nets(model: object) -> set[str]:
     the wrong direction to fail in, since an unreadable shelf would have cost
     the ``+5V``-style nets too.
     """
-    from ..facts import default_library_path  # noqa: PLC0415 — read at call time
+    from ..facts import read_default_library  # noqa: PLC0415 — read at call time
 
-    library = load_parts(default_library_path())
+    library = read_default_library()
     names: set[str] = set()
     for _title, board_model in _board_models(model):
         for name, guess in infer_net_domains(board_model, library).items():
@@ -558,9 +684,9 @@ class DecapDistance(PcbRule):
        the schematic names that this board does not carry — the multi-board
        case, and the 040/107 "a placement was dropped" case) is **skipped, not
        counted as zero**: an unmeasurable pair is the absence of information.
-    4. edge distance over :data:`DECAP_DISTANCE_MIL` is a WARN; a net with **no
-       candidate at all** is an INFO that names the IC and the net. That INFO is
-       the one that overlaps the schematic side's territory, and it is
+    4. edge distance over **this rail's tier threshold** is a WARN; a net with
+       **no candidate at all** is an INFO that names the IC and the net. That
+       INFO is the one that overlaps the schematic side's territory, and it is
        deliberately *not* an ERROR: whether this net needs a capacitor is the
        datasheet's ``required_caps`` question (``decap-required-caps``, which
        runs on the same fixture and owns it), and a rule that invented the
@@ -588,10 +714,31 @@ class DecapDistance(PcbRule):
     supply nets (silence), no grounded capacitors on a net (one INFO), and no
     measurable candidate on a net (silence — the candidates exist, this PCB
     document does not carry them, and *that* is 126's per-board bookkeeping, not
-    a layout claim). **190 moved one row between the two**: an over-the-limit
-    distance on the part's own VOUT side is INFO (see :meth:`_one_net`), so the
-    same reading can now be a disclosure rather than a complaint depending on
-    the side the rail sits on — the threshold is untouched.
+    a layout claim). **191D restored this to one rule**: 190 moved an
+    over-the-limit row on the part's own VOUT side to INFO because the threshold
+    was the same 200 mil on every rail; that side now has a threshold of its own
+    (:data:`DECAP_TIER_MIL`), so over the tier's line is a WARN on every tier and
+    the side is a disclosure again rather than a severity step.
+
+    **The line is per rail, not per rule (191D, 岳 2026-10-17).** Which of the
+    four thresholds grades a row is read from the part's own pins on the net
+    being measured — see :data:`DECAP_TIER_MIL` for the table and
+    :func:`_decap_rail_tier` for the reader — so the same capacitor can be
+    within its line for one IC and over it for another, which is the point.
+
+    **What 191D moves on the corpus, measured** (17 boards: the 14 ``.epro2``
+    fixtures, the two KiCad projects and 实板A — per-board table in
+    ``outputs/191d/evidence.md``): **one severity step and two retirements, no
+    new rows.** 35 (IC, net) rows before and 33 after — the FOC pack's own
+    readings are untouched (15 rows, 4 WARN / 11 INFO, both sides of the
+    change), because its figure *is* this table's consumer tier. The two retired
+    rows are the 190 disclosure on a rail their part **produces** — 超声波's
+    ``U5`` on the ``VCC`` net at 293.9 mil and ROBOT's ``U8`` on ``VCC`` at
+    470.3 mil — and both sit inside the 稳压器输出档 line of 500 mil, so the
+    rule has nothing to report about them at all; the same line turns the KiCad
+    fixture's ``U1``/``C2`` on ``+3V3`` (567.2 mil) back from 190's INFO step
+    into the WARN it started as. WARN 13 → 14, INFO 22 → 19, and every other row
+    keeps its severity and changes only its message.
 
     **What is an IC is now the schematic's own device facts**, not a pin
     count — see :func:`classify_device`, and 岳裁定 1 for the case that forced
@@ -643,6 +790,7 @@ class DecapDistance(PcbRule):
                     self._one_net(
                         ic_model, board, designator, net, why,
                         side=_rail_side(component, net),
+                        tier=_decap_rail_tier(component, net),
                     )
                 )
         return findings
@@ -655,6 +803,7 @@ class DecapDistance(PcbRule):
         net: str,
         why_ic: str = "",
         side: str = "",
+        tier: DecapRailTier | None = None,
     ) -> list[Finding]:
         """The one row (or the one silence) for ``designator``'s supply ``net``.
 
@@ -687,11 +836,18 @@ class DecapDistance(PcbRule):
         :mod:`boardwise.rules.pcb.regulator` uses, so the two rules cannot
         disagree about which pin is a VIN. 190 read that disclosure one step
         further (岳 2026-10-16): a distance over the house rule on the **VOUT**
-        side of this part is INFO rather than WARN, because the capacitor there
-        is shared with whatever the rail feeds next. The threshold itself is
-        unchanged — the number is still the same 200 mil house rule, and 岳's
-        ruling on the per-rail split is still outstanding.
+        side of this part was INFO rather than WARN, because the capacitor there
+        is shared with whatever the rail feeds next. **191D replaced that
+        severity step with a threshold** (岳 2026-10-17): the rail's own tier
+        decides the number, the VOUT tier's number is 500 mil, and the side stays
+        printed as the disclosure it was in 189B. See :data:`DECAP_TIER_MIL` for
+        the four tiers and :func:`_decap_rail_tier` for how this part's pins pick
+        one. A caller that hands in no ``tier`` gets the reading taken here from
+        the board's own model, so the row's number is never a guess.
         """
+        if tier is None:
+            component = (getattr(ic_model, "components", {}) or {}).get(designator)
+            tier = _decap_rail_tier(component, net)
         candidates = list(cap_candidates_on(ic_model, net))
         attribution = _rail_attribution(designator, net, side)
         roles = {
@@ -825,54 +981,48 @@ class DecapDistance(PcbRule):
             counterpart_ref=nearest,
             measurement=_measurement("distance", gap),
         )
-        if gap <= DECAP_DISTANCE_MIL:
+        limit = tier.limit
+        if gap <= limit:
             return []
-        # 190 (岳 10-16 裁决, ⑨ 的遗留): the *severity* depends on which side of
-        # the part the rail sits on. On the part's own **output** rail the
-        # capacitor that is "too far" is shared with whatever the rail feeds
-        # next, and the placement question is not the same one as on its input
-        # side (where the part is fed and *its* decoupling is the part's own
-        # business) — so an over-limit row on a declared VOUT side is INFO.
-        # The threshold and the measurement are untouched: this is the
-        # disclosure 189B added, read one step further. A rail whose pin names
-        # declare nothing, or both sides, keeps the WARN.
-        on_output = side == _SIDE_VOUT
+        # 191D (岳 10-17 裁决): the *threshold* now depends on which rail this is
+        # on the part — the part's own pin names pick one of the four tiers, and
+        # the row's number comes out of that tier (see DECAP_TIER_MIL). 190's
+        # sibling reading reached for the same distinction and answered with a
+        # severity step (an over-limit VOUT-side row was INFO); 191D retires
+        # that step, because the VOUT side now has a threshold of its own
+        # (500 mil) and severity is one rule again: over the tier's line is a
+        # WARN, on every tier.
         return [
             Finding(
                 rule_id=self.id,
-                severity="INFO" if on_output else "WARN",
+                severity="WARN",
                 level=self.level,
                 message=(
                     f"{designator}'s nearest decoupling capacitor on {net!r} is "
                     f"{nearest} at {_mil(gap):.1f} mil edge-to-edge "
-                    f"(pad on {net!r} to pad on {net!r}), over the "
-                    f"{DECAP_DISTANCE_MIL:.0f} mil house rule — the loop it "
-                    f"decouples is {_mil(gap) / DECAP_DISTANCE_MIL:.1f}x longer "
-                    f"than the rule allows；{attribution.short}"
-                    + (
-                        "——**降一级为 INFO**：这条轨在这颗器件上是它自己**输出**的"
-                        "一侧（岳 2026-10-16 裁决），阈值与读数都没动，只把「输出侧"
-                        "的距离超限」按披露降级；VIN 侧与未声明侧别仍按 WARN"
-                        if on_output
-                        else ""
-                    )
+                    f"(pad on {net!r} to pad on {net!r}) — over the line this "
+                    f"rail's own tier draws: "
+                    f"**{tier.name} {limit:.0f} mil，实测 {_mil(gap):.1f} mil** — "
+                    f"the loop it decouples is {_mil(gap) / limit:.1f}x longer "
+                    f"than the tier allows；{attribution.short}"
                 ),
                 evidence=evidence
                 + [
                     f"candidates on {net}: {', '.join(sorted(candidates))}",
                     f"measured: {', '.join(f'{c}={_mil(d):.1f}' for c, d in sorted(measured, key=lambda p: p[1]))}",
-                ]
-                + (
-                    [
-                        "severity rule (190): a distance over the house rule on the "
-                        "**VOUT** side of this part is INFO, because the capacitor "
-                        "there is shared with whatever the rail feeds next; the "
-                        "threshold is unchanged and the VIN / undeclared sides keep "
-                        "the WARN (岳 2026-10-16)"
-                    ]
-                    if on_output
-                    else []
-                ),
+                    tier.why,
+                    "tier table (191D, 岳 2026-10-17；**house rules, 可随反馈调**): "
+                    + "；".join(
+                        f"{name} {DECAP_TIER_MIL[name]:.0f} mil"
+                        for name in (*DECAP_TIER_ORDER, DECAP_TIER_UNDECLARED)
+                    ),
+                    "severity rule (191D): a measured gap over **this rail's own "
+                    "tier** is a WARN. 190's temporary step — an over-limit row on "
+                    "a declared VOUT side was INFO — is retired, because that side "
+                    "now carries the 稳压器输出档 threshold of its own (岳 "
+                    "2026-10-17); the rail attribution above is the same 189B "
+                    "disclosure it always was and no longer moves a severity",
+                ],
                 target=target,
             )
         ]
@@ -899,12 +1049,6 @@ _SIDE_ROLE_LABELS = {"IN": "VIN", "OUT": "VOUT"}
 #: answering ``None`` means 「this name declares no role」 rather than 「no pin」.
 _SIDE_UNDECLARED = "脚名未声明侧别"
 
-#: The one side label that **moves a severity** (190, see :meth:`DecapDistance._one_net`).
-#: Named here rather than spelled at the comparison so the label the disclosure
-#: prints and the label the severity rule matches cannot drift apart.
-_SIDE_VOUT = "VOUT 侧"
-
-
 def _rail_side(component: object, net: str) -> str:
     """The side of ``component`` the supply ``net`` sits on, from its pin names.
 
@@ -926,6 +1070,110 @@ def _rail_side(component: object, net: str) -> str:
     return f"{next(iter(roles))} 侧"
 
 
+@dataclass(frozen=True)
+class DecapRailTier:
+    """Which tier a (part, rail) pair is graded in, and which pin said so (191D).
+
+    ``name`` is one of :data:`DECAP_TIER_ORDER` or
+    :data:`DECAP_TIER_UNDECLARED`; ``why`` is the evidence sentence naming the
+    pin that decided it; ``limit`` is that tier's threshold in mils, read out of
+    :data:`DECAP_TIER_MIL` rather than spelled where it is used — 191D's
+    「数字与常量同源，不许手抄」 is this property. One object rather than three
+    strings for the reason :class:`RailAttribution` is one: the tier, its number
+    and the pin that decided it are one reading, and a caller that wired two of
+    the three would be quoting a tier it did not read.
+    """
+
+    name: str
+    why: str = ""
+
+    @property
+    def limit(self) -> float:
+        """This tier's threshold, in mils, out of :data:`DECAP_TIER_MIL`."""
+        return DECAP_TIER_MIL[self.name]
+
+
+def _tier_pin(pin_name: str) -> str | None:
+    """The tier one pin **name** declares, or ``None`` (191D).
+
+    Whole normalised name first, then its ``[/,_ ]``-separated tokens, and only
+    then :func:`boardwise.core.pinrole.pin_role`. The fallback is what keeps
+    :data:`DECAP_TIER_PINS` from having to enumerate every spelling the
+    classifier's own table already knows — ``VDD_1``, ``VOUTA``, ``OUTPUT`` and
+    the numbered families are roles, not entries — and the reading is therefore
+    still 「131a's classifier decides what a pin name says」 with one question
+    added on top of it: *is this ``IN`` the rail the part eats, or the rail the
+    part is fed by while it regulates?* That is the only split the table holds.
+
+    ``None`` means the name declares no tier, which is 侧别读不出档 rather than
+    「no supply pin」 — the same distinction ``pin_role``'s own docstring makes,
+    and ``RON``/``PGOOD``/a bare pin number are its witnesses.
+    """
+    text = " ".join(str(pin_name or "").split()).upper()
+    if not text:
+        return None
+    tier = DECAP_TIER_PINS.get(text)
+    if tier is not None:
+        return tier
+    tokens = [part for part in _TIER_SEPARATORS.split(text) if part]
+    seen = {DECAP_TIER_PINS[token] for token in tokens if token in DECAP_TIER_PINS}
+    if seen:
+        return min(seen, key=DECAP_TIER_ORDER.index)
+    role = pin_role(pin_name)
+    if role in ("OUT", "SW"):
+        return DECAP_TIER_REGULATOR_OUT
+    if role == "IN":
+        return DECAP_TIER_CONSUMER
+    return None
+
+
+def _decap_rail_tier(component: object, net: str) -> DecapRailTier:
+    """The tier ``component``'s pins **on this net** put the rail in (191D).
+
+    Read over the part's **own pins on that net**, not over the net's name: the
+    same ``+5V`` is U5's ``VIN`` and U11's ``VOUT`` (131b's measured case), and
+    the tier is a statement about the rail *on this part*, which is what
+    :func:`_rail_side` reads the same pair for. A part with several tiers on one
+    net resolves to the most demanding one (see :data:`DECAP_TIER_ORDER`) and the
+    evidence names the others, so the choice is readable rather than implicit.
+    """
+    designator = str(getattr(component, "designator", "") or "")
+    who = designator or "this part"
+    hits: list[tuple[str, str, str]] = []
+    for pin in getattr(component, "pins", ()) or ():
+        if str(getattr(pin, "net", "") or "") != net:
+            continue
+        name = str(getattr(pin, "name", "") or "")
+        tier = _tier_pin(name)
+        if tier is not None:
+            hits.append((tier, str(getattr(pin, "number", "") or ""), name))
+    if not hits:
+        return DecapRailTier(
+            name=DECAP_TIER_UNDECLARED,
+            why=(
+                f"tier reading (191D): no pin of {who} on {net!r} declares a tier "
+                "— not one name is in DECAP_TIER_PINS and "
+                "core.pinrole.pin_role reads no IN/OUT/SW role on any of them — "
+                f"so the rail is graded in {DECAP_TIER_UNDECLARED}, the same "
+                f"{DECAP_DISTANCE_MIL:.0f} mil this rule used before the split"
+            ),
+        )
+    hits.sort(key=lambda hit: DECAP_TIER_ORDER.index(hit[0]))
+    tier, number, name = hits[0]
+    why = (
+        f"tier reading (191D): {who} pin {number} ({name!r}) is a {tier} pin — "
+        f"the rail {net!r} is graded at that tier's {DECAP_TIER_MIL[tier]:.0f} mil"
+    )
+    others = [hit for hit in hits[1:] if hit[0] != tier]
+    if others:
+        why += (
+            "；the most demanding tier on this net wins (岳 2026-10-17), and this "
+            "rail also carries "
+            + "; ".join(f"pin {n} ({nm!r}) as {t}" for t, n, nm in others)
+        )
+    return DecapRailTier(name=tier, why=why)
+
+
 def _rail_attribution(designator: str, net: str, side: str) -> RailAttribution:
     """The 「按哪条轨量的 / 这条轨在这颗器件上是哪一侧」 disclosure (189B ⑨).
 
@@ -935,10 +1183,12 @@ def _rail_attribution(designator: str, net: str, side: str) -> RailAttribution:
     one rail and reporting another. The second is the side, because 「贴着放」 is
     a different requirement on a part's input rail (fed by whatever produces it —
     that rail's capacitors may belong to the upstream stage) than on its own
-    output rail (where the part *is* the source). The first is a disclosure; the
-    second became **one severity step** in 190 (an over-limit VOUT-side row is
-    INFO) — no threshold is invented either way, and 岳's number ruling is still
-    open.
+    output rail (where the part *is* the source). The first is a disclosure, and
+    the second stayed one: **191D moved the severity off this label and onto the
+    rail's own tier** (:func:`_decap_rail_tier`) — the side is still printed,
+    because 「哪一侧」 is what answers 岳's ⑨, but a row is no longer graded by it
+    (190's INFO step for a declared VOUT side is retired, since that side now has
+    a threshold of its own).
     """
     return RailAttribution(
         short=(
@@ -1365,9 +1615,17 @@ def _measurable_designators(board: BoardGeometry) -> list[str]:
 __all__ = [
     "COMPONENT_SPACING_MIL",
     "DECAP_DISTANCE_MIL",
+    "DECAP_TIER_CONSUMER",
+    "DECAP_TIER_MIL",
+    "DECAP_TIER_ORDER",
+    "DECAP_TIER_PINS",
+    "DECAP_TIER_REGULATOR_IN",
+    "DECAP_TIER_REGULATOR_OUT",
+    "DECAP_TIER_UNDECLARED",
     "MIN_IC_PINS",
     "MIN_OUTLINE_CORNERS",
     "BoardOffEdge",
     "ComponentSpacing",
     "DecapDistance",
+    "DecapRailTier",
 ]
