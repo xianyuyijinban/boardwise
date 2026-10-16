@@ -185,9 +185,12 @@ The three rules the pair leans on: an offline plan is never landed without a pag
 it was built against (`--page`, or a page `--new-page` creates and reads back; a
 `--new-page` beside a page the plan already carries is **refused**, never ignored
 — 143d); a
-pose is handed to the editor through `engines/draw.py::_editor_pose` (the mirror
-and rotation conventions are *not* the same as `core.geometry.transform_point`'s
-— 054 measured both); and a library profile must be **measured** on the machine it
+pose is handed to the editor through `engines/draw.py::editor_pose` (054 measured
+the API's transform as `mirror_x ∘ CW(R)` against `core.geometry.transform_point`'s
+`mirror_x ∘ CCW(angle)` — the same order, opposite operators, so the angle is
+negated and the mirror passed through; 189A2 measured the order itself on a real
+board and corrected this function's side of the pair); and a library profile must
+be **measured** on the machine it
 is landed on (`lib.symbol.get` carries no geometry), which is the workflow
 `SKILL.md` §3.3 spells out.
 

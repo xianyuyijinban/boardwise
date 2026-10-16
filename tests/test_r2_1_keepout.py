@@ -189,9 +189,9 @@ def test_a_component_keepout_judges_the_parts_pads_on_its_face():
     bottom = ComponentPlacement(id="c2", designator="U2", x=0, y=0, layer_id=2)
     pads = [
         PadGeometry(id="e1", component="U1", component_id="c1", pin_number="1", net="N1",
-                    layer_id=1, effective_layer_ids=[1], x=10, y=0, width=20, height=20, shape="RECT"),
+                    footprint_layer_id=1, effective_layer_ids=[1], x=10, y=0, width=20, height=20, shape="RECT"),
         PadGeometry(id="e1", component="U2", component_id="c2", pin_number="1", net="N2",
-                    layer_id=1, effective_layer_ids=[2], x=10, y=0, width=20, height=20, shape="RECT"),
+                    footprint_layer_id=1, effective_layer_ids=[2], x=10, y=0, width=20, height=20, shape="RECT"),
     ]
     findings = _run(_board(components=[top, bottom], pads=pads, prohibit_regions=[_circle(["COMPONENT"])]))
     assert len(findings) == 1

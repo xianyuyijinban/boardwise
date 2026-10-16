@@ -206,7 +206,7 @@ def test_vias_on_pad_tests_the_centre_against_the_pad_corners():
     approximated by the footprint's unrotated box.
     """
     pad = PadGeometry(
-        "p1", component="U1", pin_number="1", net="GND", layer_id=1,
+        "p1", component="U1", pin_number="1", net="GND", footprint_layer_id=1,
         x=0, y=0, width=100, height=60, shape="RECT", angle=0.0,
     )
     board = _foc_board(
@@ -219,7 +219,7 @@ def test_vias_on_pad_tests_the_centre_against_the_pad_corners():
     assert [via.id for via in vias_on_pad(board, pad)] == ["on", "edge"]
     assert vias_on_pad(board, pad)[1].x == 50  # the pad's half-width, inclusive
     rotated = PadGeometry(
-        "p2", component="U2", pin_number="1", net="GND", layer_id=1,
+        "p2", component="U2", pin_number="1", net="GND", footprint_layer_id=1,
         x=0, y=0, width=100, height=60, shape="RECT", angle=90.0,
     )
     # A 90-degree rotation swaps the extents, so the same point now sits outside.

@@ -1423,10 +1423,27 @@ def test_same_column_q1_r5_is_solved_by_r5s_rotation_90_not_by_the_origin():
         f"R5 reaches {sorted(set(r_pairs.values()))}) — the relation is no longer "
         "pose-solvable and 116's note IS stale, which is a different finding"
     )
-    # The measured reason: **rotation 90**, not rotation 0.  116 recorded rot0
+    # The measured reason: a **quarter turn**, not rotation 0.  116 recorded rot0
     # because 113's profile put the 0603's pins on the body axis.
-    assert all(key[0] == 90 for key in solving), (
-        f"the solving poses are {solving}, but 118 measured that rotation 0 is "
-        f"the one that misses (R5 at rot 0 reaches {r_pairs[(0, False)]}) — 116's "
-        "recorded reason and the measured one have diverged"
+    #
+    # 189A2 widened this from "rotation 90" to "a quarter turn", and the change is
+    # a **relabelling, not a geometry move** — measured on this scene: with the
+    # old mirror order `(90, mirror=True)` and `(270, mirror=False)` were the
+    # *same* placement (both put R5's pins at y = -245/-285), so the accepted set
+    # read ``{(90,False), (90,True)}``; with the order corrected they are two
+    # different placements, the geometry the search had been reaching through the
+    # mirrored one is now reached through ``(270, False)``, and the set reads
+    # ``{(90,False), (270,False)}``.  The table above still holds row for row —
+    # rot 0 misses, a quarter turn reaches Q1's column — which is what is asserted
+    # here; what no longer holds is the *label* 118 wrote for the mirrored turn.
+    assert all(key[0] in (90.0, 270.0) for key in solving), (
+        f"the solving poses are {solving}, but 118 measured that a quarter turn "
+        f"solves this and rotation 0 does not (R5 at rot 0 reaches "
+        f"{r_pairs[(0, False)]}) — 116's recorded reason and the measured one have "
+        "diverged"
+    )
+    assert not any(key[0] == 0.0 for key in solving), (
+        f"the solving poses are {solving}: 118 measured rotation 0 as the one that "
+        f"misses (R5 at rot 0 reaches {r_pairs[(0, False)]}, Q1's column is "
+        f"{q_at_zero})"
     )

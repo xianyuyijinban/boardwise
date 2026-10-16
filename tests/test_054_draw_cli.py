@@ -205,8 +205,10 @@ class _FakeEditor:
                 # The editor's own composition, measured on 3.2.186
                 # (`draw.editor_pose`, `outputs/054_c1/08_mirror_probe.json`):
                 # **clockwise** rotation, then a mirror about the canvas vertical
-                # axis — mirror *after* rotation, which is the opposite order to
-                # `core.geometry.transform_point`'s.
+                # axis. Since 189A2 that is the same *order* as
+                # `core.geometry.transform_point`'s (mirror last); the two differ
+                # only in their operators, CW against CCW, which is why the
+                # negation is what makes them land in one place.
                 if rotation == 90:
                     dx, dy = dy, -dx
                 elif rotation == 180:
@@ -686,13 +688,24 @@ def test_a_rotated_part_is_placed_at_the_editors_own_angle(monkeypatch, tmp_path
     assert placed[part.designator]["x"] == part.x and placed[part.designator]["y"] == part.y
 
 
-def test_a_mirrored_part_is_placed_at_its_own_angle(monkeypatch, tmp_path, capsys):
-    """The mirror case: the editor mirrors **after** rotating (054's measurement).
+def test_a_mirrored_part_is_placed_at_the_negated_angle_too(monkeypatch, tmp_path, capsys):
+    """The mirror case: the editor mirrors **after** rotating — same as the layout.
 
-    `editor_pose` hands a mirrored pose its angle unchanged, because the API's
-    composition is `mirror_x ∘ CW(R)` and the layout's is `CCW(R) ∘ mirror_x`.
-    Sending the negated angle (which is right for `mirror=False`) puts the two
-    pads the wrong way round — the failure the first live C1 run hit.
+    **189A2 flipped this expectation** (it used to assert ``rotation == 90``, and
+    ``editor_pose`` used to hand a mirrored pose its angle unchanged). 054 read
+    the API's composition as `mirror_x ∘ CW(R)` and the layout's as
+    `CCW(R) ∘ mirror_x`, and reconciled them by *not* negating for a mirrored
+    part. 189A2 measured the layout's order against a real drawing (the wire
+    endpoints) and it is `mirror_x ∘ CCW(angle)` — the **same** order as the API
+    — so the two transforms now differ only in their operators and the angle
+    relation is one rule again: ``R = -angle``, mirror or no mirror.
+
+    ``0`` and ``180`` are their own negation, so nothing 054 actually placed is
+    affected; only a mirrored ``90``/``270`` part is, and the assertion below is
+    where that is pinned. The end-to-end half of this test is unchanged and is
+    the real acceptance: the fake editor implements the **measured** API
+    composition, so `code == 0` with no ``verification_disagrees`` line means the
+    plan's expectation and the editor's landing point still agree.
     """
     from boardwise.core.geometry import transform_point
 
@@ -722,7 +735,9 @@ def test_a_mirrored_part_is_placed_at_its_own_angle(monkeypatch, tmp_path, capsy
         params["designator"]: params
         for action, params in editor.writes if action == "sch.place_component"
     }
-    assert placed[part.designator]["rotation"] == 90
+    assert placed[part.designator]["rotation"] == 270, (
+        "the layout's 90° is the editor's 270°, mirrored or not (189A2)"
+    )
     assert placed[part.designator]["mirror"] is True
     assert "verification_disagrees" not in printed
 

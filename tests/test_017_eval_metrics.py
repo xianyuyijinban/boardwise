@@ -709,6 +709,16 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # split BoardOffEdge out + footprint.py's library-id fallback (the field
     # report's 98 false ERRORs; anchors test_bug98a_outline_stitch.py /
     # test_151b_footprint_id_fallback.py).
+    # 189B moved the recursive one — c7bed2de -> 5162fe2d, direct unchanged at
+    # 946e8610: `rules/pcb/derating.py` reads the part's type from the 立创
+    # metadata (Type / LCSC Part Name / Supplier Footprint) instead of `Type`
+    # alone, and `rules/pcb/distance.py`'s `pcb-decap-distance` rows now disclose
+    # which rail they measured and which side of the part that rail is. Measured
+    # over the 14 fixtures, the derating change moves exactly one reading (the FPC
+    # board's NTC thermistor joins the recognised set; no WARN and no verdict
+    # appears anywhere) — the diff is in `outputs/189b/fixture_diff_derating.txt`.
+    # Anchors: `tests/test_189b_mid_pack.py`; the values are pinned in test_126a.
+    # 187A/187B/189A1's entries live in test_126a only (this note is the pointer).
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.
     # Both are measured, not guessed - `tests/test_126a_pcb_review_plumbing.py`

@@ -98,7 +98,7 @@ def test_a_bare_npth_hole_consumes_no_copper_layer():
     """
     board, by_pin = _board()
     bare = by_pin["1"]
-    assert bare.plated is False and bare.has_hole and bare.layer_id == 12
+    assert bare.plated is False and bare.has_hole and bare.footprint_layer_id == 12
     assert bare.effective_layer_ids == [], "the parser's answer is the empty reading"
     assert measure._element_layers(board, bare) == set(), "and it must reach the consumer as such"
     assert measure._comparable_layers(board, bare) == set(), "nothing to compare it on"
@@ -133,21 +133,21 @@ def test_a_pad_nobody_read_still_falls_back():
     """
     board, _ = _board()
     hand_built_barrel = PadGeometry(
-        id="p", component="R1", pin_number="1", layer_id=12,
+        id="p", component="R1", pin_number="1", footprint_layer_id=12,
         width=126, height=126, hole_diameter=40, hole_width=40, hole_height=40,
     )
     assert hand_built_barrel.effective_layer_ids is None
     assert measure._element_layers(board, hand_built_barrel) == set(COPPER)
-    hand_built_smd = PadGeometry(id="p", component="R1", pin_number="1", layer_id=2)
+    hand_built_smd = PadGeometry(id="p", component="R1", pin_number="1", footprint_layer_id=2)
     assert measure._element_layers(board, hand_built_smd) == {2}
 
 
 def test_an_empty_reading_is_not_a_fallback_trigger():
     """The distinguishing pair, side by side on one 4-layer board."""
     board, _ = _board()
-    never_read = PadGeometry(id="never", layer_id=12, hole_diameter=40, hole_width=40, hole_height=40)
+    never_read = PadGeometry(id="never", footprint_layer_id=12, hole_diameter=40, hole_width=40, hole_height=40)
     read_as_none = PadGeometry(
-        id="empty", layer_id=12, effective_layer_ids=[],
+        id="empty", footprint_layer_id=12, effective_layer_ids=[],
         hole_diameter=40, hole_width=40, hole_height=40, plated=False,
     )
     assert measure._element_layers(board, never_read) == set(COPPER), "None → the pre-127b fallback"
@@ -160,12 +160,12 @@ def test_a_hand_built_npth_flag_is_read_rather_than_stored():
     barrel — it is that pad's own face, which is what an NPTH's land sits on."""
     board, _ = _board()
     hand_built_npth = PadGeometry(
-        id="p", component="R1", pin_number="1", layer_id=2, plated=False,
+        id="p", component="R1", pin_number="1", footprint_layer_id=2, plated=False,
         width=80, height=80, hole_diameter=40, hole_width=40, hole_height=40,
     )
     assert measure._element_layers(board, hand_built_npth) == {2}
     # Unstated (the default) is not False: the conservative barrel stays.
-    unstated = PadGeometry(id="p", layer_id=2, hole_diameter=40, hole_width=40, hole_height=40)
+    unstated = PadGeometry(id="p", footprint_layer_id=2, hole_diameter=40, hole_width=40, hole_height=40)
     assert unstated.plated is None
     assert measure._element_layers(board, unstated) == set(COPPER)
 

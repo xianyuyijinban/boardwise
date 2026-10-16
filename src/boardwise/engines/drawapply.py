@@ -330,7 +330,7 @@ def posed_pin_offsets(
     """This symbol's pin tips as offsets from its origin, under a pose.
 
     One ruler for the reading and the writing: `core.geometry.transform_point`
-    (mirror, then CCW rotation), which is the transform the readability checker
+    (CCW rotation, then mirror), which is the transform the readability checker
     derives the plan's netlist with and the one 053B's compiler posed the
     geometry with. A second transform here would be a second ruler for the same
     drawing.

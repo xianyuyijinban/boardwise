@@ -1974,7 +1974,10 @@ def intent_section(
     the enumeration owes and the contract does not answer; ``required`` is the
     subset the design doc names as a *must* (a rail's voltage declaration, a
     signal's polarity), and each of those carries its `intent-missing` line.
-    ``hints`` is the questions the document asks back.
+    ``hints`` is the questions the document asks back. ``stale`` and
+    ``staleEntries`` are the same marks in the two shapes their two readers need
+    (189B ④): the count over ``section:identity`` strings, and the
+    ``{section, object}`` rows report.md names a slot with.
 
     `facts` is ``None`` only when nothing could be enumerated *and* no contract was
     read — which the caller reports as an absent section rather than an empty one.
@@ -1983,14 +1986,28 @@ def intent_section(
     missing = list(facts.get("missing") or [])
     required = [row for row in missing if row.get("required")]
     hints = list(facts.get("hints") or [])
+    # 189B ④: two readings of the same transition, and the *renderer* needs the
+    # second one. :func:`boardwise.core.designintent.merge` files the mark twice —
+    # ``stale`` as the ``section:identity`` strings a count is taken over, and
+    # ``staleEntries`` as the ``{section, object}`` dicts a reader names a slot
+    # with. Reading the strings here is what made a non-empty stale list take the
+    # whole report down (``entry.get`` on a ``str``).
     stale = list(facts.get("stale") or [])
+    stale_entries = list(facts.get("staleEntries") or [])
     added = list(facts.get("added") or [])
     extras = list(facts.get("extras") or [])
+    # 189B ③: three states, not two. A contract that is on disk and cannot be
+    # read (a schema this build refuses) is *not* a missing contract: the reader
+    # sent to 「不存在」 goes looking at paths and uuids, which is the wrong desk.
+    contract_state = (
+        "unreadable" if read_error else ("read" if present else "absent")
+    )
     return {
         "contract": {
             "file": contract_file,
             "present": bool(present),
             "readError": read_error,
+            "state": contract_state,
             "intentVersion": contract_version,
             "regenerate": regenerate,
         },
@@ -2014,6 +2031,7 @@ def intent_section(
         "requiredNote": INTENT_MISSING_NOTE,
         "hints": [{**hint, "line": intent_hint_line(hint, contract_file)} for hint in hints],
         "stale": stale,
+        "staleEntries": stale_entries,
         "added": added,
         "unregistered": extras,
         "unmapped": list(facts.get("unmapped") or []),
@@ -2062,6 +2080,11 @@ def render_intent_markdown(lines: list[str], section: dict) -> None:
     two must not be able to disagree. Long lists are summarised by count with a
     pointer, never truncated silently: every required slot and every hint is
     printed in full, because those are the ones a reader has to act on.
+
+    The contract's first bullet has **three** states, not two (189B ③): 读入 / 读不了
+    （on disk, unreadable — `<原因>` is the reader's message, so the next move is a
+    schema one） / 不存在（a file to create）. The two failures used to share one word
+    and the shared word sent the reader after paths and uuids.
     """
     totals = section.get("totals") or {}
     contract = section.get("contract") or {}
@@ -2113,11 +2136,11 @@ def render_intent_markdown(lines: list[str], section: dict) -> None:
         for hint in hints:
             lines.append(f"- {hint.get('line') or intent_hint_line(hint, contract.get('file') or '')}")
         lines.append("")
-    if section.get("stale"):
-        lines.append(f"### 合同里记着、图纸里已没有的对象（{len(section['stale'])}，不删只标）")
+    stale_rows = stale_mark_rows(section)
+    if stale_rows:
+        lines.append(f"### 合同里记着、图纸里已没有的对象（{len(stale_rows)}，不删只标）")
         lines.append("")
-        for entry in section["stale"]:
-            lines.append(f"- `{entry.get('object')}`（{entry.get('section')}）—— 值保留，只标 stale")
+        lines.extend(stale_rows)
         lines.append("")
     if totals.get("missing"):
         lines.append(
@@ -2126,6 +2149,61 @@ def render_intent_markdown(lines: list[str], section: dict) -> None:
         )
     lines.append(f"- {section.get('note', INTENT_NOTE)}")
     lines.append("")
+
+
+def stale_mark_rows(section: dict) -> list[str]:
+    """The `stale` list as report.md's bullets — **both** shapes of it (189B ④).
+
+    The rows come from ``staleEntries`` (``{section, object}`` — the shape this
+    renderer names a slot with, and the one 090's facts have carried all along as
+    ``facts["staleEntries"]``; ``checkup`` used to read ``facts["stale"]``, the
+    ``section:identity`` strings the count is taken over, and `entry.get` on a
+    ``str`` took the whole report down). A report written by an older build — or
+    by hand — carries the strings under ``stale`` with no ``staleEntries`` at all,
+    and a re-gate re-renders that report: those rows print as the keys they are
+    rather than vanishing, because a stale mark that silently stops being printed
+    is the failure this section exists to prevent.
+    """
+    rows: list[str] = []
+    for entry in section.get("staleEntries") or []:
+        if isinstance(entry, dict):
+            rows.append(
+                f"- `{entry.get('object')}`（{entry.get('section')}）—— 值保留，只标 stale"
+            )
+        else:  # a hand-built row: print what there is instead of raising on it
+            rows.append(f"- `{entry}` —— 值保留，只标 stale")
+    if not rows:
+        rows = [
+            f"- `{key}` —— 值保留，只标 stale"
+            for key in (section.get("stale") or [])
+        ]
+    return rows
+
+
+def _render_guarded(lines: list[str], name: str, body) -> None:
+    """Render one section of report.md; a section that raises costs its own (189B ④).
+
+    The rules spend minutes before a report exists, so a rendering mistake must not
+    turn that into zero output: the half-written section is dropped, a named error
+    row takes its place, and the sections on either side still print. ``report.json``
+    is written before ``report.md`` and stays complete either way — this is what
+    keeps the two from failing together.
+
+    Bounded on purpose: this is the *writing* stage, never the rule walk (a rule
+    that raises is ``rules_errored``, and that path already reports rather than
+    hides).
+    """
+    mark = len(lines)
+    try:
+        body()
+    except Exception as exc:  # noqa: BLE001 — a report must still be written
+        del lines[mark:]
+        lines.append(
+            f"> **{name} 节渲染失败：{type(exc).__name__}: {exc}**"
+            " —— 本节的 Markdown 渲染不了；`report.json` 里这一节的读数仍是完整的，"
+            "请按 JSON 读本节（其余各节照常）"
+        )
+        lines.append("")
 
 
 # --------------------------------------------------------------------------
@@ -3548,7 +3626,31 @@ def render_report_markdown(report: dict) -> str:
     Chinese, because the reader is xianyuyijinban (and the model, which fills the summary
     slot); the machine keys (tier ids, rule ids, designators) stay as they are,
     since those are what other tools match on.
+
+    **A renderer that raises must not erase the review (189B ④).** The sections are
+    appended to one list, and this wrapper keeps that list: a section that dies
+    mid-way leaves every section before it in place, plus a named row saying what
+    failed and where the complete reading still is (`report.json`, which
+    :func:`boardwise.cli._write_checkup_report` writes first). The rules ran for
+    minutes and their findings are in the body above the break — an empty file
+    with a traceback on stderr is the one outcome this must never be.
     """
+    lines: list[str] = []
+    try:
+        _render_report_markdown(lines, report)
+    except Exception as exc:  # noqa: BLE001 — the report body must survive
+        lines.append("")
+        lines.append(
+            f"> **报告渲染中断：{type(exc).__name__}: {exc}** —— 本行以上各节是"
+            "`report.json` 里已经有的读数（照常可信）；中断点以下各节没有渲染出来，"
+            "请直接读 `report.json`（它是权威，`report.md` 只是它的渲染）"
+        )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _render_report_markdown(lines: list[str], report: dict) -> None:
+    """The body of :func:`render_report_markdown`, appending into ``lines``."""
     source = report.get("source") or {}
     model = report.get("model") or {}
     summary = report.get("summary") or {}
@@ -3572,7 +3674,7 @@ def render_report_markdown(report: dict) -> str:
     project = source.get("project") or {}
     title = project.get("friendlyName") or project.get("name") or source.get("file") or "(unknown)"
     boards = model.get("boards") or []
-    lines: list[str] = [
+    lines.extend([
         "# boardwise checkup 报告",
         "",
         f"**结论：{verdict}**（退出码 {exit_code}）",
@@ -3582,7 +3684,7 @@ def render_report_markdown(report: dict) -> str:
         f"- 模型：{model.get('components', '?')} 器件 / {model.get('nets', '?')} 网"
         + (f"，位号 {'、'.join(model.get('designators') or [])}" if model.get("designators") else ""),
         f"- 计数：{errors} ERROR / {warnings} WARN / {summary.get('infoCount', 0)} INFO",
-    ]
+    ])
     if len(boards) > 1:
         # 040b: the totals above are sums over the boards; without this line
         # "155 器件" would read as one netlist's worth.
@@ -3605,7 +3707,14 @@ def render_report_markdown(report: dict) -> str:
     # with 「整工程能不能投板」). The ledger below keeps every machine detail; this is
     # the glance. It renders only what `board_report` (or the report's own sections,
     # when a hand-built dict carries no such key) already says.
-    lines.append(render_board_report(report).rstrip())
+    # 189B ④: it is another renderer over the same dict — the one section whose
+    # shape `render_report_markdown` does not own — so it gets the same guard: a
+    # dead board report costs this section, not the ledger below it.
+    _render_guarded(
+        lines,
+        "整板报告（board-report）",
+        lambda: lines.append(render_board_report(report).rstrip()),
+    )
     lines.append("")
 
     # --- 053 §2.2: the complete statement first, because it is the answer to the
@@ -4212,7 +4321,11 @@ def render_report_markdown(report: dict) -> str:
     # channel), this one what the *contract* answers and still owes.
     intent_section_report = report.get("intent")
     if intent_section_report:
-        render_intent_markdown(lines, intent_section_report)
+        _render_guarded(
+            lines,
+            "intent",
+            lambda: render_intent_markdown(lines, intent_section_report),
+        )
 
     lines.append("## AI 槽位（要模型做的三件事）")
     lines.append("")
@@ -4274,7 +4387,6 @@ def render_report_markdown(report: dict) -> str:
         if key in (report.get("pending") or {}):
             lines.append(f"- 待办（{label}）：{report['pending'][key]}")
     lines.append("")
-    return "\n".join(lines)
 
 
 def _channel_cell(channel: dict | None) -> str:

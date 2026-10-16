@@ -122,6 +122,7 @@ __all__ = [
     "CHIP_RESISTOR_LIMITS",
     "ChipLimit",
     "DeratingPackage",
+    "METADATA_TYPE_KEYS",
     "METRIC_SIZE_ALIASES",
     "RESISTOR_DESIGNATOR",
     "RESISTOR_TYPE_WORDS",
@@ -130,6 +131,7 @@ __all__ = [
     "SeriesString",
     "board_link_note",
     "chip_limit",
+    "declared_type_text",
     "resistance_ohms_of",
     "schematic_board_of",
     "series_strings",
@@ -301,6 +303,16 @@ def chip_limit(footprint_name: str) -> tuple[str, ChipLimit] | None:
 #: **不与电容词表共享**：``无极性电容`` 里没有这两个词，本规则就不认它是电阻。
 RESISTOR_TYPE_WORDS: tuple[str, ...] = ("电阻", "resistor")
 
+#: 立创元数据里「这颗件是什么」的字段，**按读取优先级**（189B ⑦）：
+#: ``Type`` 是器件库自己的电气分类（薄/厚膜电阻、合金电阻…），
+#: ``LCSC Part Name`` 是立创商城那一串商品名（实板实测把类型写在这里——``330kΩ
+#: ±1% 1/4W 厚膜电阻``——而 ``Type`` 有时是空的），``Supplier Footprint`` 是供应商
+#: 的封装串（自己不含类型词，读它是为了让「元数据面」在一次调用里取全，别再按字段
+#: 名猜第三个入口）。**位号前缀不在这张表里，也永远不会是判型门**：
+#: ``U`` 位号的 330 kΩ 电阻（``FRC1206J334TS``）是实板反馈的原始案例，位号字母是
+#: 命名习惯，不是电气事实（架构决策 5、127b 的 U3 教训、151 的同一口径）。
+METADATA_TYPE_KEYS: tuple[str, ...] = ("Type", "LCSC Part Name", "Supplier Footprint")
+
 #: 位号是不是电阻族（``R12``/``R3``）。**这不是判定门，只是报告门的原料**：
 #: 小结里把「位号像电阻、但值字段与库件都没说它是电阻」的件点名出来——那是
 #: 一句事实（本规则没有判它），不是一条 verdict（151 的 ``unplaced`` 同一口径）。
@@ -377,6 +389,27 @@ def resistance_ohms_of(value: str, footprint: str = "", type_word: str = "") -> 
 _OHM_NOTATION = re.compile(r"^[0-9]*R[0-9]*$")
 
 
+def declared_type_text(component: object) -> str:
+    """立创元数据里「这颗件是什么」的读数，**元数据优先**（189B ⑦）。
+
+    读 :data:`METADATA_TYPE_KEYS` 的字段（``Type`` / ``LCSC Part Name`` /
+    ``Supplier Footprint``），拼成一段文本交给 :func:`_is_resistor` 的词表门。
+    实板反馈的案例是 ``U`` 位号的 330 kΩ 电阻（``FRC1206J334TS``）：立创元数据写
+    「厚膜电阻」，可它写在 ``LCSC Part Name`` 里而不是 ``Type`` 里——只读 ``Type``
+    一格时这句话就听不见，判型于是只剩值字段一条门。
+
+    **MPN 不在这里读**：``core.values`` 的电阻解码器（``mpn_resistance_candidates``）
+    明写「只有已经知道这颗是电阻的调用方才能问它」——拿它反推类型是循环论证，而
+    电容 MPN 里巧合的 ``7R9`` 形状正是那句话要挡的东西（071 §3②）。器件的型号
+    用来**对值**（184/188A 的口径），不用来定类型。
+
+    位号前缀既不进这段文本，也不进任何判型门（见 :func:`_is_resistor`）。
+    """
+    props = getattr(component, "props", {}) or {}
+    parts = [str(props.get(key) or "") for key in METADATA_TYPE_KEYS]
+    return " ".join(part.strip() for part in parts if part.strip())
+
+
 def _looks_like_ohms(value: str, footprint: str = "") -> bool:
     """值字段是**欧姆的写法**吗（不需要读得出数）。
 
@@ -399,9 +432,15 @@ def _is_resistor(value: str, footprint: str, type_word: str) -> tuple[bool, str]
     """``(是不是电阻, 凭什么)``——两条门，理由原样写进证据。
 
     门一：**值字段是欧姆的写法**（``10K``/``5mΩ``/``0R``）——图上写着欧姆，这颗
-    就是电阻。门二：**器件库的 ``Type`` 说的是电阻**——值字段夹了公差/尺寸词而读不出
-    整串时，靠它才允许逐段回退（见 :func:`resistance_ohms_of`）。
-    **位号字母不是门**：``R`` 起头是命名习惯，不是电气事实（架构决策 5）。
+    就是电阻。门二：**立创元数据说的是电阻**（``type_word`` 是
+    :func:`declared_type_text` 的读数：``Type`` / ``LCSC Part Name`` /
+    ``Supplier Footprint``，见 :data:`METADATA_TYPE_KEYS`）——值字段夹了公差/尺寸词而
+    读不出整串时，靠它才允许逐段回退（见 :func:`resistance_ohms_of`）。
+    **位号字母不是门、也永远不是兜底门**：``R`` 起头是命名习惯，``U`` 起头同样
+    不是「它是一颗 IC」的证据（189B ⑦：``U`` 位号的 330 kΩ 电阻）。判型顺序是
+    「元数据优先、位号前缀**不参与**」——前缀在本模块里只有一处用法，而且只是报告
+    口（:data:`RESISTOR_DESIGNATOR` 点名「位号像电阻、却没有一条声明说它是电阻」的
+    件），它从不把一颗件判成或判不是电阻。
     """
     value_text = str(value or "").strip()
     if _looks_like_ohms(value_text, footprint):
@@ -677,7 +716,10 @@ class DeratingPackage(PcbRule):
                     f"{designator} (原理图 {drawn!r} vs PCB 文档 {own!r})"
                 )
             footprint = str(getattr(placed, "footprint", "") or "")
-            type_word = str((getattr(placed, "props", {}) or {}).get("Type") or "")
+            # 189B ⑦: 立创元数据优先——类型写在 `Type` / `LCSC Part Name` /
+            # `Supplier Footprint` 哪一格都读得到（实板的「厚膜电阻」在第二格）。
+            # 位号前缀不参与判型（`RESISTOR_DESIGNATOR` 只在报告口用）。
+            type_word = declared_type_text(placed)
             pin_nets = self._pin_nets(pcb_model, designator)
             if len(pin_nets) != 2:
                 continue

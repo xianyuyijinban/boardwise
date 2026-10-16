@@ -257,7 +257,7 @@ def test_a_slot_is_still_a_plated_barrel():
     round_barrels = {
         tuple(p.effective_layer_ids)
         for p in context.pads
-        if p.hole_type == "ROUND" and p.layer_id == MULTI_LAYER_ID
+        if p.hole_type == "ROUND" and p.footprint_layer_id == MULTI_LAYER_ID
     }
     assert round_barrels == {slot_layers}, (
         "a slot barrel and a round barrel occupy the same copper"

@@ -1154,9 +1154,43 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 读写同一架 + hygiene 三态/编码/单遍 + 3 板折叠行），证据
     # `outputs/187b_gate_holes/evidence.md`。187B 未再动 `rules/`，故本段钉值
     # `2033fcbd` / `946e8610` 对合并树有效。
+    # **189A1 moved the recursive one only** — 2033fcbd -> c7bed2de，direct 仍
+    # `946e8610`（第二十二批连任）：本批撤掉 `PadGeometry.layer_id`（改名
+    # `footprint_layer_id` + `__getattr__` 拦截），落在 `rules/pcb/` 的**一处、
+    # 且只是散文**——`rules/pcb/foc.py` 的 `pcb-foc-decap-proximity` 证据行里
+    # 那句「the footprint's layer_id is not where the copper physically is」，
+    # 字段已不存在，照读会把人引到一个已删的名字上，故写成
+    # 「the footprint's own layer id (``footprint_layer_id``, the ``layer_id``
+    # 189A1 removed)」。**判决语义零变化**：该规则的层读法本来就是
+    # `pad.effective_layers()`（127b 起），本批没动任何规则取值路径；全库
+    # `rules/` 内 `.layer_id` 的接收者全是 track/pour/region/text/row/corner/info/
+    # island/placement，没有一处是 pad（逐处裁决表见
+    # `outputs/189a1/evidence.md`）。行为锚：新建 `tests/test_189a_layer_id.py`
+    # （10 条：拦截抛错带两个替代名、dataclass/构造签名形态、copy/pickle、
+    # 毕设FOC 28 个底面焊盘两个读数回归、src 级 grep 锁 + 负控），
+    # 127b/162b/125 系列既有锚逐条未改仍绿。变异 1 组 CAUGHT（删 `__getattr__`
+    # 拦截 → `test_the_retired_name_raises_and_names_both_replacements` 红 →
+    # cp 备份还原，sha256 一致）。
+    # **189B moved the recursive one only** — c7bed2de -> 5162fe2d，direct 仍
+    # `946e8610`（第二十三批连任；量在一棵**还合着 189A1/189A2 未提交改动**的树上）：
+    # 本批落在 `rules/pcb/` 的**两个文件**——`derating.py`（判型读立创元数据：
+    # `declared_type_text` 读 `Type`/`LCSC Part Name`/`Supplier Footprint` 三格，
+    # `check()` 那一处从 `props["Type"]` 换过来；`_is_resistor` 的 docstring 写明
+    # 「位号前缀不参与判型」）与 `distance.py`（`pcb-decap-distance` 每一行加
+    # 「按哪条轨量的 + 这条轨在这颗器件上是 VIN/VOUT 哪一侧」披露，读者是
+    # `core.pinrole.pin_role`，与 `pcb-regulator-cap-distance` 同一个）。
+    # **判决语义**：derating 侧 14 夹具全量对拍只有一处读数变化——FPC 板的 `R2`
+    # （贴片NTC热敏电阻：`LCSC Part Name` 写着类型、`Type` 为空）从「未认出」进到
+    # 「认出 1 颗电阻」，零新增 WARN、零新增 verdict（对拍见
+    # `outputs/189b/fixture_diff_derating.txt`）；distance 侧只是措辞与证据行，
+    # 严重度与阈值零变化（test_126b/131b 逐条未改仍绿）。行为锚：新建
+    # `tests/test_189b_mid_pack.py`（19 条：intent 三态 / stale 两个形状都印且不炸 /
+    # 渲染兜底两层 / 元数据优先判型 + 前缀不是门 / 轨归因披露 / skill 备份窗 3 份 +
+    # 回收站）。变异 2 组 CAUGHT（④ 接缝改回读 `facts["stale"]`、⑦ 判型改回只读
+    # `Type`）。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "946e8610"
-    assert recursive == "2033fcbd", (
+    assert recursive == "5162fe2d", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

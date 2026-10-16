@@ -790,7 +790,7 @@ def test_the_word_gate_reads_through_the_reader_it_is_given(tmp_path):
 def test_a_staged_run_scans_the_index_and_a_plain_run_the_tree(monkeypatch):
     """Which of the two the command picks, and that it picks by mode."""
     guard = _guard()
-    word = "ZZQX-188B-NOT-IN-ANY-FILE"
+    word = "ZZQX-188B-" + "NOT-IN-ANY-FILE"  # 拆写防自命中（hygiene 全库扫描会扫到本文件）
     monkeypatch.setattr(guard, "_word_list", lambda path: ([word], []))
     read: list[str] = []
 

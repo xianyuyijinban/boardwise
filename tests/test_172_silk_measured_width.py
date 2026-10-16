@@ -104,7 +104,7 @@ def _pad(component: str, pin: str, *, at: tuple[float, float],
          width: float = 40.0, height: float = 40.0) -> PadGeometry:
     return PadGeometry(
         id=f"{component}.{pin}", component=component, component_id=f"c-{component}",
-        pin_number=pin, net="", layer_id=1, effective_layer_ids=[1],
+        pin_number=pin, net="", footprint_layer_id=1, effective_layer_ids=[1],
         x=at[0], y=at[1], local_x=at[0], local_y=at[1],
         width=width, height=height, shape="RECT", angle=0.0,
     )

@@ -125,7 +125,7 @@ difference.
 
 * every placed pin's tip is mapped into page coordinates with the **same**
   rigid transform the parser uses (:func:`boardwise.core.geometry.transform_point`
-  — mirror, then CCW rotation, then the part's origin). A symbol profile's tip
+  — CCW rotation, then the mirror, then the part's origin). A symbol profile's tip
   is a *local* coordinate; forgetting the pose would silently move every pin of
   every rotated part;
 * a wire vertex landing on another wire's span joins them (the editor

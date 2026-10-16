@@ -648,8 +648,21 @@ def drawn_or_skip_if_the_flag_gate_refuses(
     if result.candidates:
         return result.candidates[0]
     detail = " | ".join(item.detail for item in result.failures)
-    assert "the independent readability checker refused" in detail, detail
-    assert "powerSymbols[" in detail, detail
+    # Two members of the same class, and the second is why 189A2 touched this
+    # helper: with `core.geometry.transform_point`'s mirror order corrected, the
+    # flag ladder on these crowds gets one rung further and refuses its own last
+    # resort itself — "no lead fits anywhere around that pad … the flag is not
+    # drawn on the pin instead, standing there its glyph opens across the run
+    # that leaves the pin" — instead of drawing it for the gate to refuse. Both
+    # readings say the same thing («this shape has nowhere to put its flag»), and
+    # both name a flag, which the second assert keeps true of anything accepted
+    # here: a relation, a routing or a lattice failure carries neither phrase and
+    # still fails loudly, as the docstring above requires.
+    assert (
+        "the independent readability checker refused" in detail
+        or "no lead fits anywhere around that pad" in detail
+    ), detail
+    assert "powerSymbols[" in detail or "named by a flag of its own" in detail, detail
     pytest.skip(
         f"147's flag gate refuses this shape: a conductor is drawn through a "
         f"power flag's own extent ({subject}). Every spacing rung refuses it "

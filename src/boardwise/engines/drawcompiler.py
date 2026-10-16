@@ -2384,7 +2384,7 @@ def _posed(
 
     One call site for the whole compiler, and it is the *same* transform the
     readability checker derives the netlist with (`core.geometry.transform_point`
-    — mirror, then CCW rotation, then the origin): two transforms would be two
+    — CCW rotation, then the mirror, then the origin): two transforms would be two
     rulers for the same drawing.
     """
     return _rounded(transform_point(

@@ -40,6 +40,7 @@ from typing import Any
 
 from ..core.geometry import FRAGMENT_KIND_EXTRA_RECORDS, FRAGMENT_KIND_STROKE_PIECE
 from ..core.measure import read_stackup
+from ..core.model import ProjectModel
 from ..rules.pcb.base import PcbReviewContext, PcbRule
 from ..rules.pcb.derating import DeratingPackage
 from ..rules.pcb.distance import (
@@ -283,6 +284,162 @@ def build_module_of(
     return mapping
 
 
+#: 189A2: 「多焊盘器件」 for the cross-view check — a symbol with more than two
+#: pins. Two-pin passives are out of its scope on purpose: their pin-to-net
+#: question is the one the schematic view has always answered, and a 2-pin part
+#: whose poses disagree would show up as a missing wire endpoint instead.
+CROSS_VIEW_MIN_PINS = 3
+
+
+def schematic_board_for(model: Any, board_uuid: str) -> Any:
+    """The schematic board a PCB document belongs to, or ``None`` (154's link).
+
+    ``board_uuid`` is the PCB document's own ``META board`` (151), which
+    ``BoardRef.uuid`` carries on the schematic side — the same link
+    ``pcb_review.boards[].boardUuid`` exposes. Three readings, and the third is
+    the honest one:
+
+    * a **project** model (``ProjectModel``) is looked up by uuid;
+    * a **single-board** model (a ``DesignModel``/``BoardModel``, or a KiCad
+      project whose board has no uuid) is that board, and is returned when the
+      caller has no uuid to match on — one model, one PCB document, nothing to
+      guess;
+    * anything else — a project whose link names no board (「板链读不出」), or a
+      document whose uuid names a board the model does not hold — returns
+      ``None``, and the caller says so rather than picking a board by position.
+    """
+    if model is None:
+        return None
+    if isinstance(model, ProjectModel):
+        if board_uuid:
+            for board in model.boards:
+                if str(getattr(board.board, "uuid", "") or "") == board_uuid:
+                    return board
+            return None
+        return model.boards[0] if len(model.boards) == 1 else None
+    # A single board model (a BoardModel, a plain DesignModel, a KiCad read): the
+    # board in hand is the only candidate, and it is used when it states no
+    # identity of its own or states the document's own — never merely because it
+    # is the only one.
+    ref_uuid = str(getattr(getattr(model, "board", None), "uuid", "") or "")
+    if board_uuid and ref_uuid and ref_uuid != board_uuid:
+        return None
+    return model
+
+
+def _pin_sort_key(number: str) -> tuple[int, float, str]:
+    """Sort pin numbers the way a person reads them: ``2`` before ``10``.
+
+    The same reading ``parsers.epro2_model`` sorts a component's pins by. Here it
+    is a *display* concern only — the rows are otherwise identical — but a note
+    line that says ``U1.10、U1.11、U1.18、U1.19、U1.20、U1.8…`` looks like a
+    defect and buries the pin it truncated.
+    """
+    try:
+        return (0, float(int(number)), "")
+    except (TypeError, ValueError):
+        return (1, float("inf"), str(number))
+
+
+def cross_view_lonely_pins(
+    schematic: Any, pcb_model: Any, *, min_pins: int = CROSS_VIEW_MIN_PINS
+) -> list[dict]:
+    """Pins the schematic view leaves **alone** on a net the PCB view says has company.
+
+    One archive, two views: the schematic document (``model``, what
+    ``checkup --file`` reviews) and the PCB document's own netlist
+    (``ctx.pcb_model``, 131c). They are the same design read twice, and 189A2 is
+    why the difference is now reported instead of being left for the user to
+    find by cross-checking by hand: on the real board of that task, four
+    obsolete-bridge/TRIAC/connector symbols were read with **every connected pin
+    on its own one-member net** (``NET13``…), the schematic view's ``nets[].pins``
+    said "this pin reaches nothing", and the report grew phantom rails out of it.
+
+    The check is deliberately the artifact's own shape and not "any difference":
+    a pin the *schematic* view puts on a one-member net while the *PCB* view puts
+    it on a net with more members. Net **names** are not comparably identified
+    (this tool's auto names are ``NET7``, the editor's are ``$1N66612`` — pit 24
+    in ``docs/pits.md``), so the comparison is by **membership**, pin by pin,
+    joined on ``(designator, pin number)``.
+
+    What it deliberately does **not** claim: which view is right. A pin alone in
+    the schematic can be a parser error (189A2's shape) or a genuinely new
+    unconnected pin whose PCB copy was never re-synced (017's stale-board
+    warning, which runs the other way). The row carries both readings and the
+    caller discloses them as a difference, not as a verdict.
+
+    Two pins are deliberately **left out**, both because their absence is not this
+    question:
+
+    * a pin the schematic *component* does not carry at all — that is a parse
+      drop, and the drops have their own counters (020);
+    * a pin whose schematic net is listed in ``unproven_nets`` — 107's ruling is
+      that such a net may not be concluded about in **either** direction, and
+      "the schematic leaves this pin alone" is a conclusion. Its member list came
+      out short because a dropped placement was not written into it, which is a
+      knowledge gap the model already discloses (``unproven_reasons``), so the
+      row would read as a finding where the file says 「不知道」.
+
+    Both are measured as no-ops on the repo's own material: of the 23 rows this
+    check reports across the 14 fixtures, 0 fall on an unproven net and 0 name a
+    pin the schematic component lacks.
+
+    Rows are sorted by ``(designator, pin number)`` and are
+    ``{designator, pin, schematicNet, schematicMembers, pcbNet, pcbMembers}``.
+    An empty list is a real reading («the two views agree on these pins»); a
+    caller that could not pair a schematic board with the document must not call
+    this at all, so "not checked" never reads as "agreed".
+
+    ``min_pins`` is the 「多焊盘器件」 floor (:data:`CROSS_VIEW_MIN_PINS`): the
+    task's minimum scope. It is a parameter so a caller can widen it to every
+    component, which on the repo's own fixtures is a much noisier question —
+    those boards carry long-standing schematic-vs-PCB differences (a PCB that was
+    never re-synced, a designator whose pins were renumbered) that this check is
+    not the instrument for.
+    """
+    if schematic is None or pcb_model is None:
+        return []
+    pcb_members: dict[tuple[str, str], tuple[str, int]] = {}
+    for name, net in pcb_model.nets.items():
+        for designator, number in net.pins:
+            pcb_members.setdefault((designator, number), (name, len(net.pins)))
+    schematic_members: dict[tuple[str, str], tuple[str, int]] = {}
+    for name, net in schematic.nets.items():
+        for designator, number in net.pins:
+            schematic_members.setdefault((designator, number), (name, len(net.pins)))
+    unproven = set(getattr(schematic, "unproven_nets", None) or ())
+    rows: list[dict] = []
+    for (designator, number), (pcb_net, pcb_count) in sorted(
+        pcb_members.items(), key=lambda item: (item[0][0], _pin_sort_key(item[0][1]))
+    ):
+        if pcb_count < 2:
+            continue  # the board agrees this pin is alone: nothing to compare
+        component = schematic.components.get(designator)
+        if component is None or len(component.pins) < min_pins:
+            continue
+        if not any(pin.number == number for pin in component.pins):
+            continue
+        got = schematic_members.get((designator, number))
+        schematic_count = got[1] if got else 0
+        if schematic_count > 1:
+            continue  # the schematic gives it company too: the views agree
+        if got is not None and got[0] in unproven:
+            # 107: a net whose member list came out short may not be concluded
+            # about in either direction — and 「the schematic leaves this pin
+            # alone」 is exactly such a conclusion. The gap is disclosed by
+            # `unproven_reasons`; it may not be restated here as a difference.
+            continue
+        rows.append({
+            "designator": designator,
+            "pin": number,
+            "schematicNet": got[0] if got else None,
+            "schematicMembers": schematic_count,
+            "pcbNet": pcb_net,
+            "pcbMembers": pcb_count,
+        })
+    return rows
+
+
 def _pcb_documents(source: Any) -> list[tuple[str, str, Any]]:
     """``(META title, META board, document)`` for every PCB document, in file order.
 
@@ -343,6 +500,54 @@ def _outline_aspect_ratio(outline: Any) -> float | None:
 OUTLINE_SLENDER_ASPECT_RATIO = 20.0
 
 
+def cross_view_section(
+    schematic_board: Any, pcb_model: Any
+) -> dict:
+    """The ``crossView`` disclosure of one board entry (189A2).
+
+    ``{checked: true, minPins, lonely: [...]}`` when the two views could be
+    compared — ``lonely`` empty is the reading «they agree on these pins» — and
+    ``{checked: false, reason}`` when they could not, in the same shape the
+    three DRC sections use for 「没查」. Both keys are always present on a board
+    entry, because 「没配对」 and 「对上了」 are two different statements and a
+    missing key cannot tell them apart (钉 5).
+
+    An exception out of the comparison is **the third** ``checked: false``, and
+    it is caught here on purpose: this reading is extra evidence beside the
+    rules, so a model it chokes on may not take the whole ``pcb_review`` section
+    down with it (the runner's own contract is that one broken check never kills
+    the report — 169 did the same for a raising rule, whose id is *named* in
+    ``rules_errored``). The reason names the exception, so 「检查崩了」 is a
+    reading the report carries rather than a silence a reader would take for
+    agreement.
+    """
+    if schematic_board is None:
+        return {
+            "checked": False,
+            "reason": "该 PCB 档未能与原理图板配对（板链读不出），"
+                      "跨视图网表一致性未查（没查，不是一致）",
+        }
+    if pcb_model is None:
+        return {
+            "checked": False,
+            "reason": "该档没有自己的网表读数（pcb_model 缺席），"
+                      "跨视图网表一致性未查（没查，不是一致）",
+        }
+    try:
+        lonely = cross_view_lonely_pins(schematic_board, pcb_model)
+    except Exception as exc:  # noqa: BLE001 — named below, never silently dropped
+        return {
+            "checked": False,
+            "reason": f"跨视图网表一致性检查未完成（{type(exc).__name__}: {exc}）"
+                      "—— 没查，不是一致",
+        }
+    return {
+        "checked": True,
+        "minPins": CROSS_VIEW_MIN_PINS,
+        "lonely": lonely,
+    }
+
+
 def _board_entry(
     *,
     title: str,
@@ -350,6 +555,7 @@ def _board_entry(
     board_uuid: str,
     checks_run: list[str],
     finding_indexes: list[int],
+    cross_view: dict | None = None,
 ) -> dict:
     """One entry of ``pcb_review.boards[]``.
 
@@ -378,6 +584,12 @@ def _board_entry(
     board. The threshold is placed where the repo's own boards can check it: a
     real board is ~1:1–4:1, a strip light board or a panel can reach 10–20:1, so
     20 puts the degenerate shapes in scope without touching a real narrow board.
+
+    ``crossView`` (189A2) is the one **always-present** addition: the same
+    archive read through both views, disclosing the pins the schematic view
+    leaves alone on a net the PCB view says has company. See
+    :func:`cross_view_section` for the two shapes it carries and why a missing
+    key would have been the wrong way to say 「没配对」.
     """
     info = read_stackup(board)
     entry = {
@@ -392,6 +604,8 @@ def _board_entry(
         # carries that comment where the shift happens.
         "findings": list(finding_indexes),
     }
+    if cross_view is not None:
+        entry["crossView"] = dict(cross_view)
     # bug98（岳转的现场报告）：板框读不出来时「出板框」检查是**没跑**，不是
     # 「全过」——这件事必须长在报告上。圆角矩形拆成 16 段 BOARD_OUTLINE 而
     # 拼合失败的板，曾经在报告里淹出 98 条假 ERROR（只认了第一段弧）。
@@ -572,6 +786,17 @@ def run_pcb_review(
     unaffected — ``pcb_model`` defaults to ``None`` and a rule that needs it
     treats that as 「no netlist for this document」.
 
+    **Each board entry also carries a ``crossView`` reading** (189A2): the same
+    archive's schematic and PCB netlists compared pin by pin, disclosing the pins
+    the schematic view leaves on a one-member net while the PCB view says that
+    net has company (:func:`cross_view_lonely_pins`). It runs outside the rule
+    list — it is not a rule, it is not in ``checksRun``, and no rule's answer
+    depends on it — because what it measures is the *parser's* reading rather
+    than the board's. On the real board of 189A2 it is what would have made the
+    four phantom single-pin nets (and the phantom power rail the report grew out
+    of one of them) visible in the report instead of in the user's own
+    cross-check.
+
     The rules are :data:`BUILTIN_PCB_RULES` unless the caller overrides. One
     broken rule does **not** kill the report: a rule that raises is skipped
     exactly like ``engines.review._run_rules`` does, its id is left out of that
@@ -606,14 +831,21 @@ def run_pcb_review(
 
     for title, board_uuid, read_board, read_pcb_model in units:
         board = read_board()
+        pcb_model = read_pcb_model(board)
         ctx = PcbReviewContext(
             board=board,
             board_title=title,
             model=model,
             intent=intent,
             module_of=module_of,
-            pcb_model=read_pcb_model(board),
+            pcb_model=pcb_model,
             board_uuid=board_uuid,
+        )
+        # 189A2: the two views of this one document, compared — outside the rule
+        # list on purpose, so it is not a ``checksRun`` entry and cannot change
+        # what the rules see.
+        cross_view = cross_view_section(
+            schematic_board_for(model, board_uuid), pcb_model
         )
         checks_run: list[str] = []
         board_findings: list[Finding] = []
@@ -642,6 +874,7 @@ def run_pcb_review(
                 board_uuid=board_uuid,
                 checks_run=checks_run,
                 finding_indexes=list(range(start, len(findings))),
+                cross_view=cross_view,
             )
         )
     section = {

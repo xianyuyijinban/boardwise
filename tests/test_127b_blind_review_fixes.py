@@ -102,7 +102,7 @@ def _pad(component, pin, *, x, y, net="", layer_id=1, effective=(), width=40.0, 
         component=component,
         pin_number=pin,
         net=net,
-        layer_id=layer_id,
+        footprint_layer_id=layer_id,
         effective_layer_ids=list(effective),
         x=x,
         y=y,
@@ -162,9 +162,10 @@ def test_a_bottom_parts_pads_report_the_face_they_are_on(foc_project):
         pads = pcb1.pads_for_component(designator)
         assert pads, f"{designator} has pads"
         for pad in pads:
-            assert pad.layer_id == 1, (
+            assert pad.footprint_layer_id == 1, (
                 f"{designator}.{pad.pin_number}: the footprint's own layer is "
-                "still 1 — the raw field is deliberately left alone"
+                "still 1 — the raw field is deliberately left alone (it is "
+                "``footprint_layer_id`` since 189A1, not the removed ``layer_id``)"
             )
             assert pad.effective_layer_ids == [2], (
                 f"{designator}.{pad.pin_number}: the effective reading must be "
@@ -175,7 +176,8 @@ def test_a_bottom_parts_pads_report_the_face_they_are_on(foc_project):
 
 
 def test_a_through_hole_pad_occupies_every_copper_layer(foc_project):
-    """The barrel case: all copper layers, both by hole and by ``layer_id == 12``.
+    """The barrel case: all copper layers, both by hole and by
+    ``footprint_layer_id == 12``.
 
     ``SWD1`` is a 4-pin through-hole header on PCB1; each of its pads carries
     ``layerId == 12`` (the editor's Multi-Layer designation) **and** a hole, and
@@ -204,16 +206,16 @@ def test_a_through_hole_pad_occupies_every_copper_layer(foc_project):
     barrels = [p for p in pcb1.pads_for_component("USB1") if p.has_hole]
     assert smd and barrels, "USB1 has both SMD signal pads and TH shield pads"
     for pad in smd:
-        assert pad.layer_id == 1 and pad.effective_layer_ids == [1], (
+        assert pad.footprint_layer_id == 1 and pad.effective_layer_ids == [1], (
             f"USB1.{pad.pin_number} is surface mount: one face only"
         )
     for pad in barrels:
-        assert pad.layer_id == MULTI_LAYER_ID
+        assert pad.footprint_layer_id == MULTI_LAYER_ID
         assert pad.effective_layer_ids == [1, 2, 15, 16], (
             f"USB1.{pad.pin_number} is a plated barrel: every copper layer"
         )
     assert MULTI_LAYER_ID == 12, "the editor's Multi-Layer id is the documented 12"
-    assert pcb1.pads_for_component("SWD1")[0].layer_id == MULTI_LAYER_ID
+    assert pcb1.pads_for_component("SWD1")[0].footprint_layer_id == MULTI_LAYER_ID
 
 
 def test_an_unresolved_pad_reports_no_effective_layer():
@@ -227,7 +229,7 @@ def test_an_unresolved_pad_reports_no_effective_layer():
     copper」 — the two are different, and a caller that treated the first as the
     second would silently drop every pad off a synthetic board.
     """
-    pad = PadGeometry(id="p", component="R1", pin_number="1", layer_id=1)
+    pad = PadGeometry(id="p", component="R1", pin_number="1", footprint_layer_id=1)
     assert pad.effective_layers() == set()
     assert pad.is_smd is True
 
@@ -331,7 +333,7 @@ def test_a_cross_side_pair_is_not_measured():
     # A through-hole pad spans every layer, so it **is** comparable with a
     # bottom pad — a barrel really does reach the other side of the board.
     board.pads[1] = PadGeometry(
-        id="B.1", component="B", pin_number="1", net="N2", layer_id=MULTI_LAYER_ID,
+        id="B.1", component="B", pin_number="1", net="N2", footprint_layer_id=MULTI_LAYER_ID,
         effective_layer_ids=[1, 2], x=10.0, y=0.0, width=40.0, height=40.0,
     )
     assert component_distance(board, "A", "B") is not None

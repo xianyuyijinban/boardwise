@@ -87,7 +87,7 @@ def _pcb(designator: str, title: str, pins: int) -> tuple[BoardGeometry, DesignM
     pads = [
         PadGeometry(
             id=f"{designator}.{index}", component=designator, pin_number=str(index),
-            net="", layer_id=1, x=0.0, y=0.0, local_x=0.0, local_y=0.0,
+            net="", footprint_layer_id=1, x=0.0, y=0.0, local_x=0.0, local_y=0.0,
             width=30.0, height=30.0, shape="RECT", angle=0.0,
         )
         for index in range(1, pins + 1)

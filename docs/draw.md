@@ -104,7 +104,10 @@ named checkpoint for that boundary and is now an identity.
 
 Pin offsets rotate **counter-clockwise** — the file's own convention, restored in
 `core/geometry.py::transform_point` — and then mirror across the vertical axis;
-the instance origin is added last. Note that the *editor API* turns clockwise, so
+the instance origin is added last. (The **order** of those two is a measurement
+too, not a formality: 189A2 pinned it against a real board's wire endpoints and
+corrected `transform_point`, which had been mirroring first. 0°/180° cannot tell
+the two apart, which is why only a mirrored 90°/270° part could expose it.) Note that the *editor API* turns clockwise, so
 `engines/draw.py::_editor_rotation` negates the angle when it hands it over: the
 file's angle and the API's angle are opposite, and the two ends of that pair must
 be changed together (010c's appendix B moved one and broke the golden). The page

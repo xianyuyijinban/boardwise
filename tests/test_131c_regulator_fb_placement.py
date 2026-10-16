@@ -713,7 +713,7 @@ def test_a_regulator_whose_fb_pin_reaches_no_divider_says_so():
     def _pad(component: str, pin: str, *, x: float, y: float, net: str) -> PadGeometry:
         return PadGeometry(
             id=f"{component}.{pin}", component=component, pin_number=pin, net=net,
-            layer_id=1, x=x, y=y, width=40.0, height=40.0, shape="RECT", angle=0.0,
+            footprint_layer_id=1, x=x, y=y, width=40.0, height=40.0, shape="RECT", angle=0.0,
         )
 
     component = Component(

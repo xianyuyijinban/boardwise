@@ -566,7 +566,7 @@ def _tie_board(nets: dict[str, list[tuple[str, str]]]):
                 component=designator,
                 pin_number=pin,
                 net=net,
-                layer_id=1,
+                footprint_layer_id=1,
                 effective_layer_ids=[1],
                 x=200.0 * index,
                 y=100000.0 + 400.0 * index,
@@ -637,17 +637,17 @@ def _decap_board(cap_center_x: float):
     """
     pads = [
         PadGeometry(
-            id="U1-1", component="U1", pin_number="1", net="VM", layer_id=1,
+            id="U1-1", component="U1", pin_number="1", net="VM", footprint_layer_id=1,
             effective_layer_ids=[1], x=0.0, y=0.0, width=40.0, height=40.0,
             shape="rect",
         ),
         PadGeometry(
-            id="C1-1", component="C1", pin_number="1", net="VM", layer_id=1,
+            id="C1-1", component="C1", pin_number="1", net="VM", footprint_layer_id=1,
             effective_layer_ids=[1], x=cap_center_x, y=0.0, width=40.0,
             height=40.0, shape="rect",
         ),
         PadGeometry(
-            id="C1-2", component="C1", pin_number="2", net="GND", layer_id=1,
+            id="C1-2", component="C1", pin_number="2", net="GND", footprint_layer_id=1,
             effective_layer_ids=[1], x=cap_center_x, y=200.0, width=40.0,
             height=40.0, shape="rect",
         ),
@@ -686,12 +686,12 @@ def _spacing_board(gap: float) -> BoardGeometry:
     offset = 40.0 + gap
     pads = [
         PadGeometry(
-            id="R1.1", component="R1", pin_number="1", net="N1", layer_id=1,
+            id="R1.1", component="R1", pin_number="1", net="N1", footprint_layer_id=1,
             effective_layer_ids=[1], x=0.0, y=0.0, width=40.0, height=40.0,
             shape="rect",
         ),
         PadGeometry(
-            id="R2.1", component="R2", pin_number="1", net="N2", layer_id=1,
+            id="R2.1", component="R2", pin_number="1", net="N2", footprint_layer_id=1,
             effective_layer_ids=[1], x=offset, y=0.0, width=40.0, height=40.0,
             shape="rect",
         ),
@@ -733,12 +733,12 @@ def _keepout_board(*, foreign: bool):
     """
     pads = [
         PadGeometry(
-            id="X1.1", component="X1", pin_number="1", net="OSC-IN", layer_id=1,
+            id="X1.1", component="X1", pin_number="1", net="OSC-IN", footprint_layer_id=1,
             effective_layer_ids=[1], x=0.0, y=0.0, width=30.0, height=30.0,
             shape="rect",
         ),
         PadGeometry(
-            id="X1.2", component="X1", pin_number="2", net="OSC-OUT", layer_id=1,
+            id="X1.2", component="X1", pin_number="2", net="OSC-OUT", footprint_layer_id=1,
             effective_layer_ids=[1], x=100.0, y=0.0, width=30.0, height=30.0,
             shape="rect",
         ),

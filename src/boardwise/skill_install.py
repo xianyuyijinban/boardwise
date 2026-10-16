@@ -37,6 +37,7 @@ The module deals in paths and returns outcomes; printing is the CLI's business
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -75,6 +76,13 @@ SKILL_NAME = "SKILL.md"
 # the first. Seconds are still not uniqueness — the retry suffix below is.
 _STAMP_FORMAT = "%Y%m%d-%H%M%S"
 
+#: How many ``<name>.bak-*`` files an install keeps beside the file it installs
+#: (189B ⑧). The backups are the only record of a hand-edited SKILL.md, so they
+#: are never deleted — but an installation that is refreshed weekly accumulates
+#: one per refresh forever, and the fourth-oldest is worth less than the noise it
+#: makes in the skill directory. Older ones go to the **recycle bin**, not away.
+KEPT_BACKUPS = 3
+
 
 class SkillInstallError(RuntimeError):
     """A filesystem step failed; the message names the path and the OS reason."""
@@ -96,6 +104,15 @@ class InstallOutcome:
     #: Per-file results for the routing layer's deep-water docs (124):
     #: ``(installed path, installed|updated|current)`` in the order given.
     references: tuple[tuple[Path, str], ...] = ()
+    #: 189B ⑧: how many ``*.bak-*`` files are left beside the **installed** file
+    #: (the window the CLI prints), and what was sent to the recycle bin — that
+    #: path list covers the routing documents' own backup windows too.
+    backupsKept: int = 0   # noqa: N815 — the report key's spelling
+    recycled: tuple[Path, ...] = ()
+    #: Set when old backups were found and **could not** be recycled (an OS with
+    #: no recycle bin, a filesystem error): the honest outcome, said out loud, and
+    #: the files are left where they are rather than deleted outright.
+    pruneNote: str = ""    # noqa: N815
 
     @property
     def changed(self) -> bool:
@@ -255,6 +272,112 @@ def skill_statuses(source: Path) -> tuple[SkillStatus, ...]:
     return tuple(statuses)
 
 
+def recycle(path: Path) -> str:
+    """Send one file to the OS recycle bin; return ``""`` or why it did not (189B ⑧).
+
+    **Never a plain delete.** The project's standing rule (xianyuyijinban
+    2026-09-28) is that deletions go to the recycle bin, and the old backups this
+    batch prunes are exactly the kind of file the rule is about: the only record
+    of a hand-edited SKILL.md. Windows is the platform with a bin, and the API is
+    the shell's own (``SHFileOperationW`` with ``FOF_ALLOWUNDO``) rather than a
+    dependency — the project ships no third-party packages. Everywhere else there
+    is no bin, so this reports the reason and the caller **keeps** the file: an
+    unsupported platform must not turn a hygiene step into a data loss.
+    """
+    if os.name != "nt":
+        return f"this platform has no recycle bin ({os.name})"
+    try:
+        import ctypes
+    except ImportError:  # pragma: no cover — ctypes ships with CPython
+        return "ctypes is unavailable"
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", ctypes.c_void_p),
+            ("wFunc", ctypes.c_uint),
+            # ``pFrom``/``pTo`` are pointers to **double-NUL-terminated** string
+            # lists. Declared as ``c_void_p`` and fed a cast buffer rather than as
+            # ``c_wchar_p``: a ``create_unicode_buffer`` is not assignable to the
+            # latter, and the buffer must outlive the call (it is a local here).
+            ("pFrom", ctypes.c_void_p),
+            ("pTo", ctypes.c_void_p),
+            ("fFlags", ctypes.c_uint),
+            ("fAnyOperationsAborted", ctypes.c_bool),
+            ("hNameMappings", ctypes.c_void_p),
+            ("lpszProgressTitle", ctypes.c_wchar_p),
+        ]
+
+    FO_DELETE = 3
+    # FOF_ALLOWUNDO is the whole point (that flag is what makes it a recycle
+    # rather than a delete); the other three are the silence the CLI's own output
+    # provides, so the shell does not pop a progress or confirmation dialog.
+    flags = 0x40 | 0x10 | 0x4 | 0x400
+    try:
+        buffer = ctypes.create_unicode_buffer(str(path) + "\0\0")
+        operation = SHFILEOPSTRUCTW(
+            None, FO_DELETE, ctypes.cast(buffer, ctypes.c_void_p), None,
+            flags, False, None, None,
+        )
+        result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
+        if operation.fAnyOperationsAborted:
+            return "the shell aborted the operation"
+    except (AttributeError, OSError, ValueError, TypeError) as exc:  # pragma: no cover
+        return f"the shell refused the request ({type(exc).__name__}: {exc})"
+    if result != 0:
+        return f"the shell reported error {result}"
+    return ""
+def prune_backups(
+    directory: Path,
+    stem: str,
+    *,
+    keep: int = KEPT_BACKUPS,
+    recycler=recycle,
+) -> tuple[int, tuple[Path, ...], str]:
+    """Keep the newest ``keep`` ``<stem>.bak-*`` files, recycle the rest (189B ⑧).
+
+    ``(kept count, recycled paths, note)``. The order is the backup **names**'
+    order — ``<stem>.bak-<YYYYMMDD-HHMMSS>[-N]`` sorts oldest-first
+    lexicographically, which is the same clock :func:`_free_backup_path` wrote, so
+    this needs no mtimes (a copy or a checkout can move those).
+
+    ``note`` is non-empty only when something was older than the window and the
+    recycler refused: those files stay, and the CLI says so. A directory that has
+    a hand-written ``<stem>.bak-keepme`` in it is left alone — anything whose name
+    is not a stamp this module wrote is not this module's to move.
+    """
+    if not directory.is_dir():
+        return 0, (), ""
+    candidates = sorted(
+        path for path in directory.glob(f"{stem}.bak-*") if _is_stamped_backup(path, stem)
+    )
+    if len(candidates) <= keep:
+        return len(candidates), (), ""
+    stale = candidates[:-keep] if keep else candidates
+    recycled: list[Path] = []
+    for path in stale:
+        reason = recycler(path)
+        if reason:
+            return len(candidates) - len(recycled), tuple(recycled), (
+                f"{len(stale) - len(recycled)} 份更老的备份留在了原地："
+                f"{reason}（**没有直删**）"
+            )
+        recycled.append(path)
+    return keep, tuple(recycled), ""
+
+
+_BACKUP_NAME = re.compile(r"^.+\.bak-\d{8}-\d{6}(?:-\d+)?$")
+
+
+def _is_stamped_backup(path: Path, stem: str) -> bool:
+    """Is ``path`` a ``<stem>.bak-<YYYYMMDD>-<HHMMSS>[-N]`` this module wrote?
+
+    Anything else that happens to sit in the directory — a ``.bak-keepme`` a human
+    made, a differently named file — is not this module's to move, so it is not
+    counted and never recycled.
+    """
+    return path.name.startswith(f"{stem}.bak-") and bool(_BACKUP_NAME.match(path.name))
+
+
 def _free_backup_path(destination: Path, now: str | None) -> Path:
     """A backup path for ``destination`` that no backup already occupies.
 
@@ -362,12 +485,32 @@ def install(
     except OSError as exc:
         raise SkillInstallError(f"cannot write {destination}: {exc}") from exc
 
+    # 189B ⑧: the new copy is down and the old one is a backup — now the window
+    # applies. Per **directory and stem**, so the routing documents' backups
+    # (`references/<name>.bak-*`) get the same policy as `SKILL.md.bak-*`: three
+    # each, older ones to the recycle bin. The counts reported are the installed
+    # file's own window (that is the one the feedback asked to be printed); the
+    # recycled paths are every set's.
+    kept, _recycled_here, note = prune_backups(destination.parent, destination.name)
+    recycled: list[Path] = list(_recycled_here)
+    notes: list[str] = [f"{destination.name}: {note}"] if note else []
+    for target, action in ref_outcomes:
+        if action == "current":
+            continue
+        _kept, recycled_here, note = prune_backups(target.parent, target.name)
+        recycled.extend(recycled_here)
+        if note:
+            notes.append(f"{target.name}: {note}")
+
     return InstallOutcome(
         "updated" if previous is not None else "installed",
         destination,
         backup=backup,
         previous_bytes=len(previous) if previous is not None else None,
         references=tuple(ref_outcomes),
+        backupsKept=kept,
+        recycled=tuple(recycled),
+        pruneNote="；".join(notes),
     )
 
 

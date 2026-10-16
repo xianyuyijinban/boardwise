@@ -1199,7 +1199,7 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
                 component_id=uid,
                 pin_number=str(pad[1]) if len(pad) > 1 else None,
                 net=_net_name(pad),
-                layer_id=MULTI_LAYER_ID if "*.Cu" in layer_names or kind == "thru_hole" else (copper[0] if copper else None),
+                footprint_layer_id=MULTI_LAYER_ID if "*.Cu" in layer_names or kind == "thru_hole" else (copper[0] if copper else None),
                 effective_layer_ids=copper,
                 x=point.x, y=point.y,
                 local_x=lx * MM_TO_MIL, local_y=-ly * MM_TO_MIL,

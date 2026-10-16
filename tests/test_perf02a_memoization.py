@@ -204,7 +204,7 @@ def _board(*, with_stackup: bool = True) -> BoardGeometry:
     return BoardGeometry(
         layers=layers,
         stackup=stackup,
-        pads=[PadGeometry(id="p1", net="A", layer_id=1)],
+        pads=[PadGeometry(id="p1", net="A", footprint_layer_id=1)],
         tracks=[
             TrackSegment(
                 id="t1", net="A", layer_id=15, start=Point(0, 0), end=Point(10, 0), width=5
@@ -227,7 +227,7 @@ def test_read_stackup_is_read_once_and_says_the_same_thing_as_a_fresh_board():
 def test_a_board_that_grew_a_pad_is_read_again():
     board = _board()
     assert read_stackup(board).used_copper_layer_ids == [1, 15]
-    board.pads.append(PadGeometry(id="p2", net="B", layer_id=2))
+    board.pads.append(PadGeometry(id="p2", net="B", footprint_layer_id=2))
     assert read_stackup(board).used_copper_layer_ids == [1, 2, 15]
 
 

@@ -2473,6 +2473,18 @@ def _load_model(
         # both read the same cached PCB context.
         return build_design_model(source), build_board_geometry(source)
     supported = ", ".join(sorted(SUPPORTED_SUFFIXES))
+    if suffix == ".eprj2":
+        # 189B ⑤: the plain refusal sent readers hunting for a "supported type"
+        # that does not exist. `.eprj2` is the editor's own *project container*
+        # (a SQLite file whose content is encrypted — the structure is readable,
+        # the design is not), and the export the tool reads is one menu item away.
+        raise ValueError(
+            "unsupported input type .eprj2 —— 本工具不读 `.eprj2`（立创 EDA 工程容器，"
+            "里面的设计内容是加密的，读得出结构、读不出设计）；导出成 `.epro2` 就行："
+            "在编辑器里 文件 → 导出 → 工程备份，另存为 `.epro2`（**取消勾选加密**），"
+            "或到 `<工程名>_backup\\` 目录里找已有的 `.epro2` 快照"
+            f"（本构建支持的类型：{supported}）"
+        )
     raise ValueError(f"unsupported input type {suffix or '(none)'}; expected {supported}")
 
 
@@ -3570,10 +3582,30 @@ def _write_checkup_report(out_dir: Path, report: dict) -> Path:
     from three independent recomputations. Nothing else in the report reads
     `conclusion` — it is a projection written for whoever needs a single place to
     ask, not a new gate.
+
+    **Deriving a section must not cost the report (189B ④).** `report.json` is the
+    one artifact this stage exists to produce, and both derivations below read
+    structures the rule walk assembled — the failure ④ measured was a section
+    builder indexing a shape the producer does not guarantee. A derivation that
+    raises now leaves its own key out (no faked `conclusion`) and is named in the
+    additive `renderErrors` list, so the file still lands with every reading the
+    rules produced. The rule walk is not affected either way: a rule that raises is
+    `rules_errored` and already reports.
     """
-    section = board_report_section(report)
+    derived: list[str] = []
+    try:
+        section = board_report_section(report)
+    except Exception as exc:  # noqa: BLE001 — report.json still gets written
+        section = {}
+        derived.append(f"board_report 节派生失败：{type(exc).__name__}: {exc}")
     report["board_report"] = section
-    report["conclusion"] = conclusion_section(report, verdict=section.get("verdict"))
+    try:
+        report["conclusion"] = conclusion_section(report, verdict=section.get("verdict"))
+    except Exception as exc:  # noqa: BLE001 — same promise, one level up
+        report.pop("conclusion", None)
+        derived.append(f"conclusion 节派生失败：{type(exc).__name__}: {exc}")
+    if derived:
+        report["renderErrors"] = derived
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "report.json"
     path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -3661,6 +3693,24 @@ def _write_design_intent_view(out_dir: Path, markdown: str) -> Path:
     path = out_dir / INTENT_FILE_NAME
     path.write_text(markdown, encoding="utf-8")
     return path
+
+
+def _intent_contract_console_state(row: dict) -> str:
+    """``（读入）`` / ``（**读不了**：…）`` / ``（**不存在**：…）`` (189B ③).
+
+    ``intent_section``'s `contract` row, said in one token on the console line.
+    A contract that is on disk and fails this build's schema check is **not** a
+    missing one: 「不存在」 sent the reader to check the path and the project uuid
+    while the real message (the parse error) was already in hand. Three states,
+    in that one place, so the console line and `report.md`'s first bullet cannot
+    disagree about which of them happened — `present` alone cannot tell the two
+    failures apart, which is why the section carries ``readError`` and ``state``.
+    """
+    if row.get("readError"):
+        return f"（**读不了**：{row['readError']}；本次按全 TODO 报，文件一个字没动）"
+    if row.get("present"):
+        return "（读入）"
+    return "（**不存在**：本次按全 TODO 报）"
 
 
 def _load_intent_contract(
@@ -4658,10 +4708,24 @@ def _write_board_report(out_dir: Path, report: dict) -> Path:
     would say something the board no longer does. Rendered through the same
     :func:`boardwise.engines.checkup.render_board_report` the embedded section uses,
     so the two cannot disagree.
+
+    189B ④: this renderer is another module's over a dict this one only partly owns,
+    so a failure here writes the reason into the file instead of raising out of the
+    run — `report.json` and `report.md` are already down by now, and the remaining
+    files (`review-summary.md`, the architecture pair) are still to be written.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / BOARD_REPORT_FILE
-    path.write_text(render_board_report(report), encoding="utf-8")
+    try:
+        text = render_board_report(report)
+    except Exception as exc:  # noqa: BLE001 — the other files still get written
+        text = (
+            "# boardwise 整板报告\n\n"
+            f"> **渲染失败：{type(exc).__name__}: {exc}** —— 本节渲染不了；"
+            "`report.json` 里的读数（含 `board_report` 节）是完整的，请按 JSON 读，"
+            "`report.md` 的其余各节照常\n"
+        )
+    path.write_text(text, encoding="utf-8")
     return path
 
 
@@ -5343,7 +5407,57 @@ def _run_pcb_runner(
             f"PCB 审查未完成（{type(exc).__name__}: {exc}）：report.json 无 pcb_review 键"
         )
         return [], None, pcb_had_documents
+    _note_cross_view_lonely(notes, pcb_review)
     return pcb_findings, pcb_review, pcb_had_documents
+
+
+def _note_cross_view_lonely(notes: list[str], pcb_review: dict | None) -> None:
+    """Put 189A2's cross-view difference on the report's note line.
+
+    The machine reading lives in ``pcb_review.boards[].crossView``; a person reads
+    the ``> …`` line under the report's header, and a difference between the two
+    views of one archive is exactly the kind of thing that must not wait for
+    someone to cross-check by hand (the 189A2 feedback). Rows are named, not
+    summed: 「12 个引脚对不上」 without the designators is a number nobody can act
+    on.
+
+    The wording states the difference and both readings, and picks no side: a pin
+    alone in the schematic is what a parser that mis-places a mirrored symbol's
+    pins produces (189A2's own defect), and it is also what a schematic edited
+    after the board was last synced produces (017) — the PCB document is the
+    board's own copy and goes stale the other way.
+    """
+    rows: list[tuple[str, dict]] = []
+    for board in (pcb_review or {}).get("boards") or []:
+        cross = board.get("crossView") or {}
+        if cross.get("checked") and cross.get("lonely"):
+            rows.append((str(board.get("title") or ""), cross))
+    if not rows:
+        return
+    parts = []
+    for title, cross in rows:
+        lonely = cross["lonely"]
+        named = "、".join(
+            "{}.{}".format(row.get("designator"), row.get("pin"))
+            for row in lonely[:6]
+        )
+        parts.append(
+            "{}：{} 个引脚（{}{}）".format(
+                title or "(无标题板)", len(lonely), named,
+                "…" if len(lonely) > 6 else "",
+            )
+        )
+    notes.append(
+        "原理图/PCB 两视图网表对不上（189A2 一致性检查，只查 ≥"
+        f"{int(rows[0][1].get('minPins') or 0)} 脚器件）："
+        + "；".join(parts)
+        + " —— 这些引脚在**原理图视图**里是单成员网（网上只有它自己），"
+          "而同一 epro2 的 PCB 视图（PAD_NET）说它们所在的网还有别的成员。"
+          "原理图解析漏接（如镜像器件引脚落位错——189A2 就是这个形状）与"
+          "PCB 档未同步（原理图改过但没重排板，017）都会造成它，"
+          "两侧都不是天然权威，逐条人工核"
+          "（逐条读数见 report.json 的 pcb_review.boards[].crossView.lonely）"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -6345,7 +6459,18 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # and stores the `board_report` section (the one place every report passes
     # through, so the two re-gate commands refresh it too); the same derivation is
     # asked for here only to print the closing line. It is then written standalone.
-    board_report = board_report_section(report, modules=modules)
+    # 189B ④: this second call is for a console line — a line must not cost the run.
+    # The report is already on disk by now, so the reason goes to stderr rather than
+    # into a `notes` list that has been serialized already.
+    try:
+        board_report = board_report_section(report, modules=modules)
+    except Exception as exc:  # noqa: BLE001 — the report is already written
+        board_report = {}
+        print(
+            f"  note: 整板报告节派生失败（{type(exc).__name__}: {exc}）"
+            "—— 本次不打印它的结论行；report.json 的其余读数照出",
+            file=sys.stderr,
+        )
     report_path = _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)
     review_summary_path = _write_review_summary(out_dir, report, chains)
@@ -6505,7 +6630,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         contract_row = intent_report["contract"]
         print(
             f"  intent: {contract_row['file']}"
-            + ("（读入）" if contract_row["present"] else "（**不存在**：本次按全 TODO 报）")
+            + _intent_contract_console_state(contract_row)
             + f" —— 槽位 {intent_totals['slots']} / 已填 {intent_totals['filled']}"
             f" / 缺 {intent_totals['missing']}（必填缺 {intent_totals['requiredMissing']}）"
             + f"；provenance {intent_report['provenance'] or '（无条目）'}"
@@ -23462,6 +23587,10 @@ def _print_agent_install_prompt() -> int:
         "SKILL.md.bak-<年月日-时分秒> 再覆盖 —— 那份文件可能是旧安装或手改版，"
         "别无声丢掉，也别覆盖已经存在的同名备份；内容相同就什么都不用做。"
     )
+    print(
+        "同目录的 *.bak-* 只留最近 3 份（`boardwise install-skill` 就是这个策略）："
+        "更老的移进你系统的回收站/废纸篓，**别直删**。"
+    )
     print("----- 复制到此结束 -----")
     print()
     print(
@@ -23570,6 +23699,17 @@ def _cmd_install_skill(args: argparse.Namespace) -> int:
                 "  references 同步: "
                 + ", ".join(path.name for path, _a in changed_refs)
             )
+        # 189B ⑧: how many backups the window left, and what left the directory.
+        if outcome.backupsKept or outcome.recycled or outcome.pruneNote:
+            line = (
+                f"  备份：本目录保留最近 {outcome.backupsKept} 份 `*.bak-*`"
+                f"（策略上限 {skill_install.KEPT_BACKUPS}）"
+            )
+            if outcome.recycled:
+                line += f"；更老的 {len(outcome.recycled)} 份已进回收站"
+            if outcome.pruneNote:
+                line += f"；{outcome.pruneNote}"
+            print(line)
     return 1 if failed else 0
 
 

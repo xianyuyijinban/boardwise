@@ -153,7 +153,7 @@ def _pad(component: str, pin: str, *, local: tuple[float, float], width: float =
     """A pad placed at ``local`` with no rotation (board == local when angle is 0)."""
     return PadGeometry(
         id=f"{component}.{pin}", component=component, component_id=f"c-{component}",
-        pin_number=pin, net="", layer_id=1, effective_layer_ids=[1],
+        pin_number=pin, net="", footprint_layer_id=1, effective_layer_ids=[1],
         x=local[0], y=local[1], local_x=local[0], local_y=local[1],
         width=width, height=height, shape=shape, angle=0.0,
     )
@@ -575,7 +575,7 @@ def _polar_board(
     part_pads = [
         PadGeometry(
             id=f"{ref}.{pin}", component=ref, component_id=f"c-{ref}", pin_number=pin,
-            net="", layer_id=1, effective_layer_ids=[1],
+            net="", footprint_layer_id=1, effective_layer_ids=[1],
             x=local[0], y=local[1], local_x=local[0], local_y=local[1],
             width=30.0, height=30.0, shape="RECT", angle=0.0,
         )
@@ -711,7 +711,7 @@ def test_the_same_footprint_placed_two_ways_is_warned_about():
                 pads.append(
                     PadGeometry(
                         id=f"{ref}.{pin}", component=ref, component_id=f"c-{ref}",
-                        pin_number=pin, net="", layer_id=1, effective_layer_ids=[1],
+                        pin_number=pin, net="", footprint_layer_id=1, effective_layer_ids=[1],
                         x=origin_x + local * math.cos(rad), y=local * math.sin(rad),
                         local_x=local, local_y=0.0, width=30.0, height=30.0,
                         shape="RECT", angle=angle,
@@ -827,7 +827,7 @@ def test_ink_on_a_silk_layer_never_checks_the_other_face_s_pads():
     """A top-silk designator cannot print on a bottom-face pad."""
     bottom_pad = PadGeometry(
         id="R1.1", component="R1", component_id="c-R1", pin_number="1", net="",
-        layer_id=1, effective_layer_ids=[2], x=0.0, y=0.0, local_x=0.0, local_y=0.0,
+        footprint_layer_id=1, effective_layer_ids=[2], x=0.0, y=0.0, local_x=0.0, local_y=0.0,
         width=40.0, height=40.0, shape="RECT", angle=0.0,
     )
     board = _silk_board(

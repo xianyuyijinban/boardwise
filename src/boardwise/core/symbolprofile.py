@@ -490,9 +490,9 @@ def pose_box(
     own corners: a box turned by 90 degrees is no longer the same rectangle, which
     is why every caller in this repo re-bounds rather than reusing the local
     numbers. The pose is
-    :func:`boardwise.core.geometry.transform_point`'s — mirror, then CCW rotation,
-    then the part's origin — so a body box and a pin tip can never disagree about
-    which way a part is drawn.
+    :func:`boardwise.core.geometry.transform_point`'s — CCW rotation, then the
+    mirror, then the part's origin (189A2 measured that order) — so a body box and
+    a pin tip can never disagree about which way a part is drawn.
 
     ``None`` (a profile that states no extent) comes back ``None``: "nobody
     measured this" is not "a zero-area box at the origin", and a caller that

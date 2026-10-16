@@ -1433,7 +1433,7 @@ def _board_with(
                 component=designator,
                 pin_number=pin,
                 net=net,
-                layer_id=components[designator][0],
+                footprint_layer_id=components[designator][0],
                 effective_layer_ids=[components[designator][0]],
                 # The caller supplies (x, y) as a *rank*, not a coordinate:
                 # pads are laid out on their own well-separated rows so that no

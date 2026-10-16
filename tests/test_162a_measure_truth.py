@@ -304,7 +304,7 @@ def test_g3_a_via_in_the_empty_corner_of_a_45_degree_pad_is_not_on_it():
     thermal-pad rule would call the pad via-stitched by copper that is not on it.
     """
     pad = PadGeometry(
-        "p1", component="U1", pin_number="1", net="GND", layer_id=1,
+        "p1", component="U1", pin_number="1", net="GND", footprint_layer_id=1,
         x=0, y=0, width=10, height=10, shape="RECT", angle=45.0,
     )
     board = _board(vias=[_via("v1", 7, 7)])
@@ -322,7 +322,7 @@ def test_g3_the_rotated_rectangle_is_the_boundary_that_counts():
     edge and is outside, and one at the centre is inside.
     """
     pad = PadGeometry(
-        "p1", component="U1", pin_number="1", net="GND", layer_id=1,
+        "p1", component="U1", pin_number="1", net="GND", footprint_layer_id=1,
         x=0, y=0, width=10, height=10, shape="RECT", angle=45.0,
     )
     board = _board(
@@ -344,7 +344,7 @@ def test_g3_an_unrotated_pad_still_reads_its_own_half_widths_inclusively():
     future rewrite of the containment test fails in this batch's file too.
     """
     pad = PadGeometry(
-        "p1", component="U1", pin_number="1", net="GND", layer_id=1,
+        "p1", component="U1", pin_number="1", net="GND", footprint_layer_id=1,
         x=0, y=0, width=100, height=60, shape="RECT", angle=0.0,
     )
     board = _board(vias=[_via("on", 10, 5), _via("edge", 50, 5), _via("outside", 80, 0)])

@@ -81,10 +81,39 @@ def transform_point(
 ) -> tuple[float, float]:
     """Symbol-local offset -> page coordinates, in **canvas** space.
 
-    Mirroring flips across the vertical axis (``x -> -x``), then **rotation is
-    counter-clockwise** in the y-up canvas frame. Both inputs are already canvas
-    space (task 010c: a parser negates the stored y once at its boundary, so
-    there is no second sign to apply here).
+    Two rigid moves compose: the **rotation is counter-clockwise** in the y-up
+    canvas frame, and the mirror flips the **posed** point across the canvas'
+    vertical axis (``x -> -x``) *after* that rotation. Both inputs are already
+    canvas space (task 010c: a parser negates the stored y once at its boundary,
+    so there is no second sign to apply here).
+
+    **The order of the two moves is load-bearing and was only measured in 189A2.**
+    ``M ∘ CCW(t)`` (mirror last, this function) and ``CCW(t) ∘ M`` (mirror first,
+    what this function used to compute) agree at 0° and 180° and differ at
+    90°/270°: ``[[-c, s], [s, c]]`` against ``[[-c, -s], [-s, c]]``. What settles
+    it is the schematic's own wire endpoints — a pin tip is where the wires say
+    it is, and the parser resolves pin-to-net by matching the two:
+
+    * on the field archive of 189A2 (editor 3.2.149; the file is read-only and
+      named in ``outputs/189a2/evidence.md``, which is not tracked — no real
+      project name belongs in this repository) the twelve
+      ``(rotation 90, isMirror true)`` placements land **14/16** of their pins
+      exactly on a wire endpoint under mirror-last and **4/16** under
+      mirror-first. The four are coincidences, not evidence: a mirrored 90° pose
+      maps the symbol's own ``x`` axis onto the page's ``y``, so a seven-pin
+      connector's mirrored pins happen to land on the two outermost wire ends;
+    * the PCB document's ``PAD_NET`` rows (the authoritative side) say the same:
+      mirror-last reproduces the board's own nets pin for pin (``P7.1..5`` =
+      ``+12V/LED3/LED2/LED1/GND``; ``DB1`` pins 2/4 = ``HV/GND``), while
+      mirror-first calls all four obsolete parts one-pin islands;
+    * and it is what the editor API's measured transform implies once the two
+      angle conventions are related: 054 measured the API as ``M ∘ CW(R)`` and
+      the file's angle as ``-R``, and ``M ∘ CW(-rotation) == M ∘ CCW(rotation)``.
+
+    Why no fixture ever caught it: every mirrored placement in
+    ``tests/fixtures`` sits at 0° or 180°, where the two orders are the same
+    matrix — the golden's calibration, which is what pinned the rotation
+    *sign*, is therefore untouched by this distinction.
 
     **The rotation sign has now been argued four times; it is CCW. The
     distinction that keeps getting lost is between the *file's* angle and the
@@ -119,11 +148,14 @@ def transform_point(
     reports every two-pin passive swapping pin 1 and pin 2
     (``+5V: golden='C4.2' candidate='C4.1'``); under CCW it is clean.
 
-    Note also that ``CCW(t) ∘ M == M ∘ CW(t)``. Every ``mirror=True`` case is
-    blind to this question, and the appendix B table's "mirror ✓ / CCW ✗" row
-    compared ``M ∘ CCW`` against ``CCW ∘ M`` — the one comparison that identity
-    forbids. Only ``mirror=False`` distinguishes the two, and only the golden
-    can adjudicate it.
+    Note also that ``CCW(t) ∘ M == M ∘ CW(t)``: "mirror, then turn CCW against
+    the file" and "turn CW, then mirror" are **one** transform, which is why the
+    rotation-sign argument above is blind to the mirror's position. The appendix
+    B table's "mirror ✓ / CCW ✗" row compared ``M ∘ CCW`` against ``CCW ∘ M``
+    and read the two as the same thing; they are not, and 189A2 measured which
+    one the file means (the note at the top). Only ``mirror=False`` can
+    adjudicate the *sign*; only ``mirror=True`` at 90°/270° can adjudicate the
+    *order*, and no fixture carries that pose.
 
     Lives in ``core`` (moved here from ``parsers.schematic`` in 006c) because
     both the parsers and the engines need it and ``core`` can depend on
@@ -131,15 +163,19 @@ def transform_point(
     **private** name from ``parsers``, inverting the layering. Pure math, no
     parser state.
     """
-    if mirror:
-        x = -x
     rad = math.radians(rotation)
     cos_v, sin_v = math.cos(rad), math.sin(rad)
+    posed_x = x * cos_v - y * sin_v
+    # The mirror comes **after** the rotation (189A2): it flips the posed point
+    # across the canvas' vertical axis, not the symbol-local one. See the
+    # docstring — this line's position is the measured fact, not a preference.
+    if mirror:
+        posed_x = -posed_x
     # A plain tuple, **not** `Point`: this result is used as a dict key against
     # tuples elsewhere, and the dataclass would compare unequal to them. The
     # annotation says tuple so the next reader does not "tidy" it into Point.
     return (
-        round(x * cos_v - y * sin_v + ox, COORD_PRECISION),
+        round(posed_x + ox, COORD_PRECISION),
         round(x * sin_v + y * cos_v + oy, COORD_PRECISION),
     )
 
@@ -359,9 +395,9 @@ class PadGeometry:
     them here. ``local_x`` / ``local_y`` keep the footprint-local values so a
     consumer can re-derive them.
 
-    **``layer_id`` is what the footprint says; ``effective_layer_ids`` is where
-    the copper physically is** (task 127b). They are not the same fact, and
-    conflating them is what made a bottom-side part's SMD pads read as top
+    **``footprint_layer_id`` is what the footprint says; ``effective_layer_ids``
+    is where the copper physically is** (task 127b). They are not the same fact,
+    and conflating them is what made a bottom-side part's SMD pads read as top
     copper. Measured on the 毕设FOC fixture: PCB1 places U4 / U6 / R17 / C14 on
     the **bottom** (``COMPONENT.layerId == 2``), yet all 28 of their SMD pads
     carry ``layerId == 1`` — the footprint's own hardcoded layer, which is 1 for
@@ -370,21 +406,29 @@ class PadGeometry:
     pairs at 0.0 mil "touching" on a board whose host DRC is clean: the copper
     they were comparing lives on opposite faces of a 1.6 mm board.
 
+    **189A1: the field was called ``layer_id`` and that name is now refused.**
+    127b fixed the *readers*; the *name* stayed, and it read like 「the layer the
+    pad is on」 — which is exactly the misreading the split exists to prevent, and
+    it failed silently (a wrong number, not an error). The stub is renamed to
+    :attr:`footprint_layer_id` and :meth:`__getattr__` raises on the old name with
+    the two replacements spelled out; ``grep`` finds no reader left in ``src/``
+    (``tests/test_189a_layer_id.py`` is the grep-level lock).
+
     ``effective_layer_ids`` is the reading the rules and the clearance engine
     use — **a list of copper layer ids, or ``None`` when nobody has read the
     pad** (R2-2 fixA):
 
     * a **through-hole** pad (one with a hole of any shape — :attr:`has_hole`),
-      or any pad whose ``layer_id`` is :data:`MULTI_LAYER_ID`, occupies **every
-      copper layer** — its barrel is continuous and its lands exist on both
-      faces;
+      or any pad whose ``footprint_layer_id`` is :data:`MULTI_LAYER_ID`, occupies
+      **every copper layer** — its barrel is continuous and its lands exist on
+      both faces;
     * a **non-plated** hole (:attr:`plated` ``False`` — an NPTH) is **no
       barrel**: the pad occupies only the faces its land is on, and a hole whose
       land is no larger than the hole itself (a bare mechanical hole) occupies
       **no copper layer at all** — the empty list is then the physical answer;
     * an **SMD** pad occupies the face its **component** is on
       (``ComponentPlacement.layer_id``), falling back to the footprint's
-      ``layer_id`` when the placement carries none.
+      :attr:`footprint_layer_id` when the placement carries none.
 
     **``None`` and ``[]`` are two different answers and are never conflated.**
     The parser writes ``None`` when it cannot decide where the pad's copper is
@@ -434,7 +478,13 @@ class PadGeometry:
     component_id: str | None = None
     pin_number: str | None = None
     net: str | None = None
-    layer_id: int | None = None
+    #: 189A1: the footprint document's own layer id — the library's ``layerId``,
+    #: verbatim, and **not where the flipped part's copper is** (127b). Named
+    #: ``layer_id`` until 189A1; that name is refused now (see
+    #: :meth:`__getattr__`), because it read like a statement about the pad's
+    #: physical side. Read :attr:`effective_layer_ids` — or
+    #: :meth:`effective_layers` — for that.
+    footprint_layer_id: int | None = None
     #: R2-2 fixA: the copper layers the parser read this pad onto. **``None``
     #: means nobody has read it** (a hand-built pad, a pad the parser could not
     #: place) and consumers fall back to :func:`boardwise.core.measure._element_layers`'s
@@ -467,6 +517,36 @@ class PadGeometry:
     #: this field, so ``plated is False`` is no longer a stored-but-unread fact
     #: (R2-2 fixA).
     plated: bool | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        """Refuse the retired name ``layer_id`` with both replacements named.
+
+        **Why a trap and not just a rename (189A1).** 127b taught every reader
+        to ask for the effective layers, but left a field whose *name* says
+        「the layer this pad is on」 while holding the footprint's hardcoded
+        value: a flipped part's pad reads ``1`` and the copper is on ``2``. Used
+        by mistake it produced a **number**, not an error — on the real board
+        that was a false clearance finding handed to an engineer.
+
+        The two facts now have two names, and the old one is a dead end:
+
+        * :attr:`footprint_layer_id` — the footprint document's own value,
+          verbatim (debug dumps, footprint consistency, the pre-127b fallback);
+        * :attr:`effective_layer_ids` — where the copper physically is (spacing,
+          geometry, every rule judgement; ``None`` = nobody read the pad).
+
+        A dataclass instance has no ``layer_id`` in its ``__dict__`` any more, so
+        this runs on exactly the lookups that used to succeed. Everything else
+        falls through to the ordinary ``AttributeError``, which keeps
+        ``getattr(pad, "x", default)``, ``hasattr``, ``copy`` and ``pickle``
+        behaving as they should.
+        """
+        if name == "layer_id":
+            raise AttributeError(
+                "layer_id 已移除——它是封装写死的层号，器件翻面不重写（127b）；"
+                "要封装原值用 footprint_layer_id，要铜实际所在层用 effective_layer_ids"
+            )
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
     @property
     def center(self) -> Point:

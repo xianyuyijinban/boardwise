@@ -98,6 +98,7 @@ from ...core.parts import (
     load_parts,
     resolve_component_facts,
 )
+from ...core.pinrole import pin_role
 from ...core.power_domains import infer_net_domains
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on
@@ -661,7 +662,10 @@ class DecapDistance(PcbRule):
             )
             for net in nets:
                 findings.extend(
-                    self._one_net(ic_model, board, designator, net, why)
+                    self._one_net(
+                        ic_model, board, designator, net, why,
+                        side=_rail_side(component, net),
+                    )
                 )
         return findings
 
@@ -672,6 +676,7 @@ class DecapDistance(PcbRule):
         designator: str,
         net: str,
         why_ic: str = "",
+        side: str = "",
     ) -> list[Finding]:
         """The one row (or the one silence) for ``designator``'s supply ``net``.
 
@@ -689,8 +694,24 @@ class DecapDistance(PcbRule):
         ``<= HF_FARADS`` is measured; a bulk one is named and excluded, and an
         IC whose whole candidate pool is bulk gets the INFO row below saying so
         rather than a WARN about a distance it should never have been asked for.
+
+        **Which rail is measured, and on which side of this part (189B ⑨).**
+        Every row names the net it measured, and the reading is *on that net*
+        (the capacitor's pad on ``net`` to this part's pad on ``net``) — so the
+        rail the row speaks about **is** the rail the capacitor serves; nothing
+        here measures one rail and reports another. What 岳's feedback showed
+        missing was the other half of the attribution: on a part that *makes* a
+        rail, the same net can be this part's **input** (fed by whatever produces
+        it — the ``+5V`` that is U5's VIN and U11's VOUT, 131b) or its **output**,
+        and 「为什么要贴着放」 is not the same question on the two sides. The row
+        therefore carries the side, read from the pin names through
+        :func:`boardwise.core.pinrole.pin_role` — the same reader
+        :mod:`boardwise.rules.pcb.regulator` uses, so the two rules cannot
+        disagree about which pin is a VIN. The severity is unchanged: this is a
+        disclosure (say which rail, and on which side), not a new threshold.
         """
         candidates = list(cap_candidates_on(ic_model, net))
+        attribution = _rail_attribution(designator, net, side)
         roles = {
             candidate.designator: capacitor_role(candidate, ic_model)
             for candidate in candidates
@@ -730,11 +751,12 @@ class DecapDistance(PcbRule):
                             f"is no high-frequency decoupling candidate here to "
                             f"measure. Whether one is required at all is the "
                             f"datasheet's required_caps question "
-                            f"(decap-required-caps)"
+                            f"(decap-required-caps)；{attribution.short}"
                         ),
                         evidence=[
                             f"{designator} @ {net} (no high-frequency candidate)",
                             f"{designator} judged an IC because {why_ic}",
+                            attribution.evidence,
                             *role_evidence,
                         ],
                         target=FindingTarget(component_ref=designator, net_refs=[net]),
@@ -751,11 +773,12 @@ class DecapDistance(PcbRule):
                         f"ground was found on the net — whether one is required "
                         f"is the datasheet's required_caps question "
                         f"(decap-required-caps); this row says only that the "
-                        f"layout has none to place"
+                        f"layout has none to place；{attribution.short}"
                     ),
                     evidence=[
                         f"{designator} @ {net} (no high-frequency capacitor)",
                         f"{designator} judged an IC because {why_ic}",
+                        attribution.evidence,
                         *role_evidence,
                     ],
                     target=FindingTarget(component_ref=designator, net_refs=[net]),
@@ -799,7 +822,7 @@ class DecapDistance(PcbRule):
         if not measured:
             return []
         nearest, gap = min(measured, key=lambda pair: pair[1])
-        evidence = [f"{designator} @ {net}", f"{nearest} @ {net}"]
+        evidence = [f"{designator} @ {net}", f"{nearest} @ {net}", attribution.evidence]
         component_level = component_distance(board, designator, nearest)
         if component_level is not None:
             evidence.append(
@@ -833,7 +856,7 @@ class DecapDistance(PcbRule):
                     f"(pad on {net!r} to pad on {net!r}), over the "
                     f"{DECAP_DISTANCE_MIL:.0f} mil house rule — the loop it "
                     f"decouples is {_mil(gap) / DECAP_DISTANCE_MIL:.1f}x longer "
-                    f"than the rule allows"
+                    f"than the rule allows；{attribution.short}"
                 ),
                 evidence=evidence
                 + [
@@ -843,6 +866,79 @@ class DecapDistance(PcbRule):
                 target=target,
             )
         ]
+
+
+@dataclass(frozen=True)
+class RailAttribution:
+    """Which rail a row measured, and which side of the part that rail is on (189B ⑨).
+
+    ``short`` is the clause a finding's message carries, ``evidence`` the
+    sentence its evidence carries. One object rather than two strings so a caller
+    cannot wire one without the other (the two are one reading).
+    """
+
+    short: str = ""
+    evidence: str = ""
+
+
+#: Labels for the two supply-side roles a pin name can declare.
+_SIDE_ROLE_LABELS = {"IN": "VIN", "OUT": "VOUT"}
+
+#: What a rail the pin names said nothing about is called. Not a guess: ``RON``
+#: and ``PGOOD`` are supply-ish pins with no role, and 131a's ``pin_role``
+#: answering ``None`` means 「this name declares no role」 rather than 「no pin」.
+_SIDE_UNDECLARED = "脚名未声明侧别"
+
+
+def _rail_side(component: object, net: str) -> str:
+    """The side of ``component`` the supply ``net`` sits on, from its pin names.
+
+    One of ``VIN 侧`` / ``VOUT 侧`` / ``VIN+VOUT 两侧`` / :data:`_SIDE_UNDECLARED`.
+    The reader is :func:`boardwise.core.pinrole.pin_role`, the same one
+    :mod:`boardwise.rules.pcb.regulator` reads a regulator's two sides with.
+    """
+    roles: set[str] = set()
+    for pin in getattr(component, "pins", ()) or ():
+        if str(getattr(pin, "net", "") or "") != net:
+            continue
+        role = pin_role(str(getattr(pin, "name", "") or ""))
+        if role in _SIDE_ROLE_LABELS:
+            roles.add(_SIDE_ROLE_LABELS[role])
+    if not roles:
+        return _SIDE_UNDECLARED
+    if len(roles) > 1:
+        return "VIN+VOUT 两侧"
+    return f"{next(iter(roles))} 侧"
+
+
+def _rail_attribution(designator: str, net: str, side: str) -> RailAttribution:
+    """The 「按哪条轨量的 / 这条轨在这颗器件上是哪一侧」 disclosure (189B ⑨).
+
+    Two statements, and the first is the one that answers 岳's feedback: the
+    capacitor this row measured is **on the same net as the pin**, so the rail the
+    row speaks about is the rail the capacitor serves — the row is not measuring
+    one rail and reporting another. The second is the side, because 「贴着放」 is
+    a different requirement on a part's input rail (fed by whatever produces it —
+    that rail's capacitors may belong to the upstream stage) than on its own
+    output rail (where the part *is* the source). Both are disclosures: no
+    severity moves, no threshold is invented.
+    """
+    return RailAttribution(
+        short=(
+            f"（本条量的是 {net!r} 这条轨，在 {designator} 上是 **{side}** —— "
+            "归因按「电容服务的那条轨」计）"
+        ),
+        evidence=(
+            f"rail attribution: this row measured {net!r} — the net both "
+            f"{designator} and the capacitor sit on, which is the rail the "
+            f"capacitor serves; on {designator} that net's pins read {side} "
+            "(core.pinrole.pin_role over the real pin names, the same reader "
+            "pcb-regulator-cap-distance takes its VIN/VOUT split from). A rail "
+            "that is one part's input may be another part's output — read this "
+            "row against the side it measured, not against the part's function "
+            "in general"
+        ),
+    )
 
 
 def _ic_pairs(model: object, library=None) -> list[tuple[str, object, object, str]]:

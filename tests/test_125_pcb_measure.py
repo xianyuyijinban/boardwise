@@ -93,7 +93,7 @@ def _pad(
         component=component,
         pin_number=pin,
         net=net,
-        layer_id=layer_id,
+        footprint_layer_id=layer_id,
         x=x,
         y=y,
         width=width,

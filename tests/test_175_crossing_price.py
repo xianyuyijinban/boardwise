@@ -177,14 +177,23 @@ def test_the_landing_pages_component_run_no_longer_cuts_the_trunk_twice():
 
     ``old`` (173, and this tree before 175):
     ``[(760,645),(755,645),(755,605),(795,605)]`` — cutting `SEC_12V`'s trunk at
-    (755,615) and (765,605). ``new``: ``[(760,645),(760,620),(795,620),
-    (795,605)]``, one crossing at (765,620): the remaining one is what the search
-    could not buy its way out of inside 120 steps, which is the finite price
-    doing its job rather than a wall doing nothing.
+    (755,615) and (765,605). ``new`` (175): ``[(760,645),(760,620),(795,620),
+    (795,605)]``, one crossing at (765,620) — the remaining one is what the search
+    could not buy its way out of inside 120 steps, which is the finite price doing
+    its job rather than a wall doing nothing.
+
+    **189A2 re-measured it**: ``[(760,645),(760,605),(795,605)]``, a two-bend L
+    with **zero** crossings. The scene is compiled, not parsed, but the compiler
+    poses its parts with the same `core.geometry.transform_point` the parser reads
+    them with, and 189A2 corrected that function's mirror order — so the route the
+    search settles on moved, and it moved the good way (the sibling test's duty,
+    「at most one crossing」, is still green and is now satisfied with room to
+    spare). This assertion pins the drawn route, so it has to be re-pinned with
+    the measurement rather than left to describe a drawing nobody produces.
     """
     plan, _result = _landing_page()
     assert _routes(plan, "COMP") == [[
-        (760.0, 645.0), (760.0, 620.0), (795.0, 620.0), (795.0, 605.0),
+        (760.0, 645.0), (760.0, 605.0), (795.0, 605.0),
     ]]
 
 

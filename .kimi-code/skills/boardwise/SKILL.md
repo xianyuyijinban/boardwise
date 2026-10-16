@@ -33,10 +33,12 @@ boardwise doctor            # 10 项全绿（skip 不算红）= 装好了；退�
   等端口就绪再继续，输出写 `~/.boardwise/log/daemon-<日期>.log`；拉起失败会把日志尾部
   打在报错上面（唯一挂载点是 `cli.py` 的 `_open_cli`）。想在前台盯着配对公告才用
   `boardwise bridge start`；自己管 daemon 的部署用 `BOARDWISE_NO_AUTO_DAEMON=1` 关掉自动拉起。
-- 开发态用仓库解释器：`E:\boardwise\.venv\Scripts\python.exe -m boardwise.cli <命令>`。
+- 开发态（从源码 checkout 跑）用仓库自己的解释器：`<你的 checkout>/.venv/Scripts/python.exe -m boardwise.cli <命令>`
+  （**按你的 checkout 位置**，别照抄别人机器上的盘符路径）；装了 exe / pip 装好的直接 `boardwise <命令>`。
 - **把这份 skill 装到别的 agent 上**：`boardwise install-skill` 写进 Kimi Code / Claude Code 的
   用户级 skill 目录（`--harness {kimi,claude,all}`，默认全装；目标位置已有异版先备份成
-  `SKILL.md.bak-<年月日-时分秒>`，同一天装两次是两个备份文件、后者不覆盖前者）；别的 harness 跑
+  `SKILL.md.bak-<年月日-时分秒>`，同一天装两次是两个备份文件、后者不覆盖前者；
+  **同目录只留最近 3 份 `.bak-*`，更老的进回收站不直删，装完打印保留了几份**，`references/` 同一策略）；别的 harness 跑
   `boardwise install-skill --agent` —— 它**打印一段
   引导指令**，整段粘给你的 AI，放哪儿由它自己按自己的约定定（我们不维护 harness 路径表）。
 
@@ -250,8 +252,8 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 ## 7. 红线（开发/测试，改代码也照办）
 
 - **不动 git**：不 `commit` / `add` / `checkout` / `restore`。任何 git 变更逐次经xianyuyijinban点头。
-- **pytest 必带 `--basetemp=.tmp_pt_home`**：Windows 上否则汇总行被吞、假 exit 1。
-  命令：`.venv/Scripts/python.exe -m pytest tests/ -q --basetemp=.tmp_pt_home`。
+- **pytest 必带 `--basetemp=.tmp_pt_home`**：Windows 上否则汇总行被吞、假 exit 1。在**你的 checkout 根目录**跑：
+  `.venv/Scripts/python.exe -m pytest tests/ -q --basetemp=.tmp_pt_home`（`.venv` 是仓库自己的虚拟环境）。
 - **四线全绿才交卷**：pytest / `cd connector && npm test`（= build + `node --test`）/
   `npm run typecheck`（= `tsc --noEmit`；以 `connector/package.json` 实际脚本名为准）/
   `cd dsh-plugin && npm run typecheck && npm test && npm run build`（045 起；`npm run smoke`

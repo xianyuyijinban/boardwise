@@ -2198,8 +2198,9 @@ def build_pads(
 ) -> list[PadGeometry]:
     """Instantiate footprint pads at their placed, rotated positions.
 
-    ``layer_id`` on the result stays **the footprint's own value** (125's
-    contract, and 125's tests pin it); ``effective_layer_ids`` carries the
+    ``footprint_layer_id`` on the result stays **the footprint's own value**
+    (125's contract, and 125's tests pin it — the field was called ``layer_id``
+    until 189A1); ``effective_layer_ids`` carries the
     physical reading from :func:`pad_effective_layers`, which is the one every
     rule and the clearance engine uses — a list of layers, ``[]`` when the
     reading is 「no copper layer」 (a bare mechanical hole, R2-2 fixA), or
@@ -2224,7 +2225,7 @@ def build_pads(
                     component_id=comp.id,
                     pin_number=template.num or None,
                     net=net,
-                    layer_id=template.layer_id,
+                    footprint_layer_id=template.layer_id,
                     effective_layer_ids=pad_effective_layers(
                         template, comp, copper_layers
                     ),

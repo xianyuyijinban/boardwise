@@ -279,7 +279,7 @@ def read_stackup(board: BoardGeometry) -> StackupInfo:
       would compare a list with itself and never fire.
 
     What it does **not** catch is an element mutated in place without changing
-    any length (``pad.layer_id = 5``, ``layer.is_copper = False``). That is
+    any length (``pad.footprint_layer_id = 5``, ``layer.is_copper = False``). That is
     outside the contract this repository relies on and states: a parsed board is
     read-only once constructed (:mod:`boardwise.engines.layout`'s module
     docstring, ``tests/_golden.py``), and there is no such write in ``src/`` or
@@ -310,9 +310,15 @@ def read_stackup(board: BoardGeometry) -> StackupInfo:
     else:
         copper = board.copper_layers()
 
+    # 189A1 裁决：pad 这一项读**封装原值**（footprint_layer_id）。本函数量的是
+    # 「文档声明了哪些铜层」——:class:`StackupInfo` 自己的话是 "without any
+    # judgement attached"，一件元素按它在文件里写的层入账，不是按它的铜物理在
+    # 哪层。若改读 effective_layer_ids，通孔盘会把 15（毕设FOC 的 PLANE 内层）
+    # 带进 used 集，与 test_125_pcb_measure.py::test_foc_main_board_used_layers
+    # 的实读 [1, 2, 16] 冲突——那是岳 2026-10-07 的亲裁值，动它要另开裁决。
     used: set[int] = set()
     for layer_id in (
-        [p.layer_id for p in board.pads]
+        [p.footprint_layer_id for p in board.pads]
         + [t.layer_id for t in board.tracks]
         + [p.layer_id for p in board.pours]
     ):
@@ -450,18 +456,25 @@ def _comparable_layers(board: BoardGeometry, pad: PadGeometry) -> set[int]:
     all** (a synthetic fixture, a minimal hand-built ``BoardGeometry``): there
     :func:`_element_layers` can only answer 「every copper layer」 for a
     through-hole pad, and answers *nothing* for an SMD one, because the copper
-    set it draws from is empty. Two pads that both say ``layer_id == 1`` plainly
-    share a face, so the pad's own declared layer is admitted alongside. The
-    widening is narrow on purpose: it is consulted **only when the board names
-    no copper layer**, so on every real document (125a: PCB1 defines 34 copper
-    ``LAYER`` records) it never fires and the layer table is the authority.
+    set it draws from is empty. Two pads that both say
+    ``footprint_layer_id == 1`` plainly share a face, so the pad's own declared
+    layer is admitted alongside. The widening is narrow on purpose: it is
+    consulted **only when the board names no copper layer**, so on every real
+    document (125a: PCB1 defines 34 copper ``LAYER`` records) it never fires and
+    the layer table is the authority.
+
+    **189A1 裁决：这里读的是封装原值**，不是 ``effective_layer_ids`` —— 它是
+    127b 自己留下的**兜底**逻辑（``resolved`` 已在上一步消费过有效的层读法，
+    走到这里意味着读数为 ``[]`` 或无人读过），而这一支问的是「封装写的是哪层」
+    作为最后的同名面判据。换成 effective 会让这行退化成永远为空的重复检查，
+    并改变 ``[]`` 读数 + 无层表这种合成板上的行为。
     """
     resolved = pad.effective_layers()
     if resolved:
         return resolved
     layers = _element_layers(board, pad)
-    if not layers and pad.layer_id is not None and not _copper_layer_ids(board):
-        return {pad.layer_id}
+    if not layers and pad.footprint_layer_id is not None and not _copper_layer_ids(board):
+        return {pad.footprint_layer_id}
     return layers
 
 
@@ -752,8 +765,9 @@ def _element_layers(
       (task 127b): all copper layers for a through-hole / Multi-Layer pad, the
       **placement's own face** for an SMD pad, and **no layer at all** for a
       bare mechanical hole (R2-2 fixA — its NPTH record left it a land no larger
-      than its hole). The footprint's ``layer_id`` is *not* read when the parser
-      has spoken — it names the part as the library stores it, and on a part
+      than its hole). The footprint's own layer id (``footprint_layer_id``,
+      called ``layer_id`` until 189A1) is *not* read when the parser has
+      spoken — it names the part as the library stores it, and on a part
       flipped to the bottom face it still says ``1`` (measured: all 28 of
       PCB1's U4/U6/R17/C14 SMD pads say ``1`` while their placement says ``2``),
       which is what manufactured six top-x-bottom "touching" pairs on a board
@@ -767,10 +781,10 @@ def _element_layers(
       A pad the parser never resolved (a hand-built board, a synthetic fixture)
       **falls back to the pre-127b derivation**: all copper layers if it has a
       hole unless its own ``plated`` says otherwise, otherwise its own
-      ``layer_id``. That fallback is what keeps 125's own hand-built fixtures
-      saying what they said, and it is the conservative direction — it is the
-      reading 127b proved wrong only for a *flipped* pad, and a flipped pad is
-      one the parser resolved.
+      ``footprint_layer_id``. That fallback is what keeps 125's own hand-built
+      fixtures saying what they said, and it is the conservative direction — it
+      is the reading 127b proved wrong only for a *flipped* pad, and a flipped
+      pad is one the parser resolved.
     * **track / pour** — only its own ``layer_id``; the file states it and there
       is nothing to correct.
 
@@ -794,14 +808,15 @@ def _element_layers(
             # layer」 (a bare mechanical hole), not a signal to guess.
             return set(resolved)
         # Never resolved by the parser — the pre-127b derivation, kept so a
-        # hand-built pad keeps behaving the way 125's fixtures pin it.
-        layer_id = element.layer_id
-        if layer_id is None:
+        # hand-built pad keeps behaving the way 125's fixtures pin it. 189A1
+        # 裁决：读的是**封装原值**，这一支就是 127b 保留的旧读法本体。
+        footprint_layer_id = element.footprint_layer_id
+        if footprint_layer_id is None:
             return set()
         flag = plated if plated is not None else element.plated
         if element.hole_diameter is not None and flag is not False:
             return set(copper)
-        return {layer_id}
+        return {footprint_layer_id}
     layer_id = getattr(element, "layer_id", None)
     if layer_id is None:
         return set()
@@ -814,7 +829,8 @@ def _describe(kind: str, ident: str, layer_id: int | None) -> str:
     """One element's label for a clearance result.
 
     The raw ``layer_id`` is what the file says. For a **pad** that is the
-    footprint's own value and is wrong on a flipped part (127a measured 28 of
+    footprint's own value (``footprint_layer_id`` since 189A1) and is wrong on a
+    flipped part (127a measured 28 of
     PCB1's pads claiming layer 1 while sitting on layer 2), so a label built from
     it tells a reader the copper is on the wrong face — which is the misattribution
     127b exists to remove. The caller therefore passes the *effective* layers and
@@ -977,10 +993,11 @@ def _net_shape_records(
                     pad_corners(pad),
                     0.0,  # pad is a bare rectangle: the corners are the outline
                     layers,
-                    # 127b: the **effective** layers, not ``pad.layer_id``. A
-                    # label reading "layer 1" for a pad whose copper is on
-                    # layer 2 is the misattribution this fix removed, and the
-                    # message is where a reader would have been misled.
+                    # 127b: the **effective** layers, not
+                    # ``pad.footprint_layer_id``. A label reading "layer 1" for
+                    # a pad whose copper is on layer 2 is the misattribution
+                    # this fix removed, and the message is where a reader would
+                    # have been misled.
                     _describe("pad", _pad_key(pad), layers),
                     is_pour=False,
                 ),

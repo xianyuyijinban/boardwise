@@ -1076,7 +1076,8 @@ class FocDecapProximity(PcbRule):
                 "about which vias carry the bypass current — a row that needs "
                 "that reading must re-derive it from the net's own copper",
                 "layer reading is effective_layer_ids (127b): the footprint's "
-                "layer_id is not where the copper physically is, and 毕设FOC "
+                "own layer id (``footprint_layer_id``, the ``layer_id`` 189A1 "
+                "removed) is not where the copper physically is, and 毕设FOC "
                 "1.0.0's PCB1 places four parts on the bottom whose pads all "
                 "say layer 1",
             ],

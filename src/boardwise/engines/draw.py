@@ -966,25 +966,31 @@ def editor_pose(rotation: float, mirror: bool) -> tuple[float, bool]:
     =========== ======= ============== ==============
 
     The API's transform is ``mirror_x ∘ CW(R)``: the mirror is applied **after**
-    the rotation, about the canvas' vertical axis. `core.geometry.transform_point`
-    is ``CCW(angle) ∘ mirror_x`` — the mirror *before* the rotation. The two agree
-    at ``0``/``180`` and differ at ``90``/``270``, where conjugating by the
-    reflection gives ``mirror_x ∘ CCW(R_editor) = CCW(R) ∘ mirror_x`` exactly when
-    ``R_editor = R``. So:
+    the rotation, about the canvas' vertical axis. Since 189A2 that is the same
+    order as `core.geometry.transform_point` (``mirror_x ∘ CCW(angle)``), and the
+    two differ only in their operators — ``CW`` against ``CCW``. The angle
+    relation those operators force is therefore **one** rule, mirror or no
+    mirror::
 
-    * ``mirror=False`` — the angle is negated (:func:`_editor_rotation`, the
-      2026-09-14 measurement);
-    * ``mirror=True`` — the angle is handed over **unchanged**.
+        mirror_x ∘ CW(R) == mirror_x ∘ CCW(angle)   ⟺   R = -angle
 
-    Getting the second case wrong is not cosmetic: a mirrored 90° part sent the
-    negated angle lands with its two pads exchanged, which is how 054's pin
-    read-back caught it (the first C1 run on the live editor reported ``R1.1
-    reads back at (85, 710) but the plan expects (85, 750)`` and stopped before
-    drawing a single wire).
+    054 read the same two transforms and reconciled them the other way round
+    (``mirror_x ∘ CCW(R) = CCW(R) ∘ mirror_x`` when ``R`` is handed over
+    unchanged for ``mirror=True``), because `transform_point` then computed the
+    mirror *before* the rotation. 189A2 measured that order against the drawing
+    itself and it was wrong (see that function's docstring), so the compensation
+    moves with it: the angle is negated in **both** cases. ``0``/``180`` are
+    their own negation, so every mirrored pose 054 actually placed is unchanged;
+    only a mirrored ``90``/``270`` part lands differently, and there the old pair
+    put it in the wrong place — which is the same defect 189A2 found in the
+    parser, seen from the writing side.
+
+    The 054 failure this replaced was real but was a *plan-vs-editor* test whose
+    plan came from the old transform: ``R1.1 reads back at (85, 710) but the plan
+    expects (85, 750)``. With both halves on the measured order the negated angle
+    is what reproduces the plan, and the read-back agrees.
     """
-    if mirror:
-        return (float(rotation) % 360.0, True)
-    return ((-float(rotation)) % 360.0, False)
+    return ((-float(rotation)) % 360.0, bool(mirror))
 
 
 def print_gate(plan: ActionPlan, model: DesignModel, source: str, frame: SheetFrame | None) -> None:

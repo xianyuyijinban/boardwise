@@ -424,8 +424,8 @@ class PlanDrawPin:
     expectation is ``(part.x + dx, part.y + dy)``, and the comparison the
     acceptance asks for ("引脚回读=plan 期望，容差半格") is the part's own pin
     geometry seen through its pose. ``dx``/``dy`` are already posed by the
-    compiler's own transform (`core.geometry.transform_point`, mirror then CCW
-    rotation), so apply needs no second ruler.
+    compiler's own transform (`core.geometry.transform_point`, CCW rotation then
+    mirror — 189A2 measured the order), so apply needs no second ruler.
     """
 
     number: str = ""
