@@ -254,29 +254,39 @@ def test_load_annotations_reads_the_bishe_a_and_b_rulings():
     assert len(mpn_exceptions) == 10
     mpn_rule = ValueMpnMatch(library=load_parts("blocklib/parts.json"))
 
-    def outcomes_per_board(rule):
+    def outcomes_per_board(rule, divergent_refs=frozenset()):
         """Subject -> outcome, running the rule on each board (040b).
 
-        A ref that exists on two boards must reach the same verdict on both —
-        asserted here rather than silently taking one, because that equality is
-        what makes "one project scope" a reading instead of an assumption.
+        A ref carried by more than one board is **not** required to reach one
+        verdict: 040b states that two boards can hold two *different* parts under
+        one name (``unreviewed_parts`` reports one row per placement for exactly
+        that reason), and 188a measured the first divergence on this project --
+        ``C11`` is ``HGC1206R5106K500NSPJ`` (10 µF, its part number now names the
+        value code, so the rule reads a match) on **Board3** and an **MPN-less**
+        100 pF part on Board1, so the one is OK and the other UNKNOWN. What is
+        asserted instead is that the set of diverging refs is exactly the one the
+        caller names: a divergence anywhere else still fails here, and the per-ref
+        pins below name refs whose verdict is the same on every board carrying
+        them.
         """
-        collected: dict[str, object] = {}
+        per_board: dict[str, list[tuple[str, object]]] = {}
         for board_model in model.boards:
             for outcome in rule.outcomes(board_model):
-                seen = collected.get(outcome.subject)
-                if seen is not None:
-                    assert seen.state == outcome.state, (
-                        outcome.subject, seen.state, outcome.state,
-                    )
-                    continue
-                collected[outcome.subject] = outcome
-        return collected
+                per_board.setdefault(outcome.subject, []).append(
+                    (board_model.board.title, outcome)
+                )
+        divergent = {
+            subject: [(title, outcome.state) for title, outcome in rows]
+            for subject, rows in per_board.items()
+            if len({outcome.state for _title, outcome in rows}) > 1
+        }
+        assert set(divergent) == set(divergent_refs), divergent
+        return {subject: rows[0][1] for subject, rows in per_board.items()}
 
     a2a = {"C115", "C116", "R43"}
     a2b = {"U10", "U14", "C28", "C29", "C36", "C42", "C44"}
     assert {item.ref for item in mpn_exceptions} == a2a | a2b
-    outcomes = outcomes_per_board(mpn_rule)
+    outcomes = outcomes_per_board(mpn_rule, {"C11"})
     assert not [o for o in outcomes.values() if o.state == "VIOLATION"]
     # The three A2a refs are still on the board and still read by the rule:
     # UNKNOWN ("this notation is not EIA"), never a contradiction.

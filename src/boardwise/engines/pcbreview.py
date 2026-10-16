@@ -316,6 +316,33 @@ def _pcb_documents(source: Any) -> list[tuple[str, str, Any]]:
     return titled
 
 
+def _outline_aspect_ratio(outline: Any) -> float | None:
+    """The bbox's long side over its short one (188a), or ``None`` when it has none.
+
+    :attr:`BoardOutline.bbox` is the geometry layer's own reading of the ring, so
+    this does not measure it a second time: the question the report asks is "how
+    slender is the ring in hand", and the ring in hand is ``points``.
+    """
+    bbox = getattr(outline, "bbox", None)
+    if bbox is None:
+        return None
+    short = min(bbox.width, bbox.height)
+    if short <= 0:
+        return None
+    return max(bbox.width, bbox.height) / short
+
+
+#: 板框细长比（bbox 长边/短边）的披露阈值（188a）。**只披露不拒收**：窄板、
+#: 细条灯板、长条形拼板都真实存在，这个数不是判定语义，报告说的是「请人工确认
+#: 拼合正确」而不是「这不是板框」。
+#:
+#: 定在 20 的实板对照：仓库里的真板 1:1–4:1（毕设FOC 主机板、CH340G 小板都是
+#: 矩形），细条灯板/拼条的 bbox 可达 10–20:1，而 187A 遗留的那个「2000 mil 板框
+#: 回程错开 0.9 mil」的退化环是 2000/0.9 = **2222:1**——阈值落在 20 把退化形态
+#: 框进来，又不碰真细长板。
+OUTLINE_SLENDER_ASPECT_RATIO = 20.0
+
+
 def _board_entry(
     *,
     title: str,
@@ -339,6 +366,18 @@ def _board_entry(
     ``BoardRef`` title). Empty string when the document states none, which the
     reader treats as 「板链读不出」 rather than as a board. Additive: no existing
     key moves.
+
+    ``outlineNote`` (bug98 on) is the disclosure channel of the PCB block, and
+    188a adds one **INFO** line to it: a ring whose bbox is longer than
+    :data:`OUTLINE_SLENDER_ASPECT_RATIO` to its short side gets 「板框极细长…请人工
+    确认拼合正确」. It is a disclosure and never a refusal — narrow boards are
+    real. What it is *for*: the shapes 187A's H1 left standing are rings that do
+    close and do carry area but are a line's width thick (its leftover ①: the
+    0.9 mil mis-join of a 2000 mil frame, 2222:1), where the frame the off-board
+    rule measures against is inside a stitching error rather than around the
+    board. The threshold is placed where the repo's own boards can check it: a
+    real board is ~1:1–4:1, a strip light board or a panel can reach 10–20:1, so
+    20 puts the degenerate shapes in scope without touching a real narrow board.
     """
     info = read_stackup(board)
     entry = {
@@ -418,6 +457,13 @@ def _board_entry(
         note = str(getattr(outline, "note", "") or "")
         if note:
             outline_notes.append(note)
+        # 188a：极细长环只披露、不拒收。位置在最后——前面几句说的是「这一次读数
+        # 怎么来的」，这一句是对同一个环的**形状**再加一条人工核项。
+        ratio = _outline_aspect_ratio(outline)
+        if ratio is not None and ratio > OUTLINE_SLENDER_ASPECT_RATIO:
+            outline_notes.append(
+                f"板框极细长（{ratio:.0f}:1）——细长板/拼板请人工确认拼合正确"
+            )
     if outline_notes:
         entry["outlineNote"] = "；".join(outline_notes)
     return entry

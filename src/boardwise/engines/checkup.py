@@ -1075,8 +1075,22 @@ def _value_decodable(prefix: str, component: Component) -> bool:
       043/046/048/071/184:
       a resistor spelling the whitelist refuses (``FRC0603F1000TS``, whose E-96
       field sits in front of a taping tail) is still a value a rule can use.
-      For ``C``/``L`` this branch is not consulted — the capacitor side has no
-      candidates entry, and inventing one here would be a second decoder.
+      This branch belongs to the parts whose **quantity is a resistance**, and
+      nothing else (188a): it is not consulted for ``C``/``L`` (the capacitor
+      side has no candidates entry and inventing one here would be a second
+      decoder; ``L`` has no parser to check the reading against), nor for
+      ``FB``/``RV``/``RT``, whose numbers are a 100 MHz impedance, a varistor
+      voltage and a thermistor's R25 + **B constant** — a reading of those as
+      ohms is a number nobody can defend. ``RP`` (a resistor network/array)
+      keeps it: an array's declared value *is* a resistance, and the shelf
+      writes it in ohms.
+
+    ``MF52-103/3435`` is the witness for the ``RT`` half of that (188a): the
+    candidates reader answers 34.3 MΩ out of the part's B constant ``3435``
+    (an E-96 four-figure field by shape), and before 188a the gate cleared the
+    part on it. The readers are untouched — the *gate* is what stopped asking a
+    question that is not about this part (``7D471K``-class varistors and
+    ``BRC2016T101K``-class beads are the same shape of false clear).
 
     ``L`` deliberately has no board-value branch: this module has no inductance
     parser (``parse_inductance`` does not exist), and reading an inductor's value
@@ -1109,7 +1123,7 @@ def _value_decodable(prefix: str, component: Component) -> bool:
         return False
     if mpn_value_code(mpn) is not None:
         return True
-    if prefix in ("C", "L"):
+    if prefix in ("C", "L", "FB", "RV", "RT"):
         return False
     return bool(mpn_resistance_candidates(mpn))
 
@@ -1151,10 +1165,12 @@ def unknown_parts(model: DesignModel) -> list[dict]:
     * **the value is not knowable** (`UNKNOWN_REASON_UNDECODABLE`, rewritten by
       184) — the part's board ``Value`` field does not parse *and* its MPN
       carries no value code the decoders can read (:func:`_value_decodable`,
-      which asks the board's own parsers, the EIA whitelist and the resistance
-      candidates system). Restricted to prefixes whose MPN is *expected* to
-      carry a code (R/C/L/…), because asking about an IC's MPN would list every
-      IC on the board. Before 184 the signal was narrower — "``mpn_value_code``
+      which asks the board's own parsers, the EIA whitelist and — for the
+      prefixes whose quantity really is a resistance — the resistance
+      candidates system; 188a keeps the last one off FB/RV/RT, whose numbers are
+      not ohms). Restricted to prefixes whose MPN is *expected* to carry a code
+      (R/C/L/…), because asking about an IC's MPN would list every IC on the
+      board. Before 184 the signal was narrower — "``mpn_value_code``
       returned ``None``" — which listed every resistor family the whitelist does
       not spell, board value or no board value;
     * **no supplier part** — the part cannot be ordered or cross-checked by code.

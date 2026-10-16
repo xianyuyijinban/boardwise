@@ -419,44 +419,136 @@ def _foreign_unit_code(token: str) -> bool:
 
 
 #: The ceramic field that prints the value **and** the rating and names the
-#: packaging at the end (task 184): ``<value code><tolerance letter><voltage
-#: code>NT`` — ``0603B103K500NT`` (10 nF, ±10 %, 50 V), ``CGA1206X7R104K501NT``
-#: (100 nF, ±10 %, 500 V), ``0603B225K250NT`` (2.2 µF, ±10 %, 25 V). Measured on
-#: ``.tmp_bug98b/实板A.epro2`` (岳 2026-10-15 实板反馈): that board's
-#: own ``Value`` fields spell the first two 10nF and 100nF, which is exactly
-#: what the group **in front of** the tolerance letter reads.
+#: packaging at the end (task 184, widened by 188a): ``<value code><tolerance
+#: letter><voltage code><packaging letters>`` — ``0603B103K500NT`` (10 nF,
+#: ±10 %, 50 V), ``CGA1206X7R104K501NT`` (100 nF, ±10 %, 500 V),
+#: ``FCC0603B103K500CT`` (the same field in Walsin's ``CT`` packaging),
+#: ``HGC0603R5225K500NTHJ`` (2.2 µF, ``NTHJ``), ``0603S226M6R3CT`` (22 µF at
+#: **6.3 V** — the rating is spelled ``6R3``, with ``R`` as the decimal point,
+#: which is why the rating group is not simply three digits). Measured on
+#: ``.tmp_bug98b/实板A.epro2`` (岳 2026-10-15 实板反馈): that board's own
+#: ``Value`` fields spell the first two 10nF and 100nF, which is exactly what
+#: the group **in front of** the tolerance letter reads.
 #:
 #: The ``$`` is what makes this a field rather than a scan: with the tail named,
-#: only one nine-character window of a token can match, so the pair of three-
-#: figure groups is located by the token itself. That is also why the reader
-#: does not have to guess which of the two groups is a rating — the one behind
-#: the tolerance letter is the voltage code, and the one in front of it is the
-#: value.
-_CAP_VOLTAGE_TAIL_RE = re.compile(r"(\d{3})[A-Z](\d{3})NT$")
+#: only one window of a token can match, so the pair of three-figure groups is
+#: located by the token itself. That is also why the reader does not have to
+#: guess which of the two groups is a rating — the one behind the tolerance
+#: letter is the voltage code, and the one in front of it is the value.
+#:
+#: **188a: the tail is the structure, not one vendor's packaging code.** 184
+#: pinned ``NT`` — the letter pair 宇阳/风华 print — so the *same field* in
+#: another house's packaging (Walsin's ``CT``, ``AT``, ``JT``, ``MT``,
+#: ``NTHJ``, ``NSPJ``, ``NSLJ`` …) refused the whole token, and every capacitor
+#: of this repository's own shelf that is spelled that way (`cap.10n_0603`'s
+#: ``FCC0603B103K500CT``, `cap.4u7_1206`'s ``HHV1206R7475K101NSPJ`` …) reported
+#: 「值不可知」on a board whose ``Value`` field is empty. The packaging letters
+#: are the one part of the field this reader *never reads*, so their spelling is
+#: not evidence about anything; the structure is ``<three figures><letter><three
+#: figures><two to four letters>$``, and that is what it matches now. The five
+#: real 015 witnesses (electrolytics, TDK's thickness tail, the polymer µF
+#: series) keep their ``None`` — see :func:`_cap_voltage_tail_code` for the guard
+#: that keeps the widening off the tokens that are not this field at all.
+_CAP_VOLTAGE_TAIL_RE = re.compile(r"(\d{3})[A-Z](\d{3}|\d[Rr]\d)[A-Z]{2,4}$")
 
 
 def _cap_voltage_tail_code(token: str) -> str | None:
-    """The EIA value code of a ``<value><tol><voltage>NT`` ceramic, or None.
+    """The EIA value code of a ``<value><tol><voltage><packaging>`` ceramic, or None.
 
     The reading :func:`mpn_value_code` asks *before* :func:`_non_eia_notation`
     is consulted, and the reason it has to come first: the voltage tail
     (:data:`_VOLTAGE_TAIL_RE`, ``103K500``) is one of the notations 015 refuses
     a token for, and that refusal is right — the raw records of the trade do
-    not say which group is which. The ``NT`` tail does say it (that is the
+    not say which group is which. The packaging tail does say it (that is the
     whole point of this reader's pattern), so the token is read here, and the
-    notation refusal is left standing for every token that does not carry the
-    tail — the electrolytics and the ``HGC1206R5106K500NSPJ`` family it was
-    written for keep their ``None``.
+    notation refusal is left standing — one line of it unread, not weakened —
+    for every token that does not carry the tail: the electrolytics
+    (``PA50V330M10x15``), TDK's thickness tail (``C1608X5R1V225KT000E``) and
+    the polymer µF series (``SPZ1HM100E07O00RAXXX``) keep their ``None``.
+
+    **One guard (188a) decides whose tail this is, and it has two branches** —
+    because the bare structure also matches tokens that are not this field at
+    all. Measured over this repository's own corpus (136,893 MPN-shaped tokens,
+    the swarm's harvest including the session scratch dirs; 24 of them when the
+    harvest is limited to the source tree — the false hits are the same six), the
+    bare tail (184's pattern with ``NT`` widened to ``[A-Z]{2,4}``) newly matched
+    29 tokens, six of them false hits. The group in front of the tolerance letter
+    is read when **either** of these holds:
+
+    * **it is a number of its own** — ``_digit_run`` returns exactly the group, so
+      the three figures are a field rather than somebody else's tail
+      (``FS32X106K101EGG`` -> 106, ``TAJB107K006RNJ`` -> 107,
+      ``CGA0603X7R104K500JT`` -> 104);
+    * **the token names its own package size and the group is not part of a size
+      code** — the field the shelf's 华新科/风华 capacitors carry, where a
+      dielectric code's digit is glued to the value (``HGC0603R``**5**``106M250``,
+      ``HHV1206R``**7**``475K101``), and the token's size (``0603``/``1206``) is
+      the anchor 071 §1 C calls ``ANCHOR_PACKAGE_CONTEXT``. The
+      :data:`_PACKAGE_TAILS` half of this branch is the same ``_digit_run``
+      judgement :func:`_voltage_rating_tail` makes — reused, not re-spelled — and
+      it is what stops the reader from taking over the readings 184 broke:
+      ``X0402K500NT``/``CC1206K500NT``/``GRM0603K500NT`` answer ``500`` again,
+      exactly the token's pre-184 reading (the ``402``/``206``/``603`` 184
+      answered were the package size's own last three figures).
+
+    The four false hits are refused by one half or the other of that guard —
+    ``FRC0805J471TSD``/``KRMV0805G350NXT`` because their group is the last three
+    figures of a **size code** (both keep their own readings, ``471``/``350``),
+    ``XC6206P332MR`` (a regulator, whose ``206`` is the tail of ``6206``) and
+    ``FTC252012S100MBCA`` (**the shelf's own 10 µH inductor**,
+    ``ind.ftc252012s100mbca``, whose size ``252012`` would read ``012``) because
+    their group is a fragment of a number and the token never names a size.
+
+    岳 ruled the branch split on 2026-10-16 (裁点 1): the first cut of this batch
+    required the *size* branch alone, which refused ``FS32X106K101EGG`` (10 µF,
+    the fixture board's own ``C4`` with an empty ``Value``) and ``TAJB107K006RNJ``
+    (a 100 µF tantalum) even though their group **is** a whole run and their
+    reading is right. Requiring the whole run *alone* instead refuses four of the
+    shelf's own capacitors, whose value is glued to a dielectric digit — so the
+    reader needs both branches, and the anchor keeps its meaning: a reading from a
+    token that states no size (``FS32X106K101EGG``, ``TAJB107K006RNJ``, the bare
+    ``225K250NT``) is **unanchored** (:func:`mpn_value_code_anchor`), and 071 §1 C
+    lets it contradict a board only in silence.
+
+    The readings that survive the guard are the field this reader is for, and
+    the shelf measures them: all **11** catalogued capacitors that state a
+    rating this way now agree with the catalogue's own ``value`` field
+    (``tests/test_188a_value_decode.py``), and the corpus diff against the
+    pre-184 module has no reading that moves or is lost.
+
+    A group that completes a **metric** size is deliberately out of scope here:
+    ``105``/``201``/``451`` are also honest value codes (1 µF, 200 pF, 450 pF),
+    and the repo's metric rule is the whitelist's own leading-run guard (071
+    §3①: a metric size is a size only *at the head of a token*, which is where
+    ``mpn_value_code`` tests it) — a run check here would refuse
+    ``0805B105K500AT``, whose ``105`` is the 1 µF it is. The guard this reader
+    *does* make is the weaker one that is true of the field itself: the group has
+    to be a number of its own, not somebody else's tail.
 
     Refusals, deliberately narrow: a token whose three figures before the
     tolerance letter are not a value code this decoder would state (an empty
-    group cannot happen — the pattern fixes the length), and every token that
-    does not end in the tail. Nothing else is invented.
+    group cannot happen — the pattern fixes the length), a token where those
+    figures are only part of a longer digit run **and** the token states no
+    package size, and every token that does not end in the tail. Nothing else is
+    invented.
     """
-    m = _CAP_VOLTAGE_TAIL_RE.search(token)
-    if m is None:
-        return None
-    return m.group(1)
+    # Every start position is tried, not ``finditer``'s non-overlapping scan --
+    # the same reason :func:`_voltage_rating_tail` gives: a window this guard
+    # skips must not end the search before a real tail that starts inside it.
+    anchored = has_package_context(token)
+    for start in range(len(token)):
+        m = _CAP_VOLTAGE_TAIL_RE.match(token, start)
+        if m is None:
+            continue
+        run = _digit_run(token, start)
+        if run == m.group(1):
+            return m.group(1)  # a number of its own
+        if not anchored or run in _PACKAGE_TAILS:
+            # The group is somebody else's tail: a size code's last three
+            # figures, or a fragment of a token that never says what it is.
+            continue
+        return m.group(1)
+    return None
 
 
 #: 国巨 (Yageo) puts its own power code between the size and the value, and the
@@ -1396,16 +1488,28 @@ def mpn_value_code(mpn: str) -> str | None:
       ``"071"`` this entry point used to answer for that part). The resistor
       reader's own mid-letter readings of the same tokens (1 kΩ, 4.7 kΩ) are
       unaffected — they never came from here.
+
+    188a widens that first shape from 184's ``NT`` packaging code to the field's
+    own structure (:data:`_CAP_VOLTAGE_TAIL_RE`) and adds the guard that keeps it
+    off tokens that are not this field (:func:`_cap_voltage_tail_code`): the
+    reading before the notation refusal now covers ``FCC0603B103K500CT``,
+    ``HGC0603R5225K500NTHJ``, ``HHV0805R7225K101NSLJ`` and the Walsin ``6R3``
+    rating spelling (``0603S226M6R3CT`` -> ``226``). A reading from a token that
+    also states a package size is anchored (``mpn_value_code_anchor``); one from
+    a token that does not (``FS32X106K101EGG``, ``TAJB107K006RNJ``) is not, and
+    may contradict a board only in silence. The five 015 witnesses that are *not*
+    this field keep their ``None``.
     """
     if not mpn or _too_long(mpn):
         return None
     token = mpn.strip().split()[0] if mpn.strip() else ""
     if not token or _foreign_unit_code(token):
         return None
-    # 184: the ceramic field that names its own voltage code and packaging
-    # (``0603B103K500NT``). Asked before the notation refusal below, because
-    # that refusal covers this shape too -- and here the tail says which group
-    # is the rating, so the token is not ambiguous after all.
+    # 184 (widened by 188a): the ceramic field that names its own voltage code
+    # and packaging (``0603B103K500NT``, ``FCC0603B103K500CT``). Asked before the
+    # notation refusal below, because that refusal covers this shape too -- and
+    # here the tail says which group is the rating, so the token is not
+    # ambiguous after all.
     value_and_rating = _cap_voltage_tail_code(token)
     if value_and_rating is not None:
         return value_and_rating
@@ -1461,6 +1565,13 @@ def has_package_context(mpn: str) -> bool:
     code and three digits that happen to sit in a string -- the electrolitics of
     issue #25 (``UVR1H101MPD``, ``50YXF100MEFC``, ``NRWA221M35V``,
     ``16ZLH470MEFC``, ``EEU-FC1H101``) carry no size at all.
+
+    It is **not** a gate the ceramic-tail reader asks: 188a's first cut required
+    it there, and 岳 ruled that off (2026-10-16) because two tokens whose group
+    is a whole run and whose reading is right state no size --
+    ``FS32X106K101EGG`` (10 µF) and ``TAJB107K006RNJ`` (a 100 µF tantalum). So a
+    tail reading from a token that states no size is *unanchored*
+    (:func:`mpn_value_code_anchor`) and may contradict a board only in silence.
     """
     if not mpn:
         return False
@@ -1499,6 +1610,15 @@ def mpn_value_code_anchor(mpn: str) -> tuple[str | None, str]:
     asks it the same question: is the reading anchored? Here the anchor is the
     package context (:func:`has_package_context`) -- the one thing that turns
     three digits into a code field. ``None`` code keeps ``""``.
+
+    A reading that comes from the ceramic tail (:func:`_cap_voltage_tail_code`)
+    carries the package anchor exactly when the token also states a size — that
+    is the same ``has_package_context`` question, asked of the whole token. So
+    ``CGA0603X7R104K500JT`` is anchored, while ``FS32X106K101EGG``,
+    ``TAJB107K006RNJ`` and the bare ``225K250NT`` are **not** (188a dropped the
+    requirement that the tail reader itself ask for a size: 岳 ruled 2026-10-16
+    that refusing those two correctly-read tokens costs more than the anchor is
+    worth) — an unanchored reading may contradict a board only in silence.
 
     The length cap (issue #27) is stated here as well as inside
     :func:`mpn_value_code`, because this is an entry point of its own: a first

@@ -20,6 +20,7 @@ from boardwise.rules.params import (
     ValueMpnMatch,
 )
 from boardwise.rules.values import (
+    _non_eia_notation,
     decode_eia_3digit,
     mpn_resistance_candidates,
     mpn_resistance_readings,
@@ -354,7 +355,14 @@ def test_the_mpn_code_finder_whitelists_shapes_and_guards_packages():
     assert mpn_value_code("CC0603KRX7R9BB104") == "104"
     # A part number with no code, or two conflicting ones, is None.
     assert mpn_value_code("") is None
-    assert mpn_value_code("CGA0603X5R105K500JT") is None  # 105 vs 500
+    # Two three-figure groups, each in a code field, and no packaging tail to
+    # say which is the rating: ambiguity is None, never a pick (018/#22). 188a
+    # moved the previous witness here -- ``CGA0603X5R105K500JT`` used to be
+    # "105 vs 500" ambiguous and now reads its value field, because the
+    # packaging tail **does** say which group is the rating
+    # (``tests/test_188a_value_decode.py``).
+    assert mpn_value_code("MHZ100KN220M") is None
+    assert mpn_value_code("CGA0603X5R105K500JT") == "105"
     # The CH340G lesson: "CH340G" would decode to "34 pF" -- the guard and
     # the caller's kind check keep a regulator from masquerading as a cap.
     assert mpn_value_code("CH340G") == "340"  # the finder is dumb; callers gate
@@ -371,6 +379,18 @@ def test_the_mpn_code_finder_refuses_notations_that_are_not_eia():
 
     Each class has a witness the other two leave alone, which is what makes a
     single-guard mutation visible (task 015 sec.4.2).
+
+    **188a: the voltage-tail witnesses are asserted on the refusal itself.**
+    184 added a reader that is asked *before* ``_non_eia_notation`` for the
+    ceramic ``<value><tol><voltage><packaging>`` field, and 188a widened it from
+    the literal ``NT`` to that field's structure — so the four ``HGC…``/``HHV…``/
+    ``CGA…`` witnesses below are now *read* (``106K500`` = 10 µF / 50 V in
+    another house's packaging code, asserted in
+    ``tests/test_188a_value_decode.py``). What this test owns is the guard: it
+    still refuses every one of them, and a mutation that disables it still turns
+    this test red. The code-level answer for a token whose tail carries **no**
+    packaging letters is the pre-188a one, ``None``, and is asserted below as
+    the second half of the same pin.
     """
     # R as the decimal point: a 1 mΩ shunt is not "00 x 10^1". Keep this list
     # to the parts only the R guard refuses -- adding an HGC part number here
@@ -381,10 +401,14 @@ def test_the_mpn_code_finder_refuses_notations_that_are_not_eia():
     assert mpn_value_code("RE1206F1R100") is None
     # value + tolerance letter + voltage rating: the second group is a
     # rating, so neither group is a value on its own.
-    assert mpn_value_code("HGC1206R5106K500NSPJ") is None  # 106K500 = 10µF/50V
-    assert mpn_value_code("HGC0603R5225K500NTHJ") is None
-    assert mpn_value_code("HHV1206R7475K101NSPJ") is None
-    assert mpn_value_code("CGA0603X7R104K500JT") is None
+    assert _non_eia_notation("HGC1206R5106K500NSPJ") is True  # 106K500 = 10µF/50V
+    assert _non_eia_notation("HGC0603R5225K500NTHJ") is True
+    assert _non_eia_notation("HHV1206R7475K101NSPJ") is True
+    assert _non_eia_notation("CGA0603X7R104K500JT") is True
+    # The same field with nothing after the rating reaches the refusal as its
+    # own answer (the reader only answers the tail that names its packaging).
+    assert mpn_value_code("HGC1206R5106K500") is None
+    assert mpn_value_code("HGC0805R5106K250") is None
     # The electrolytic layout: a case size, or a voltage before the value --
     # PA50V330M10x15 is 50 V, 330 µF ±20 %, 10x15 mm, and "330M" is not EIA.
     assert mpn_value_code("PA50V330M10x15") is None
@@ -1191,7 +1215,7 @@ def test_param4_matching_values_are_ok_and_undecodable_are_unknown():
         pins=[Pin("1", "A", "VCC")])  # no MPN at all
     model.components["C4"] = Component(
         uid="c4", designator="C4", value="",
-        mpn="CGA0603X5R105K500JT",  # two candidate codes: ambiguous
+        mpn="CGA0603X5R105K500JT",  # 188a: the packaging tail names the value (105)
         pins=[Pin("1", "A", "VCC")])
     states = _states(ValueMpnMatch(library=lib), model)
     assert any(o.subject == "R1" and o.state == "OK" for o in states["OK"])

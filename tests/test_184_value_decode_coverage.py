@@ -231,20 +231,24 @@ def test_the_capacitor_voltage_tail_names_the_value_group():
 
 
 def test_the_voltage_tail_refusal_is_untouched_for_every_token_without_the_tail():
-    """The guard is the ``NT`` tail, not "a voltage tail anywhere".
+    """The refusal is the *notation*, not "a voltage tail anywhere" (184).
 
     Every witness 015/025/072/094 relied on keeps answering ``None``: the
-    electrolytics (``PA50V330M10x15``), the voltage-tailed ceramic whose
-    packaging is ``NSPJ``/``JT`` rather than ``NT``
-    (``HGC1206R5106K500NSPJ``, ``CGA0603X7R104K500JT``), the TDK field string
-    whose tail figures are a **thickness** (``C1608X5R1V225KT000E``) and the
-    polymer electrolytic that prints microfarads (``SPZ1HM100E07O00RAXXX``).
+    electrolytics (``PA50V330M10x15``), the TDK field string whose tail figures
+    are a **thickness** (``C1608X5R1V225KT000E``) and the polymer electrolytic
+    that prints microfarads (``SPZ1HM100E07O00RAXXX``).
+
+    **188a moved three tokens out of this list** (they are asserted in
+    ``tests/test_188a_value_decode.py``): ``HGC0603R5106M250NTHJ`` (-> ``106``),
+    ``HGC1206R5106K500NSPJ`` (-> ``106``) and ``CGA0603X7R104K500JT``
+    (-> ``104``, the shelf's own ``cap.100n_0603.c6119867``). They were never
+    *not this notation* — they are the same ``<value><tol><voltage>`` field as
+    ``0603B103K500NT``, printed in another house's packaging code, which is what
+    184's literal ``NT`` tail could not see. The refusal itself is unchanged:
+    ``_non_eia_notation`` still answers ``True`` for them (see the 188a file).
     """
     for token in (
         "PA50V330M10x15",
-        "HGC1206R5106K500NSPJ",
-        "HGC0603R5106M250NTHJ",
-        "CGA0603X7R104K500JT",
         "C1608X5R1V225KT000E",
         "SPZ1HM100E07O00RAXXX",
     ):
@@ -309,12 +313,22 @@ def test_the_shelf_resistors_agree_with_the_resistance_reader():
 
 
 def test_no_shelved_passive_is_unreviewed_for_its_value():
-    """Every shelved R/C is value-decodable — the contract the gate now states.
+    """Every shelved R/C is value-decodable — with the **board's** value.
 
     A shelf entry is a part this project already knows how to place; if its value
     could not be known, the gate would be telling the reviewer to go and read a
     datasheet for a part the catalogue has already priced. 55 entries checked,
     0 flagged.
+
+    This is the branch the board's own ``Value`` field answers, and it is *only*
+    that branch — which is why the sibling test below
+    (:func:`test_every_shelved_passive_is_decodable_from_its_mpn_alone`) exists:
+    a part whose ``Value`` field is empty is the shape 184 was reported for (5 of
+    its 14 feedback rows were empty), and this test cannot see it. The挖洞 swarm
+    measured exactly that gap (agent-342 中-1): putting ``value=entry.value``
+    into the synthetic part made the test green while every capacitor whose MPN
+    spelled the rating tail in another house's packaging code was reported
+    「值不可知」 the moment the field was empty.
     """
     library = load_parts(SHELF)
     flagged = []
@@ -337,6 +351,69 @@ def test_no_shelved_passive_is_unreviewed_for_its_value():
         1 for entry in library.parts
         if entry.key.startswith(("res.", "cap."))
     ) == 55
+
+
+def test_every_shelved_passive_is_decodable_from_its_mpn_alone():
+    """188a: the same traversal with the board's ``Value`` field **empty**.
+
+    The 184 test above hands every synthetic part the shelf's own ``value``
+    string, so it measures the board-value branch and nothing else. This one
+    hands the part an MPN and nothing more — the production shape a part is in
+    before the engineer fills the field in, and the shape that made 184 report a
+    whole board.
+
+    What it pins: the catalogue's passives are readable **from their part
+    number**, with the exceptions below being deliberate refusals the repo has
+    argued for elsewhere — not gaps. Each exception is named, so a new shelf
+    entry that cannot answer from its MPN fails here instead of hiding behind
+    its own ``value`` field.
+
+    * caps — ``C1608X5R1V225KT000E`` (TDK's tail figures are a *thickness*, #72),
+      ``PA50V330M10x15`` (015's electrolytic), ``SPT1HM2R2D11ORVZC`` and
+      ``SPZ1HM100E07O00RAXXX`` (polymer/aluminium series that print microfarads,
+      046/015 — the EIA path must not read their digits);
+    * resistors — the two 0 Ω jumpers (``CRCW06030000Z0EAHP``, ``RE1206F1R000``:
+      their MPNs state no value code at all), and the three shunts whose value
+      field is ``R``-notation and therefore refused on purpose
+      (``RE1206F1R100``, ``RE2512F3R001``, ``JER2512F3R005`` — 015 and 043).
+
+    Before 188a this traversal flagged the four caps in the first group *plus
+    every capacitor whose MPN states its value in the structural
+    ``<value><tol><voltage><packaging>`` field* (11 of the catalogue's own,
+    ``FCC0603B103K500CT`` through ``HHV1206R7475K101NSPJ``) — the false green the
+    swarm measured.
+    """
+    library = load_parts(SHELF)
+    expected_caps = {
+        "cap.2u2_0603.c342978",
+        "cap.pa50v330m10x15",
+        "cap.spt1hm2r2d11orvzc",
+        "cap.spz1hm100e07o00raxxx",
+    }
+    expected_resistors = {
+        "res.0_0603",
+        "res.0_1206",
+        "res.100m_1206",
+        "res.5m_2512",
+        "res.re2512f3r001",
+    }
+    flagged_caps, flagged_resistors = set(), set()
+    for entry in library.parts:
+        if entry.key.startswith("res."):
+            prefix, bucket = "R", flagged_resistors
+        elif entry.key.startswith("cap."):
+            prefix, bucket = "C", flagged_caps
+        else:
+            continue
+        part = component(f"{prefix}1", mpn=entry.mpn or "")
+        if any(
+            reason == UNKNOWN_REASON_UNDECODABLE
+            for row in unknown_parts(model_of(part))
+            for reason in row["reasons"]
+        ):
+            bucket.add(entry.key)
+    assert flagged_caps == expected_caps, sorted(flagged_caps)
+    assert flagged_resistors == expected_resistors, sorted(flagged_resistors)
 
 
 # --------------------------------------------------------------------------
@@ -368,18 +445,29 @@ def test_an_empty_board_value_with_an_unreadable_mpn_is_still_undecodable():
     capacitor whose MPN is refused as a whole. The board's ``Value`` field is
     empty for both, so the value genuinely cannot be known — which is exactly
     what ``UNKNOWN_REASON_UNDECODABLE`` now means.
+
+    The capacitor witness is 188a's correction: 184 wrote
+    ``HGC1206R5106K500NSPJ`` here, which is *not* an unreadable part — it is the
+    ``<value><tol><voltage>`` field (``106K500`` = 10 µF / 50 V) in another
+    house's packaging code, and since 188a it reads ``106``. What the branch has
+    to be witnessed by is a token whose digits really are in a notation this
+    decoder does not read: 015's electrolytic (``50 V, 330 µF`` — the figures are
+    microfarads, and ``330M`` is not EIA) and 046's polymer series, both of which
+    keep their ``None``.
     """
     parts = unknown_parts(model_of(
         # The shelf's own 0 Ω jumper: its MPN states no value code this decoder
         # reads (``res.0_0603``), and there is no board value to fall back on.
         component("R7", value="", mpn="CRCW06030000Z0EAHP"),
-        # A 10 µF electrolytic with an empty ``Value``: 015 refuses the MPN as a
-        # whole, so with nothing on the board the value is genuinely unknown.
-        # The same shape the 094 evidence records (``C7``/``C8`` of the FOC board).
-        component("C7", value="", mpn="HGC1206R5106K500NSPJ"),
+        # 015's electrolytic layout, empty ``Value``: the MPN's figures are a
+        # capacitance in microfarads, so the EIA path must not touch them.
+        component("C7", value="", mpn="PA50V330M10x15"),
+        # 046's polymer series — refused for the same reason (``100`` is 10 µF,
+        # read against the picofarad base it reported 10 pF).
+        component("C8", value="", mpn="SPZ1HM100E07O00RAXXX"),
     ))
     by_ref = {part["designator"]: part for part in parts}
-    assert set(by_ref) == {"R7", "C7"}
+    assert set(by_ref) == {"R7", "C7", "C8"}
     assert all(UNKNOWN_REASON_UNDECODABLE in part["reasons"] for part in parts)
 
 
