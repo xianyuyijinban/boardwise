@@ -1041,6 +1041,14 @@ UNKNOWN_REASON_UNDECODABLE = (
     "值不可知（MPN 里的值码解不出，板上 Value 也读不出；判定见 values.py）"
 )
 UNKNOWN_REASON_NO_SUPPLIER = "供应商字段为空"
+#: 188B (186 中2): the entry is on the shelf with verified facts but **no
+#: category**. `rules.facts._category_state` answers UNKNOWN for exactly that
+#: shape, so the facts rules refuse a part the gate used to call judged — the
+#: one thing "the shelf has this part" and "the shelf can judge it" must not
+#: collapse into. The work it names is a shelf edit, not a datasheet hunt.
+UNKNOWN_REASON_UNCATEGORISED = (
+    "货架条目有 facts 但没分类（category 为空；规则按 category 认料，未分类一律 UNKNOWN）"
+)
 
 #: Designator prefixes whose MPN is expected to carry an EIA value code, i.e. the
 #: ones for which "the value cannot be known" is a real signal. An IC's MPN never
@@ -1245,8 +1253,10 @@ def unreviewed_counts_by_reason(unreviewed: list[dict] | None) -> dict[str, int]
 #: question is coarser and has an **opposite next step** per answer. Two classes:
 #:
 #: * 「工具读不懂」 — the value is genuinely unknowable to this project's
-#:   decoders (``UNKNOWN_REASON_UNDECODABLE``): more datasheets will not help;
-#:   the work is a better reading (a decoder, or the board's own ``Value``);
+#:   decoders (``UNKNOWN_REASON_UNDECODABLE``) or the shelf entry itself cannot
+#:   be read by a rule (``UNKNOWN_REASON_UNCATEGORISED``, 188B): more datasheets
+#:   will not help; the work is a better reading (a decoder, the board's own
+#:   ``Value``, or a ``category`` on the entry);
 #: * 「真缺资料」 — the datasheet hunt itself is blocked (no MPN to search, no
 #:   supplier code to look up, shelf has nothing): a PDF **is** the next step.
 #:
@@ -1264,10 +1274,16 @@ CLASS_ORDER: tuple[str, ...] = (REASON_CLASS_UNDECODABLE, REASON_CLASS_MISSING_M
 
 
 def unreviewed_reason_class(reason: str) -> str:
-    """Which of the two classes one reason belongs to (186 §C)."""
+    """Which of the two classes one reason belongs to (186 §C, 188B).
+
+    ``UNKNOWN_REASON_UNCATEGORISED`` joins the "read, do not hunt" class: the
+    entry is on the shelf, so more datasheets change nothing — what is missing is
+    a **class** on the entry (`category`), which is a reading of the shelf rather
+    than a document to go and find.
+    """
     return (
         REASON_CLASS_UNDECODABLE
-        if str(reason) == UNKNOWN_REASON_UNDECODABLE
+        if str(reason) in (UNKNOWN_REASON_UNDECODABLE, UNKNOWN_REASON_UNCATEGORISED)
         else REASON_CLASS_MISSING_MATERIAL
     )
 
@@ -1306,14 +1322,27 @@ def unreviewed_counts_by_class(unreviewed: list[dict] | None) -> dict[str, int]:
 #: The fixed line the 未审器件 section must carry (186 §C, P1). The accident it
 #: answers: handing a PDF over looked like it closed the gate, and the reader
 #: could not tell which action actually would. Named commands are the CLI's own
-#: — `boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`
-#: closes it, and `boardwise need-datasheet` is the *other* channel (the
-#: reviewer's own "cannot establish"), which makes this section longer rather
-#: than emptying it. There is no `accept-unknown` command in this CLI, and the
-#: line does not pretend there is one.
+#: — `boardwise parts add <MPN> --lcsc <C码> --category <类别> --facts
+#: <facts.json> --verified` closes it, and `boardwise need-datasheet` is the
+#: *other* channel (the reviewer's own "cannot establish"), which makes this
+#: section longer rather than emptying it. There is no `accept-unknown` command in
+#: this CLI, and the line does not pretend there is one.
+#:
+#: 188B added two things to that command line, both because the instruction was
+#: incomplete rather than wrong:
+#:
+#: * **`--category <类别>`** — since 188B an entry with facts and no category no
+#:   longer counts as judged (`rules.facts._category_state` answers UNKNOWN for
+#:   it), so a reader following the old spelling would close the facts half of the
+#:   gate and stay on this list;
+#: * **where the C 码 comes from** — 立创商城 search. The reader who does not
+#:   already know how to get a C-number is exactly the reader this line is for,
+#:   and "search 立创商城" is the honest first step (the shelf's own
+#:   `parts select` / `--resolve` come after it).
 UNREVIEWED_CLEARING_NOTE = (
     "给 PDF ≠ 清闸。清闸 = 货架条目带**已核验 facts**"
-    "（`boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`）"
+    "（`boardwise parts add <MPN> --lcsc <C码> --category <类别> "
+    "--facts <facts.json> --verified`；C 码来源：立创商城搜索）"
     "——喂 PDF（`parts fetch --file`）只写出 `facts_verified: false` 的候选，"
     "候选不驱动规则、也不清闸；另一条通道是审查者自己标记未知"
     "（`boardwise need-datasheet`），它只会让本节变长，不会让它变空。"
@@ -1340,7 +1369,7 @@ def unreviewed_clearing_note(shelf_path: str = "") -> str:
         UNREVIEWED_CLEARING_NOTE
         + f"本次审查读的货架就是 {shelf_path}——"
         f"facts 要写进**这一架**才算数（`boardwise parts add <MPN> --lcsc <C码> "
-        f"--facts <facts.json> --verified --library {shelf_path}`，"
+        f"--category <类别> --facts <facts.json> --verified --library {shelf_path}`，"
         f"报告里这行是 `shelfPath`）。"
     )
 
@@ -1438,6 +1467,46 @@ def suggested_queries(mpn: str, manufacturer: str = "", value: str = "") -> list
     return queries
 
 
+def shelf_can_drive_rules(entry: object | None) -> bool:
+    """Can a rule act on this shelf entry? Facts **and** a category (188B).
+
+    Two requirements, one answer. The facts half is 039's gate (`facts_verified`
+    false leaves ``entry.facts`` None, so a candidate reads as "no facts" here
+    without this function knowing the flag exists); the category half is 188B's
+    tightening (186 中2) — `rules.facts._category_state` answers UNKNOWN for a
+    verified entry whose `category` is empty, so "the shelf has this part" and
+    "the shelf can judge it" are different claims and the gate must not credit
+    the weaker one.
+    """
+    if entry is None or getattr(entry, "facts", None) is None:
+        return False
+    return bool(str(getattr(entry, "category", "") or "").strip())
+
+
+def shelf_judgement(entry: object | None) -> bool:
+    """Did the **shelf** judge this part? One name for the gate above (188B)."""
+    return shelf_can_drive_rules(entry)
+
+
+def shelf_unusable_reason(entry: object) -> str:
+    """Why the shelf cannot judge a part from this entry, in the entry's terms.
+
+    Two answers, never one: "no facts recorded" is a curation task, "facts but no
+    class" is a classification task, and a message that named the wrong one would
+    send the reader to fetch a datasheet the shelf does not need.
+    """
+    if getattr(entry, "facts", None) is None:
+        return (
+            "货架没有可驱动规则的 facts"
+            + (
+                "（条目没有 facts）"
+                if getattr(entry, "facts_verified", True)
+                else "（候选条目未核验）"
+            )
+        )
+    return UNKNOWN_REASON_UNCATEGORISED
+
+
 def unreviewed_parts(
     model: DesignModel,
     *,
@@ -1457,18 +1526,24 @@ def unreviewed_parts(
       act on — no entry at all, an entry with no facts, or a **candidate** whose
       `facts_verified` is false (039 批①'s gate: an unverified claim does not
       drive rules, so it does not close this item either);
+    * its shelf entry carries facts but **no `category`** (188B, 186 中2): the
+      facts rules answer UNKNOWN for exactly that shape
+      (`rules.facts._category_state`), so the shelf still cannot judge the part —
+      and the row says so with its own reason
+      (:data:`UNKNOWN_REASON_UNCATEGORISED`), whatever its designator is;
     * it has no MPN, or an MPN whose value code this project refuses, or no
       supplier part number — the three 025 identity signals, kept because they
       are also reasons a datasheet hunt cannot even start.
 
     …and **not** when the shelf can judge it: an entry resolved through the
     identity chain (:func:`boardwise.core.parts.resolve_facts` — MPN, then
-    C-number, then the device name) that carries `facts` a rule may act on.
-    "The shelf cannot judge this part" is the section's own definition, and a
-    part whose verified facts are on the shelf is judgeable whatever its board
-    fields say — the 025 signals stay as the row's *reasons* on rows that are
-    still unreviewed, but a part relisted only because of them, while the shelf
-    holds the datasheet the reader was being sent to find, is the gate lying
+    C-number, then the device name) that carries `facts` a rule may act on **and**
+    a non-empty `category` (:func:`shelf_judgement`, which is that pair in one
+    place). "The shelf cannot judge this part" is the section's own definition,
+    and a part whose verified facts are on the shelf is judgeable whatever its
+    board fields say — the 025 signals stay as the row's *reasons* on rows that
+    are still unreviewed, but a part relisted only because of them, while the
+    shelf holds the datasheet the reader was being sent to find, is the gate lying
     about the work left (task 186 §A: 喂 PDF 清不掉闸). `mayClaimPassed` (053)
     follows the same rule: it asks whether a part was left unjudged by the
     shelf, and this one was not.
@@ -1507,21 +1582,33 @@ def unreviewed_parts(
                 lcsc=(component.lcsc_part or "").strip(),
                 name=name,
             )
-        judged = entry is not None and entry.facts is not None
+        judged = shelf_judgement(entry)
         if judged:
             continue
         facts = {}
         if entry is not None:
             facts = entry.facts if entry.facts is not None else (entry.candidate_facts or {})
-        gated = bool(entry is not None and not entry.facts_verified)
-        no_driving_facts = entry is None or entry.facts is None
+        # 188B (186 中2): "the shelf has this part" and "the shelf can judge it"
+        # are different claims, and the second one needs a `category` as well as
+        # facts — `rules.facts._category_state` answers UNKNOWN for a verified
+        # entry with no category, so a part whose entry carries facts but no class
+        # is still work the review cannot finish.
+        uncategorised = bool(
+            entry is not None
+            and entry.facts is not None
+            and not str(entry.category or "").strip()
+        )
+        no_driving_facts = not shelf_can_drive_rules(entry)
         reasons = list(known.get((designator, tuple(boards)), {}).get("reasons") or [])
-        if not (is_ic and no_driving_facts) and not reasons:
+        if not (is_ic and no_driving_facts) and not uncategorised and not reasons:
             continue
-        if is_ic and no_driving_facts and not reasons:
+        if uncategorised and UNKNOWN_REASON_UNCATEGORISED not in reasons:
+            # Always named, whatever the 025 reasons say: it is the reason the
+            # shelf cannot judge this part, which is what this section answers.
+            reasons = reasons + [UNKNOWN_REASON_UNCATEGORISED]
+        elif is_ic and no_driving_facts and not reasons:
             reasons = (
-                ["货架没有可驱动规则的 facts"
-                 + ("（候选条目未核验）" if gated else "（条目没有 facts）")]
+                [shelf_unusable_reason(entry)]
                 if entry is not None
                 else ["货架没有这颗料"]
             )
@@ -1591,6 +1678,50 @@ def unreviewed_parts(
                 [key for key in FACTS_KEYS if key not in facts] if is_ic else []
             ),
             "channels": channels,
+            **_board_field(boards),
+        })
+    return out
+
+
+def reviewed_by_shelf(model: DesignModel, *, library: object | None = None) -> list[dict]:
+    """The parts the shelf **judged** — the rows that left the 未审 list (188B).
+
+    The complement of :func:`unreviewed_parts`, computed from the same chain and
+    the same gate (:func:`shelf_judgement`), so the two lists cannot disagree
+    about one part. It exists because a judged row used to vanish without trace:
+    a part whose entry was found by **device name** — 186 §B's weaker step — left
+    `unreviewed_parts`/`needs_datasheet` and the report never said the shelf had
+    claimed anything about it, let alone how it had been identified. The report
+    now carries this list (added, never a rename: `report["reviewedByShelf"]`),
+    so "why is U3 not on the list?" is answerable from the JSON.
+
+    ``matchedBy`` is the identity step that matched (:data:`IDENTITY_MPN` /
+    :data:`IDENTITY_LCSC` / :data:`IDENTITY_NAME`), the same vocabulary
+    `unreviewed_parts[].shelfMatchedBy` and `parts missing[].matchedBy` use. A
+    part on no shelf is not here — nothing judged it — and neither is one whose
+    entry has no facts or no category: those are :func:`unreviewed_parts`' rows.
+    """
+    from ..core.parts import resolve_facts
+
+    if library is None:
+        return []
+    out: list[dict] = []
+    for designator, component, boards in _parts_with_boards(model):
+        entry, matched_by = resolve_facts(
+            library,
+            mpn=(component.mpn or "").strip(),
+            lcsc=(component.lcsc_part or "").strip(),
+            name=str(component.props.get("device_name") or "").strip(),
+        )
+        if not shelf_judgement(entry):
+            continue
+        out.append({
+            "designator": designator,
+            "shelfKey": entry.key,
+            "shelfMatchedBy": matched_by,
+            "category": str(entry.category or ""),
+            "factsVerified": bool(entry.facts_verified),
+            "factsPresent": sorted(entry.facts or {}),
             **_board_field(boards),
         })
     return out
@@ -2903,6 +3034,12 @@ def _group_key(
 VERDICT_CAN_SHIP = "可以投板"
 VERDICT_CANNOT_CLAIM = "不能写「通过」"
 
+#: The one `completion.verdict` that may be quoted as a pass (073/053's state
+#: machine). Named once, because 188B derives `conclusion.mayQuotePassed` from it
+#: — the boolean and the closing sentence must not disagree about which state
+#: ships.
+VERDICT_COMPLETE = "complete"
+
 
 def board_report_verdict(report: dict) -> dict:
     """「整工程能不能投板」—— the closing line, from the report's **own** gate.
@@ -2965,7 +3102,7 @@ def board_report_verdict(report: dict) -> dict:
     if blockers:
         can_ship = False
         line = f"不能投板：先改 {'；'.join(blockers)}（逐条见下）"
-    elif verdict == "complete":
+    elif verdict == VERDICT_COMPLETE:
         can_ship = True
         line = (
             f"{VERDICT_CAN_SHIP}：本工程无 ERROR、无缺手册未审、无待分诊、无覆盖缺口"
@@ -2989,10 +3126,15 @@ def board_report_verdict(report: dict) -> dict:
     }
 
 
-#: The `conclusion` section's five keys, in the order they are written (185 A).
-#: Nothing else goes in: the section exists so a caller has **one** place to read
-#: a verdict from, and a sixth key would be one more thing to keep in sync.
-CONCLUSION_KEYS = ("verdict", "exitCode", "mayClaimPassed", "oneLiner", "blockers")
+#: The `conclusion` section's keys, in the order they are written (185 A, 188B).
+#: 185's five, plus `mayQuotePassed` — the one boolean a script may gate on
+#: (188B 低4): `verdict` is the full state machine, and "may this be quoted as a
+#: pass?" is the single question `exitCode 0` gets wrong. Nothing else goes in:
+#: the section exists so a caller has **one** place to read a verdict from, and
+#: every extra key is one more thing to keep in sync.
+CONCLUSION_KEYS = (
+    "verdict", "exitCode", "mayClaimPassed", "mayQuotePassed", "oneLiner", "blockers",
+)
 
 
 def conclusion_section(report: dict, *, verdict: dict | None = None) -> dict:
@@ -3015,19 +3157,32 @@ def conclusion_section(report: dict, *, verdict: dict | None = None) -> dict:
 
     **Every field is a read**, which is the whole point:
 
-    * ``oneLiner`` is the verdict dict's ``line`` — the *same string*, from the
-      *same call*, that :func:`render_board_report` prints as the closing line of
-      ``board-report.md``; pass the section's own ``verdict`` in (the CLI does) so
-      there is exactly one generation and the two cannot drift. One generator, two
-      readers — not a second sentence written beside the first;
+    * ``oneLiner`` is the verdict dict's ``line`` — the string
+      :func:`render_board_report` prints as the closing line of
+      ``board-report.md``. **Same function, not the same call** (188B 低6): the
+      CLI passes the section's own verdict dict in, so this section reuses
+      `board_report_section`'s call, while `render_board_report` — rendering the
+      Markdown a person reads — makes its **own** call to the same function. The
+      two agree because :func:`board_report_verdict` is a pure read of the report
+      (deterministic, and asserted verbatim in `tests/test_185_conclusion.py`
+      from *three* independent recomputations), not because one call answered
+      twice. One generator, several readers — not a second sentence written
+      beside the first;
     * ``blockers`` is ``completion.verdictWhy`` as it stands. The one exception is
       a report with **no** ``completion`` section at all (a hand-built dict, a
       report from before 053), where there is no ``verdictWhy`` to quote and the
       narrow reasons :func:`board_report_verdict` derived are used instead — still
-      that one function's own list, never a re-derivation here.
+      that one function's own list, never a re-derivation here;
+    * ``mayQuotePassed`` (188B 低4) is ``verdict == "complete"``, and nothing else:
+      the single boolean a script or an AI may gate on before saying a board
+      passed. ``exitCode`` answers a different question — 0 also covers
+      ``complete-with-open-items`` and a clean-looking run that could not state
+      its state is 3 — so 「exitCode 0 ≠ 可投板」 is a rule, not a nuance
+      (`docs/review-sop.md`).
 
     Additive by construction: the five older readings keep their names, meanings
-    and places. Nothing in the verdict arithmetic reads this section.
+    and places, and the sixth is derived from the first. Nothing in the verdict
+    arithmetic reads this section.
     """
     summary = report.get("summary") or {}
     completion = report.get("completion") or {}
@@ -3036,10 +3191,12 @@ def conclusion_section(report: dict, *, verdict: dict | None = None) -> dict:
         blockers = [str(reason) for reason in (completion.get("verdictWhy") or [])]
     else:
         blockers = [str(reason) for reason in (info.get("blockers") or [])]
+    state = str(completion.get("verdict") or info.get("completionVerdict") or "")
     return {
-        "verdict": str(completion.get("verdict") or info.get("completionVerdict") or ""),
+        "verdict": state,
         "exitCode": summary.get("exitCode"),
         "mayClaimPassed": summary.get("mayClaimPassed"),
+        "mayQuotePassed": state == VERDICT_COMPLETE,
         "oneLiner": str(info.get("line") or ""),
         "blockers": blockers,
     }
@@ -3534,6 +3691,8 @@ def render_report_markdown(report: dict) -> str:
     lines.append("")
 
     # --- the datasheet gate: what could not be reviewed at all (039 批② §WI-1).
+    from ..core.parts import IDENTITY_NAME
+
     unreviewed = report.get("unreviewed_parts") or []
     lines.append(f"## 未审器件（{len(unreviewed)}）")
     lines.append("")
@@ -3600,6 +3759,26 @@ def render_report_markdown(report: dict) -> str:
                 f"| {_channel_cell(channels.get('engineer'))} "
                 f"| {_channel_cell(channels.get('lcsc'))} "
                 f"| {_channel_cell(channels.get('official'))} |"
+            )
+        lines.append("")
+        # 188B (186 中1): a row whose shelf entry was found by **device name** —
+        # 186 §B's weaker identity step — says so before the reader acts on it.
+        # Read from the rows' own `shelfMatchedBy`, never re-resolved: the
+        # engineer-channel cell above can say "按器件名匹配" about a *local PDF*,
+        # which is a different claim about a different thing.
+        by_name = [
+            str(part.get("designator"))
+            for part in unreviewed
+            if part.get("shelfMatchedBy") == IDENTITY_NAME
+        ]
+        if by_name:
+            lines.append("")
+            lines.append(
+                "**货架⇢按器件名匹配（弱证据）**："
+                + "、".join(f"`{name}`" for name in by_name)
+                + "——货架上这颗料是拿**器件名**找到的（MPN 与 C 码都没对上），"
+                "身份比 MPN/C 码命中弱一档：核 facts 时把身份一并核了"
+                "（行里的 `shelfMatchedBy` 就是这个读数，`name` 即按器件名）。"
             )
         lines.append("")
         for part in unreviewed:

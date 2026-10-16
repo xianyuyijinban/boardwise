@@ -12,7 +12,12 @@ which is exactly the review moment this guard exists to force.
 
 Usage:
     python tools/check_repo_hygiene.py            # check every tracked file
-    python tools/check_repo_hygiene.py --staged   # check staged files (pre-commit)
+    python tools/check_repo_hygiene.py --staged   # pre-commit: read the index
+
+``--staged`` is the pre-commit mode, and it reads the **index** for both halves:
+the path list (`git diff --cached`) and the content (:func:`index_blobs`, the blob
+`git show :<path>` would print — see 188B 低3). The working tree is not consulted,
+because a file edited after staging is not what the commit carries.
 
 Exit 0 = clean, 1 = violations found (they are listed on stderr).
 """
@@ -22,6 +27,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 #: The repository this guard belongs to — read off the file's own location, so
 #: the gates run against *this* checkout and not against whatever directory a
@@ -129,6 +135,12 @@ _BANNER = (
 #     AcmeCorp                       # a word to watch, everywhere in the index
 #     docs/notes.md<TAB>AcmeCorp     # the **baseline**: this word on this path
 #                                    # is grandfathered — reported, never fatal
+#
+# **Every spelling has to be listed** (188B 低7): matching is per *token* and the
+# only normalisation is case-insensitivity, so `AcmeCorp`, `ACME Corp` and
+# `acme-corp` are three entries — the list file is the whole vocabulary, and a
+# spelling nobody wrote down is a leak this gate reports clean about. See
+# :func:`_word_pattern`.
 #
 # The baseline exists because a leak detector switched on over a repository that
 # already contains the word has only two honest options, and before 187B it had
@@ -303,6 +315,15 @@ def _word_pattern(word: str) -> "re.Pattern[str]":
     ``OCS-project``, ``(OCS)`` and ``the OCS board`` all match. Non-ASCII
     neighbours are boundaries by definition, which is what lets a Chinese name
     match inside a Chinese sentence.
+
+    **The list must spell out every variant** (188B 低7): matching is on the
+    token, with no normalisation of case-in-word, punctuation, hyphens, spacing
+    or abbreviated forms — ``AcmeCorp``, ``ACME Corp`` and ``acme-corp`` are
+    three words, and one line in the list only covers the spelling it names.
+    Write each one down (the file has no limit on lines, and a missed spelling is
+    a leak this gate reports clean about). The one normalisation that *is*
+    applied is case-insensitivity (``re.IGNORECASE``), so ``acmecorp`` and
+    ``AcmeCorp`` are one entry.
     """
     return re.compile(
         r"(?<![0-9A-Za-z])" + re.escape(word) + r"(?![0-9A-Za-z])", re.IGNORECASE
@@ -332,6 +353,7 @@ def sensitive_report(
     words: list[str],
     paths: list[str],
     exemptions: list[tuple[str, str]] | None = None,
+    read_bytes: "Callable[[str], bytes | None] | None" = None,
 ) -> dict:
     """Everything the word gate found: ``hits`` / ``exempt`` / ``unscanned``.
 
@@ -351,6 +373,14 @@ def sensitive_report(
     straddle nothing in particular: a name in a table cell, a code block, an HTML
     comment. Line numbers come from counting newlines before each match, so a hit
     inside a long line still reports the right line.
+
+    ``read_bytes`` is **where the content comes from** (188B 低3): the default
+    reads the working tree under ``root``; a ``--staged`` run passes
+    :func:`index_blobs`' reader instead, so the bytes scanned are the ones the
+    commit would carry. ``None`` from a reader means "no such content"
+    (untracked, or absent from the index) and is skipped exactly as a missing
+    working-tree file was — the caller has already decided which paths are worth
+    asking about.
     """
     hits: list[str] = []
     exempt_hits: list[str] = []
@@ -368,13 +398,18 @@ def sensitive_report(
             # The list is not scanned by its own contents: every line of it
             # would match itself, and the hit would say nothing.
             continue
-        file = base / relative
-        if not file.is_file():
-            continue
-        try:
-            data = file.read_bytes()
-        except OSError:
-            continue
+        if read_bytes is not None:
+            data = read_bytes(relative)
+            if data is None:
+                continue
+        else:
+            file = base / relative
+            if not file.is_file():
+                continue
+            try:
+                data = file.read_bytes()
+            except OSError:
+                continue
         text = _decode_text(data)
         if text is None:
             unscanned.append(relative)
@@ -407,16 +442,103 @@ def sensitive_violations(
     words: list[str],
     paths: list[str],
     exemptions: list[tuple[str, str]] | None = None,
+    read_bytes: "Callable[[str], bytes | None] | None" = None,
 ) -> list[str]:
     """Just the ``hits`` half of :func:`sensitive_report` — the exit-code half."""
-    return sensitive_report(root, words, paths, exemptions)["hits"]
+    return sensitive_report(root, words, paths, exemptions, read_bytes)["hits"]
 
 
+def _git_raw(args: list[str]) -> bytes:
+    """git's stdout, undecoded — needed for blob content (see :func:`index_blobs`)."""
+    out = subprocess.run(["git", *args], capture_output=True, cwd=REPO_ROOT)
+    if out.returncode != 0:
+        print(
+            f"repo hygiene: git {' '.join(args)} failed: "
+            f"{out.stderr.decode('utf-8', 'replace').strip()}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    return out.stdout
 
+
+def index_blobs() -> dict[str, bytes]:
+    """``{path: bytes}`` for **every tracked file, as the index holds it** (188B 低3).
+
+    What a ``--staged`` run should scan: the content the commit would carry, not
+    the working tree a caller may have edited after staging (or staged and then
+    edited — the case a pre-commit hook exists for). The path list has always come
+    from the index (`git ls-files`); this makes the **content** match.
+
+    Read as one batch — `git ls-files -s` for the blob ids, then a single
+    `git cat-file --batch` — because the per-path spelling of the same read
+    (`git show :<path>`, one process each) costs ~2.5 s per 50 files on this
+    repository: ~65 s for its 1305 tracked files, on a hook that has to run before
+    every commit. The batch is the same bytes, once, in ~0.3 s.
+
+    A path whose blob cannot be read is simply absent from the result: the caller
+    treats "no content" as "nothing to scan", exactly as it treated a missing
+    working-tree file before. Blob content is what git stored, so a `text=auto`
+    working tree may differ from it in line endings — that is the point, and
+    matching is per token, so it changes no verdict.
+    """
+    wanted: dict[str, str] = {}
+    for record in _git_raw(["ls-files", "-s", "-z"]).split(b"\0"):
+        meta, _, path = record.partition(b"\t")
+        fields = meta.split()
+        if len(fields) < 3 or not path:
+            continue
+        wanted[path.decode("utf-8", "surrogateescape")] = fields[1].decode("ascii")
+    if not wanted:
+        return {}
+    shas = sorted(set(wanted.values()))
+    out = subprocess.run(
+        ["git", "cat-file", "--batch"],
+        input=("\n".join(shas) + "\n").encode("ascii"),
+        capture_output=True,
+        cwd=REPO_ROOT,
+    )
+    if out.returncode != 0:
+        print(
+            "repo hygiene: git cat-file --batch failed: "
+            f"{out.stderr.decode('utf-8', 'replace').strip()}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    by_sha: dict[str, bytes] = {}
+    cursor = 0
+    data = out.stdout
+    for sha in shas:
+        end = data.find(b"\n", cursor)
+        if end < 0:
+            break
+        header = data[cursor:end].split()
+        cursor = end + 1
+        if len(header) < 3 or header[1] != b"blob":
+            continue  # `missing`, or something that is not a blob: no content.
+        size = int(header[2])
+        by_sha[sha] = data[cursor:cursor + size]
+        cursor += size + 1
+    return {path: by_sha[sha] for path, sha in wanted.items() if sha in by_sha}
+
+
+def index_reader(blobs: dict[str, bytes] | None = None) -> "Callable[[str], bytes | None]":
+    """A :func:`sensitive_report` reader over the **index** rather than the tree.
+
+    A closure rather than the dict itself, so the caller has one read function and
+    the content is fetched **once**: the gate asks about every tracked path
+    (~1300 here) and the batch in :func:`index_blobs` already holds all of their
+    bytes. ``None`` for a path the index does not have is the reader's "no
+    content", which is what a missing working-tree file used to mean.
+    """
+    if blobs is None:
+        blobs = index_blobs()
+    return lambda relative: blobs.get(relative)
+
+
+# `-z`: NUL-separated, no quoting — git's default quotepath escaping would hide
+# non-ASCII paths from the container regex (the closing quote breaks the
+# `(/|$)` anchor), which is exactly the path a company board takes.
 def _git(*args: str) -> list[str]:
-    # `-z`: NUL-separated, no quoting — git's default quotepath escaping would
-    # hide non-ASCII paths from the container regex (the closing quote breaks
-    # the `(/|$)` anchor), which is exactly the path a company board takes.
     out = subprocess.run(["git", *args, "-z"], capture_output=True, cwd=REPO_ROOT)
     if out.returncode != 0:
         print(
@@ -432,7 +554,8 @@ def violations(paths: list[str]) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    if "--staged" in argv[1:]:
+    staged = "--staged" in argv[1:]
+    if staged:
         paths = _git("diff", "--cached", "--name-only", "--diff-filter=ACM")
     else:
         paths = _git("ls-files")
@@ -452,7 +575,13 @@ def main(argv: list[str]) -> int:
     words, exemptions = _word_list(REPO_ROOT / SENSITIVE_WORDS_FILE)
     if words:
         suspects = sorted(set(tracked) | set(paths))
-        report = sensitive_report(REPO_ROOT, words, suspects, exemptions)
+        # 188B 低3: under `--staged` the bytes come from the **index**, which is
+        # what the commit will carry — the working tree may have been edited after
+        # (or before) staging, and a hook that reads it reports on a file nobody
+        # is about to commit. `git show :<path>` is that read, batched (see
+        # `index_blobs`); a plain run keeps reading the working tree.
+        reader = index_reader() if staged else None
+        report = sensitive_report(REPO_ROOT, words, suspects, exemptions, reader)
         if SENSITIVE_WORDS_FILE in tracked:
             report["hits"] = [*report["hits"], f"{SENSITIVE_WORDS_FILE} itself is tracked"]
         if report["hits"] or report["exempt"]:

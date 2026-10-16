@@ -51,20 +51,28 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 再按下面的四步逐段读 `report.md` 做深度审查。
 
 - **只想问「能不能投板」就只读 `report.json` 的 `conclusion` 节**（185 起，顶层）——
-  它是这份报告**唯一权威**的结论，五个字段全是既有数据的**读**，不是第二套算法：
+  它是这份报告**唯一权威**的结论，六个字段全是既有数据的**读**，不是第二套算法：
 
   | 字段 | 是什么 | 同源处 |
   |---|---|---|
   | `verdict` | 审查跑完没有（`complete` / `complete-with-open-items` / `incomplete`） | `completion.verdict` |
   | `exitCode` | 这次跑退出几（就是下面那条退出码规则） | `summary.exitCode` |
   | `mayClaimPassed` | **窄义**：没有器件缺手册未审（053 §2.2） | `summary.mayClaimPassed` |
-  | `oneLiner` | 那一句话结论，**与 `board-report.md` 末行的结论句逐字同一份**（同一个生成函数） | `board_report_verdict` |
+  | `mayQuotePassed` | **脚本判读只看这一个布尔**：`verdict` 是 `complete` 才为 true，其余一律 false（188B） | 由 `verdict` 派生 |
+  | `oneLiner` | 那一句话结论，**与 `board-report.md` 的 `### 整工程能不能投板：` 后那一句逐字一致**（同一函数 `board_report_verdict`；两处各自独立调用，确定性保证逐字相同，不是"同一次调用"） | `board_report_verdict` |
   | `blockers` | 为什么不能投/还欠什么，逐条 | `completion.verdictWhy` |
 
   **AI 汇报、脚本判读一律只读 `conclusion` 节；`summary.*` / `completion.*` / `ai_slots` /
   `board_report` 都是它的投影**，要细节（哪条规则、哪个位号）再往下翻对应节。任何场合都**不要**
   自己拿 `summary.conclusion`（窄义字符串）或 `mayClaimPassed` 拼一句结论——那正是 185 要收掉的缝。
   节里没有的东西就是没有，不许由 `board_report` 或 `report.md` 反推一个「应该通过」。
+  **`exitCode 0 ≠ 可投板`**（188B）：退出码 0 还覆盖 `complete-with-open-items`（有欠账但不定
+  incomplete），也覆盖"看起来干净"的窄义读数；要拿一句话卡 CI，卡的是
+  `conclusion.mayQuotePassed`，不是退出码。
+  **旧报告没有 `conclusion` 节**（185 之前的 `report.json`）：重跑一次 `boardwise checkup`，
+  或任一重新写报告的子命令（`triage` / `need-datasheet`，它们都走同一个写口）把它重建出来；
+  不重跑就按旧五处顺序读——`completion.verdict` → `summary.exitCode` →
+  `summary.mayClaimPassed` → `board-report.md` 的结论句 → `completion.verdictWhy`。
 - **`needsDatasheet` 三键别读错**（185）：`completion.needsDatasheet` 是**窄义**（审查者手工标记数，
   已判 deprecated，改读 `completion.reviewerMarked`）；`completion.needsDatasheetTotal` 才是
   `needs_datasheet[]` 的全量（facts 触发 + 手工标记）。向工程师报「还差几份手册」时用

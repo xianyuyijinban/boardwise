@@ -1559,6 +1559,16 @@ class BridgeDaemon:
         )
 
     def _local_action(self, action: str) -> dict[str, Any]:
+        """Answer a daemon-owned action (``ping``). **No hint is consulted.**
+
+        Owner ``daemon`` is checked before routing (`handle_request`), so a
+        daemon-owned action never resolves `targetProject`/`targetInstance` — and
+        that is a fact callers have to know (188B 低6): ``ping`` carrying a
+        **stale instance id** still answers `pong`, because nothing about the id
+        was ever looked at. A pong is therefore evidence that *the daemon* is up,
+        never that the named window is: window liveness is ``windows[]`` below,
+        which is what `boardwise bridge status` prints.
+        """
         if action == "ping":
             return {
                 "pong": True,

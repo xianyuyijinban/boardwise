@@ -2,13 +2,14 @@
 
 岳 2026-10-15 的 AI 使用者体验反馈三块，本文件逐块钉：
 
-* **A — `report.json` 顶层的 `conclusion` 节**：五字段全是**既有数据的读**，
-  `oneLiner` 必须与 `board-report.md` 的结论句**逐字同一份**（同一个生成函数
-  `board_report_verdict`），`blockers` 必须逐字等于 `completion.verdictWhy`，
-  `verdict`/`exitCode`/`mayClaimPassed` 三个分别是 `completion.verdict` /
-  `summary.exitCode` / `summary.mayClaimPassed` 的读。三态（incomplete /
-  complete-with-open-items / complete）各钉一遍，外加真夹具上端到端一遍——
-  「同一个数」不许靠两次独立推导碰巧相等，必须是同一个调用。
+* **A — `report.json` 顶层的 `conclusion` 节**：六字段（185 的五 + 188B 的
+  `mayQuotePassed`）全是**既有数据的读**，`oneLiner` 必须与 `board-report.md` 的
+  `### 整工程能不能投板：` 后那一句**逐字一致**，`blockers` 必须逐字等于
+  `completion.verdictWhy`，`verdict`/`exitCode`/`mayClaimPassed` 三个分别是
+  `completion.verdict` / `summary.exitCode` / `summary.mayClaimPassed` 的读。三态
+  （incomplete / complete-with-open-items / complete）各钉一遍，外加真夹具上端到端一遍——
+  188B 低6 起口径是「**同一函数**、确定性保证逐字一致」（渲染器自己独立调一次
+  `board_report_verdict`），不再是「同一次调用」。
 * **B — `completion` 的三键计数**：`reviewerMarked`（现 `needsDatasheet` 窄义的正主）
   ≤ `needsDatasheetTotal`（`len(needs_datasheet[])`），且旧键 `== reviewerMarked`
   （保留原义、标注 deprecated），生成处那行注释也在场。
@@ -133,25 +134,48 @@ STATES = {
 
 @pytest.mark.parametrize("state", sorted(STATES))
 def test_the_conclusion_reads_the_five_exits_in_every_state(state):
-    """The section's five fields are the five older readings, value for value.
+    """The section's fields are the older readings, value for value.
 
     The failure this pins: a second verdict arithmetic living in `conclusion`.
     Every assertion below compares against the section that already owned the
     value, so a `conclusion` that recomputed anything would have to agree with
     four other places to pass — which is the drift 185 A exists to remove.
+
+    188B 低4 added the sixth: `mayQuotePassed`, the single boolean a script may
+    gate on, derived from `verdict` and from nothing else.
     """
     report = STATES[state]
     section = conclusion_section(report)
     summary, completion = report["summary"], report["completion"]
 
     assert tuple(section) == CONCLUSION_KEYS, (
-        "the section's key set is the task book's five, in order, and nothing else"
+        "the section's key set is the task book's (five + 188B's mayQuotePassed), "
+        "in order, and nothing else"
     )
     assert section["verdict"] == completion["verdict"]
     assert section["exitCode"] == summary["exitCode"]
     assert section["mayClaimPassed"] == summary["mayClaimPassed"]
     assert section["blockers"] == completion["verdictWhy"]
     assert section["oneLiner"] == board_report_verdict(report)["line"]
+    assert section["mayQuotePassed"] is (section["verdict"] == "complete")
+
+
+@pytest.mark.parametrize("state", sorted(STATES))
+def test_only_the_complete_verdict_may_be_quoted_as_a_pass(state):
+    """`mayQuotePassed` is the verdict, and `exitCode 0` is not (188B 低4).
+
+    Two states in this file exit 0 (`complete-with-open-items` and `complete`),
+    and the rule the SOP states is that 「exitCode 0 ≠ 可投板」 — so the boolean
+    has to disagree with a zero exit code on at least one of them, or it is a
+    restatement of the exit code under another name. It is derived from the
+    verdict and from nothing else, so `complete` is the only `True` in any state.
+    """
+    section = conclusion_section(STATES[state])
+    assert section["mayQuotePassed"] is (state == "complete")
+    if state == "complete-with-open-items":
+        assert section["exitCode"] == 0 and section["mayQuotePassed"] is False, (
+            "还欠着东西却退出 0 —— 这正是「脚本不能卡 exitCode」那条规则要防的"
+        )
 
 
 @pytest.mark.parametrize("state", sorted(STATES))

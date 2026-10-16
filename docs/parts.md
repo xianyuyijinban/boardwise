@@ -80,6 +80,9 @@ boardwise parts add TPL2981-30DBVR --lcsc C9900000001
   **JSON-document** edit — a library-wide re-serialisation would reorder keys
   inside existing entries — so it backs the file up to a `.tmp` sibling, re-parses
   the result with the real validator, and rolls back if the validator refuses.
+  `--json` is written **before** the shelf is touched (188B): a json path that
+  cannot be opened (a directory, a missing parent, a read-only volume) exits 2 with
+  the shelf byte-identical, instead of leaving a moved shelf behind a failed run.
 
 ### The manual facts path: `parts add --facts … --verified` (186)
 
@@ -155,6 +158,11 @@ boardwise parts add ACME-PWR-1000 --lcsc C9900000001 \
 * The same lookup is what `parts select <query> --resolve` does for an online
   pick; the difference is the destination: `select --write` appends a
   `catalog-select` entry, `add --resolve` writes the entry the AI is curating.
+  `select --write` **without** `--library` resolves the destination the same way
+  `add` does — the repository's `blocklib/parts.json` from a checkout, the user's
+  own `~/.boardwise/parts.json` when frozen (188B, 187B 遗留4: the write used to
+  be handed a literal `None` there, i.e. a `TypeError` in the middle of the
+  flow), so the entry always lands in the shelf the review reads back.
 
 ### The gate
 

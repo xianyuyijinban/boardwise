@@ -56,6 +56,7 @@ from .engines.checkup import (
     render_board_report,
     render_report_markdown,
     render_review_summary,
+    reviewed_by_shelf,
     summary_template,
     unknown_parts,
     unreviewed_counts_by_class,
@@ -3400,6 +3401,7 @@ def _checkup_report(
     slots: dict,
     unreviewed_parts: list[dict] | None = None,
     needs_datasheet: list[dict] | None = None,
+    reviewed_by_shelf: list[dict] | None = None,
     warning_triage: list[dict] | None = None,
     layout_review: dict | None = None,
     architecture: dict | None = None,
@@ -3447,6 +3449,12 @@ def _checkup_report(
     `pcb_review` section is `incomplete`. Nothing else moved: `layout_review`,
     `intent` and `pcb_review` keep the 090 A1 / 126a "adds a reading, no bump"
     deal, and `mayClaimPassed` keeps its narrow meaning.
+
+    188B added `reviewedByShelf` — the rows the shelf **judged**, i.e. the ones
+    that left `unreviewed_parts` — and likewise does not bump: it is a reading of
+    the same walk (`checkup.engines.checkup.reviewed_by_shelf`), no existing key
+    changes meaning, and the gate (`completion`, `mayClaimPassed`, the exit code)
+    never reads it.
     """
     body: dict = {
         "schema": CHECKUP_SCHEMA,
@@ -3465,6 +3473,12 @@ def _checkup_report(
         "modules": modules,
         "findings": findings,
         "unreviewed_parts": list(unreviewed_parts or []),
+        # 188B (186 中1): the parts the shelf judged — the rows that left the
+        # section above. Added, never a rename, and always present (an empty list
+        # is the honest "nothing was judged by the shelf"), because the question
+        # it answers is "why is U3 not on the 未审 list?" and it is answerable
+        # only if the report kept the answer.
+        "reviewedByShelf": list(reviewed_by_shelf or []),
         # 058: always present, empty list included — the reviewer's mark channel
         # exists from the first report on (`boardwise need-datasheet` fills it).
         "needs_datasheet": list(needs_datasheet or []),
@@ -3546,11 +3560,16 @@ def _write_checkup_report(out_dir: Path, report: dict) -> Path:
 
     185 A: the `conclusion` section is written here for the same reason, one level
     up — it is the report's **one** answer (verdict / exit code / may-claim /
-    one-liner / blockers), and the one-liner is the integrated report's own closing
-    line. Passing the section's verdict into :func:`conclusion_section` is what
-    makes that literal rather than a promise: one call to `board_report_verdict`,
-    two readers. Nothing else in the report reads `conclusion` — it is a projection
-    written for whoever needs a single place to ask, not a new gate.
+    may-quote / one-liner / blockers), and the one-liner is the same sentence the
+    integrated report closes with. Passing the section's verdict into
+    :func:`conclusion_section` is what makes that literal **for this writer**: one
+    call to `board_report_verdict`, two readers. The renderer makes its own call
+    to the same function when it prints `board-report.md` (188B 低6: same
+    *function*, not the same *call*) — the two agree because that function is a
+    pure read of the report, which is what `tests/test_185_conclusion.py` asserts
+    from three independent recomputations. Nothing else in the report reads
+    `conclusion` — it is a projection written for whoever needs a single place to
+    ask, not a new gate.
     """
     section = board_report_section(report)
     report["board_report"] = section
@@ -6133,6 +6152,12 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     unreviewed = unreviewed_parts(
         model, library=shelf, datasheet_dir=Path(UNREVIEWED_DATASHEET_DIR)
     )
+    # 188B (186 中1): the same walk, the other half of the answer — the parts the
+    # shelf *judged*, and by which identity step. It is what makes "why is this
+    # part not on the list?" checkable, and it is where a name-matched judgement
+    # (`shelfMatchedBy: name`, the weaker claim) stays visible instead of
+    # vanishing with the row.
+    reviewed = reviewed_by_shelf(model, library=shelf)
     summary["unreviewedParts"] = len(unreviewed)
     # 184: the same number split by reason. One count for problems that need
     # different work (no MPN vs a value nobody can read vs no supplier) sent the
@@ -6283,6 +6308,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         drc=drc, findings=findings, summary=summary, modules=modules, slots=slots,
         unreviewed_parts=unreviewed,
         needs_datasheet=needs_datasheet,
+        reviewed_by_shelf=reviewed,
         warning_triage=triage,
         layout_review=(
             layout_review_section(source=aesthetics_source, pages=canvas)
@@ -6624,6 +6650,12 @@ def _cmd_need_datasheet(args: argparse.Namespace) -> int:
                 "updated": updated,
                 "needs_datasheet": needs_datasheet,
                 "completion": report["completion"],
+                # 188B 低2: the five-field `conclusion` section, under its own
+                # name. `conclusion` above keeps its old meaning (the narrow
+                # `summary.conclusion` sentence) — a caller written against the
+                # old payload reads exactly what it read before.
+                "conclusionSection": report.get("conclusion")
+                or conclusion_section(report),
                 "conclusion": report["summary"].get("conclusion", ""),
                 "report": str(report_path),
                 "sidecar": str(sidecar_path),
@@ -6819,6 +6851,11 @@ def _cmd_triage(args: argparse.Namespace) -> int:
                 "updated": updated,
                 "warning_triage": triage,
                 "completion": report["completion"],
+                # 188B 低2: same addition as `need-datasheet`'s payload — the
+                # five-field `conclusion` section under a name of its own, with
+                # the old `conclusion` string untouched beside it.
+                "conclusionSection": report.get("conclusion")
+                or conclusion_section(report),
                 "conclusion": report["summary"].get("conclusion", ""),
                 "report": str(report_path),
                 "sidecar": str(sidecar_path),
@@ -12607,10 +12644,19 @@ def _cmd_parts_select(args: argparse.Namespace) -> int:
                         f"({existing.provenance.kind}); nothing written"
                     )
                     return 0
+                # 187B 遗留4 (188B): the write goes to the same file the **read**
+                # resolved, through the same helper `parts add` uses. Before this,
+                # `--write` without `--library` handed `None` to `save_parts` —
+                # `Path(None)`, a TypeError out of the middle of the flow, in both
+                # a checkout and the exe. `_parts_library_path(writable=True)` is
+                # that helper: the repo-relative shelf from a checkout, the user's
+                # own shelf (seeded from the bundled copy on first use) when
+                # frozen — never a file the review would not read back.
+                shelf_path = _parts_library_path(args, writable=True)
                 library.parts.append(entry)
                 library.parts.sort(key=lambda p: p.key)
-                save_parts(library, args.library)
-                print(f"  written: {args.library} now holds {len(library.parts)} entries")
+                save_parts(library, shelf_path)
+                print(f"  written: {shelf_path} now holds {len(library.parts)} entries")
             return 0 if resolved.resolved else 1
 
         return asyncio.run(run())
@@ -13037,8 +13083,72 @@ def _candidate_key(mpn: str, lcsc: str) -> str:
     )
 
 
-def _facts_from_flags(args: argparse.Namespace) -> tuple[dict, str, str]:
-    """``(facts, source, error)`` from ``--facts <file.json>`` / ``--fact k=js``.
+#: A 立创商城 supplier part number: `C` followed by digits (`C9900000001`,
+#: `C46634460`). Used to compare a `parts fetch` sidecar's own strings with the
+#: identity the caller typed (188B 中3) — the tool's own vocabulary, not a parse
+#: of the C-number field.
+_LCSC_TOKEN_RE = re.compile(r"C\d{4,}", re.IGNORECASE)
+
+
+def _sidecar_identity_warnings(
+    label: str, url: str, *, mpn: str, lcsc: str
+) -> list[str]:
+    """Where a ``--facts`` sidecar names a **different** part than the command line.
+
+    188B 中3. `parts fetch` writes ``<stem>.candidate.json`` as
+    ``{"label": "<C码> <厂商> <MPN>", "url": …, "facts": …}``, and the whole point
+    of accepting that file **as it stands** (186 §A) is that the AI hands back
+    what it just read. The failure this catches is the one that file shape makes
+    easy: facts extracted for part A, then written onto part B — the entry then
+    drives rules with another device's requirements, which no schema can see.
+
+    **A warning, never a refusal.** The label is free text and `--mpn`/`--lcsc`
+    are exact strings, so a hit is "these do not look like the same part", not
+    "this is wrong" — and a tool that refused here would be refusing a hand-off
+    that legitimately carries a supplier's own spelling. Two readings, both
+    checkable: the C-numbers named in the label/url (a mismatch is the strong
+    signal), and whether the label mentions the MPN at all.
+    """
+    warnings: list[str] = []
+    if lcsc:
+        for where, text in (("label", label), ("url", url)):
+            found = sorted(
+                {match.group(0).upper() for match in _LCSC_TOKEN_RE.finditer(text or "")}
+            )
+            if found and lcsc.upper() not in found:
+                warnings.append(
+                    f"侧车 {where} 里的 C 码 {'/'.join(found)} 与命令行的 --lcsc {lcsc} "
+                    "不是同一个"
+                )
+    if mpn and label and mpn.casefold() not in label.casefold():
+        warnings.append(
+            f"侧车 label {label!r} 里没有命令行的 --mpn {mpn}"
+        )
+    return warnings
+
+
+def _identity_warning_note(warnings: list[str]) -> str:
+    """A ``--facts`` sidecar's identity reading, for an entry's ``provenance.note``.
+
+    188B 中3: the mismatch is recorded where the entry's own history lives, so the
+    paper trail outlives the terminal that printed it. Empty when there is nothing
+    to say — an entry written without a mismatch keeps exactly the note it had —
+    and worded as a **reading** ("not the same part, as far as these strings go"),
+    never as a verdict: the facts did land and the entry does drive rules.
+    """
+    if not warnings:
+        return ""
+    return (
+        " —— WARN（188B 中3 侧车身份比对，未拒写）："
+        + "；".join(warnings)
+        + "。核一下这到底是不是同一颗料的 facts"
+    )
+
+
+def _facts_from_flags(
+    args: argparse.Namespace,
+) -> tuple[dict, str, str, list[str]]:
+    """``(facts, source, error, warnings)`` from ``--facts <file.json>`` / ``--fact k=js``.
 
     Two spellings for one thing (task 186 §A): a **file** is what an AI writes
     after reading a datasheet (the whole object, reviewable in a diff), and a
@@ -13053,7 +13163,16 @@ def _facts_from_flags(args: argparse.Namespace) -> tuple[dict, str, str]:
     in the file passes, so a fact without a page-cited provenance is refused at
     the same place whether it was typed, fetched or written by hand. What is
     checked here is only what the validator cannot say: which sources the caller
-    used, and that a key is spelled the way the vocabulary spells it.
+    used, that a key is spelled the way the vocabulary spells it, and — 188B 中3
+    — whether the sidecar's own ``label``/``url`` name the part the command line
+    does (:func:`_sidecar_identity_warnings`; the answer travels in ``warnings``
+    and lands in the entry's provenance, never as a refusal).
+
+    ``RecursionError`` is caught here too (188B 低1): a deeply nested JSON object
+    — ``[[[[…]]]]`` far past ``sys.getrecursionlimit`` — makes the parser raise it
+    rather than ``ValueError``, and an uncaught one reached the user as a
+    traceback after the shelf had been read. It is unusable input, so: exit 2,
+    named like every other bad-input answer.
     """
     import json
 
@@ -13061,45 +13180,61 @@ def _facts_from_flags(args: argparse.Namespace) -> tuple[dict, str, str]:
 
     facts: dict = {}
     sources: list[str] = []
+    warnings: list[str] = []
     if getattr(args, "facts", None):
         path = Path(args.facts)
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except OSError as exc:
-            return {}, "", f"读不了 {path}: {exc}"
+            return {}, "", f"读不了 {path}: {exc}", []
+        except RecursionError:
+            return {}, "", (
+                f"{path} 嵌套太深：JSON 解析爆栈（RecursionError）——"
+                "facts 不该是这种形状，拆开或压平再来"
+            ), []
         except ValueError as exc:
-            return {}, "", f"{path} 不是合法 JSON: {exc}"
+            return {}, "", f"{path} 不是合法 JSON: {exc}", []
         if isinstance(raw, dict) and "facts" in raw and set(raw) >= {"facts"}:
             # `parts fetch`'s own candidate sidecar (`<stem>.candidate.json`) has
             # this shape, so what a fetch proposed can be handed straight back in
             # — one handoff, no hand-written wrapper. A facts object can never
             # carry a `facts` key of its own: FACTS_KEYS has none.
+            warnings = _sidecar_identity_warnings(
+                str(raw.get("label") or ""),
+                str(raw.get("url") or ""),
+                mpn=str(getattr(args, "mpn", "") or ""),
+                lcsc=str(getattr(args, "lcsc", "") or ""),
+            )
             raw = raw["facts"]
         if not isinstance(raw, dict) or not raw:
             return {}, "", (
                 f"{path}: 期望一个非空的 facts 对象（键取自 {', '.join(FACTS_KEYS)}），"
                 f"拿到 {type(raw).__name__}"
-            )
+            ), []
         facts.update(raw)
         sources.append(f"--facts {path}")
     for item in getattr(args, "fact", None) or []:
         key, sep, value = str(item).partition("=")
         key = key.strip()
         if not sep or not key:
-            return {}, "", f"--fact 期望 KEY=JSON，拿到 {item!r}（例：--fact 'nc_pins={{\"pins\":[\"2\"],\"provenance\":\"file:ds.pdf p.3\"}}'）"
+            return {}, "", f"--fact 期望 KEY=JSON，拿到 {item!r}（例：--fact 'nc_pins={{\"pins\":[\"2\"],\"provenance\":\"file:ds.pdf p.3\"}}'）", []
         if key not in FACTS_KEYS:
             return {}, "", (
                 f"--fact 的键 {key!r} 不在事实词表里；可用：{', '.join(FACTS_KEYS)}"
-            )
+            ), []
         if key in facts:
-            return {}, "", f"fact {key!r} 给了两次（--facts 文件里也有），去重后再来"
+            return {}, "", f"fact {key!r} 给了两次（--facts 文件里也有），去重后再来", []
         try:
             parsed = json.loads(value)
+        except RecursionError:
+            return {}, "", (
+                f"--fact {key}: 值嵌套太深，JSON 解析爆栈（RecursionError）"
+            ), []
         except ValueError as exc:
-            return {}, "", f"--fact {key}: 值必须是 JSON: {exc}"
+            return {}, "", f"--fact {key}: 值必须是 JSON: {exc}", []
         facts[key] = parsed
         sources.append(f"--fact {key}")
-    return facts, "; ".join(sources), ""
+    return facts, "; ".join(sources), "", warnings
 
 
 def _uuid_requirement_note() -> str:
@@ -13152,6 +13287,48 @@ def _write_shelf_document(
         else:
             library_path.unlink(missing_ok=True)
         return None, f"the entry was refused by the validator, rolled back: {exc}"
+
+
+def _prospective_shelf(raw: dict, library_path: Path) -> tuple[object | None, str]:
+    """The document **about to be written**, parsed by the real validator (188B 低4).
+
+    ``(library, error)``. Since 188B the `--json` output is written *before* the
+    shelf (see :func:`_write_parts_json`), and it has to describe what landed —
+    so the answers come from the same validator on the same document, one step
+    earlier. An entry the validator refuses is refused here, before either file
+    exists, which is also what keeps the json from claiming `ok: true` about a
+    write that then rolled back.
+    """
+    from boardwise.core.parts import PartError, library_from_json
+
+    try:
+        return library_from_json(raw, str(library_path)), ""
+    except PartError as exc:
+        return None, f"写进去的条目验证器不认（一个字没写）：{exc}"
+
+
+def _write_parts_json(payload: dict, path: str | Path) -> str:
+    """Write a 039-toolchain command's `--json` output; ``""`` when it landed.
+
+    188B 低4: the order is the point. The shelf is a **file a rule reads** and the
+    json is a report *about* that write, so a json path that cannot be opened
+    (a directory, a read-only volume, a typo'd directory that does not exist) must
+    fail **before** the shelf changes — otherwise the caller sees exit 2 and a
+    shelf that moved, which is the one combination nobody can undo without a
+    backup nobody told them to keep. Every 039-toolchain writer calls this before
+    :func:`_write_shelf_document`; a shelf write that fails after it is the
+    remaining half (the json then describes an attempt, and the exit code and the
+    stderr message say so).
+    """
+    import json
+
+    try:
+        Path(path).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        return f"--json 写不了 {path}: {exc}（货架一个字没动）"
+    return ""
 
 
 def _resolve_add_uuids(args: argparse.Namespace) -> tuple[str, str, str]:
@@ -13291,10 +13468,15 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
         library = PartLibrary()
         raw = library_to_json(library)
 
-    facts, facts_source, error = _facts_from_flags(args)
+    facts, facts_source, error, identity_warnings = _facts_from_flags(args)
     if error:
         print(f"boardwise parts add: {error}", file=sys.stderr)
         return 2
+    for warning in identity_warnings:
+        # 188B 中3: a WARN, not a refusal — the facts land, and the mismatch is
+        # written into the entry's provenance below so a later reader sees it
+        # without this terminal.
+        print(f"boardwise parts add: WARN 侧车身份可能不是同一颗料 —— {warning}", file=sys.stderr)
     if args.verified and not facts:
         print(
             "boardwise parts add: --verified 要配 facts —— 核验一条没有 facts 的条目"
@@ -13346,6 +13528,7 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
             existing=existing,
             facts=facts,
             facts_source=facts_source,
+            identity_warnings=identity_warnings,
             backup=backup,
             existed=existed,
         )
@@ -13383,7 +13566,8 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
                 "candidate scaffolded by `parts add` (039): identity only — no "
                 "category, no facts, and the uuids the bridge fills have not been "
                 "resolved yet"
-            ),
+            )
+            + _identity_warning_note(identity_warnings),
         ),
         notes=(
             [
@@ -13406,6 +13590,44 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
         ),
     )
     raw.setdefault("parts", []).append(entry_to_json(candidate))
+    prospective, error = _prospective_shelf(raw, library_path)
+    if prospective is None:
+        print(f"boardwise parts add: {error}", file=sys.stderr)
+        return 2
+    written = prospective.get(key)
+    if args.json_path:
+        # 188B 低4: the report about the write goes first, so a json write that
+        # cannot land leaves the shelf exactly as it was.
+        problem = _write_parts_json(
+            {
+                "command": "parts-add",
+                "ok": True,
+                "library": str(library_path),
+                "backup": str(backup) if existed else "",
+                "key": key,
+                "mpn": candidate.mpn,
+                "lcsc": candidate.lcsc,
+                "created": True,
+                "facts": sorted(facts),
+                "factsSource": facts_source,
+                "category": candidate.category,
+                "deviceUuid": written.deviceUuid if written else device_uuid,
+                "libraryUuid": written.libraryUuid if written else library_uuid,
+                # Whether the bridge was asked — 187c: the uuids above say
+                # what landed, this says where they came from.
+                "resolveRequested": bool(getattr(args, "resolve", False)),
+                "factsVerified": bool(written is not None and written.facts_verified),
+                "entriesOnShelf": len(prospective.parts),
+                # 188B 中3: the sidecar-vs-command-line identity readings that
+                # were not refusals. Recorded here as well as in the entry's
+                # provenance, so a caller sees them without reading the shelf.
+                "identityWarnings": list(identity_warnings),
+            },
+            args.json_path,
+        )
+        if problem:
+            print(f"boardwise parts add: {problem}", file=sys.stderr)
+            return 2
     if existed:
         import shutil
 
@@ -13417,7 +13639,6 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
         print(f"boardwise parts add: {error}", file=sys.stderr)
         return 2
 
-    written = reloaded.get(key)
     if not facts:
         gate = "false — curate the facts, then flip the flag in review"
     elif args.verified:
@@ -13433,34 +13654,6 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
     print(f"  gate: facts_verified = {gate}")
     print(f"next: boardwise parts show {key}")
     if args.json_path:
-        Path(args.json_path).write_text(
-            json.dumps(
-                {
-                    "command": "parts-add",
-                    "ok": True,
-                    "library": str(library_path),
-                    "backup": str(backup) if existed else "",
-                    "key": key,
-                    "mpn": candidate.mpn,
-                    "lcsc": candidate.lcsc,
-                    "created": True,
-                    "facts": sorted(facts),
-                    "factsSource": facts_source,
-                    "category": candidate.category,
-                    "deviceUuid": written.deviceUuid if written else device_uuid,
-                    "libraryUuid": written.libraryUuid if written else library_uuid,
-                    # Whether the bridge was asked — 187c: the uuids above say
-                    # what landed, this says where they came from.
-                    "resolveRequested": bool(getattr(args, "resolve", False)),
-                    "factsVerified": bool(written is not None and written.facts_verified),
-                    "entriesOnShelf": len(reloaded.parts),
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
         print(f"json: {args.json_path}")
     return 0
 
@@ -13475,6 +13668,7 @@ def _fill_existing_entry(
     facts_source: str,
     backup: Path,
     existed: bool,
+    identity_warnings: list[str] | None = None,
 ) -> int:
     """Write ``facts`` onto an entry already on the shelf (186 §A).
 
@@ -13543,6 +13737,14 @@ def _fill_existing_entry(
         "facts_verified stays false — no rule acts on them until a human says so"
     )
     body["notes"] = list(existing.notes) + [marker]
+    # 188B 中3: the sidecar-vs-command-line identity reading goes into the
+    # entry's own provenance, where the rest of its history lives — a warning
+    # that only ever reached a terminal would be gone by the time anyone audits
+    # the facts it warns about.
+    note_suffix = _identity_warning_note(list(identity_warnings or []))
+    if note_suffix:
+        provenance = body.setdefault("provenance", {})
+        provenance["note"] = str(provenance.get("note") or "") + note_suffix
     try:
         updated = entry_from_json(body, f"add[{existing.key}]")
     except PartError as exc:
@@ -13553,6 +13755,42 @@ def _fill_existing_entry(
         if isinstance(item, dict) and item.get("key") == existing.key:
             raw["parts"][index] = entry_to_json(updated)
             break
+    prospective, error = _prospective_shelf(raw, library_path)
+    if prospective is None:
+        print(f"boardwise parts add: {error}", file=sys.stderr)
+        return 2
+    on_shelf = prospective.get(existing.key)
+    if args.json_path:
+        # 188B 低4: same order as the create branch — the json first, so a json
+        # write that cannot land leaves the shelf untouched.
+        problem = _write_parts_json(
+            {
+                "command": "parts-add",
+                "ok": True,
+                "library": str(library_path),
+                "backup": str(backup) if existed else "",
+                "key": existing.key,
+                "mpn": existing.mpn,
+                "lcsc": existing.lcsc,
+                "created": False,
+                "facts": sorted(facts),
+                "factsSource": facts_source,
+                "category": on_shelf.category if on_shelf is not None else "",
+                "deviceUuid": on_shelf.deviceUuid if on_shelf is not None else "",
+                "libraryUuid": on_shelf.libraryUuid if on_shelf is not None else "",
+                # 187c: what landed, and whether the bridge supplied it.
+                "resolveRequested": bool(getattr(args, "resolve", False)),
+                "factsVerified": bool(
+                    on_shelf is not None and on_shelf.facts_verified
+                ),
+                "entriesOnShelf": len(prospective.parts),
+                "identityWarnings": list(identity_warnings),
+            },
+            args.json_path,
+        )
+        if problem:
+            print(f"boardwise parts add: {problem}", file=sys.stderr)
+            return 2
     if existed:
         shutil.copy2(library_path, backup)
     reloaded, error = _write_shelf_document(
@@ -13561,7 +13799,6 @@ def _fill_existing_entry(
     if reloaded is None:
         print(f"boardwise parts add: {error}", file=sys.stderr)
         return 2
-    on_shelf = reloaded.get(existing.key)
     print(
         f"entry updated: {existing.key} → {library_path} "
         f"(now {len(reloaded.parts)} entries)"
@@ -13577,35 +13814,6 @@ def _fill_existing_entry(
         print(f"next: 核过页号后重跑 `boardwise parts add {args.mpn} --lcsc {args.lcsc} "
               f"--facts {args.facts or '<facts.json>'} --verified`")
     if args.json_path:
-        Path(args.json_path).write_text(
-            json.dumps(
-                {
-                    "command": "parts-add",
-                    "ok": True,
-                    "library": str(library_path),
-                    "backup": str(backup) if existed else "",
-                    "key": existing.key,
-                    "mpn": existing.mpn,
-                    "lcsc": existing.lcsc,
-                    "created": False,
-                    "facts": sorted(facts),
-                    "factsSource": facts_source,
-                    "category": on_shelf.category if on_shelf is not None else "",
-                    "deviceUuid": on_shelf.deviceUuid if on_shelf is not None else "",
-                    "libraryUuid": on_shelf.libraryUuid if on_shelf is not None else "",
-                    # 187c: what landed, and whether the bridge supplied it.
-                    "resolveRequested": bool(getattr(args, "resolve", False)),
-                    "factsVerified": bool(
-                        on_shelf is not None and on_shelf.facts_verified
-                    ),
-                    "entriesOnShelf": len(reloaded.parts),
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
         print(f"json: {args.json_path}")
     return 0
 
@@ -13625,10 +13833,17 @@ DATASHEET_DIR = ".tmp_datasheets"
 #: images extracts to a page of headings and no records). Saying so, and naming
 #: the path that does work, is the whole difference between "the tool is broken"
 #: and "this document needs a human".
+#:
+#: The command carries `--category` since 188B (186 中2): an entry with facts and
+#: no class is one `rules.facts._category_state` answers UNKNOWN for, so a reader
+#: who followed this hint without it would close the facts half of the gate and
+#: stay on the 未审 list — the same trap the report's own clearing line now spells
+#: out.
 EMPTY_FACTS_HINT = (
     "facts 提取为空——文档语言/结构可能不在提取范围，可走人工路径："
     "读全文（`text` 那个 dump）→ 写 facts JSON → "
-    "`boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`"
+    "`boardwise parts add <MPN> --lcsc <C码> --category <类别> "
+    "--facts <facts.json> --verified`"
 )
 
 #: A browser-shaped UA: TI and LCSC both answer a bare urllib request with an
@@ -22208,28 +22423,74 @@ MULTI_WINDOW_FIX = (
     "`boardwise bridge status` 会列出每个在线窗口的工程名与 id"
 )
 
+#: The two codes a **hint** produces when it names nothing, and their fixes
+#: (188B 低3). Both are the `MULTI_WINDOW_FIX` situation from the other side: the
+#: extension is attached and working, so sending the reader to re-open the editor
+#: ("先让扩展连上") spends their time and ends where it started. `INSTANCE_STALE`
+#: is the stale-id case — the connector mints a new instance id every time a
+#: window greets the daemon, so an id copied out of yesterday's log names nothing
+#: today; `PROJECT_NOT_CONNECTED` is the name case — no online window has that
+#: project open (or the name is a typo). Neither is fixed by anything on the
+#: extension's side; both are fixed by re-reading the window table.
+INSTANCE_STALE_CODE = "INSTANCE_STALE"
+PROJECT_NOT_CONNECTED_CODE = "PROJECT_NOT_CONNECTED"
 
-def _window_unspecified(error: str) -> bool:
-    """Was this failure the daemon refusing to guess a window?
+INSTANCE_STALE_FIX = (
+    "实例已失效（窗口已关，或页面重连后 id 变了——连接器每次握手都新发一个 id）："
+    "用 `boardwise bridge status` 的 windows[] 重取在线窗口 id，"
+    "再用 `--instance <新 id>` 重跑 `boardwise doctor`；"
+    "**别去重开扩展**——扩展是连着的，问题在这个 id 上"
+)
+
+PROJECT_NOT_CONNECTED_FIX = (
+    "没有在线窗口打开这个工程（工程名写错，或它还没在编辑器里打开）："
+    "`boardwise bridge status` 的 windows[] 列出每个在线窗口的工程名，"
+    "对准了再用 `--project <工程名>` 重跑；要审的工程没开就先打开它"
+)
+
+
+def _leading_code(error: str, code: str) -> bool:
+    """Is ``code`` the **leading** ``[CODE]`` of a `_cmd_doctor` error string?
 
     The text is the one `_cmd_doctor` builds from a `BridgeError` — ``[CODE] …`` —
-    so the code is read from the *leading bracket* rather than searched for
-    anywhere in the string: a message that merely mentions the code (the refused
-    action's own text does: the daemon lists the windows it could have picked)
-    must not by itself turn a check into the multi-window story.
+    so a code is read from the *leading bracket* rather than searched for anywhere
+    in the string: a message that merely mentions it (the refused action's own
+    text quotes the daemon's message, `WINDOW_UNSPECIFIED` included) must not by
+    itself turn a check into that story.
     """
-    return (error or "").startswith(f"[{WINDOW_UNSPECIFIED_CODE}]")
+    return (error or "").startswith(f"[{code}]")
+
+
+def _window_unspecified(error: str) -> bool:
+    """Was this failure the daemon refusing to guess a window?"""
+    return _leading_code(error, WINDOW_UNSPECIFIED_CODE)
 
 
 def _connector_fix(error: str) -> str:
     """The fix line for a connector-dependent check that could not be made.
 
-    Two stories, and they are not interchangeable: no connector at all (fix the
-    extension) versus a connector that answered the daemon but not this call
-    (name the window). Everything that is not the second one keeps the sentence
-    it always had — an unrecognised error is not evidence for a new story.
+    Three stories now, and they are not interchangeable:
+
+    * **nothing attached** — fix the extension (:data:`CONNECTOR_FIX`);
+    * **a hint that named several windows** — the daemon's designed refusal, so
+      the reader names one (:data:`MULTI_WINDOW_FIX`);
+    * **a hint that named nothing** — `INSTANCE_STALE` (a stale window id) or
+      `PROJECT_NOT_CONNECTED` (a project no online window has open), each with its
+      own fix since 188B 低3. These used to fall through to `CONNECTOR_FIX`, which
+      told the reader to go and re-enable an extension that is attached and
+      working — the same mistake issue #6 fixed for `WINDOW_UNSPECIFIED`, made one
+      code over.
+
+    Everything else keeps the sentence it always had — an unrecognised error is
+    not evidence for a new story.
     """
-    return MULTI_WINDOW_FIX if _window_unspecified(error) else CONNECTOR_FIX
+    if _window_unspecified(error):
+        return MULTI_WINDOW_FIX
+    if _leading_code(error, INSTANCE_STALE_CODE):
+        return INSTANCE_STALE_FIX
+    if _leading_code(error, PROJECT_NOT_CONNECTED_CODE):
+        return PROJECT_NOT_CONNECTED_FIX
+    return CONNECTOR_FIX
 
 
 def _daemon_fix() -> str:

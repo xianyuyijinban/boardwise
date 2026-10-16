@@ -252,19 +252,52 @@ def test_a_refused_window_guess_points_at_addressing_instead_of_the_extension():
         assert "WINDOW_UNSPECIFIED" in entry.detail, name
 
 
-def test_only_the_refusal_code_changes_the_story():
-    # A near-miss code must not: `PROJECT_NOT_CONNECTED` also arrives from a
-    # routing hint, but its meaning is "no window has that project open", which
-    # the extension sentence answers as well as anything does.
-    checks = run_doctor(healthy_probe(
-        probe=None, probe_error="[PROJECT_NOT_CONNECTED] no connected window has project 'x' open",
-        documents=None, documents_error="[PROJECT_NOT_CONNECTED] no connected window has project 'x' open",
+def test_the_hint_codes_that_name_nothing_get_their_own_fix():
+    # 188B 低3 reverses 185's reading of `PROJECT_NOT_CONNECTED`. The old comment
+    # here said "its meaning is that no window has that project open, which the
+    # extension sentence answers as well as anything" — but the extension sentence
+    # sends the reader to re-enable an extension that is attached and working, and
+    # the actual next step is to re-read the window table (`bridge status`), which
+    # is what the fix now says. `INSTANCE_STALE` is the same situation one code
+    # over: a stale instance id, fixed by copying a live id out of that table.
+    cases = {
+        "INSTANCE_STALE": "[INSTANCE_STALE] no live window answers to 'inst-gone'",
+        "PROJECT_NOT_CONNECTED": "[PROJECT_NOT_CONNECTED] no connected window has project 'x' open",
+    }
+    for code, error in cases.items():
+        checks = run_doctor(healthy_probe(
+            probe=None, probe_error=error,
+            documents=None, documents_error=error,
+            connector_version="", editor_version="",
+        ))
+        assert check(checks, "connector").ok is True, (
+            "the extension is attached; only the hint was wrong"
+        )
+        for name in ("methods", "editor-version", "connector-version", "project"):
+            entry = check(checks, name)
+            assert entry.ok is False, name
+            assert "bridge status" in entry.fix, (code, name, entry.fix)
+            assert "立创 EDA Pro" not in entry.fix, (
+                f"{code}/{name}: 扩展是连着的，别再把人送去重开它"
+            )
+            # The daemon's own words survive in the detail, so the reader can see
+            # which code this was without taking the fix line's word for it.
+            assert code in entry.detail, name
+    # The stale-instance sentence names the thing that actually changed (the id)
+    # rather than the window, and the project one names both repairing moves: the
+    # name may be a typo, or the project may genuinely not be open.
+    stale = check(run_doctor(healthy_probe(
+        probe=None, probe_error=cases["INSTANCE_STALE"],
+        documents=None, documents_error=cases["INSTANCE_STALE"],
         connector_version="", editor_version="",
-    ))
-    for name in ("methods", "editor-version", "connector-version", "project"):
-        entry = check(checks, name)
-        assert entry.ok is False, name
-        assert "立创 EDA Pro" in entry.fix, (name, entry.fix)
+    )), "methods")
+    assert "windows[]" in stale.fix and "--instance" in stale.fix, stale.fix
+    missing = check(run_doctor(healthy_probe(
+        probe=None, probe_error=cases["PROJECT_NOT_CONNECTED"],
+        documents=None, documents_error=cases["PROJECT_NOT_CONNECTED"],
+        connector_version="", editor_version="",
+    )), "methods")
+    assert "--project" in missing.fix and "工程名写错" in missing.fix, missing.fix
 
 
 def test_a_code_mentioned_inside_a_message_is_not_the_code():
@@ -282,6 +315,23 @@ def test_a_code_mentioned_inside_a_message_is_not_the_code():
         entry = check(checks, name)
         assert entry.ok is False, name
         assert "立创 EDA Pro" in entry.fix, (name, entry.fix)
+
+
+def test_a_stale_hint_mentioned_inside_a_message_is_not_the_code():
+    # 188B 低3's own trap: a message may quote both new codes while its leading
+    # bracket says something else (the daemon lists the windows, and a window's
+    # last known project may be named). Only the leading bracket decides.
+    for code in ("INSTANCE_STALE", "PROJECT_NOT_CONNECTED"):
+        checks = run_doctor(healthy_probe(
+            probe=None,
+            probe_error=f"[CONNECTOR_ERROR] the page refused: {code} and {code}",
+            documents=None,
+            documents_error=f"[CONNECTOR_ERROR] the page refused: {code} and {code}",
+            connector_version="", editor_version="",
+        ))
+        for name in ("methods", "editor-version", "connector-version", "project"):
+            entry = check(checks, name)
+            assert "立创 EDA Pro" in entry.fix, (code, name, entry.fix)
 
 
 def test_an_editor_below_the_api_floor_is_called_out_with_the_version():

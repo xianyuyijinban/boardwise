@@ -478,6 +478,15 @@ same top-level `context`, so a caller can see *which* window answered without a 
 itself never reaches `params`: it instructs the daemon about which window, it is not something the
 connector is asked to do.
 
+**A daemon-owned action never consults a hint** (188B 低6). `ping` and `hello` are answered by the
+daemon itself, before any routing happens — so `ping` with a **stale `targetInstance`** (or a
+`targetProject` no window has open) still comes back `{pong: true}`, because nothing about that hint
+was ever looked at. **A pong is evidence that the daemon is up, and nothing else**: it is not
+evidence that the instance named in the same frame is alive, and a script that treats it as such
+gates on the wrong thing. Instance liveness is `windows[]` in the same `ping` answer — the list
+`boardwise bridge status` prints — and that list is what `boardwise doctor` reads after `INSTANCE_STALE`
+to hand the caller a window id that exists.
+
 **Writes serialise per window.** Two writes into one editor queue (the editor is a single thread of
 truth — two placements racing in one window is how a half-drawn page happens); writes into two
 *different* windows run in parallel, which is the point of a hub; reads never take the lock at all.
@@ -716,7 +725,10 @@ Notes that matter operationally:
   inbound frame* is a different number — `HELLO_TIMEOUT`, 5 s (§3.3). They are unrelated, and
   confusing them makes the handshake look far more forgiving than it is.
 - **`ping` never reaches the editor.** It is answered by the daemon and reports whether a
-  connector is attached. This is what `boardwise bridge status` calls.
+  connector is attached. This is what `boardwise bridge status` calls. It is also **not a liveness
+  probe for a window**: `ping` is daemon-owned, so neither hint is consulted (§3.5) and a stale
+  `--instance` still gets a pong — verify an instance with `bridge status`'s `windows[]`, never with
+  a ping that carried the id.
 - **Only `role: "cli"` may originate editor actions.** A connector asking for `pcb.readback`
   gets `BAD_REQUEST` — the connector is the hands, not a caller, and this catches an accidental
   loop where the extension ends up talking to itself.
