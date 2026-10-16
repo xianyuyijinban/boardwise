@@ -536,8 +536,12 @@ def _texts(parts, board, vp, highlight) -> None:
         colour = _COLOURS["highlight"] if hot else _silk_colour(kind)
         x, y = vp.x(text.x), vp.y(text.y)
         anchor = _text_anchor(str(text.origin or ""))
+        # 底层的 transform 自带 translate(锚点)，属性位置必须写 0,0：属性坐标在
+        # transform 之内解释，写成 x,y 会先被 scale(-1,1) 翻成 -x 再平移，锚点落到
+        # (0, 2y)——整层底面位号被甩出视窗（189C 落账时漏掉的洞）。
+        ax, ay = (0.0, 0.0) if vp.view == "bottom" else (x, y)
         parts.append(
-            f'<text x="{x:.2f}" y="{y:.2f}"{_text_transform(text, vp, x, y)} '
+            f'<text x="{ax:.2f}" y="{ay:.2f}"{_text_transform(text, vp, x, y)} '
             f'font-size="{vp.px(size):.2f}" fill="{colour}" '
             f'font-weight="{700 if hot else 400}"{anchor}>{escape(body)}</text>'
         )

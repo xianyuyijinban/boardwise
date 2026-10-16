@@ -217,12 +217,16 @@ def test_bottom_silk_text_is_mirrored_with_the_panel_not_just_moved():
     # C2 的位号在 BOT_SILK 上，只出现在底层（右）视窗，且带字形镜像
     assert svg.count(">C2</text>") == 1
     match = re.search(
-        r'<text x="([\d.]+)" y="[\d.]+" transform="translate\([^)]*\) scale\(-1,1\)"'
-        r'[^>]*>C2</text>',
+        r'<text x="([\d.]+)" y="([\d.]+)" transform="translate\(([\d.]+) ([\d.]+)\) '
+        r'scale\(-1,1\)"[^>]*>C2</text>',
         svg,
     )
     assert match, "底层文字要带 scale(-1,1)"
-    assert bottom[0] <= float(match.group(1)) <= bottom[0] + bottom[1], "画在底层视窗里"
+    # 有效锚点 = 属性坐标先过 scale(-1,1) 再过 translate。属性必须是 0,0，否则锚点被
+    # 甩到 (tx - x, ty + y)——189C 首版就是这样，整层底面位号画出了视窗。
+    ax, ay, tx, ty = (float(g) for g in match.groups())
+    assert (ax, ay) == (0.0, 0.0), "属性坐标会在 transform 内被镜像，必须写 0,0"
+    assert bottom[0] <= tx - ax <= bottom[0] + bottom[1], "有效锚点画在底层视窗里"
     # R1 的位号在顶层丝印上：不镜像（零角度时连 transform 都不需要）
     assert re.search(r'<text x="[\d.]+" y="[\d.]+" font-size="[\d.]+"[^>]*>R1</text>', svg)
 
@@ -250,6 +254,7 @@ def test_an_angled_bottom_text_keeps_its_anchor_and_mirrors_its_glyphs():
     assert "rotate(90.000)" in transform
     assert "scale(-1,1)" in transform
     assert transform.index("translate") < transform.index("rotate") < transform.index("scale")
+    assert (match.group(1), match.group(2)) == ("0.00", "0.00"), "锚点只由 translate 给出"
 
 
 def test_each_panel_draws_the_copper_of_its_own_side():
