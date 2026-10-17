@@ -191,3 +191,12 @@ state=connected  evaluations=1  instance id 与开工时逐字相同
 ```
 
 ⇒ **connector 最终版本 0.5.13（= 开工时的 V0）、instance id 未变（无 reload）、`evaluations` 仍是 1（自启动以来未重求值）**。`routed` 从 176 涨到 186 = 本批 10 次全只读调用（status×2 / doc.list / connector_status×2 / realm probe / 及统计前的核对），没有一次写入。
+
+## 实验④（菜单点击免重载激活）—— 路线 A 实测，2026-10-17，宿主 3.2.186 / connector 0.5.14
+
+**结论：成立。** 步骤：test2 窗写入探针 bundle（`0.5.14` → `0.5.14-r4probe`，仅版本串 +8B，探针由当前发布 dist 单点替换生成，写入共享记录 `User_08be6a96fc064a03b488fd9d5a25ccea_v6`）；test 窗保持不动（同 instance、0.5.14、`evaluations=1`，写后复读三项不变——共享记录写入不波及未重载窗）。岳在 test 窗点一次扩展菜单（无 reload）：test 窗 instance 更换（inst-031914557… → inst-064408323…），`bridge status` 报 **0.5.14-r4probe**——菜单点击触发重求值**且**激活新 bundle。随后 `update-connector --all` 恢复两窗 0.5.14 verified。
+
+对 165 的含义：本机宿主上「菜单点击即激活」成立，165（工作电脑写≠激活）的候选收敛到 H1（宿主版本/窗口冻结态差异）与 H3（回读时点太早）——工作电脑补测那一项仍挂着。
+对 R4 的含义：「免重载热更」在用户态已经是「写 + 点一次菜单」，stub 的增量价值只剩「连菜单都不用点」——立项价值重估，钥匙管理三选项（design-proposal §3b）待岳裁。
+
+顺带发现（已记 192C 之后的欠账）：`--all` 两窗几乎同秒 reload 时，逐窗验收的两行证据引用了**同一条**新连接 id（inst-064726033 被算给两窗）——结论对（两窗确实都 0.5.14），但 per-window 证据归属仍可能错配，排进后续。
