@@ -1222,9 +1222,15 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `read_default_library()`，判决语义只多「内置新条目可见」）。191A/191C 未动
     # `rules/`。逐批对拍与变异见 `outputs/{190s,191b,191d}/evidence.md`。
     # 合并时另把 `rules/facts.py` 一处 docstring 里的企业归档文件名换成「实板A」（186 带入的保密洞，纯散文）。
+    # **192B moved BOTH (主代理统一重钉)** — recursive 9b1fcf61 -> fc23ac00，direct
+    # 6ad63b13 -> 3de90bc4（第二十六批；v0.5.14 发版前挖洞修复）。落点：`rules/connectivity.py`
+    # （DecouplingPerIC 判型带货架）、`rules/sensebias.py` 与 `rules/pcb/distance.py`（039 门
+    # 过 `facts_verified`；`_tier_pin` 剥脚名尾号）。判型词表改词边界在 `core/partkind.py`，
+    # 不在指纹里；192A 的底层焊盘翻转在 `core/geometry.py`，也不在。夹具判型翻转 2 条
+    # （毕设滤波采样/U1、超声波/U1 回到 IC），IC->非IC 0 条，见 `outputs/192b/evidence.md`。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "6ad63b13"
-    assert recursive == "9b1fcf61", (
+    assert old_digest == "3de90bc4"
+    assert recursive == "fc23ac00", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

@@ -1936,7 +1936,13 @@ def test_update_connector_all_reports_one_window_as_unknown_not_as_verified(
 
     This is the `--all` shape of the blind spot: another window's connection is
     announcing the right build the whole time, and this window has not reloaded.
-    Exit 3 (some unknown, nothing mismatched), and the line names the window.
+    Exit 3 (nothing mismatched), and the line names the window.
+
+    Since 192C §4 the two windows that *did* see a new connection are
+    `unconfirmed` rather than `verified`: three windows were written to and only
+    two expected-version connections appeared, so the daemon's table cannot say
+    which window either one belongs to. `inst-B` keeps its own `unknown` — its
+    socket is still there, which is a fact about that window.
     """
     from boardwise.cli import _cmd_bridge_update_connector
 
@@ -1955,8 +1961,8 @@ def test_update_connector_all_reports_one_window_as_unknown_not_as_verified(
 
     captured = capsys.readouterr()
     assert code == 3, captured.out + captured.err
-    assert "inst-A: verified (0.4.3)" in captured.out
-    assert "inst-C: verified (0.4.3)" in captured.out
+    assert "inst-A: unconfirmed" in captured.err
+    assert "inst-C: unconfirmed" in captured.err
     assert "inst-B: unknown" in captured.err and "inst-B 仍以写之前的身份在线" in captured.err
     assert "不是失败" in captured.err
 

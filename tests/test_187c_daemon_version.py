@@ -129,7 +129,12 @@ def test_another_build_is_named_with_both_versions_and_the_way_out():
     assert CLI_VERSION in text
     # Why the mismatch matters, and the one command that ends it.
     assert "动作表是加载期常量" in text
-    assert "`boardwise bridge start`" in text
+    # 192C §6: the way out is to end the old *process* — `boardwise bridge start`
+    # with a daemon already running is OSError 10048 and a traceback, and the next
+    # bridge command starts a daemon by itself anyway.
+    assert "taskkill" in text
+    assert "自动拉起" in text
+    assert "`boardwise bridge start`" not in text
 
 
 def test_a_daemon_that_reports_no_version_is_unknown_not_a_comparison():
@@ -256,7 +261,8 @@ def test_a_bridge_command_warns_against_a_stale_daemon(tmp_path, monkeypatch):
     assert result.returncode == 1, result.stderr   # daemon up, no connector attached
     assert "daemon up on 127.0.0.1" in result.stdout, result.stdout
     assert f"daemon 运行 {STALE_DAEMON_VERSION} ≠ CLI {CLI_VERSION}" in result.stderr
-    assert "boardwise bridge start" in result.stderr
+    # 192C §6: how to end it, not a command that fails while it is running.
+    assert "taskkill" in result.stderr
 
 
 def test_a_bridge_command_is_silent_against_its_own_daemon(tmp_path, monkeypatch):

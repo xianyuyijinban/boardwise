@@ -210,6 +210,40 @@ IDENTITY_KEYS: dict[str, str] = {
     SECTION_ACCEPTED: "part",
 }
 
+#: The sections whose uniqueness is over a **tuple** of fields rather than the
+#: single :data:`IDENTITY_KEYS` field (192B ⑥). One section, and the reason is
+#: that its identity really is two fields: 191A's writer, its rewriter and the
+#: report all key an acceptance on ``(part, board)``
+#: (:meth:`IntentAccepted.matches`), while the *reader* enforced uniqueness on
+#: ``part`` alone — so ``accept-unknown U7 --board Board2`` after a boardless
+#: ``U7`` wrote a document the same reader then **refused to read back**
+#: (``acceptedUnknown[1] states part 'U7' twice``, measured in
+#: ``.tmp_hole4/p1_board_key_roundtrip.py``, ``p2_cli_board_scope.py``): the
+#: second acceptance could neither be written nor read, and a project with one
+#: token on two boards is exactly what 191A's ``--board`` exists for.
+#:
+#: The tuple is compared through :func:`part_token` field by field, so ``U7`` /
+#: ``u7`` and ``Board2`` / ``board2`` are one key — the same normalization the
+#: writer's clerk uses.
+TUPLE_IDENTITY_KEYS: dict[str, tuple[str, ...]] = {
+    SECTION_ACCEPTED: ("part", "board"),
+}
+
+
+def identity_fields(section: str, body: dict[str, Any]) -> tuple[str, ...]:
+    """The uniqueness key of one entry, as comparing strings (192B ⑥).
+
+    A section in :data:`TUPLE_IDENTITY_KEYS` answers with every field of its
+    tuple, normalized by :func:`part_token`; an absent field is the empty string,
+    which is the same reading the writer's ``matches`` gives a boardless
+    acceptance. Anything else answers with the single
+    :data:`IDENTITY_KEYS` field, exactly as before.
+    """
+    fields = TUPLE_IDENTITY_KEYS.get(section)
+    if fields is None:
+        return (str(body.get(IDENTITY_KEYS[section], "")),)
+    return tuple(part_token(body.get(name)) for name in fields)
+
 _TOP_KEYS: tuple[str, ...] = (
     "intentVersion", "requirements", "blocks", "decisions", SECTION_ACCEPTED,
 )
@@ -1546,8 +1580,10 @@ def render_markdown(
         lines.append("")
         lines.append(
             "> 这些件 checkup 会给它们单独一节 `accepted_unknown[]`：不再算在"
-            "`unreviewed_parts` 里、也不再让 `completion.verdict` 停在 `incomplete`，"
-            "但报告会一直把数量和理由说在明面上（结论里那句「另有 N 颗工程师接受未审」）。"
+            "`unreviewed_parts` 里，也不再让**这一颗**的未知挂在 `incomplete` 上"
+            "——本轮 verdict 仍是别的缺口说了算，实际值看报告 `completion.verdict`"
+            "（接受存在时它至少是 `complete-with-open-items`），"
+            "而报告会一直把数量和理由说在明面上（结论里那句「另有 N 颗工程师接受未审」）。"
             "撤销用 `boardwise parts accept-unknown <MPN|位号> --reason … --revoke`。"
         )
         lines.append("")
@@ -1621,7 +1657,7 @@ def _entries_from(raw: Any, where: str, cls: type) -> list[Any]:
     allowed = ENTRY_KEYS[section]
     identity_key = IDENTITY_KEYS[section]
     out: list[Any] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, ...]] = set()
     for index, item in enumerate(raw):
         spot = f"{where}[{index}]"
         body = _object(item, spot)
@@ -1630,10 +1666,25 @@ def _entries_from(raw: Any, where: str, cls: type) -> list[Any]:
         for name in _TYPED_FIELDS[cls]:
             text = _text(body.get(name), f"{spot}.{name}", required=True)
             kwargs[_RENAMED.get(name, name)] = text
-        identity = str(kwargs[identity_key])
+        # 192B ⑥: the uniqueness key is `identity_fields`' — a tuple for the
+        # sections whose identity is one (see TUPLE_IDENTITY_KEYS), the single
+        # identity field for the rest.
+        # Read off the **body**, not `kwargs`: `board` is one of the section's
+        # optional fields and is filled by the loop below, which has not run yet
+        # — a key taken from a half-built entry would read every acceptance as
+        # boardless, which is the bug this batch is fixing.
+        fields = TUPLE_IDENTITY_KEYS.get(section)
+        identity = identity_fields(section, body)
         if identity in seen:
+            where_key = (
+                f"({', '.join(fields)})" if fields else identity_key
+            )
+            shown = (
+                "/".join(part or "(无)" for part in identity)
+                if fields else identity[0]
+            )
             raise DesignIntentError(
-                f"{spot} states {identity_key} {identity!r} twice — "
+                f"{spot} states {where_key} {shown!r} twice — "
                 "one entry is one object"
             )
         seen.add(identity)

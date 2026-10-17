@@ -898,29 +898,39 @@ def test_a_sot23_packaged_ic_is_back_on_the_ic_subject():
 
 
 def test_a_declared_passive_is_exempt_from_the_gate_and_a_mystery_ic_is_not():
-    """The exemption itself, synthetically: only a **declaration** exempts.
+    """The exemption itself, synthetically: only a **declaration** exempts —
+    and only for a part the declaration's shape can cover (192B ⑤).
 
-    A ``U``-designated part whose metadata declares a resistor is not the
-    datasheet gate's subject; one that declares nothing is (the gate's job is to
-    ask, and 「没人说过它是什么」 is exactly the question a datasheet answers).
+    A ``U``-designated **two-pin** part whose metadata declares a resistor is not
+    the datasheet gate's subject; one that declares nothing is (the gate's job is
+    to ask, and 「没人说过它是什么」 is exactly the question a datasheet answers).
+    The pin count is part of the rule since 192B ⑤: 「330kΩ 厚膜电阻」 written on a
+    chip with three or more pins is a reading that has gone wrong somewhere, and
+    the gate must not get *shorter* on it — a touch-key IC whose catalogue name
+    says 「电容式触摸…」 was dropping out of the review that way.
     """
     from boardwise.core.parts import load_parts
     from boardwise.engines.checkup import unreviewed_parts
 
-    # Both parts carry a full identity (MPN + supplier): on FPC's `U4` that is
+    # These parts carry a full identity (MPN + supplier): on FPC's `U4` that is
     # what makes the declaration the *only* thing left to decide, and it is the
     # contrast under test. A part with no MPN would stay on the gate for the 025
     # signal instead (`UNKNOWN_REASON_NO_MPN`), which is a different row.
-    declared = _three("U7", mpn="FRC0805J1001 TS", props={
+    declared = _two("U7", mpn="FRC0805J1001 TS", props={
         "LCSC Part Name": "330kΩ ±1% 厚膜电阻",
     })
     declared.lcsc_part = "C1"
+    many_pinned = _three("U9", mpn="FRC0805J1001 TS", props={
+        "LCSC Part Name": "330kΩ ±1% 厚膜电阻",
+    })
+    many_pinned.lcsc_part = "C3"
     mystery = _three("U8", mpn="MYSTERY-1")
     mystery.lcsc_part = "C2"
-    model = _model([declared, mystery])
+    model = _model([declared, many_pinned, mystery])
     rows = {
         row["designator"]
         for row in unreviewed_parts(model, library=load_parts(str(SHELF)))
     }
     assert "U7" not in rows
     assert "U8" in rows
+    assert "U9" in rows, "the exemption is for two-pin parts; a three-pin one stays"

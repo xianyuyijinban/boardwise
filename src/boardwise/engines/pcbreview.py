@@ -596,15 +596,24 @@ def _board_entry(
     :func:`cross_view_section` for the two shapes it carries and why a missing
     key would have been the wrong way to say 「没配对」.
 
-    ``netIdNote`` (191C) is present only on a KiCad board that lost net names —
-    a pad, track, via or zone stating a bare ``(net N)`` whose id no
-    ``(net N "NAME")`` row of the file's own table explains. The reader keeps
-    those as ``net#N`` and never invents a name
-    (:func:`boardwise.parsers.kicad.unnamed_net_names`), and the note states the
-    count, because the checks that find a net **by name** — the differential-pair
-    inventory, the per-rail decap bands — cannot see such a net at all. Absent,
-    not empty, when every id was named: a board that lost nothing must not grow a
-    line saying it lost nothing.
+    ``netIdNote`` (191C, extended by 192A-3/4) is the KiCad board's **net-table
+    disclosure**, and it is present only when there is something to disclose —
+    absent, not empty, when the file was clean. Two facts ride on it, joined by
+    「；」:
+
+    * a **lost name** — a pad, track, via or zone stating a bare ``(net N)``
+      whose id no ``(net N "NAME")`` row of the file's own table explains. The
+      reader keeps those as ``net#N`` and never invents a name; the count comes
+      from :func:`boardwise.parsers.kicad.unnamed_net_names` — **the reader's own
+      yardstick, called and never re-implemented here** (192A-3: a second prefix
+      filter is a second answer waiting to drift) — because the checks that find
+      a net **by name** (the differential-pair inventory, the per-rail decap
+      bands) cannot see such a net at all;
+    * a **contradicted id** (192A-4) — the file's own table gave one id more than
+      one name (``board.net_table_conflicts``). The reader keeps the **first**
+      name; the note names every name that id was given, because the ignored one
+      is not cosmetic: the bare-``(net N)`` copper now sits on the first name,
+      and a reader who is not told would take the two nets for one.
     """
     info = read_stackup(board)
     entry = {
@@ -700,16 +709,36 @@ def _board_entry(
     # **丢名字**的记录，必须在报告上说出来：网是**按名字**认的，一块序号全丢的板
     # 正是按网名读的检查（差分对清单、按轨分档）看不见的板。门只对 KiCad 读数开
     # ——`net#N` 是 KiCad 读盘器自己写的形状，EasyEDA 板的网名不是它造的。
-    from ..parsers.kicad import UNNAMED_NET_PREFIX, is_kicad_path
+    from ..parsers.kicad import is_kicad_path, unnamed_net_names
 
     if is_kicad_path(str(getattr(board, "source", "") or "")):
-        unnamed = sorted(name for name in board.nets if name.startswith(UNNAMED_NET_PREFIX))
+        # 192A-3：读法是读盘器自己的那一个（`unnamed_net_names`），不是这里重写
+        # 一遍前缀匹配——两把尺必然漂移，而这条披露的全部价值就是「数与
+        # `parsers.kicad` 说的一致」。
+        unnamed = unnamed_net_names(board)
+        notes: list[str] = []
         if unnamed:
             shown = "、".join(unnamed[:NET_ID_NOTE_LIMIT]) + ("…" if len(unnamed) > NET_ID_NOTE_LIMIT else "")
-            entry["netIdNote"] = (
+            notes.append(
                 f"文件里有 {len(unnamed)} 个网序号查不到名字（{shown}），已按 net#N 保留"
                 "——按网名认网的检查（差分对清单、按轨分档）看不到这些网"
             )
+        # 192A-4：文件自己的表给同一个序号写了不止一次（先写的胜出，后写的被
+        # 忽略）。这也是一条必须在报告上说出来的话——被忽略的那个名字标注过的
+        # 铜，现在归在第一个名字名下，而一条裸 `(net N)` 的走线正是查表得到名字
+        # 的；不说，读报告的人会以为文件里只有第一个名字。
+        conflicts = getattr(board, "net_table_conflicts", None) or {}
+        if conflicts:
+            rows = "、".join(
+                f"{ident}（{'、'.join(names)}）"
+                for ident, names in list(conflicts.items())[:NET_ID_NOTE_LIMIT]
+            )
+            notes.append(
+                f"文件自己的 (net N \"NAME\") 表有 {len(conflicts)} 个序号写了不止一次（{rows}），"
+                "已按首次出现的名字保留——后写的名字被忽略，它标注的铜已归到首个名字名下"
+            )
+        if notes:
+            entry["netIdNote"] = "；".join(notes)
     return entry
 
 

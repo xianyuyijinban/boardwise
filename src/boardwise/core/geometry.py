@@ -209,6 +209,17 @@ MULTI_LAYER_ID = 12
 #: rather than with the non-copper artwork.
 MULTI_LAYER_TYPES: frozenset[str] = frozenset({"MULTI"})
 
+#: The copper layer id a **flipped** placement is mounted on. The id comes from
+#: the document's own ``LAYER`` table (``parsers.epru._placement_face`` reads the
+#: ``BOTTOM`` spelling there and never the number), but the *number* is a
+#: measured fact of the format: on every fixture ``COMPONENT.layerId`` is ``1``
+#: for a top part and ``2`` for one on the other face — see
+#: :class:`PadGeometry`'s own note (28 bottom SMD pads that keep the footprint's
+#: hardcoded ``layerId 1``) and ``engines.canvasrender._copper_view``, which maps
+#: the same two ids to its two windows. 192A-1 is what needs it here: an id of
+#: ``2`` is also the *mirror* flag for the footprint-local frame.
+BOTTOM_LAYER_ID = 2
+
 
 #: Layer types that carry **printed legend** (丝印) — the ink a fab prints on
 #: the board. `LayerInfo.layer_type` carries these strings verbatim from the
@@ -376,10 +387,67 @@ class ComponentPlacement:
         Inferred, not confirmed against editor rendering: every copper
         coordinate on the LLC fixture is negative in y and falls inside the
         board outline only under this reading (see ``docs/epru-format.md``).
+
+        **A placement on the bottom face (:data:`BOTTOM_LAYER_ID`) flips the
+        footprint's own local ``y`` axis** (192A-1). A footprint document is
+        written for one face — its pads, its artwork and its silk all keep the
+        layer the library declared — so placing it on the other face is a flip,
+        and the flip is a reflection **in the footprint's local frame**: the
+        posed point is ``R(angle) · (local_x, -local_y)``. Without it every pad
+        of every bottom part lands where the part would be if it had not been
+        flipped; that is invisible on a symmetric footprint (a two-pad chip
+        resistor has ``local_y == 0`` on both pads) and wrong on every
+        asymmetric one.
+
+        Measured, not inferred, and the measurement **refutes the obvious
+        guess**. The oracle is the board's own copper: a pad's centre must sit
+        on its own net, and the tracks and vias carrying that net are drawn at
+        the *real* positions — the reader's transform plays no part in where
+        they are. Two readings of that oracle over every bottom-face pad of
+        every ``.epro2`` fixture (125 pads have same-net copper), both against
+        the *unflipped* reading (this code's old behaviour):
+
+        * **exact landing** — pads whose centre is within 1 mil of a same-net
+          copper **endpoint**: unflipped 54, local-``y`` flip **69**, and the 15
+          that change are all gains: **not one pad loses its landing**;
+        * **margin** — ``distance(centre, nearest other-net copper) -
+          distance(centre, nearest same-net copper)``, which is the reading
+          that puts the pad on its own net and nowhere else: unflipped sums to
+          **-4049.5 mil** (its pads sit *further* from their own net than from
+          their neighbours'), the local-``y`` flip to **+2731.3 mil**, and of
+          the 62 pads the two readings place differently, 31 favour the flip
+          and **0** favour the unflipped reading.
+
+        **``mirror_x ∘ CCW(angle)`` — the transform :func:`transform_point`
+        settled in 189A2 — is *not* what a PCB placement does, and 192A-1 was
+        written to apply it before this was measured.** On the same pads that
+        reading scores 49 exact against the unflipped 54 and 69 for the local
+        flip, and it makes 16 pads *worse* than doing nothing (worst offenders:
+        the channel-reused resistor pairs at 135°, and every 0°/180° bottom
+        part, where ``M_x ∘ CCW`` reverses the two pads of a chip part and the
+        file's own ``PAD_NET`` says pin 2 is where pin 1's copper is). The
+        reason the two transforms differ is that they answer different
+        questions: 189A2's mirror is a **schematic** symbol placed mirrored on
+        the page (a pose in canvas space, adjudicated by wire endpoints), while
+        this one is a **footprint** mounted on the other board face (a change
+        of the library's own frame). They are not the same rigid move and must
+        not be tied together; the pin-1/pin-2 evidence above is the reading
+        that separates them.
+
+        The numbers above come from ``outputs/192a/evidence.md`` §1; the
+        property test ``tests/test_192a_bottom_pad_mirror.py`` re-measures the
+        "never worse" half of it on every fixture on every run.
         """
         a = math.radians(self.angle)
         cos_a = math.cos(a)
         sin_a = math.sin(a)
+        # The flip is in the footprint's own frame and comes **before** the
+        # rotation: "the library's local y axis points the other way once the
+        # part is on the other face". See the docstring — the position of this
+        # line is measured, not a preference, and it is deliberately *not* the
+        # `mirror_x ∘ CCW` order `transform_point` uses for schematic symbols.
+        if self.layer_id == BOTTOM_LAYER_ID:
+            local_y = -local_y
         return Point(
             self.x + local_x * cos_a - local_y * sin_a,
             self.y + local_x * sin_a + local_y * cos_a,
@@ -743,8 +811,13 @@ class SilkText:
     component_id: str | None = None
     text: str = ""
     source: str = ""
-    #: Board-frame anchor (for ``designator``/``board`` sources this is the
-    #: record's own x/y; for a footprint ``STRING`` it is the transformed point).
+    #: Board-frame anchor (for every PCB-document record — a designator ``ATTR``
+    #: or a free ``STRING`` — this is the record's own x/y; for a footprint
+    #: ``STRING`` it is the transformed point). 192A-2: an ``ATTR`` whose
+    #: ``parentId`` names no placement on the board is stamped
+    #: ``source="designator-unparented"`` and its anchor is the same record's own
+    #: x/y, exactly like a parented one — the source spelling records whether the
+    #: join found a component, not where the geometry came from.
     x: float = 0.0
     y: float = 0.0
     #: Footprint-local anchor; identical to ``x``/``y`` for a PCB-document record.
@@ -793,24 +866,28 @@ class SilkText:
         measured box is the top-face box **reflected in x about the anchor**,
         which is what :meth:`frame_axes` returns for this property.
 
-        It is a property of the *record*, so it covers the sources whose
-        ``x``/``y``/``angle`` come straight off the PCB document — a
-        designator ``ATTR`` (measured) and a board-level free ``STRING`` (the
-        same record family on the same layer; **not** separately measured —
-        the bridge has no action that creates free text). A
-        ``source == "footprint"`` string is *excluded on purpose*: its anchor
-        is posed by :meth:`ComponentPlacement.transform` and its angle
-        composed with the placement's, so it is already board-frame geometry,
-        and the measurement above says nothing about that path.
+        It is a property of the *record*, so it covers **every source whose
+        ``x``/``y``/``angle`` come straight off the PCB document** — a
+        designator ``ATTR`` (measured; ``designator`` and, since 192A-2,
+        ``designator-unparented``, which is the *same record family* with the
+        ``parentId`` join empty, and whose anchor/direction are read the same
+        way) and a board-level free ``STRING`` (the same record family on the
+        same layer; **not** separately measured — the bridge has no action that
+        creates free text). A ``source == "footprint"`` string is *excluded on
+        purpose*: its anchor is posed by :meth:`ComponentPlacement.transform`
+        and its angle composed with the placement's, so it is already
+        board-frame geometry, and the measurement above says nothing about that
+        path. The predicate is therefore written as **"everything but a
+        footprint"** rather than as a list of the spellings that exist today —
+        the list is what let ``designator-unparented`` fall through unframed
+        (192A-2; the probe ``.tmp_hole_1/probe_silk.py`` A3 shows a 90° bottom
+        record taking ``u`` in the opposite direction under the two spellings).
 
         The same predicate is what :func:`boardwise.engines.canvasrender.
         _text_transform` renders with, so the picture and the rule cannot
         disagree about which side of the anchor the ink is on.
         """
-        return str(self.layer_kind or "") == "BOT_SILK" and self.source in (
-            "designator",
-            "board",
-        )
+        return str(self.layer_kind or "") == "BOT_SILK" and self.source != "footprint"
 
     def frame_axes(self) -> tuple[tuple[float, float], tuple[float, float]]:
         """``(u, v)`` — the advance axis and the "up" axis, **in board coordinates**.
@@ -1484,6 +1561,18 @@ class BoardGeometry:
     #: say it. Empty for a hand-built board, and for a KiCad board whose
     #: ``.kicad_pro`` was not beside the ``.kicad_pcb``.
     net_meta: dict[str, NetMeta] = field(default_factory=dict)
+    #: 192A-4: net **ids** the file's own ``(net N "NAME")`` table named more
+    #: than once, and every name it gave that id, **in file order** — so the
+    #: first element is the one this reader kept. A well-formed file has none
+    #: (the map is empty, not "all ids"): the key is present only when the file
+    #: contradicted itself. Only ``parsers.kicad`` writes it, and it matters
+    #: because the alternative reading — last row wins, which is what the
+    #: reader did before 192A-4 — silently renames a net: a track stating a bare
+    #: ``(net 2)`` and a pad stating ``(net 2 "CAN_L")`` end up on two different
+    #: nets, and every check that finds a net **by name** sees a different board
+    #: than the one in the file. Disclosed through the board entry's
+    #: ``netIdNote`` (``engines.pcbreview``).
+    net_table_conflicts: dict[int, list[str]] = field(default_factory=dict)
     stats: ParseStats = field(default_factory=ParseStats)
     #: **perf-02A C2: the ``read_stackup`` memo slot**, ``(fingerprint, answer)``.
     #: ``boardwise.core.measure.read_stackup`` is called once per *query* on a

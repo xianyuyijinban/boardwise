@@ -256,5 +256,7 @@ def test_real_board_bottom_boxes_never_move_further_from_their_own_part():
         else:
             same.append(text.text)
     assert further == [], further
-    assert len(closer) == 3, (len(closer), closer)
+    # 192A 把底层焊盘的局部 y 翻转后，P7 两种帧下离自家焊盘同为 61.2 mil，
+    # 从 closer 移到 same（3 -> 2）；further == [] 这条不变式不动。
+    assert len(closer) == 2, (len(closer), closer)
     assert len(same) + len(closer) + len(further) == 30

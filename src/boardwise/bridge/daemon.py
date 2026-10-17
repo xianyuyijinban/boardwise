@@ -801,6 +801,51 @@ class WindowConnection:
         }
 
 
+def project_listing(windows: Iterable[WindowConnection]) -> str:
+    """``projectName uuid projectUuid (windowKey)`` per window — the project refusal's row.
+
+    A second renderer rather than a change to :func:`window_listing` (192C §5):
+    the caller whose hint matched **nothing** is the one who has to retype it, and
+    the two spellings of one project are exactly what it needs — the connector
+    reports the project's *friendly name* (``/test``, from ``friendlyName`` in
+    ``connector/src/actions.ts``) while ``doc.list`` reports ``test``, so a reader
+    told only one of them cannot see why their hint missed. The uuid is printed
+    beside it because that is the other spelling that always routes.
+
+    ``(none)`` for an empty list, same as :func:`window_listing`.
+    """
+    rendered = []
+    for window in windows:
+        name = window.project_name or "(no project)"
+        uuid_ = window.project_uuid or "(no uuid)"
+        rendered.append(f"{name} uuid={uuid_} ({window.key})")
+    return ", ".join(rendered) if rendered else "(none)"
+
+
+def _normalise_project_hint(value: Any) -> str:
+    """A project name or uuid as it is compared (192C §5).
+
+    The two sides of this comparison are typed by different windows and read off
+    different screens, so the differences a reader cannot see have to be ignored
+    or a correct hint is refused: a leading ``/`` (the connector's friendly name),
+    surrounding whitespace (a shell, a copy-paste), and letter case (uuid hex and
+    how people type a project name). Nothing else is folded — ``test`` and
+    ``test2`` stay different projects.
+    """
+    return str(value or "").strip().lstrip("/").casefold()
+
+
+def _project_hint_matches(hint: str, window: WindowConnection) -> bool:
+    """Whether ``hint`` names this window's project — by name or by uuid."""
+    folded = _normalise_project_hint(hint)
+    for value in (window.project_name, window.project_uuid):
+        if value and (
+            value == hint or _normalise_project_hint(value) == folded
+        ):
+            return True
+    return False
+
+
 def window_listing(windows: Iterable[WindowConnection]) -> str:
     """``projectName (instanceId)`` for each window, comma-separated (023).
 
@@ -1335,18 +1380,18 @@ class BridgeDaemon:
         hint = self._target_project(target_project)
         if hint:
             matched = [
-                window
-                for window in live
-                if hint in (window.project_name, window.project_uuid)
+                window for window in live if _project_hint_matches(hint, window)
             ]
             if len(matched) == 1:
                 return matched[0]
             if not matched:
                 raise BridgeError(
                     ErrorCodes.PROJECT_NOT_CONNECTED,
-                    f"no connected window has project {hint!r} open; online windows: "
-                    f"{window_listing(live)} — a window can also be named by its "
-                    "instance id (boardwise bridge call --instance INSTANCE_ID)",
+                    f"no connected window has project {hint!r} open (the comparison "
+                    "ignores a leading `/` and letter case, so `/test` and `test` are "
+                    f"one project); online windows: {project_listing(live)} — a window "
+                    "can also be named by its instance id "
+                    "(boardwise bridge call --instance INSTANCE_ID)",
                     {"targetProject": hint, "candidates": [w.as_status() for w in live]},
                 )
             raise BridgeError(
@@ -1594,9 +1639,19 @@ class BridgeDaemon:
                 # that were not.
                 "windows": [window.as_status() for window in self.live_windows()],
             }
-        # "hello" during the request phase is a protocol violation.
+        # 192C §7: any daemon-owned action this build does not know used to get
+        # the hello handshake's sentence ("hello may only be sent once"), which is
+        # a fact about a *protocol phase* — and about `hello`. The honest answer
+        # is that this daemon's action table has no such owner action, which is
+        # what a newer CLI talking to a daemon left running across an upgrade
+        # gets: the table is a load-time constant, so the fix is to end the old
+        # process and let the next command start a fresh daemon.
         raise BridgeError(
-            ErrorCodes.PROTOCOL_VIOLATION, "hello may only be sent once, as the first frame"
+            ErrorCodes.UNKNOWN_ACTION,
+            f"unknown daemon action {action!r} — this daemon's action table is a "
+            "load-time constant, so a daemon started before this build does not "
+            "have it: end the old daemon process (taskkill) and run any bridge "
+            "command — the next one starts a fresh daemon",
         )
 
     async def _forward(

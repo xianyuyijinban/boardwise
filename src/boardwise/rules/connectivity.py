@@ -1,21 +1,26 @@
 """L1 connectivity rules.
 
 All rules in this module are heuristics over the normalized netlist model.
-They look at designator prefixes, value strings and net membership only —
-no schematic geometry, no datasheet knowledge. Each finding message states
-the heuristic's limits so readers can judge how much to trust it.
+They look at value strings, declarations and net membership — no schematic
+geometry, no datasheet knowledge. Each finding message states the heuristic's
+limits so readers can judge how much to trust it.
 
 **Which parts count as what is not this module's own table any more (190).**
-The two rules that have to decide 「is this an IC / a capacitor / a resistor?」
+The rules that have to decide 「is this an IC / a capacitor / a resistor?」
 ask :func:`boardwise.core.partkind.classify_part`, the same entry point
 ``rules/facts``, ``rules/sensebias`` and the PCB rules read — 岳 2026-10-16 ⑦
 was the measured cost of a `U`-prefix test disagreeing with what the part's own
-declaration says (three 330 kΩ resistors at ``U`` designators each asked for a
-decoupling capacitor). The rules here call it **without a shelf**, deliberately:
-this module's contract is the netlist, and a rule that silently read
-``blocklib/parts.json`` would be claiming a datasheet it never opened — the
-reading reports which basis it used (``prefix`` for these callers, and the
-finding says so).
+declaration says (three 330 kΩ resistors at `U` designators each asked for a
+decoupling capacitor).
+
+**The shelf goes in with the reading** (192B ②): the rules that ask that
+question now hand over the same
+:func:`boardwise.rules.facts.read_default_library` shelf the PCB-side readers
+use (:func:`default_shelf`), because *not* handing it over is what made this
+module answer 「connector」 about a part the shelf had already classified
+``ic.usb-uart`` — two readings of one question, one holding the shelf and one
+not. What stays this module's own contract is the **evidence**: no geometry, no
+datasheet, and each finding still says which basis decided which side.
 """
 
 from __future__ import annotations
@@ -41,6 +46,28 @@ def parse_resistance_ohms(value: str) -> float | None:
     from .values import parse_resistance_ohms as _parse
 
     return _parse(value)
+
+
+def default_shelf():
+    """The project's own shelf, for this module's 判型 reads (192B ②).
+
+    Read at **call time** from :func:`boardwise.rules.facts.read_default_library`
+    (the one resolver every facts-reading rule shares: the user shelf when the
+    tool is frozen, ``blocklib/parts.json`` in a checkout), and returned as
+    ``None`` when it cannot be read — a shelfless reading is a narrower one, never
+    an exception raised out of a rule.
+
+    Why the L1 rules read a shelf at all: 190 put every 「what is this part?」 on
+    one entry point, and an entry point whose strongest input is missing at two of
+    its call sites answers a different question there. ``DecouplingPerIC`` was the
+    measured case (see its docstring).
+    """
+    from .facts import read_default_library
+
+    try:
+        return read_default_library()
+    except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
+        return None
 
 
 def _pin_net_evidence(comp: Component) -> list[str]:
@@ -72,11 +99,20 @@ class DecouplingPerIC(Rule):
       so a ``C``-designated connector stops counting and a capacitor declared by
       metadata counts wherever it is placed.
 
-    The rule is L1 and reads **no shelf**: this module's contract is heuristics
-    over the normalized netlist, and :func:`classify_part` is called without a
-    library so its shelf step is simply absent. That is why the message says
-    which basis each side was read on instead of claiming a datasheet it never
-    opened.
+    **The shelf goes in** (192B ②). Until this batch the two reads above were
+    made **without** a library — 「this module's contract is the netlist」 — and
+    the measured cost was that this rule and the PCB facts rules answered
+    differently about *one* part: ``超声波``'s ``U2`` (``USB2.0芯片CH340``, shelf
+    category ``ic.usb-uart``) was an IC to ``rules/pcb/distance`` and to
+    ``rules/facts``, and a **connector** here, so 「no decoupling capacitor near
+    this IC」 was never asked about the one part on that board the shelf knew.
+    Two readers of the same question, one of them holding the shelf and one not,
+    is the 口径 split 190 exists to collapse; the shelf is the same
+    :func:`boardwise.rules.facts.read_default_library` every other facts reader
+    uses, and it is read **once** per rule run. A shelf that cannot be read
+    degrades to the old shelfless reading rather than raising (the same
+    discipline ``rules/pcb/distance.device_facts`` applies), and the finding still
+    names the basis each side was read on.
     """
 
     id = "decoupling-per-ic"
@@ -86,17 +122,18 @@ class DecouplingPerIC(Rule):
 
     def check(self, model: DesignModel) -> list[Finding]:
         findings: list[Finding] = []
+        library = default_shelf()
         cap_nets: set[str] = set()
         capacitor_count = 0
         for comp in model.components.values():
-            if classify_part(comp).kind != KIND_CAPACITOR:
+            if classify_part(comp, library=library).kind != KIND_CAPACITOR:
                 continue
             capacitor_count += 1
             cap_nets |= {
                 pin.net for pin in comp.pins if pin.net is not None
             }
         for comp in model.components.values():
-            read = classify_part(comp)
+            read = classify_part(comp, library=library)
             if read.kind != KIND_IC:
                 continue
             pin_nets = {

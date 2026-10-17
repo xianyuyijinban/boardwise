@@ -159,6 +159,13 @@ boardwise parts add ACME-PWR-1000 --lcsc C9900000001 --category ic.ldo \
   touched by that path (a differing C-number is refused), and an entry whose facts
   already drive rules is not overwritten without `--force` — the same guard
   `fetch` applies.
+* The duplicate check reads the **merged** shelf, not only the file the write
+  lands in (192C). A part the exe's own shelf already carries is a duplicate too,
+  and gets the same refusal: without `--force`, a hit on the *bundled* shelf is
+  never shadowed, because a candidate keyed on the same MPN / C-number wins the
+  merge (191B) and takes the curated entry's verified facts with it. `--force`
+  writes your entry into the user's shelf, and the output names the bundled entry
+  it overrides.
 
 The same flow is what the report's 未审器件 section points at: **给 PDF ≠ 清闸**.
 

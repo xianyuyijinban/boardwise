@@ -1065,7 +1065,7 @@ def _net_id(value: Any) -> int | None:
     return int(text) if text.isdigit() else None
 
 
-def _net_table(tree: list) -> dict[int, str]:
+def _net_table(tree: list, conflicts: dict[int, list[str]] | None = None) -> dict[int, str]:
     """The board's own top-level ``(net N "NAME")`` table: id → name (191C).
 
     KiCad 6–9 wrote this table beside the inline name on every pad and track;
@@ -1075,6 +1075,16 @@ def _net_table(tree: list) -> dict[int, str]:
     dropped, so :func:`_net_name` can tell 「the file says this id has no name」
     apart from 「the file says nothing about this id」: the first is a net that
     is not there, the second is a name that was lost.
+
+    **A second row for an id already in the table is ignored (192A-4)**: the
+    file's own first statement about that id is the one it declared, and the
+    reader does not adjudicate between two contradictory rows — it takes the
+    first and says so. Which row wins is not cosmetic: a track carrying the bare
+    ``(net 2)`` looks this id up, so last-wins moves that copper onto the second
+    name and splits one net into two, invisibly, for every check that finds a
+    net **by name**. Passing ``conflicts`` collects the evidence —
+    ``{ident: [every name the table gave it, in file order]}``, written only for
+    ids with more than one row — for the caller to carry onto the board.
     """
     table: dict[int, str] = {}
     for node in _kids(tree, "net"):
@@ -1084,7 +1094,12 @@ def _net_table(tree: list) -> dict[int, str]:
         if ident is None:
             continue
         name = node[-1]
-        table[ident] = "" if isinstance(name, Atom) else str(name)
+        value = "" if isinstance(name, Atom) else str(name)
+        if ident in table:
+            if conflicts is not None:
+                conflicts.setdefault(ident, [table[ident]]).append(value)
+            continue
+        table[ident] = value
     return table
 
 
@@ -1245,8 +1260,11 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
         raise KicadFormatError(f"{path.name}: not a kicad_pcb document")
     layers = _read_layers(tree)
     # 191C: the board's own net table, read once — every element that states a
-    # bare `(net N)` is resolved through it (see `_net_name`).
-    net_table = _net_table(tree)
+    # bare `(net N)` is resolved through it (see `_net_name`). 192A-4: a row
+    # that repeats an id the table already named is kept out of the way and
+    # reported here, so the board carries what the file contradicted itself on.
+    net_conflicts: dict[int, list[str]] = {}
+    net_table = _net_table(tree, net_conflicts)
     name = path.name
     components: list[ComponentPlacement] = []
     pads: list[PadGeometry] = []
@@ -1370,6 +1388,7 @@ def read_kicad_board(path: str | Path) -> BoardGeometry:
         layers=layers.infos, stackup=_read_stackup(tree, layers),
         components=components, pads=pads, tracks=tracks, vias=vias,
         pours=pours, outline=_outline(tree, name),
+        net_table_conflicts=net_conflicts,
     )
     # 182: the project's own netclasses, from the sibling `.kicad_pro` (same
     # stem, same folder — the convention `kicad_project_files` already uses).

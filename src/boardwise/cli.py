@@ -43,11 +43,14 @@ from .engines.checkup import (
     TRIGGER_FACTS,
     TRIGGER_MARKED,
     UNREVIEWED_DATASHEET_DIR,
+    STALE_ACCEPTED_STATES,
+    STATE_ACCEPTED_STALE_ELSEWHERE,
     accepted_unknown_counts,
     accepted_unknown_count,
     accepted_unknown_section,
     board_report_section,
     conclusion_section,
+    declared_passive_exemptions,
     disambiguated_triage_keys,
     finding_chains,
     intent_section,
@@ -3521,6 +3524,7 @@ def _checkup_report(
     completion: dict | None = None,
     pcb_review: dict | None = None,
     accepted_unknown: list[dict] | None = None,
+    declared_passive_exempt: list[dict] | None = None,
     shelf_path: str = "",
 ) -> dict:
     """Assemble the report: what was read (batch 2), what was found (batch 3),
@@ -3607,6 +3611,13 @@ def _checkup_report(
         # reading of the same walk, no existing key changes meaning, and the gate
         # it moves (`completion`) is where the movement is recorded.
         "accepted_unknown": list(accepted_unknown or []),
+        # 192B ⑤: the parts 190's declared-passive exemption took **off** the
+        # datasheet gate — the section's only shortening path, and the one whose
+        # silence could hide a real IC. Always present (an empty list is the
+        # honest "nothing was exempted"), with the kind/basis/pins that made the
+        # exemption apply, so "why is this U-designated part not on the list?"
+        # has an answer in the report rather than only in the rule.
+        "declaredPassiveExempt": list(declared_passive_exempt or []),
         # 058: always present, empty list included — the reviewer's mark channel
         # exists from the first report on (`boardwise need-datasheet` fills it).
         "needs_datasheet": list(needs_datasheet or []),
@@ -4115,6 +4126,7 @@ def _completion_body(
     needs_datasheet: list[dict] | None = None,
     coverage: dict | None = None,
     accepted: list[dict] | None = None,
+    passive_exempt: list[dict] | None = None,
 ) -> dict:
     """`completion` from counts a caller already has — one shape, two callers.
 
@@ -4225,7 +4237,17 @@ def _completion_body(
     # drawing no longer has.
     accepted_counts = accepted_unknown_counts(accepted)
     accepted_count = int(accepted_counts.get("accepted", 0))
-    accepted_stale = int(accepted_counts.get("stale", 0))
+    # 192B ⑦: two stale states, one count plus its own split. `stale-elsewhere`
+    # is stale in the sense the verdict reads (the acceptance does not apply to
+    # the board it names) but *not* 「the drawing no longer has this part」 — so
+    # the total keeps its name and meaning, and the narrower one is named beside
+    # it rather than folded in silently.
+    accepted_stale = sum(
+        int(accepted_counts.get(state, 0)) for state in STALE_ACCEPTED_STATES
+    )
+    accepted_stale_elsewhere = int(
+        accepted_counts.get(STATE_ACCEPTED_STALE_ELSEWHERE, 0)
+    )
 
     why: list[str] = []
     if errors:
@@ -4267,7 +4289,16 @@ def _completion_body(
         errors or error_entries or counts_incomplete
         or unreviewed_count or marked_count
         or architecture is None
-        or coverage["modelEmpty"]
+        # 192B ⑧: read with `.get`, like the `pcbReviewMissing` clause three lines
+        # below and for exactly the reason spelled out there — this function is
+        # also the **re-gate** path (`need-datasheet` / `triage`), and a report
+        # written before this gate existed carries a coverage section with no
+        # `modelEmpty` key. `_clean_coverage()` fills the key only when the
+        # caller passes **no** coverage at all; `_completion_from_report` passes
+        # the old report's own dict, so a subscript here is a KeyError on every
+        # old report — the crash 126d fixed one clause over and left standing in
+        # this one.
+        or coverage.get("modelEmpty")
         # 126d: read with `.get`, not `[...]` — a re-gate of a report written
         # before the gate existed carries a `/6` coverage section with no such
         # key, and KeyError there would make `need-datasheet` and `triage` crash
@@ -4346,6 +4377,16 @@ def _completion_body(
         "acceptedUnknown": accepted_count,
         "acceptedUnknownTotal": accepted_unknown_count(accepted),
         "acceptedUnknownStale": accepted_stale,
+        # 192B ⑦: of those, the ones whose part **is** on the drawing and only
+        # not on the board the acceptance names. Additive; a reader of the older
+        # total still gets a total, and report.md says which is which.
+        "acceptedUnknownStaleElsewhere": accepted_stale_elsewhere,
+        # 192B ⑤: the one path in this section that makes the datasheet gate
+        # **shorter** — 190's declared-passive exemption. A count, because the
+        # exemption's whole risk is that a real IC leaves the gate silently; the
+        # designators are listed in report.md and the rows are in
+        # `report.declaredPassiveExempt`. Additive, like every key beside it.
+        "declaredPassiveExempt": len(passive_exempt or []),
         "coverage": coverage,
         "sourceVersions": {
             "ruleset": ruleset_fingerprint(rule_ids),
@@ -4366,6 +4407,7 @@ def _completion_section(
     needs_datasheet: list[dict] | None = None,
     coverage: dict | None = None,
     accepted: list[dict] | None = None,
+    passive_exempt: list[dict] | None = None,
 ) -> dict:
     """`completion` for a **live run** — the coverage counts come from the model.
 
@@ -4396,6 +4438,7 @@ def _completion_section(
         needs_datasheet=needs_datasheet,
         coverage=coverage,
         accepted=accepted,
+        passive_exempt=passive_exempt,
     )
 
 
@@ -4438,7 +4481,16 @@ def _fold_accepted_stale(intent_section_payload: dict, stale_rows: list[dict]) -
     intent_section_payload["stale"] = marks
     totals = intent_section_payload.get("totals")
     if isinstance(totals, dict):
-        totals["staleEntries"] = len(marks)
+        # 192B ⑨: `staleTotal` is what the section's heading counts — every stale
+        # row it prints, the folded accepted-unknown marks included. It is the
+        # length of the **entries** list, not of ``marks``: `stale` is the
+        # newly-marked strings and is a subset of the standing set, so counting
+        # it here would print a total the heading below contradicts.
+        # `newlyStale` is this regeneration's own marks and is **not** touched
+        # here: a folded acceptance mark is not something the regeneration
+        # discovered, and bumping the delta would make the line say a contract
+        # moved when what happened is that a part left the drawing.
+        totals["staleTotal"] = len(entries)
 
 
 def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dict:
@@ -4483,6 +4535,10 @@ def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dic
         # path's: `need-datasheet` and `triage` observe nothing about the
         # contract).
         accepted=report.get("accepted_unknown") or [],
+        # 192B ⑤: the same carry-over for the declared-passive trace. A re-gate
+        # re-reads no model, so it cannot recount; it reads the rows the run
+        # wrote rather than dropping the disclosure down to zero.
+        passive_exempt=report.get("declaredPassiveExempt") or [],
     )
 
 
@@ -5731,23 +5787,30 @@ def _geometry_canvas_images(
     and never from the runner's English sentence — the file name is built from it
     (:func:`~boardwise.engines.canvasrender.canvas_file_name`), so a title with a
     slash in it cannot write outside ``--out``.
+
+    192A-5: the same entry's ``boardUuid`` rides along as the **disambiguator** for
+    two boards that share a title (``update --all`` on a project whose documents
+    were copy-pasted is how that happens in the field) — ``write_canvases`` uses it
+    only when the sanitised names collide, so a normal run's file names do not move.
     """
     from .engines.canvasrender import marks_from_findings, write_canvases
 
     entries = list((section or {}).get("boards") or [])
     pairs: list[tuple[str, object]] = []
     marks: list[list] = []
+    keys: list[str] = []
     for index, board in enumerate(boards):
         entry = entries[index] if index < len(entries) else {}
         title = str(entry.get("title") or "") or f"board{index + 1}"
         pairs.append((title, board))
+        keys.append(str(entry.get("boardUuid") or ""))
         rows = [
             findings[position]
             for position in (entry.get("findings") or [])
             if isinstance(position, int) and 0 <= position < len(findings)
         ]
         marks.append(marks_from_findings(rows))
-    return write_canvases(pairs, out_dir=out_dir, marks=marks, notes=notes)
+    return write_canvases(pairs, out_dir=out_dir, marks=marks, notes=notes, keys=keys)
 
 
 # ---------------------------------------------------------------------------
@@ -6254,6 +6317,15 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             ),
             project_uuid=enumerated_uuid,
             contract_version=intent_contract.INTENT_VERSION,
+            # 192B ⑩: the second half of 「契约版本」 — the version the **file**
+            # declares, which is a different claim from the one this build reads
+            # and is `None` when there is no file to declare anything. The loaded
+            # document carries it (`DesignIntent.intent_version`); an absent or
+            # unreadable contract has none, and the report says that instead of
+            # quoting the build's own constant as if the file had written it.
+            declared_version=(
+                int(contract.intent_version) if contract is not None else None
+            ),
         )
 
     # 092 A2b: the contract reaches the **rule walk** now, not only the report.
@@ -6724,6 +6796,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     }
 
     architecture_section = architecture.section if architecture is not None else None
+    # 192B ⑤: read once, used twice — the report section below and the verdict's
+    # count. The exemption is the datasheet gate's only *shortening* path, so it
+    # gets a trace in both places rather than existing only as a rule in code.
+    passive_exempt = declared_passive_exemptions(model)
     completion = _completion_section(
         model=model, summary=summary, unreviewed=unreviewed, triage=triage,
         architecture=architecture_section,
@@ -6732,6 +6808,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         # 191A: the accepted-unknown rows are the datasheet gate's other half, so
         # the verdict reads them here — the same list the report carries.
         accepted=accepted_rows,
+        passive_exempt=passive_exempt,
     )
     # 073, decided **once**, here: the verdict now decides the exit code, and the
     # report carries `summary.exitCode` — so writing it back into the summary the
@@ -6769,6 +6846,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         unreviewed_parts=unreviewed,
         needs_datasheet=needs_datasheet,
         reviewed_by_shelf=reviewed,
+        declared_passive_exempt=passive_exempt,
         warning_triage=triage,
         layout_review=(
             layout_review_section(source=aesthetics_source, pages=canvas)
@@ -8083,7 +8161,41 @@ def _cmd_bridge_start(args: argparse.Namespace) -> int:
         asyncio.run(run())
     except KeyboardInterrupt:
         print("\nboardwise bridge: stopped")
+    except OSError as exc:
+        # 192C §6: `serve_forever` raises straight out of `asyncio.run` when the
+        # port already belongs to another process, which is what happens when a
+        # reader follows the "restart the daemon" advice while one is running —
+        # an `OSError` traceback where a sentence belongs. On Windows that is
+        # WinError 10048 ("only one usage of each socket address is normally
+        # permitted"); `errno.EADDRINUSE` covers the same fact elsewhere.
+        if _address_in_use(exc):
+            print(
+                f"boardwise bridge: 127.0.0.1:{port} 已被别的进程占着（多半就是一个还在跑的"
+                " daemon）—— 前台 daemon 起不来是意料之中：结束那个进程再试"
+                "（任务管理器，或 `taskkill /F /PID <pid>`；pid 用 "
+                f"`netstat -ano | findstr :{port}` 找）。也可以什么都不做："
+                "下一条 bridge 命令会自动拉起一个 daemon（157 起）。"
+                f"端口不是 61190 时用 --port 指明（当前 --port {port}）",
+                file=sys.stderr,
+            )
+            return 2
+        print(f"boardwise bridge: 起不来 —— {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
     return 0
+
+
+def _address_in_use(exc: OSError) -> bool:
+    """Whether this ``OSError`` is "the address is already taken" (192C §6).
+
+    Windows reports it as ``WinError 10048`` with ``errno`` set to the same
+    number, POSIX as ``EADDRINUSE``; the code is checked rather than the message,
+    which is localized.
+    """
+    import errno
+
+    return getattr(exc, "winerror", None) == 10048 or getattr(exc, "errno", None) in (
+        errno.EADDRINUSE, 10048,
+    )
 
 
 def _cmd_bridge_status(args: argparse.Namespace) -> int:
@@ -13179,7 +13291,10 @@ def _read_default_shelf(args: argparse.Namespace):
     try:
         library = load_libraries(paths)
     except PartError as exc:
-        return None, f"货架 {paths[0]} 读不了（{exc}）"
+        # 192C §3: name the shelf that **failed**, not the first one named. A
+        # broken bundled shelf used to be reported as the user's file being
+        # unreadable, which sends the reader to edit a file that is fine.
+        return None, f"货架 {_unreadable_shelf(paths, exc)} 读不了（{exc}）"
     if len(paths) > 1:
         origins = library.origins
         note = (
@@ -13191,6 +13306,51 @@ def _read_default_shelf(args: argparse.Namespace):
         )
         return library, note
     return library, ""
+
+
+def _unreadable_shelf(paths: tuple[str, ...], exc: Exception) -> str:
+    """Which of ``paths`` the reader could not read, by its own path (192C §3).
+
+    The merge reads every path in one call, so the error that comes back names
+    none of them. The paths are re-read one at a time until one raises — the
+    first such path is the answer, and ``paths[0]`` is the honest fallback for an
+    error that no single path reproduces.
+    """
+    from boardwise.core.parts import PartError, load_libraries
+
+    for path in paths[1:]:
+        try:
+            load_libraries((path,))
+        except PartError:
+            return str(path)
+    try:
+        load_libraries((paths[0],))
+    except PartError:
+        return str(paths[0])
+    return str(paths[0])
+
+
+def _shelf_description(args: argparse.Namespace, library) -> str:
+    """The shelf a read **actually read**, as one string (192C §2).
+
+    `parts show` and `parts missing` judged the merge (191B) while printing
+    ``default_library_path()`` — one file — and the merged entry count. So "no
+    entry for X in <the user's file> (N entries)" pointed at a file that has
+    fewer entries than the search walked, which is how a reader concludes the
+    shelf does not have a part it does carry. This is the same answer `parts
+    list` gives, in one line: which shelves, in which order, and how many entries
+    the merge holds.
+    """
+    paths = (
+        (str(args.library),)
+        if getattr(args, "library", None)
+        else _default_shelf_paths()
+    )
+    if len(paths) > 1:
+        return (
+            f"{paths[0]}（用户架）+ {paths[1]}（内置架）合并，共 {len(library.parts)} 条"
+        )
+    return f"{paths[0]}（{len(library.parts)} entries）"
 
 
 def _cmd_parts_list(args: argparse.Namespace) -> int:
@@ -13426,10 +13586,15 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
     )
 
     library_path = _parts_library_path(args)
-    library, _shelf_note = _read_default_shelf(args)
+    library, shelf_note = _read_default_shelf(args)
     if library is None:
-        print(f"boardwise parts missing: {_shelf_note}", file=sys.stderr)
+        print(f"boardwise parts missing: {shelf_note}", file=sys.stderr)
         return 2
+    if shelf_note:
+        print(f"note: {shelf_note}", file=sys.stderr)
+    # 192C §2: the summary lines and the json name the shelf that was **read**
+    # here (the merge), which is the shelf every row above was judged against.
+    shelf_label = _shelf_description(args, library)
 
     project = Path(args.file)
     try:
@@ -13467,6 +13632,9 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
             "lcsc": comp.lcsc_part,
             "value": comp.value,
             "shelfKey": entry.key if entry is not None else "",
+            # 192C §2: which shelf the matched entry came from, in `parts list`'s
+            # vocabulary ("" when it is on no shelf, or when one file was read).
+            "source": "" if entry is None else library.origin_of(entry),
             "onShelf": entry is not None,
             "category": entry.category if entry is not None else "",
             "datasheetUrl": datasheet,
@@ -13511,6 +13679,13 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
         "ok": True,
         "file": str(project),
         "library": str(library_path),
+        # 192C §2: the read is the merge (191B) — same pair `parts list --json`
+        # reports, so a reader can tell a miss from a shelf that was never read.
+        "shelfPaths": list(
+            (str(args.library),) if getattr(args, "library", None)
+            else _default_shelf_paths()
+        ),
+        "merged": bool(library.origins),
         "entriesOnShelf": len(library.parts),
         "parts": rows,
         "fullyJudgeable": owed == 0,
@@ -13520,13 +13695,13 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
         print(f"{project}: no U-prefix ICs found — nothing for the shelf to judge here")
     elif owed == 0:
         print(
-            f"{len(rows)} U-prefix part(s) are judgeable from {library_path} "
+            f"{len(rows)} U-prefix part(s) are judgeable from {shelf_label} "
             "(全部可查; exit 0)"
         )
     else:
         print(
             f"{len(rows)} U-prefix part(s), {owed} with missing facts "
-            f"against {library_path} (a report, not a failure: exit 0)"
+            f"against {shelf_label} (a report, not a failure: exit 0)"
         )
     if args.json_path:
         Path(args.json_path).write_text(
@@ -13607,10 +13782,13 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
     import json
 
     library_path = _parts_library_path(args)
-    library, _shelf_note = _read_default_shelf(args)
+    library, shelf_note = _read_default_shelf(args)
     if library is None:
-        print(f"boardwise parts show: {_shelf_note}", file=sys.stderr)
+        print(f"boardwise parts show: {shelf_note}", file=sys.stderr)
         return 2
+    if shelf_note:
+        # The same line `parts list` prints: which shelves answered (191B/192C §2).
+        print(f"note: {shelf_note}", file=sys.stderr)
 
     query = args.query
     folded = query.casefold()
@@ -13624,8 +13802,8 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
             or folded in (part.lcsc or "").casefold()
         ][:5]
         print(
-            f"boardwise parts show: no entry for {query!r} in {library_path} "
-            f"({len(library.parts)} entries)",
+            f"boardwise parts show: no entry for {query!r} in "
+            f"{_shelf_description(args, library)}",
             file=sys.stderr,
         )
         if near:
@@ -13638,7 +13816,11 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
         return 2
 
     facts = _facts_in_file(entry)
+    origin = library.origin_of(entry)
     print(f"{entry.mpn or entry.key} — {entry.key}")
+    # Which shelf this row came from, in `parts list`'s vocabulary (192C §2). "-"
+    # on a single-file read: there was no merge, so there is no source to name.
+    print(f"  source: {origin or '-'}")
     print(f"  lcsc: {entry.lcsc or '-'}")
     print(f"  value: {entry.value or '-'}")
     print(f"  manufacturer: {entry.manufacturer or '-'}")
@@ -13679,6 +13861,15 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
         Path(args.json_path).write_text(
             json.dumps(
                 {"command": "parts-show", "ok": True, "library": str(library_path),
+                 # 192C §2: the same attribution `parts list --json` carries. The
+                 # read is the merge; `library` stays the write-target spelling
+                 # (a report quotes it back), so both answers are here.
+                 "shelfPaths": list(
+                     (str(args.library),) if getattr(args, "library", None)
+                     else _default_shelf_paths()
+                 ),
+                 "merged": bool(library.origins),
+                 "origin": origin,
                  "entry": _entry_dump(entry)},
                 ensure_ascii=False,
                 indent=2,
@@ -14040,6 +14231,23 @@ def _resolve_add_uuids(args: argparse.Namespace) -> tuple[str, str, str]:
     return asyncio.run(run())
 
 
+def _shelf_identity_hit(library, *, mpn: str, lcsc: str):
+    """``(entry, which, identity)`` — the one shelf entry ``mpn``/``lcsc`` names.
+
+    Identity is MPN or C-number, compared case-insensitively and deliberately
+    stricter than the shelf's own exact-match lookup: an entry differing only in
+    case is a duplicate to fix, not a second part to keep. ``which`` names the
+    field that matched, so the refusal can quote the string the caller typed.
+    One lookup, used by `parts add`'s duplicate check and by nothing else.
+    """
+    for on_shelf in library.parts:
+        same_mpn = bool(on_shelf.mpn) and on_shelf.mpn.casefold() == mpn.casefold()
+        same_lcsc = bool(on_shelf.lcsc) and on_shelf.lcsc.casefold() == lcsc.casefold()
+        if same_mpn or same_lcsc:
+            return on_shelf, ("mpn" if same_mpn else "lcsc"), (mpn if same_mpn else lcsc)
+    return None, "", ""
+
+
 def _cmd_parts_add(args: argparse.Namespace) -> int:
     """WI-3 + 186 §A: scaffold a candidate, or **write facts into the shelf**.
 
@@ -14069,6 +14277,7 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
     import json
 
     from boardwise.core.parts import (
+        SHELF_BUILTIN,
         PartEntry,
         PartLibrary,
         PartProvenance,
@@ -14110,23 +14319,51 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
     # Identity is compared case-insensitively, deliberately stricter than the
     # shelf's own exact-match lookup: an entry differing only in case is a
     # duplicate to fix, not a second part to keep.
-    existing = None
-    for on_shelf in library.parts:
-        same_mpn = on_shelf.mpn and on_shelf.mpn.casefold() == args.mpn.casefold()
-        same_lcsc = on_shelf.lcsc and on_shelf.lcsc.casefold() == args.lcsc.casefold()
-        if same_mpn or same_lcsc:
-            existing = on_shelf
-            if not facts:
-                which = "mpn" if same_mpn else "lcsc"
-                identity = args.mpn if same_mpn else args.lcsc
-                print(
-                    f"boardwise parts add: {which} {identity!r} is already on the shelf "
-                    f"as {existing.key}; inspect it with "
-                    f"`boardwise parts show {existing.key}`",
-                    file=sys.stderr,
-                )
-                return 2
-            break
+    #
+    # 192C §1: this check runs against the **merged** shelf — the one every reader
+    # and every rule reads (191B) — not against the file this command writes.
+    # Those two used to disagree, and the disagreement destroyed a judgement in
+    # silence: a part the exe's shelf already carries (curated, `facts_verified`
+    # true, driving rules) was not a duplicate to `parts add`, so the command
+    # scaffolded `candidate.<mpn>` into the user's shelf — and the merge then
+    # dropped the curated entry for it, because identity is MPN/C-number/shelf
+    # key and the user's entry wins. One `parts add` deleted a verified entry.
+    #
+    # Only a real pair has to be read twice: with one path (a checkout, or an
+    # explicit `--library`) the file this command writes **is** the file every
+    # reader reads, and `library` above already holds it.
+    checked = library
+    if not getattr(args, "library", None) and len(_default_shelf_paths()) > 1:
+        merged, merged_note = _read_default_shelf(args)
+        if merged is None:
+            print(f"boardwise parts add: {merged_note}", file=sys.stderr)
+            return 2
+        checked = merged
+    hit, which, identity = _shelf_identity_hit(checked, mpn=args.mpn, lcsc=args.lcsc)
+    from_builtin = hit is not None and checked.origin_of(hit) == SHELF_BUILTIN
+    if hit is not None and (not facts or from_builtin) and not args.force:
+        if from_builtin:
+            print(
+                f"boardwise parts add: {which} {identity!r} is already on the shelf "
+                f"as {hit.key}（内置架 source={SHELF_BUILTIN}，exe 自带、只读）—— "
+                "再建一条候选会在合并时把它顶掉（191B 按 MPN/LCSC 合并、用户架优先），"
+                "它的 facts 与 facts_verified 会从合并读里一起消失。"
+                f"先用 `boardwise parts show {hit.key}` 看它；确实要用自己的条目覆盖它，"
+                "再加 --force（写了也仍然只落在用户架）",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"boardwise parts add: {which} {identity!r} is already on the shelf "
+                f"as {hit.key}; inspect it with "
+                f"`boardwise parts show {hit.key}`",
+                file=sys.stderr,
+            )
+        return 2
+    # A merged hit from the user's own shelf is the entry to fill; the builtin one
+    # is not (this command writes one file, and it is not inside the exe).
+    existing = None if from_builtin else hit
+    shadowed = hit if from_builtin else None
 
     # 187c: `--resolve` fills the uuid pair *before* either branch below reads
     # it, so both the new entry and the facts-onto-an-existing-entry path see
@@ -14268,6 +14505,16 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
         gate = "false — 候选不驱动规则；核过页号后重跑本命令加 --verified"
     label = "entry" if facts else "candidate"
     print(f"{label} appended: {key} → {library_path} (now {len(reloaded.parts)} entries)")
+    if shadowed is not None:
+        # 192C §1: `--force` said "my entry, not the exe's" — so say what it did
+        # to the merged read, instead of leaving it to be discovered from the
+        # shelf labels later. The exe's own file is untouched (it cannot be
+        # written), which is the other half of "the write still only lands in
+        # the user's shelf".
+        print(
+            f"  override: 内置架的 {shadowed.key} 从合并读里让位给这一条"
+            "（191B：同 MPN/LCSC 时用户架优先）；exe 自带那份文件没被动过"
+        )
     if existed:
         print(f"  backup: {backup}")
     if facts:
@@ -15953,7 +16200,7 @@ async def _update_all_windows(
         targets=targets,
     )
     print("  逐窗验收：")
-    verified = mismatch = unknown = 0
+    verified = mismatch = unknown = unconfirmed = 0
     for key in targets:
         state, version, detail = states.get(key, (RELOAD_PENDING, "", ""))
         if state == RELOAD_VERIFIED:
@@ -15962,6 +16209,9 @@ async def _update_all_windows(
         elif state == RELOAD_MISMATCH:
             mismatch += 1
             print(f"    {key}: mismatch — {detail}", file=sys.stderr)
+        elif state == RELOAD_UNCONFIRMED:
+            unconfirmed += 1
+            print(f"    {key}: unconfirmed — {detail}", file=sys.stderr)
         else:
             unknown += 1
             print(f"    {key}: unknown — {detail}", file=sys.stderr)
@@ -15980,6 +16230,16 @@ async def _update_all_windows(
         )
         print(_write_without_activation_hint(), file=sys.stderr)
         return 1
+    if unconfirmed:
+        # 192C §4: the write landed, the evidence cannot be split per window. Not
+        # verified (that would be a claim about a window), not failed either.
+        print(
+            f"boardwise bridge update-connector: {unconfirmed} 个窗口的验收归不到单个"
+            f"窗口 —— daemon 的表分不出写之后的新连接属于哪一窗（{verified} 个 verified，"
+            f"{unknown} 个 unknown）。不记 verified，也不说失败："
+            "用 `boardwise bridge status` 逐窗复核运行版本",
+            file=sys.stderr,
+        )
     if unknown:
         print(
             f"boardwise bridge update-connector: {unknown} 个窗口在 "
@@ -15988,6 +16248,7 @@ async def _update_all_windows(
             file=sys.stderr,
         )
         print(_write_without_activation_hint(lead=_STILL_OLD_LEAD), file=sys.stderr)
+    if unconfirmed or unknown:
         return 3
     print(f"  verified: {verified} 个窗口都报 {expected}")
     return 0
@@ -16037,9 +16298,18 @@ def _text(value: object) -> str:
 #: what this pair of names is about.
 #: ``pending`` — nothing conclusive *about this window* yet; the caller's deadline
 #: turns it into "unknown" (exit 3), which is not the same claim as "failed".
+#:
+#: ``unconfirmed`` (192C §4) — the evidence exists but **cannot be attributed to
+#: this window**. It is only reachable in a multi-window run: the daemon's table
+#: says which connections are new, never which *window* a new connection belongs
+#: to, so with two windows written to, one connection announcing the stored
+#: version is one connection's evidence and no window's verdict. Every target is
+#: unconfirmed until at least as many expected-version connections have reported
+#: as there are targets (exit 3: "not confirmed", never "verified").
 RELOAD_VERIFIED = "verified"
 RELOAD_MISMATCH = "mismatch"
 RELOAD_PENDING = "pending"
+RELOAD_UNCONFIRMED = "unconfirmed"
 
 
 def _window_names(window: dict) -> set[str]:
@@ -16204,9 +16474,28 @@ def _table_verdicts(
         # every target answers `pending`.
         if before is not None and not (names & before):
             fresh.append(window)
+    targets_list = list(targets or ("",))
+    # 192C §4: how many *new* connections announce the stored version, against how
+    # many windows the caller wrote to. One connection is evidence for one window,
+    # and the daemon's table cannot say which — so in a multi-window run a short
+    # pool supports no `verified` at all (see `_one_verdict`).
+    expected_fresh = [
+        window for window in fresh
+        if _text(window.get("connectorVersion")) == expected
+    ]
+    pool_ok = len(targets_list) < 2 or len(expected_fresh) >= len(targets_list)
     results: dict[str, tuple[str, str, str]] = {}
-    for target in targets or ("",):
-        results[target] = _one_verdict(target, windows, names_now, fresh, before, expected)
+    for target in targets_list:
+        results[target] = _one_verdict(
+            target,
+            windows,
+            names_now,
+            fresh,
+            before,
+            expected,
+            pool_ok=pool_ok,
+            target_count=len(targets_list),
+        )
     return results
 
 
@@ -16217,8 +16506,17 @@ def _one_verdict(
     fresh: list[dict],
     before: frozenset[str] | None,
     expected: str,
+    *,
+    pool_ok: bool = True,
+    target_count: int = 1,
 ) -> tuple[str, str, str]:
-    """`(state, version, detail)` for one window — the rule, in one place."""
+    """`(state, version, detail)` for one window — the rule, in one place.
+
+    ``pool_ok`` is the multi-window attribution gate from :func:`_table_verdicts`
+    (192C §4), and it gates **only** the `verified` branch: `mismatch` is a claim
+    that a new connection came back on the wrong build, which is true whoever it
+    belongs to, and refusing to say it would be the safe direction taken too far.
+    """
     if before is None:
         return (
             RELOAD_PENDING,
@@ -16240,14 +16538,27 @@ def _one_verdict(
                 "",
                 f"窗口 {target} 不在写之前的窗口表里，表里没有任何连接可以归给它",
             )
-    for window in fresh:
-        version = _text(window.get("connectorVersion"))
-        if version and version == expected:
+    expected_fresh = [
+        window
+        for window in fresh
+        if _text(window.get("connectorVersion")) == expected
+    ]
+    for window in expected_fresh:
+        if not pool_ok:
             return (
-                RELOAD_VERIFIED,
-                version,
-                f"写之后新出现的连接 {_window_key(window)} 报 {version}，且目标窗的旧连接已消失",
+                RELOAD_UNCONFIRMED,
+                expected,
+                f"写之后报出 {expected} 的新连接有 {len(expected_fresh)} 个"
+                f"（{', '.join(_window_key(w) for w in expected_fresh)}），少于目标窗数 "
+                f"{target_count} —— daemon 的表分不出哪个新连接属于哪一窗，池证据不给"
+                "任何一窗记 verified（这也不说它们失败：多半是还没 reload 完，"
+                "用 `boardwise bridge status` 逐窗复核）",
             )
+        return (
+            RELOAD_VERIFIED,
+            expected,
+            f"写之后新出现的连接 {_window_key(window)} 报 {expected}，且目标窗的旧连接已消失",
+        )
     for window in fresh:
         version = _text(window.get("connectorVersion"))
         if version and version != expected:
@@ -16310,10 +16621,14 @@ async def _await_verdicts(
         round_ = _table_verdicts(
             windows, expected=expected, before=before, targets=pending
         )
-        for target in pending:
+        for target in list(pending):
             state, version, detail = round_[target]
             states[target] = (state, version, detail)
-            if state != RELOAD_PENDING:
+            # 192C §4: `unconfirmed` is a *provisional* reading — the pool it
+            # needs may complete on the next read (the other window's reload
+            # lands a second later), so it keeps polling instead of settling and
+            # only stands if the budget runs out.
+            if state not in (RELOAD_PENDING, RELOAD_UNCONFIRMED):
                 pending.remove(target)
         if not pending:
             return states
@@ -23304,6 +23619,23 @@ MULTI_WINDOW_FIX = (
     "`boardwise bridge status` 会列出每个在线窗口的工程名与 id"
 )
 
+#: How to end a daemon that outlived an upgrade (192C §6). The daemon's action
+#: table is a load-time constant, so a daemon started before this build answers
+#: new actions with `UNKNOWN_ACTION` — and the advice used to be "run `boardwise
+#: bridge start`", which with a daemon already listening is an `OSError` (10048,
+#: address in use) and a traceback. Since 157 the next bridge command starts a
+#: daemon by itself, so the actionable step is to end the old **process**.
+#:
+#: :func:`boardwise.bridge.client.daemon_version_warning` says the same thing on
+#: every handshake; it cannot import this module (layering), so the sentence
+#: exists twice and `tests/test_192c_release_holes.py` pins both.
+DAEMON_RESTART_ADVICE = (
+    "结束旧 daemon 进程（任务管理器，或 `taskkill /F /PID <pid>`——"
+    "pid 用 `netstat -ano | findstr :<端口>` 找）；"
+    "下一条 bridge 命令会自动拉起一个新的（157 起）"
+)
+
+
 #: The two codes a **hint** produces when it names nothing, and their fixes
 #: (188B 低3). Both are the `MULTI_WINDOW_FIX` situation from the other side: the
 #: extension is attached and working, so sending the reader to re-open the editor
@@ -23326,7 +23658,10 @@ INSTANCE_STALE_FIX = (
 PROJECT_NOT_CONNECTED_FIX = (
     "没有在线窗口打开这个工程（工程名写错，或它还没在编辑器里打开）："
     "`boardwise bridge status` 的 windows[] 列出每个在线窗口的工程名，"
-    "对准了再用 `--project <工程名>` 重跑；要审的工程没开就先打开它"
+    "对准了再用 `--project <工程名>` 重跑；要审的工程没开就先打开它。"
+    "工程名比较时忽略前导 `/` 与大小写（连接器上报的是 `/test` 这种 friendlyName，"
+    "`doc.list` 里是 `test`），所以两种写法都能路由；"
+    "报错行还会印出每个窗口的 uuid，uuid 也当提示用"
 )
 
 
@@ -24051,8 +24386,8 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
             fix=(
                 ""
                 if daemon_version_ok
-                else "重启 daemon（`boardwise bridge start`）：动作表是加载期常量，"
-                "跑着旧版本的 daemon 会把新动作答成 UNKNOWN_ACTION"
+                else "动作表是加载期常量，跑着旧版本的 daemon 会把新动作答成 "
+                f"UNKNOWN_ACTION；{DAEMON_RESTART_ADVICE}"
             ),
         )
     )

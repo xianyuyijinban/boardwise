@@ -164,10 +164,34 @@ def canvas_file_name(board_title: str) -> str:
     板的标题来自文档自己的 ``META``（钉 4），可能带空格、斜杠、中文……一个带斜杠的
     标题会写到 ``--out`` 之外去，所以文件名的**不安全字符**在这里就换掉；标题本身
     原样写进 ``canvas_images[].board``，两处不混。
+
+    两个不同的标题可以映射到同一个文件名（``"A B"`` 与 ``"A/B"`` 都是 ``A_B``）——
+    这里只保证**单个**标题安全，撞名与否由 :func:`write_canvases` 按盘上已有的名字
+    判（192A-5），因为只有它知道这一次渲染里有哪些板。
     """
     safe = re.sub(r"[^0-9A-Za-z._\u4e00-\u9fff-]+", "_", str(board_title or ""))
     safe = re.sub(r"\.{2,}", "_", safe).strip("._")
     return f"canvas-{safe or 'board'}.svg"
+
+
+#: XML 1.0 **不允许出现**的字符（即使转义也不行）：C0 控制字符里除去 ``\t`` / ``\n`` /
+#: ``\r``（这三个是合法的空白）。来源是板文件自己：一条丝印文字的 ``STRING`` 记录、
+#: 一块板的 ``META`` 标题都可能带着它们，而解析器照实读、照实保留——它是文件里的
+#: 事实，不是读数错误。
+#:
+#: 192A-6：这样一个字符会让**整张图**不是良构 XML，于是「图上多了一个看不见的字符」
+#: 的代价是这张图完全打不开。所以出图前剔掉，且只在这里剔（一处口径）。
+_XML_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _svg_text(value: str) -> str:
+    """一段要写进 SVG 文本节点的字符串：先剔非法控制字符，再 XML 转义。
+
+    ``escape()`` 只解决 ``< & > " '``，对控制字符无能为力——``&#1;`` 也是非法实体。
+    剔掉的字符不另发披露：它们在图上本来就不可见（这正是它们非法的方式），而这张图
+    的读者要的是「打开看得见板子」；文件里有没有它们由解析侧的 finding 去说。
+    """
+    return escape(_XML_ILLEGAL.sub("", str(value)))
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +286,7 @@ def render_board_svg(
         )
         parts.append(
             f'<text x="{ox:.2f}" y="{panel_y - 6:.2f}" fill="{_COLOURS["label"]}" '
-            f'font-size="13">{escape(_panel_label(view))}</text>'
+            f'font-size="13">{_svg_text(_panel_label(view))}</text>'
         )
         parts.extend(_panel(board, viewport, highlight))
     parts.extend(_caption(caption, panel_y + panel_h + _MARGIN))
@@ -277,6 +301,7 @@ def write_canvases(
     marks: Sequence[Sequence[CanvasMark]] = (),
     notes: list[str] | None = None,
     scale: float = 1.0,
+    keys: Sequence[str] = (),
 ) -> list[dict]:
     """把每块板渲染进 ``out_dir``，返回 ``canvas_images[]`` 的条目列表。
 
@@ -287,12 +312,28 @@ def write_canvases(
     块在列表里留一条 ``{board, error}`` 行、原因同时写进 ``notes``，其余照出。空板
     （一条几何都没有）不是异常，画出来是一张只有空框与说明的图——「这块板没有几何」
     本身就是要看见的事实。
+
+    **两块板叫同一个名字各写各的文件（192A-5）**：``canvas_file_name`` 只保证单个
+    标题安全，撞名要在这里判——只有这里知道这一批有哪些板。撞名时给后一块的文件名
+    加一个后缀，优先用 ``keys[index]``（调用方给的板自己的 ``boardUuid``）的**后 6
+    位**，取不到再退回序号；后缀加到底仍撞（比如两块板的 uuid 后 6 位也相同）就继续
+    往下数，直到盘上没这个名字。``canvas_images[].file`` 与盘上文件由**同一个**串
+    写成，所以「报告说在哪」与「图在哪」不会分成两句话。
+
+    ``keys`` 与 ``boards`` 同序、可省（省了就只用序号）；它是 uuid，不是第二份标题
+    ——标题照旧原样进 ``board`` / ``page``。
     """
     out_path = Path(out_dir)
     images: list[dict] = []
+    used: set[str] = set()
     for index, (title, board) in enumerate(boards):
         board_marks = tuple(marks[index]) if index < len(marks) else ()
-        name = canvas_file_name(title)
+        name = _unique_canvas_name(
+            canvas_file_name(title),
+            str(keys[index]) if index < len(keys) else "",
+            used,
+        )
+        used.add(name)
         try:
             svg = render_board_svg(board, title=title, marks=board_marks, scale=scale)
             out_path.mkdir(parents=True, exist_ok=True)
@@ -317,6 +358,26 @@ def write_canvases(
             "note": CANVAS_NOTE,
         })
     return images
+
+
+def _unique_canvas_name(name: str, key: str, used: set[str]) -> str:
+    """``name`` 若已被本批用掉，就加后缀让开，直到没被用掉（192A-5）。
+
+    ``key`` 是这块板自己的标识（``boardUuid``）：取后 6 位是因为整条 uuid 会把文件名
+    撑长且前 30 多位全是同一段前缀，而后 6 位正是编辑器自己区分两块板时给人看的那一段。
+    """
+    if name not in used:
+        return name
+    stem = name[:-4] if name.endswith(".svg") else name
+    suffix = key[-6:] if key else ""
+    candidate = f"{stem}-{suffix}.svg" if suffix else f"{stem}-2.svg"
+    ordinal = 2
+    while candidate in used:
+        ordinal += 1
+        candidate = (
+            f"{stem}-{suffix}-{ordinal}.svg" if suffix else f"{stem}-{ordinal}.svg"
+        )
+    return candidate
 
 
 def _panel_label(view: str) -> str:
@@ -544,7 +605,7 @@ def _texts(parts, board, vp, highlight) -> None:
         parts.append(
             f'<text x="{ax:.2f}" y="{ay:.2f}"{_text_transform(text, vp, x, y)} '
             f'font-size="{vp.px(size):.2f}" fill="{colour}" '
-            f'font-weight="{700 if hot else 400}"{anchor}>{escape(body)}</text>'
+            f'font-weight="{700 if hot else 400}"{anchor}>{_svg_text(body)}</text>'
         )
 
 
@@ -612,7 +673,7 @@ def _markers(parts, board, vp, highlight) -> None:
         )
         parts.append(
             f'<text x="{x + 9:.2f}" y="{y - 3:.2f}" font-size="11" '
-            f'fill="{_COLOURS["highlight"]}" font-weight="700">#{number}{escape(label)}</text>'
+            f'fill="{_COLOURS["highlight"]}" font-weight="700">#{number}{_svg_text(label)}</text>'
         )
 
 
@@ -749,13 +810,13 @@ def _caption_lines(
         f"走线 {len(board.tracks)}、过孔 {len(board.vias)}、铜区 {len(board.pours)}、"
         f"丝印图元 {len(board.silk_shapes)}、丝印文字 {len(board.silk_texts)}、"
         f"网 {len(board.nets)}",
-        "finding 高亮：实线＝被点名的器件/焊盘/丝印，虚线＝被点名的**网**上的铜；"
+        "finding 高亮：实线＝被点名的器件/焊盘/丝印，虚线＝被点名的网上的铜；"
         f"颜色 {_COLOURS['highlight']}，编号与下面的清单一一对应",
         "口径：" + CANVAS_NOTE,
         "底层视窗：位置与字形都按 x 镜像（板左↔右）——与规则量丝印/焊盘用的那套板面"
         "坐标一致，文字落墨范围才和焊盘对得上。文字方向取同一份实测口径（190S）："
-        "底层**位号与板上自由文字**记录的角度是「底层视图角」，所以它们在本图底层视窗里"
-        "读起来是**正字**、在顶层视窗里是反的；封装自带印字那一路记录的角度已经是板面角"
+        "底层位号与板上自由文字记录的角度是「底层视图角」，所以它们在本图底层视窗里"
+        "读起来是正字、在顶层视窗里是反的；封装自带印字那一路记录的角度已经是板面角"
         "（它的锚点由器件位姿求出），在本图里相反。要改文字方向请改文件，本图只照读数画",
     ]
     lines.extend(_undrawn_lines(board))
@@ -829,7 +890,7 @@ def _caption(lines: Sequence[str], top: float) -> list[str]:
     for index, line in enumerate(lines):
         out.append(
             f'<text x="8" y="{top + _CAPTION_TOP + index * _CAPTION_LINE:.2f}" '
-            f'fill="{_COLOURS["caption"]}" font-size="12">{escape(line)}</text>'
+            f'fill="{_COLOURS["caption"]}" font-size="12">{_svg_text(line)}</text>'
         )
     return out
 

@@ -116,7 +116,11 @@ def test_the_stale_mark_renders_a_named_object_and_does_not_raise():
     )
     assert section["stale"] == ["rails:+24V"], "the count's own reading is kept"
     assert section["staleEntries"] == [{"section": "rails", "object": "+24V"}]
-    assert section["totals"]["staleEntries"] == 1
+    # 192B ⑨: two names, because these are two questions — this pass's marks, and
+    # the standing set the heading below counts. They happen to be equal here,
+    # which is exactly why one name used to look right.
+    assert section["totals"]["newlyStale"] == 1
+    assert section["totals"]["staleTotal"] == 1
 
     lines: list[str] = []
     render_intent_markdown(lines, section)

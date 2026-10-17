@@ -392,7 +392,11 @@ def test_a_stale_daemon_is_diagnosed_as_a_restart():
     entry = check(checks, "daemon-version")
     assert entry.ok is False
     assert "0.0.9" in entry.detail and "0.1.0" in entry.detail
-    assert "重启 daemon" in entry.fix
+    # 192C §6: the step said "run `boardwise bridge start`", which with a daemon
+    # already listening is an OSError and a traceback — the way to end a running
+    # daemon is to end its process.
+    assert "taskkill" in entry.fix
+    assert "自动拉起" in entry.fix
 
 
 def test_a_daemon_that_predates_the_version_field_is_not_silently_equal():

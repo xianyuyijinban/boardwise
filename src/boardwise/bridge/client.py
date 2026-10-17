@@ -68,7 +68,8 @@ def daemon_version_warning(daemon_version: Any) -> str | None:
     return (
         f"boardwise bridge: daemon 运行 {running} ≠ CLI {cli_version}"
         "（动作表是加载期常量，新动作/修复在旧 daemon 里不存在）；"
-        "用 `boardwise bridge start` 重启 daemon"
+        "结束旧 daemon 进程（任务管理器 / `taskkill /F /PID <pid>`，"
+        "pid 见 `netstat -ano | findstr :<端口>`），下一条 bridge 命令会自动拉起新的"
     )
 
 

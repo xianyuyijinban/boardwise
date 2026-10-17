@@ -48,6 +48,7 @@ from boardwise.engines.checkup import (
     STATE_ACCEPTED,
     STATE_ACCEPTED_NOT_UNREVIEWED,
     STATE_ACCEPTED_STALE,
+    STATE_ACCEPTED_STALE_ELSEWHERE,
     UNREVIEWED_CLEARING_NOTE,
     accepted_unknown_counts,
     accepted_unknown_section,
@@ -512,7 +513,10 @@ def test_an_acceptance_whose_part_left_the_board_is_marked_not_deleted(
     # section, rendered by the renderer that already knows this shape.
     intent = report["intent"]
     assert {"section": "acceptedUnknown", "object": "UNSOLDERED9"} in intent["staleEntries"]
-    assert intent["totals"]["staleEntries"] >= 1
+    # 192B ⑨: the standing total carries the folded acceptance mark; the delta
+    # (this regeneration's own marks) does not — that pass marked nothing.
+    assert intent["totals"]["staleTotal"] >= 1
+    assert intent["totals"]["newlyStale"] == 0
     markdown = (tmp_path / "out-stale" / "report.md").read_text(encoding="utf-8")
     assert "合同里记着、图纸里已没有的件（1，不删只标）" in markdown
     assert "`UNSOLDERED9`（acceptedUnknown）—— 值保留，只标 stale" in markdown
@@ -563,12 +567,17 @@ def test_the_engine_pairs_a_row_by_designator_or_mpn_and_honours_the_board():
     assert accepted[0]["state"] == STATE_ACCEPTED_NOT_UNREVIEWED
     assert accepted[0]["stale"] is False
 
+    # 192B ⑦: `stale` split in two — a part that is nowhere on the drawing and one
+    # that is only not on the board the acceptance named send the reader to two
+    # different places (a contract entry to revoke vs a board name to fix).
     counts = accepted_unknown_counts(accepted)
     assert counts == {
-        STATE_ACCEPTED: 0, STATE_ACCEPTED_NOT_UNREVIEWED: 1, STATE_ACCEPTED_STALE: 0,
+        STATE_ACCEPTED: 0, STATE_ACCEPTED_NOT_UNREVIEWED: 1,
+        STATE_ACCEPTED_STALE: 0, STATE_ACCEPTED_STALE_ELSEWHERE: 0,
     }
     assert accepted_unknown_counts([]) == {
-        STATE_ACCEPTED: 0, STATE_ACCEPTED_NOT_UNREVIEWED: 0, STATE_ACCEPTED_STALE: 0,
+        STATE_ACCEPTED: 0, STATE_ACCEPTED_NOT_UNREVIEWED: 0,
+        STATE_ACCEPTED_STALE: 0, STATE_ACCEPTED_STALE_ELSEWHERE: 0,
     }
 
 

@@ -943,10 +943,16 @@ def test_a_hint_that_matches_no_window_lists_the_online_ones(tmp_path):
             reply = decode_frame(await cli_ws.recv())
             assert reply["ok"] is False
             assert reply["error"]["code"] == ErrorCodes.PROJECT_NOT_CONNECTED
+            # 192C §5: the row carries the window's own name **and** its uuid —
+            # the two spellings of one project — because the caller's hint missed
+            # and has to be retyped from one of them.
             assert reply["error"]["message"] == (
-                "no connected window has project '反激辅助电源' open; online windows: "
-                f"/test ({WINDOW_A}), test2 ({WINDOW_B}) — a window can also be named "
-                "by its instance id (boardwise bridge call --instance INSTANCE_ID)"
+                "no connected window has project '反激辅助电源' open (the comparison "
+                "ignores a leading `/` and letter case, so `/test` and `test` are "
+                "one project); online windows: /test uuid=uuid-test ("
+                f"{WINDOW_A}), test2 uuid=uuid-test2 ({WINDOW_B}) — a window can "
+                "also be named by its instance id (boardwise bridge call "
+                "--instance INSTANCE_ID)"
             )
             assert [c["windowKey"] for c in reply["error"]["detail"]["candidates"]] == [
                 WINDOW_A, WINDOW_B,
@@ -1430,7 +1436,7 @@ def test_ping_drops_a_window_as_soon_as_its_socket_closes(tmp_path):
             await cli_ws.send(request_frame("doc.list", {}, id="x", target_project="test2"))
             reply = decode_frame(await cli_ws.recv())
             assert reply["error"]["code"] == ErrorCodes.PROJECT_NOT_CONNECTED
-            assert f"online windows: /test ({WINDOW_A})" in reply["error"]["message"]
+            assert f"online windows: /test uuid=(no uuid) ({WINDOW_A})" in reply["error"]["message"]
             await cli_ws.close()
             await a_ws.close()
 
@@ -1636,8 +1642,10 @@ def test_a_window_that_names_no_project_still_connects_and_routes_around(tmp_pat
             reply = decode_frame(await cli_ws.recv())
             assert reply["error"]["code"] == ErrorCodes.PROJECT_NOT_CONNECTED
             assert reply["error"]["message"] == (
-                "no connected window has project 'test9' open; online windows: "
-                f"(no project) ({window.key}), test2 ({WINDOW_B}) — a window can "
+                "no connected window has project 'test9' open (the comparison "
+                "ignores a leading `/` and letter case, so `/test` and `test` are "
+                "one project); online windows: (no project) uuid=(no uuid) "
+                f"({window.key}), test2 uuid=(no uuid) ({WINDOW_B}) — a window can "
                 "also be named by its instance id (boardwise bridge call "
                 "--instance INSTANCE_ID)"
             )

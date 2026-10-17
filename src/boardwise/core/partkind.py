@@ -34,7 +34,10 @@ returned next to the answer so a report can say which signal decided it —
    ours, and :data:`DECLARATION_WORDS` is the vocabulary. Metadata is scanned
    before the part's own text because 189B established that order on the one
    board that forced it: the type was written in ``LCSC Part Name`` while
-   ``Type`` was empty.
+   ``Type`` was empty. Since 192B ① an ASCII word has to sit on a **token
+   boundary** (:data:`SUBSTRING_WORDS` names the part-number families that are
+   the deliberate exceptions) and the IC table (:data:`IC_WORDS`) is scanned
+   before every other family.
 3. **the designator prefix** — :func:`boardwise.core.parts.designator_category`,
    the project's own table, and **only** a fallback: it is the last thing read
    and the reason says so. Two rules refine it, and both are reused from the
@@ -80,6 +83,7 @@ value is ``core.values``' question.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -185,6 +189,22 @@ TRANSISTOR_WORDS: tuple[str, ...] = (
 #: would otherwise have to re-spell this list.
 TRANSFORMER_WORDS: tuple[str, ...] = ("XFMR", "TRANSFORMER", "变压器", "共模")
 
+#: Words that name an **IC** in the part's own words, scanned **before every
+#: other family** (192B ①). This is the exclusion table the vocabulary needed
+#: the moment the words became token-matched: ``MOS`` no longer hits
+#: ``CMOS``, ``USB`` no longer hits the STM32 description — but 「CMOS 运算放大器」
+#: and 「…CPU、USB和CAN」 would then be classified by their **designator alone**,
+#: and 「电容式触摸按键芯片(TTP223)」 would still be read as a *capacitor* from
+#: the 「电容」 inside its catalogue name. A part whose own words say 芯片 /
+#: 单片机 / 运算放大器 / 放大器 / 运放 **is** an IC, and that statement outranks
+#: every passive and interface family below: a touch-key chip is not a
+#: capacitor, whatever its catalogue name starts with.
+#:
+#: Matched as a **substring** — these are Chinese words and ``运算放大器``
+#: carries no separator — with ``MCU`` on token boundaries like the rest of the
+#: ASCII vocabulary.
+IC_WORDS: tuple[str, ...] = ("芯片", "单片机", "运算放大器", "运放", "放大器", "mcu")
+
 #: Words that name a passive family in the part's own name or footprint. 127b's
 #: ``PASSIVE_WORDS`` split into the two kinds it actually named: a
 #: ``RES-TH_L9.5…`` / ``RES_…`` footprint is a resistor, a ``CAP-``/``CAP_`` one
@@ -219,13 +239,15 @@ CRYSTAL_WORDS: tuple[str, ...] = ("晶振", "crystal", "resonator", "振荡器")
 #: The vocabulary, in the order it is scanned, as ``(kind, label, words)``.
 #:
 #: The order is a **priority order** and each step is a stop, exactly as 127b's
-#: was: thermistor before resistor (see :data:`THERMISTOR_WORDS`), the named
+#: was: the IC exclusion table first (see :data:`IC_WORDS`), thermistor before
+#: resistor (:data:`THERMISTOR_WORDS`), the named
 #: passives before the two "shape" families, and connector/transistor in their
 #: 127b positions relative to each other. ``label`` is the phrase the reason
 #: quotes — it carries 127b's own spellings (``connector/header``,
 #: ``transistor``) so the evidence a reader already saw keeps reading the same
 #: way.
 DECLARATION_WORDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    (KIND_IC, "IC", IC_WORDS),
     (KIND_THERMISTOR, "thermistor", THERMISTOR_WORDS),
     (KIND_RESISTOR, "resistor", RESISTOR_WORDS),
     (KIND_CAPACITOR, "capacitor", CAPACITOR_WORDS),
@@ -441,10 +463,66 @@ def kind_of_category(category: str) -> str:
     return CATEGORY_KINDS.get(text, KIND_UNKNOWN)
 
 
+#: The words that stay **substring**-matched although they are plain ASCII
+#: (192B ①). Two measured reasons, and neither is a preference:
+#:
+#: * the part **number** families — ``MCAC53N06Y-TP``, ``2N7002K``,
+#:   ``PZ254V-11-04P``, ``XT60PW-M``, ``HNTC0603-103F3450FA`` — spell the
+#:   family name as a *prefix of a longer code*, which is exactly where a
+#:   token-boundary read finds nothing. Every one of them is a witness a
+#:   previous batch measured (127b's MOSFET and header families, 190's NTC on
+#:   the FPC fixture and 实板A), and reading ``2N7002K`` as "not a MOSFET" would
+#:   rebuild the false positive 127b exists to prevent;
+#: * ``ntc`` / ``ptc`` are read out of names such as ``NTC2.5D-9SM20E`` — the
+#:   same shape, same witness (see :data:`THERMISTOR_WORDS`).
+#:
+#: Everything else ASCII is matched at **token boundaries**: ``MOS`` inside
+#: ``CMOS`` and ``USB`` inside a ``USB2.0`` catalogue string are the two holes
+#: 192B ① measured (an op-amp read as a transistor, an STM32 read as a
+#: connector), and both are *infixes* of a longer word — which is what a
+#: boundary read refuses and nothing else does.
+SUBSTRING_WORDS: frozenset[str] = frozenset(
+    {"mcac", "2n7002", "pz254", "xt60", "ntc", "ptc"}
+)
+
+#: One ASCII word at a token boundary. ``\w`` is Python's Unicode word class, so
+#: the boundary after ``USB`` in 「…CPU、USB和CAN」 is a **CJK letter** and the
+#: match is refused — the STM32 case is a Chinese sentence listing an interface,
+#: not an English one, and an ASCII-only boundary class would have read it as a
+#: connector again.
+_TOKEN_BOUNDARY_RE: dict[str, re.Pattern] = {}
+
+
+def _boundary_hit(word: str, text: str) -> bool:
+    """Is ``word`` in ``text`` as a whole token (not inside a longer word)?"""
+    pattern = _TOKEN_BOUNDARY_RE.get(word)
+    if pattern is None:
+        pattern = re.compile(rf"(?<!\w){re.escape(word)}(?!\w)")
+        _TOKEN_BOUNDARY_RE[word] = pattern
+    return pattern.search(text) is not None
+
+
 def _hit(text: str, words: tuple[str, ...]) -> str:
-    """The first word of ``words`` occurring in ``text``, or ``""`` (127b)."""
+    """The first word of ``words`` occurring in ``text``, or ``""`` (127b/192B ①).
+
+    Two matching modes, chosen by the *word* rather than by the table (see
+    :data:`SUBSTRING_WORDS`): a word that is not plain ASCII, or is not
+    alphanumeric (``RES-`` / ``TYPE-C`` / ``MX1.25`` / ``ferrite bead``), is a
+    substring — it carries the separator that makes it specific already; a plain
+    ASCII word is matched at :func:`_boundary_hit`'s token boundary unless it is
+    named in :data:`SUBSTRING_WORDS`.
+    """
     for word in words:
-        if word.lower() in text:
+        lowered = word.lower()
+        if (
+            lowered in SUBSTRING_WORDS
+            or not lowered.isascii()
+            or not lowered.isalnum()
+        ):
+            if lowered in text:
+                return word
+            continue
+        if _boundary_hit(lowered, text):
             return word
     return ""
 
@@ -467,7 +545,7 @@ def _kind_of_words(text: str) -> tuple[str, str, str]:
     return KIND_UNKNOWN, "", ""
 
 
-def _shelf_declaration(entry: object | None) -> str:
+def shelf_declaration(entry: object | None) -> str:
     """The category an entry declares, or ``""`` when it declares nothing.
 
     **The 039 gate, applied where the entry is read rather than where a rule
@@ -476,10 +554,20 @@ def _shelf_declaration(entry: object | None) -> str:
     this is the same judgement ``rules.facts._category_state`` makes, and for the
     same reason: no partial trust. An entry with no category declares nothing
     about the part's kind and the read falls through to the next step.
+
+    Public since 192B ③, because *three* readers had grown their own copy of the
+    read and two of them had lost the gate: ``rules/pcb/distance.device_facts``
+    and ``rules/sensebias._entry_category`` both answered a candidate entry's
+    category as if the shelf had declared it. A gate whose read is re-implemented
+    at two call sites is not a gate; this is the one function they both call.
     """
     if entry is None or not getattr(entry, "facts_verified", True):
         return ""
     return str(getattr(entry, "category", "") or "").strip()
+
+
+#: 190's spelling, kept as an alias for the module's own callers.
+_shelf_declaration = shelf_declaration
 
 
 def classify_part(
@@ -671,6 +759,7 @@ __all__ = [
     "CRYSTAL_WORDS",
     "DECLARATION_WORDS",
     "DIODE_WORDS",
+    "IC_WORDS",
     "INDUCTOR_WORDS",
     "KIND_BUZZER",
     "KIND_CAPACITOR",
@@ -695,10 +784,12 @@ __all__ = [
     "PartDeclarations",
     "PartKind",
     "RESISTOR_WORDS",
+    "SUBSTRING_WORDS",
     "THERMISTOR_WORDS",
     "TRANSFORMER_WORDS",
     "TRANSISTOR_WORDS",
     "classify_part",
     "declarations_of",
     "kind_of_category",
+    "shelf_declaration",
 ]

@@ -344,7 +344,9 @@ def test_poured_is_now_parsed_and_reads_as_board_coordinates():
         (FOC_100, "IA+", 4, 1),
         (FOC_100, "GND", 45, 37),
         (ROBOT, "GND", 194, 15),
-        (ROBOT, "VCC", 3, 2),
+        # 192A：底层焊盘按「翻转封装局部 y」装到底面后，U7.6 落在 VCC 走线端点上，
+        # 两块 VCC 铜由它连成一岛（2 -> 1；面积不变）。
+        (ROBOT, "VCC", 3, 1),
         (PILLBOX, "GND", 225, 1),
     ],
 )

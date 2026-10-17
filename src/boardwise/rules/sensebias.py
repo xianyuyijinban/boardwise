@@ -50,7 +50,12 @@ from __future__ import annotations
 import re
 
 from ..core.model import Component, DesignModel, is_ground_net
-from ..core.partkind import PartDeclarations, classify_part, declarations_of
+from ..core.partkind import (
+    PartDeclarations,
+    classify_part,
+    declarations_of,
+    shelf_declaration,
+)
 from ..core.pintable import port_pin_of
 from ..core.power_domains import infer_net_domains
 from ..core.values import parse_capacitance_farads, parse_resistance_ohms
@@ -182,8 +187,14 @@ class SamplingBias(FactsRule):
         return ohms <= MAX_SHUNT_OHMS
 
     def _entry_category(self, comp: Component) -> str:
-        entry = self.entry_for(comp)
-        return str(getattr(entry, "category", "") or "") if entry else ""
+        """货架条目声明的 category——**过 039 门**（192B ③）。
+
+        `facts_verified: false` 的候选条目是机器起草的：`core.partkind` 与
+        `rules.facts` 都拒绝把它当声明读，而这里曾经直接取 `entry.category`，
+        于是同一条目「判型入口说没声明、本规则说有」——门只在一处存在就等于没有。
+        门本身在 `core.partkind.shelf_declaration`，两处调用点共用一份。
+        """
+        return shelf_declaration(self.entry_for(comp))
 
     def _part_text(self, comp: Component) -> str:
         return " ".join(
@@ -198,7 +209,12 @@ class SamplingBias(FactsRule):
         不认——"脚名长得像 PA7" 单独不足以把一颗料判成 MCU。
         """
         entry = self.entry_for(comp)
-        category = str(getattr(entry, "category", "") or "") if entry else ""
+        # 192B ③: through the 039 gate like every other read of a shelf category.
+        # A candidate entry's `ic.mcu` is not a declaration, and letting this
+        # one path act on it would have decided 「this pin is an MCU ADC input」
+        # — and therefore the whole reachability report — from an unverified
+        # claim.
+        category = self._entry_category(comp)
         if category == "ic.mcu":
             return (
                 f"货架条目 {getattr(entry, 'key', '') or comp.mpn} 的 category=ic.mcu"

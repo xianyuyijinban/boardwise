@@ -170,8 +170,9 @@ facts 写进货架（每条带出处页码），**由人核验并声明**才驱�
 器件，货架条目按**器件名**也能被认出来（报告里标「按器件名匹配」，证据级别低于 MPN）。
 **第三通道：工程师明示接受**（191A）——`boardwise parts accept-unknown <MPN|位号> --reason "<为什么接受>" [--board <板名>]`
 把「这颗的未知我接受」写进设计意图合同；下一轮 checkup 里该件从 `unreviewed_parts`
-移到报告的 `accepted_unknown[]`，`completion.verdict` 不再因它停在 `incomplete`
-（成 `complete-with-open-items`），但结论那句里一直有「另有 N 颗工程师接受未审」——
+移到报告的 `accepted_unknown[]`，**这一颗**的未知不再挂在 `incomplete` 上（有接受存在时
+verdict 至少是 `complete-with-open-items`；别的缺口还在时它仍是 `incomplete`，本轮实际值
+看报告 `completion.verdict`——192B ⑪），但结论那句里一直有「另有 N 颗工程师接受未审」——
 **它不是「审过了」**，`mayQuotePassed` 仍为 false。撤销加 `--revoke`。
 
 ③ **整图布局（审美开关，默认关）**：开关开着报告才有 `layout_review` 节（五轴：

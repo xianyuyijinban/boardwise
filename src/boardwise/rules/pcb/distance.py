@@ -106,6 +106,7 @@ from ...core.partkind import (
     TRANSISTOR_WORDS as _TRANSISTOR_WORDS,
     PartDeclarations,
     classify_part,
+    shelf_declaration,
 )
 from ...core.parts import resolve_component_facts
 from ...core.pinrole import pin_role
@@ -253,6 +254,24 @@ DECAP_TIER_PINS: dict[str, str] = {
 #: every STM32 port pin a candidate, and no name in :data:`DECAP_TIER_PINS` is
 #: ever spelled with a hyphen in its own right.
 _TIER_SEPARATORS = re.compile(r"[/,_ ]+")
+
+#: The trailing suffix a numbered pin name carries — ``SW1`` / ``PVIN1`` /
+#: ``VCC3`` / ``VOUT_2`` / ``AVDD_1`` (192B ④). Stripped **once, at the end**, and
+#: only after the whole name and its tokens have both been tried as they are.
+#:
+#: Why the strip is needed at all: the numbered families are the *common*
+#: spelling on a real regulator (``PVIN1``/``PVIN2`` on a dual-phase part,
+#: ``SW1``/``SW2`` on a two-output one), and before 192B ``SW1`` and ``PVIN1``
+#: both read 「no tier declared」 — the table is keyed by the whole name — while
+#: ``VIN1`` was graded on the **consuming** side, because
+#: :func:`~boardwise.core.pinrole.pin_role` reads the ``IN`` inside it and a
+#: regulator's input was thereby graded as if the part ate the rail. A plain
+#: number is a pin *index*, never a different electrical name.
+#:
+#: Deliberately narrow: digits with an optional leading separator, nothing else.
+#: A suffix that is a letter (``SW_P``, ``VOUTA``) is part of the family's own
+#: spelling and is read by the table or by ``pin_role`` as it stands.
+_TIER_TRAILING_SUFFIX = re.compile(r"[_\-]?\d+$")
 
 #: The smallest edge-to-edge gap two placed components may have, in mils.
 #: Below this is a WARN — **岳 re-affirmed the line on 2026-10-11**: this is the
@@ -407,7 +426,14 @@ def device_facts(comp: object, library=None) -> DeviceFacts:
     text = f"{text} {props.get('device_name', '') or ''}"
     return DeviceFacts(
         designator=str(getattr(comp, "designator", "") or ""),
-        shelf_category=(entry.category or "") if entry is not None else "",
+        # 192B ③: the 039 gate, through the one function that holds it. A
+        # ``facts_verified: false`` entry is a candidate a machine drafted, and
+        # without this call the whole point of the gate was undoable one step
+        # later: `classify_part` refused the category and `device_facts` handed
+        # the same category over as `shelf_category`, so `classify_device`
+        # answered 「IC, because the shelf says ic.ldo」 about an unverified entry
+        # (measured: `.tmp_hole_2/p11_gate.py`).
+        shelf_category=shelf_declaration(entry),
         text=text.lower(),
     )
 
@@ -1093,6 +1119,26 @@ class DecapRailTier:
         return DECAP_TIER_MIL[self.name]
 
 
+def _tier_of_name(text: str) -> str | None:
+    """The tier :data:`DECAP_TIER_PINS` declares for one **normalised** name.
+
+    The whole name first, then its ``[/,_ ]``-separated tokens (so ``AVDD_1``
+    and ``VIN/VCC`` are read), and the most demanding hit wins. ``None`` is
+    「this table does not know the name」 — the caller's own fallbacks follow.
+    """
+    tier = DECAP_TIER_PINS.get(text)
+    if tier is not None:
+        return tier
+    seen = {
+        DECAP_TIER_PINS[token]
+        for token in _TIER_SEPARATORS.split(text)
+        if token in DECAP_TIER_PINS
+    }
+    if seen:
+        return min(seen, key=DECAP_TIER_ORDER.index)
+    return None
+
+
 def _tier_pin(pin_name: str) -> str | None:
     """The tier one pin **name** declares, or ``None`` (191D).
 
@@ -1105,6 +1151,16 @@ def _tier_pin(pin_name: str) -> str | None:
     added on top of it: *is this ``IN`` the rail the part eats, or the rail the
     part is fed by while it regulates?* That is the only split the table holds.
 
+    **A numbered name is read on both**: ``SW1``/``PVIN1``/``VCC3``/``VOUT_2``
+    are the same names as ``SW``/``PVIN``/``VCC``/``VOUT`` with a pin index on
+    them (:data:`_TIER_TRAILING_SUFFIX`), and until 192B ④ the first two answered
+    「no tier」 while ``VIN1`` was graded as a **consuming** pin — a regulator's
+    own input rail read as the rail the part eats. The strip happens **after**
+    the whole name and its tokens have been tried as they stand, so nothing that
+    already read is re-read, and it is tried **before** ``pin_role``, because the
+    numbered name is exactly the shape that classifier declines
+    (``SW1``: its table is a whole-name one).
+
     ``None`` means the name declares no tier, which is 侧别读不出档 rather than
     「no supply pin」 — the same distinction ``pin_role``'s own docstring makes,
     and ``RON``/``PGOOD``/a bare pin number are its witnesses.
@@ -1112,13 +1168,14 @@ def _tier_pin(pin_name: str) -> str | None:
     text = " ".join(str(pin_name or "").split()).upper()
     if not text:
         return None
-    tier = DECAP_TIER_PINS.get(text)
+    tier = _tier_of_name(text)
     if tier is not None:
         return tier
-    tokens = [part for part in _TIER_SEPARATORS.split(text) if part]
-    seen = {DECAP_TIER_PINS[token] for token in tokens if token in DECAP_TIER_PINS}
-    if seen:
-        return min(seen, key=DECAP_TIER_ORDER.index)
+    stripped = _TIER_TRAILING_SUFFIX.sub("", text)
+    if stripped != text:
+        tier = _tier_of_name(stripped)
+        if tier is not None:
+            return tier
     role = pin_role(pin_name)
     if role in ("OUT", "SW"):
         return DECAP_TIER_REGULATOR_OUT

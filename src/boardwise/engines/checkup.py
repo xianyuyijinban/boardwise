@@ -1437,7 +1437,8 @@ UNREVIEWED_CLEARING_NOTE = (
     "**第三通道**（191A）：工程师明示接受这颗的未知——"
     "`boardwise parts accept-unknown <MPN|位号> --reason \"<为什么接受>\" "
     "[--board <板名>] [--intent <合同>]`，写进设计意图合同；"
-    "该件从本节移到报告的 `accepted_unknown[]`（不再让 verdict 停在 incomplete，"
+    "该件从本节移到报告的 `accepted_unknown[]`（它不再挂在 `incomplete` 上，"
+    "本轮 verdict 实际是多少看 `completion.verdict`——别的缺口还在时仍是 `incomplete`；"
     "但结论里一直写着「另有 N 颗工程师接受未审」），撤销加 `--revoke`。"
 )
 
@@ -1665,7 +1666,11 @@ def unreviewed_parts(
     out: list[dict] = []
     for designator, component, boards in _parts_with_boards(model):
         # 190：位号前缀只是兜底。元数据/货架**声明**它是无源件（U 位号的 330 kΩ
-        # 电阻）就不按 IC 问手册；只豁免、不扩招——判型读错时只会多问，不会少问。
+        # 电阻）就不按 IC 问手册。**192B ⑤ 更正了这里的旧注释**：它曾说这条豁免
+        # 「只会多问，不会少问」——判型读错时正相反，一颗目录名带「电容」的触摸
+        # 按键芯片会就此静默掉出未审闸。现在豁免只给 ≤ MAX_PASSIVE_PINS 脚的件，
+        # 且每一颗被豁免的件都在 `completion.declaredPassiveExempt` 与 report.md
+        # 里留名（declared_passive_exemptions）。
         is_ic = is_ic_designator(designator) and not _declared_passive(component)
         name = str(component.props.get("device_name") or "").strip()
         entry = None
@@ -1836,10 +1841,10 @@ def reviewed_by_shelf(model: DesignModel, *, library: object | None = None) -> l
 # accepted_unknown — 工程师明示「这颗的未知我接受」(191A)
 # --------------------------------------------------------------------------
 
-#: The three states one `accepted_unknown[]` row can carry. One name per row,
-#: because the three send the reader to different places and a row that collapsed
-#: them would be unanswerable ("the contract says U7 — but is U7 even on this
-#: board?"):
+#: The four states one `accepted_unknown[]` row can carry (three until 192B ⑦).
+#: One name per row, because they send the reader to different places and a row
+#: that collapsed them would be unanswerable ("the contract says U7 — but is U7
+#: even on this board, and on *which* board?"):
 #:
 #: * ``accepted`` — the acceptance moved this part off `unreviewed_parts` on this
 #:   run: it is on the board, the shelf cannot judge it, and the engineer said so;
@@ -1848,16 +1853,36 @@ def reviewed_by_shelf(model: DesignModel, *, library: object | None = None) -> l
 #:   names a board the part is not on): nothing was skipped, so nothing is owed —
 #:   the row and its reason stay visible because an acceptance is not deleted by
 #:   a shelf update;
-#: * ``stale`` — the part is **not on the board at all** (or not on the board the
-#:   acceptance names). Same discipline as a stale intent slot: the entry keeps
-#:   every byte, gains `stale: true`, and is reported rather than removed (189B's
-#:   path, one section over).
+#: * ``stale`` — the part is **not on the drawing at all**. Same discipline as a
+#:   stale intent slot: the entry keeps every byte, gains `stale: true`, and is
+#:   reported rather than removed (189B's path, one section over);
+#: * ``stale-elsewhere`` — the part is on the drawing, but **not on the board the
+#:   acceptance names** (192B ⑦). It used to share ``stale``'s name *and* its
+#:   label, so report.md printed 「stale（图纸上已没有）」 over a part sitting on
+#:   two other boards — a sentence the reader can see is false one line above, in
+#:   the same 未审 list (`.tmp_hole_sew3/probe10_board_scope_label.py`). The two
+#:   send the reader to different places: 「图纸上没有」 is a contract entry to
+#:   revoke, 「不在 Board9 上」 is a **board name to fix**. ``stale`` stays true for
+#:   both (the acceptance does not apply to what it names), and the row's `why`
+#:   carries the board names.
 STATE_ACCEPTED = "accepted"
 STATE_ACCEPTED_NOT_UNREVIEWED = "not-unreviewed"
 STATE_ACCEPTED_STALE = "stale"
+STATE_ACCEPTED_STALE_ELSEWHERE = "stale-elsewhere"
 
 ACCEPTED_STATES: tuple[str, ...] = (
-    STATE_ACCEPTED, STATE_ACCEPTED_NOT_UNREVIEWED, STATE_ACCEPTED_STALE,
+    STATE_ACCEPTED,
+    STATE_ACCEPTED_NOT_UNREVIEWED,
+    STATE_ACCEPTED_STALE,
+    STATE_ACCEPTED_STALE_ELSEWHERE,
+)
+
+#: The two states whose rows carry ``stale: true`` — one acceptance scoped to a
+#: board that no longer has the part, whatever the reason. The distinction above
+#: is *where the reader goes next*; this one is *whether the acceptance applies*,
+#: and both questions are asked of these rows.
+STALE_ACCEPTED_STATES: tuple[str, ...] = (
+    STATE_ACCEPTED_STALE, STATE_ACCEPTED_STALE_ELSEWHERE,
 )
 
 
@@ -1934,15 +1959,25 @@ def _accepted_absent_row(entry: object, tokens: dict[str, set[str]]) -> dict:
     token = part_token(getattr(entry, "part", ""))
     scoped = str(getattr(entry, "board", "") or "")
     boards = tokens.get(token)
+    # 192B ⑦: three outcomes, and the middle one is *not* the same statement as
+    # the first — 「图纸上没有这颗件」 and 「不在这块板上，但在另外两块上」 were one
+    # row and one label until now, and the second sent the reader to revoke a
+    # contract entry over a part they can see in the list above.
     if boards is None:
-        stale, why = True, "图纸上没有这颗件（合同里记着，只标 stale，不删）"
+        state, stale = STATE_ACCEPTED_STALE, True
+        why = "图纸上没有这颗件（合同里记着，只标 stale，不删）"
     elif scoped and boards and part_token(scoped) not in {part_token(name) for name in boards}:
-        stale, why = True, f"这颗件不在 {scoped} 上（在 {'、'.join(sorted(boards))}）"
+        state, stale = STATE_ACCEPTED_STALE_ELSEWHERE, True
+        why = (
+            f"这颗件不在 {scoped} 上（在 {'、'.join(sorted(boards))}）——"
+            "件还在图纸上，要改的是接受记录点名的板，不是把记录撤掉"
+        )
     else:
-        stale, why = False, "这颗件这一轮不在未审清单里（货架已能判，或它已被接受过）"
+        state, stale = STATE_ACCEPTED_NOT_UNREVIEWED, False
+        why = "这颗件这一轮不在未审清单里（货架已能判，或它已被接受过）"
     return {
         "part": str(getattr(entry, "part", "")),
-        "state": STATE_ACCEPTED_STALE if stale else STATE_ACCEPTED_NOT_UNREVIEWED,
+        "state": state,
         "matchedBy": "",
         "designator": "",
         "name": "",
@@ -2010,6 +2045,40 @@ def accepted_unknown_section(
         if not used[index]:
             rows.append(_accepted_absent_row(entry, tokens))
     return remaining, rows
+
+
+#: What the accepted-unknown section says the acceptance did to the verdict, per
+#: verdict. Three sentences, because there are three outcomes and one of them is
+#: **not** "the verdict left `incomplete`": an engineer may accept one part while
+#: the board still owes a datasheet for another, and 192B ⑪ measured the section
+#: claiming otherwise — 「它们不再让 `completion.verdict` 停在 `incomplete`」
+#: printed two lines above a `verdict: incomplete` whose `verdictWhy` named the
+#: other open items. The claim is now read from this run's own verdict.
+ACCEPTED_VERDICT_CLAUSES: dict[str, str] = {
+    "incomplete": (
+        "——本轮 verdict **仍是** `incomplete`（还有别的缺口，见 `completion.verdictWhy`）："
+        "这几颗自己的未知已经不欠了，是别的项把它按住的，"
+    ),
+    "complete-with-open-items": (
+        "——接受让 verdict 不再因**这几颗**停在 `incomplete`，本轮值就是 "
+        "`complete-with-open-items`（一颗没人判过的件是开口项，不是已结项）："
+    ),
+    "complete": (
+        "——本轮 verdict 是 `complete`（这几颗并非决定它的项）："
+    ),
+}
+
+
+def accepted_verdict_clause(completion: dict) -> str:
+    """The accepted-section sentence about this run's own verdict (192B ⑪)."""
+    verdict = str((completion or {}).get("verdict") or "")
+    clause = ACCEPTED_VERDICT_CLAUSES.get(verdict)
+    if clause is None:
+        # A hand-built report with no `completion` section: say where to read the
+        # answer instead of asserting one (the same rule as `_report_chains`'
+        # fallback — a missing section is a reading, not a licence to guess).
+        return "——它对本轮 verdict 的影响以 `completion.verdict` 为准（本报告无该节）："
+    return clause
 
 
 def part_on_board(model, token: str, board: str = "") -> bool:
@@ -2317,6 +2386,7 @@ def intent_section(
     regenerate: str = "",
     project_uuid: str = "",
     contract_version: int = 0,
+    declared_version: int | None = None,
 ) -> dict:
     """The report's `intent` section — what the contract answers and what it owes.
 
@@ -2346,6 +2416,16 @@ def intent_section(
     # whole report down (``entry.get`` on a ``str``).
     stale = list(facts.get("stale") or [])
     stale_entries = list(facts.get("staleEntries") or [])
+    # 192B ⑨: two different questions, and until now one name in `totals`.
+    # :func:`~boardwise.core.designintent.merge` files ``stale`` as the entries it
+    # marked **on this pass** and ``staleEntries`` as **every** entry that is
+    # stale now (an old mark stays stale without being re-marked), so
+    # ``len(stale)`` and ``len(staleEntries)`` are equal only the first time. The
+    # section's heading counts the second, and `totals` used to carry the first
+    # under the *same key name as the section's own list* — so report.md printed
+    # 「图纸里已消失（stale，不删只标）1」 four lines above 「合同里记着、图纸里已没有
+    # 的对象（5，不删只标）」, about one document (`.tmp_hole_5/runD`). Two names
+    # now: `newlyStale` for this pass's marks, `staleTotal` for the standing set.
     added = list(facts.get("added") or [])
     extras = list(facts.get("extras") or [])
     # 189B ③: three states, not two. A contract that is on disk and cannot be
@@ -2360,7 +2440,16 @@ def intent_section(
             "present": bool(present),
             "readError": read_error,
             "state": contract_state,
+            # 192B ⑩: two versions, because they were one word printed as one
+            # number. `intentVersion` is what **this build** reads (the constant a
+            # contract must match to be readable at all); `declaredIntentVersion`
+            # is what the **file** declares, or ``None`` when there is no file to
+            # declare anything — absent, or on disk and unreadable. report.md used
+            # to print the build constant as 「契约版本：intentVersion N」 even for
+            # a contract that does not exist, which reads as a statement about the
+            # file.
             "intentVersion": contract_version,
+            "declaredIntentVersion": declared_version,
             "regenerate": regenerate,
         },
         "projectUuid": project_uuid,
@@ -2372,7 +2461,13 @@ def intent_section(
             "filled": int(facts.get("filled") or 0),
             "missing": len(missing),
             "requiredMissing": len(required),
-            "staleEntries": len(stale),
+            # 192B ⑨: `newlyStale` is what this regeneration marked;
+            # `staleTotal` is every stale mark the section prints, which is what
+            # the 「合同里记着、图纸里已没有的对象（N）」 heading says. Two names,
+            # because one document was being described by two numbers under one
+            # word (see the reading above).
+            "newlyStale": len(stale),
+            "staleTotal": len(stale_entries),
             "addedEntries": len(added),
             "unregisteredAnswers": len(extras),
             "hints": len(hints),
@@ -2457,18 +2552,42 @@ def render_intent_markdown(lines: list[str], section: dict) -> None:
             "A1 不自动建文件——要生成/重生成契约："
             f"`{contract.get('regenerate') or 'boardwise arch <export> --intent <path>'}`）"
         )
+    # 192B ⑩: 「文件声明」 and 「本 build 读」 are two different sentences and used
+    # to be one number — the build constant — printed as if it described the file.
+    # A contract that is absent or unreadable declares nothing, and the line now
+    # says so instead of quoting a version nobody wrote.
+    declared = contract.get("declaredIntentVersion")
+    if declared is None:
+        # Wording matters here: the bullet above already says 「不存在」 for a
+        # contract that is not on disk, and a second use of the same word for a
+        # *different* state (read, but the caller handed no declared version) is
+        # how the two got confused in the first place.
+        declared_text = (
+            "文件声明的版本没拿到（调用方没给）"
+            if str(contract.get("state") or "") == "read"
+            else "文件没声明（本次没有读入合同）"
+        )
+    else:
+        declared_text = f"文件声明 `intentVersion {declared}`"
+        if int(declared) != int(contract.get("intentVersion") or 0):
+            declared_text += "（与本 build 能读的版本不同——读不下去时按读不了报）"
     lines.append(
-        f"- 契约版本：`intentVersion {contract.get('intentVersion', 0)}`；"
+        f"- 契约版本：{declared_text}；本 build 读 `intentVersion "
+        f"{contract.get('intentVersion', 0)}`；"
         f"弱词：`{section.get('provenance') or '（无条目）'}`"
         + ("（**草稿**：" + "；".join((section.get("draftReasons") or [])[:2]) + "）"
            if section.get("draft") else "")
     )
     if section.get("draft"):
         lines.append(f"- {INTENT_DRAFT_NOTE}")
-    if totals.get("addedEntries") or totals.get("staleEntries") or totals.get("unregisteredAnswers"):
+    # 192B ⑨: the delta line reports the **delta** and the **total** separately,
+    # because they are different numbers about one document and the heading below
+    # counts the total. Until this batch both were printed as 「stale」.
+    if totals.get("addedEntries") or totals.get("newlyStale") or totals.get("unregisteredAnswers"):
         lines.append(
             f"- 重生成差量：新增 TODO 条目 {totals.get('addedEntries', 0)} · "
-            f"图纸里已消失（stale，不删只标）{totals.get('staleEntries', 0)} · "
+            f"本轮新标 stale {totals.get('newlyStale', 0)}"
+            f"（stale 合计 {totals.get('staleTotal', 0)}，不删只标）· "
             f"枚举已不再问、但合同里还答着的槽 {totals.get('unregisteredAnswers', 0)}"
         )
     lines.append("")
@@ -4117,7 +4236,17 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
                 if completion.get("acceptedUnknown") else ""
             )
             + (
-                f"（另有 {completion.get('acceptedUnknownStale', 0)} 条指向的件已不在图纸上）"
+                # 192B ⑦: two kinds of stale, both counted here, and the sentence
+                # says which — 「不在图纸上」 and 「不在这块板上」 are different
+                # places to look, and the second is not a part to go and revoke.
+                f"（另有 {completion.get('acceptedUnknownStale', 0)} 条指向的件"
+                "已不在图纸上"
+                + (
+                    f"，{completion.get('acceptedUnknownStaleElsewhere', 0)} 条只在"
+                    "别的板上（板名要改）"
+                    if completion.get("acceptedUnknownStaleElsewhere") else ""
+                )
+                + "）"
                 if completion.get("acceptedUnknownStale") else ""
             )
         )
@@ -4275,6 +4404,21 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
                 )
         lines.append("")
         lines.append(f"每个器件问同一件事：{UNKNOWN_PART_QUESTION}")
+    # 192B ⑤: the exemption's trace, printed whether or not the section above is
+    # empty — a part this pass took *off* the gate is exactly the reading a reader
+    # has to be able to see, and it is the one row that would otherwise leave no
+    # mark at all (it neither is, nor ever was, in `unreviewed_parts`).
+    exempt_rows = report.get("declaredPassiveExempt") or []
+    if exempt_rows:
+        lines.append("")
+        lines.append(
+            f"**声明为无源件、未按 IC 问手册的件（{len(exempt_rows)}）**："
+            + "、".join(f"`{row.get('designator')}`" for row in exempt_rows)
+            + f"——位号像 IC，但元数据/货架声明它是无源件（190 的豁免只给 ≤ "
+            f"{MAX_PASSIVE_PINS} 脚的件）。判型读法与脚数见 `report.json` 的 "
+            "`declaredPassiveExempt[]`（`kind` / `basis` / `pins`）；判型读错时"
+            "这条就是它的留痕，而不是它无声消失。"
+        )
     lines.append("")
 
     # --- 191A: the accepted-unknown list, right after 未审器件 because it is the
@@ -4291,8 +4435,8 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
         lines.append(
             "这些件**这一轮没有判**：工程师明示「这颗的未知我接受」，理由写在下面。"
             f"其中 {counts.get(STATE_ACCEPTED, 0)} 颗本轮真的从「未审器件」里移了出来"
-            "——它们不再让 `completion.verdict` 停在 `incomplete`，但报告把数量和理由"
-            "一直说在明面上，**不算「审过了」**。"
+            + accepted_verdict_clause(report.get("completion") or {})
+            + "但报告把数量和理由一直说在明面上，**不算「审过了」**。"
         )
         lines.append("")
         lines.append("| 位号/令牌 | 状态 | MPN | 理由 | 谁 | 何时 |")
@@ -4301,11 +4445,21 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
             STATE_ACCEPTED: "本轮接受（已从 未审 移出）",
             STATE_ACCEPTED_NOT_UNREVIEWED: "不在本轮未审清单",
             STATE_ACCEPTED_STALE: "stale（图纸上已没有）",
+            # 192B ⑦: the label alone would say the same false sentence the two
+            # states shared, so this row's own `why` is appended to the cell
+            # below — the board names are the whole content of the reading.
+            STATE_ACCEPTED_STALE_ELSEWHERE: "stale-elsewhere（件在别的板上）",
         }
         for row in accepted_rows:
+            state_text = state_labels.get(str(row.get("state")), row.get("state"))
+            if (
+                str(row.get("state")) == STATE_ACCEPTED_STALE_ELSEWHERE
+                and row.get("why")
+            ):
+                state_text = f"{state_text}：{row['why']}"
             lines.append(
                 f"| {_cell(row.get('part'))} "
-                f"| {_cell(state_labels.get(str(row.get('state')), row.get('state')))} "
+                f"| {_cell(state_text)} "
                 f"| {_cell(row.get('mpn') or '—')} "
                 f"| {_cell(row.get('reason') or '—')} "
                 f"| {_cell(row.get('who') or '—')} "
@@ -4869,8 +5023,29 @@ def _walk_leafs(group: dict) -> list[dict]:
     return out
 
 
+#: The pin count above which 190's declared-passive exemption does **not** apply
+#: (192B ⑤). The exemption exists for the U-designated **two-pin** resistor 190
+#: measured (``FRC1206J334 TS`` asked for a decoupling capacitor because its
+#: designator letter was the only readable signal); a part with three or more
+#: pins is not a chip resistor whatever its words say.
+MAX_PASSIVE_PINS = 2
+
+
 def _declared_passive(component) -> bool:
-    """元数据或货架**声明**这颗是无源件（电阻/电容/电感/热敏）——190 未审闸的豁免条件。"""
+    """元数据或货架**声明**这颗是无源件（电阻/电容/电感/热敏）——190 未审闸的豁免条件。
+
+    **192B ⑤：豁免只给 ≤ :data:`MAX_PASSIVE_PINS` 脚的件。** 190 的注释断言这条豁免
+    不会少问——假话，而反例就是它自己引的那类料：立创目录名里带
+    「电容」的触摸按键**芯片**（``TTP223``）被这条读成 capacitor，于是一颗真 IC
+    静默掉出了未审闸（`.tmp_hole_sew3/probe6_declared_passive_leak.py`）。判型那边
+    192B ① 已按「芯片/单片机/运放」优先判 IC 修掉这一类；这里加的是**反向守卫**，
+    两个方向都要有：脚数 ≥ 3 的件一律不豁免，豁免造成的静默必须留在报告里
+    （:func:`declared_passive_exemptions`，`completion.declaredPassiveExempt`，
+    report.md 一行列位号）。
+
+    脚数读不出（模型只读到一个占位件、调用方自己造的合成模型）时按 0 算，
+    仍走豁免——「没数到」不是「数到很多脚」，与 127b 的脚地板同一条纪律。
+    """
     from ..core.partkind import (
         KIND_CAPACITOR,
         KIND_INDUCTOR,
@@ -4879,7 +5054,50 @@ def _declared_passive(component) -> bool:
         classify_part,
     )
 
+    pins = len(getattr(component, "pins", ()) or ())
+    if pins > MAX_PASSIVE_PINS:
+        return False
     kind = classify_part(component, pin_floor=False)
     return kind.declared and kind.kind in (
         KIND_RESISTOR, KIND_CAPACITOR, KIND_INDUCTOR, KIND_THERMISTOR,
     )
+
+
+def declared_passive_exemptions(model) -> list[dict]:
+    """The parts 190's exemption took off the datasheet gate, with the reading (192B ⑤).
+
+    One row per exempted placement: the designator, the kind the declaration gave
+    it, that reading's basis/reason and its pin count. It exists because the
+    exemption is the one path in this section that makes the gate **shorter**
+    rather than longer, and a shorter gate with no trace is exactly the silent
+    green light the section forbids: the count rides in
+    ``completion.declaredPassiveExempt`` and report.md prints the designators.
+
+    Read off the same predicate :func:`unreviewed_parts` applies, over the same
+    placements (:func:`_parts_with_boards`), so the trace cannot disagree with
+    what the gate did.
+    """
+    from ..core.partkind import classify_part
+    from ..core.parts import is_ic_designator
+
+    rows: list[dict] = []
+    for designator, component, boards in _parts_with_boards(model):
+        if not is_ic_designator(designator) or not _declared_passive(component):
+            continue
+        read = classify_part(component, pin_floor=False)
+        rows.append({
+            "designator": designator,
+            "kind": read.kind,
+            "basis": read.basis,
+            "reason": read.reason,
+            "pins": len(getattr(component, "pins", ()) or ()),
+            "value": component.value,
+            "footprint": component.footprint,
+            **_board_field(
+                boards,
+                mpn=str(component.mpn or "").strip(),
+                name=str(component.props.get("device_name") or component.value or ""),
+                value=component.value,
+            ),
+        })
+    return rows
