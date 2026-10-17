@@ -149,6 +149,22 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 含警告的模块已排在 `modules` 前头（`source.modulesOrderedBy = "warnings-first"`，
 每个模块带 `warningFindings`），分模块**先审含警告的**。
 
+**自有规则里有一类 WARN 要按轨分档看：去耦距离**（`pcb-decap-distance`，191D）。
+「去耦电容离供电脚多远算超」不是一个数，而是由**这颗器件在这条网上的脚名**读出四档——
+消耗端供电脚 200 / 稳压器输入 300 / 稳压器输出 500 / 侧别读不出 200 mil：
+
+| 档名 | 阈值 (mil) | 什么脚名落进这一档 |
+|---|---|---|
+| 消耗端供电脚 | 200 | 这颗件**吃**这条轨：`VCC`/`VDD`/`AVDD`/`DVDD`/`VDDA`/`VBAT`/`VS`… |
+| 稳压器输入 | 300 | 这颗件是稳压器、这条轨喂它：`VIN`/`PVIN` |
+| 稳压器输出 | 500 | 这条轨是这颗件**产出**的：`VOUT`/`SW`… |
+| 侧别读不出 | 200 | 脚名什么都没说（`RON` 类、裸编号、词表外且 `pin_role` 无角色） |
+
+同一条网上多档并存时**取最严**（证据行点名输了的那档）；超限即 WARN，四档一个口径
+（190 那条「VOUT 侧降一级为 INFO」已撤）。**四档数值是 house rule 的初值、可随反馈调**
+——它不是标准（IPC-2221 只讲 clearances，不讲摆放距离），来源与实测语料见
+`rules/pcb/distance.py::DECAP_TIER_MIL` 与 `outputs/191d/evidence.md`。
+
 ② **分模块 + 手册闸**：手册闸的唯一未知项清单是 `needs_datasheet[]`（⓪ 的两源合一）——
 `unreviewed_parts[]` 是它的 **facts 触发子集**，保留原名不动，三通道状态
 （`channels.engineer/lcsc/official`）就在那些条目里；`summary.unreviewedByClass` 再按

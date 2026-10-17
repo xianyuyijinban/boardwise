@@ -62,6 +62,60 @@ Two consequences worth stating outright, because both have been violated:
    of the lower layer's *interface* — publish it there (`field_of`,
    `as_float` in `core/candidate.py` are public for exactly this reason).
 
+### One reading of what a part *is* (190, 192B)
+
+Before 190 the same question — "is this an IC?" — had two spellings inside one
+repository: `rules/pcb/derating` read the 立创 library metadata and never the
+designator; `rules/pcb/distance` read the shelf category, then the part's own
+name/footprint words, and only **last** the designator letter. Two orders, four
+call sites, one measured consequence: a `U`-designated 330 kΩ resistor was asked
+for a decoupling capacitor because its *designator* letter was the only signal
+one of the rules read.
+
+`core/partkind.py::classify_part(...)` is now the one entry point. It returns a
+`PartKind(kind, basis, reason)` so a report can say **which signal decided it**,
+not just the answer. The read order is fixed, and each step exists for a measured
+reason:
+
+1. **the shelf** (`core.parts.PartEntry.category`) — the curated declaration,
+   strongest when present. The 039 gate applies here (`shelf_declaration`): an
+   entry with `facts_verified: false` is *unclassified* to the rules. An entry
+   with **no** category does not stop the read — it has said nothing, which is
+   not the same as saying "not an IC".
+2. **the declarations about the part itself** — the 立创 metadata fields
+   (`METADATA_TYPE_KEYS`: `Type` / `LCSC Part Name` / `Supplier Footprint`), then
+   the part's own `footprint` / `value` / `mpn` / `device_name`. Metadata before
+   the part's own text because the board that forced it wrote the type in
+   `LCSC Part Name` with `Type` empty.
+3. **the designator prefix** (`core.parts.designator_category`) — the project's
+   own table, and **only** a fallback; the `reason` says so.
+
+Two guards refine it, both reused from the batch that measured them:
+
+* **Word-boundary matching** (192B): a plain ASCII word has to sit on a Unicode
+  token boundary (`(?<!\w)…(?!\w)`) — so `USB` in 「USB和CAN」 is correctly *not*
+  a hit — while `SUBSTRING_WORDS` names the part-number families (`MCAC`, `2N7002`,
+  `PZ254`, `XT60`, `NTC`…) that are the deliberate exceptions, and the IC table
+  (`IC_WORDS`) is scanned **before** every other family.
+* **The two-pin exemption guard**: `MIN_IC_PINS = 3` means a part with two pins
+  cannot be an IC; the floor can only ever **refuse an IC** (a two-pin part is
+  still a resistor or a capacitor), and only when the caller **supplied a pin
+  count** — 「this model read two pins」 is evidence, 「nobody counted」 is not.
+  A caller that never counted must not get the verdict by accident;
+  `pin_floor=False` is that caller saying *its question is not about pin counts*.
+  `MAX_PASSIVE_PINS = 2` on the exemption path is the same guard read backwards.
+
+The reader lives in `core`, not in `rules`, because `rules/facts.py` and
+`rules/connectivity.py` have module-level imports of each other — putting it in
+`rules` would create a real import cycle (006c's rule, `tests/test_layer_rules.py`).
+
+Who calls it: `rules/connectivity` (`DecouplingPerIC`, `ShuntSenseLink`),
+`rules/facts` (`ics()`), `rules/pcb/derating`, `rules/pcb/distance`
+(`device_facts`), `rules/sensebias` (the op-amp half-gate), and `engines/checkup`
+(the unreviewed gate's declared-passive exemption, `declared_passive_exemptions`).
+The value's own grammar (an ohms- or farads-shaped `Value` is a declaration too)
+is deliberately **not** here — it stays with the rule that measured it.
+
 ### The two layout engines, and the one place that chooses (006b, verified 006c)
 
 `engines` holds two planners and they are **not** interchangeable:

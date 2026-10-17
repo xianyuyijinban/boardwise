@@ -55,6 +55,17 @@ compose onto one page: what is already on the page becomes keep-outs,
 your locked placements are honoured, every rail gets a flag, and one
 `draw discard` takes a landed page back off.
 
+Newer pieces worth knowing:
+
+- **Offline geometry render** — `checkup --file` draws each board to
+  `canvas-<board>.svg` (two views, findings highlighted); it is drawn from the
+  archived geometry, not a screenshot.
+- **`parts accept-unknown`** — an engineer puts on record that a part's unknowns
+  are acceptable, so the datasheet gate stops owing it; it is **not** a pass, and
+  the conclusion still counts the accepted parts.
+- **KiCad bare net ids** — a `(net 3)` with no name is read (as `net#3`) instead
+  of the whole board being refused for carrying no net names.
+
 ## Architecture and roadmap
 
 Three layers, all on your own machine — nothing goes through a cloud:
@@ -214,6 +225,15 @@ boardwise checkup
 拉线前先回读引脚、保存、再出一张渲染图。多个模块能组合进同一页：
 页上已有的图元自动变成禁布区、你锁定的位置被尊重、每条电源轨都有
 旗标，一条 `draw discard` 能把落好的整页撤下来。
+
+几件新东西值得知道：
+
+- **离线几何渲染**——`checkup --file` 给每块板出 `canvas-<board>.svg`（顶/底两个
+  视窗、finding 高亮）；它是按归档几何**画**出来的，不是截图。
+- **`parts accept-unknown`**——工程师当面记下「这颗器件的未知我接受」，数据手册闸
+  不再欠它；它**不是审过**，结论里照样数着这些被接受的器件。
+- **KiCad 裸网序号**——没有名字的 `(net 3)` 照读（记成 `net#3`），不再因为一块板
+  网名全丢就整盘读不出来。
 
 ### 架构和规划
 

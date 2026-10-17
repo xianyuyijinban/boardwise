@@ -230,6 +230,39 @@ solder masks (5/6) are Er 3.3 / Df 0.02, and 智能药箱's core is Er 4.5 / Df 
 `x`/`y` are the placement origin in board coordinates, `angle` the rotation.
 The component carries **no pads** — see 6.3.
 
+**A placement on the bottom face (`layerId` 2) flips the footprint's own local
+`y` axis.** **[confirmed — 192A, live-calibrated]** A FOOTPRINT document is
+written for one face (its pads and artwork keep the layer the library declared),
+so placing it on the other face is a reflection *in the footprint's local
+frame*: a footprint-local `(lx, ly)` lands at `R(angle) · (lx, −ly)` — the flip
+comes **before** the rotation. Without it every pad of every bottom part lands
+where the part would be if it had not been flipped: invisible on a symmetric
+footprint (a two-pad chip resistor has `local_y == 0` on both pads) and wrong on
+every asymmetric one.
+
+The measurement is the board's own copper (a pad's centre must sit on its own
+net, and the tracks carrying that net are drawn at the real positions): over
+every bottom-face pad of every `.epro2` fixture, exact landing on a same-net
+copper endpoint is 54 unflipped vs **69** with the local-`y` flip, no pad loses
+its landing, and the "own-net margin" reading sums to −4049.5 mil unflipped vs
+**+2731.3 mil** flipped. **Live** (editor 3.2.186, connector 0.5.13): an
+AMS1117-3.3 (SOT-223) placed to `layer: bottom` at rotation 0 and 90, read back
+through `pcb.readback` and cross-checked against the parsed `.epro2` — **8/8 pins
+within 0.057 mil**. Evidence: `outputs/192a/evidence.md` §1.
+
+**This is *not* the `mirror_x ∘ CCW(angle)` transform 189A2 settled for schematic
+symbols, and the two must not be tied together.** They are both "a mirror", but they answer different
+questions: 189A2's `transform_point` (`core/geometry.py`) is a **schematic**
+symbol placed mirrored on a page — a pose in canvas space, adjudicated by wire
+endpoints — while this one is a **footprint** mounted on the other board face, a
+change of the library's own frame. On the same pads the `mirror_x ∘ CCW` reading
+scores 49 exact (below the unflipped 54 and the flip's 69) and makes 16 pads
+*worse* than doing nothing — at 0°/180° it reverses the two pads of a chip part
+while the file's own `PAD_NET` puts pin 2 on pin 1's copper. The two are equal
+only at 90°/270°, which is exactly why a reading that only looks there gets the
+wrong answer. `ComponentPlacement.transform` (`core/geometry.py`) is the live
+implementation and its docstring carries the full argument.
+
 ### 6.2 `ATTR` — attributes hanging off another object **[confirmed]**
 
 ```jsonc
@@ -549,6 +582,31 @@ Two of them are worth a future task:
     the text height and nothing states how wide a character is, so a text box
     is a *model* (`rules/pcb/silk.py::ADVANCE_BAND`) and any consumer must say
     which ratio it assumed.
+
+    **A bottom-face silk record's box runs in the *bottom view's* frame**
+    **[confirmed — 190S, live-calibrated]**. A PCB-document silk record (a
+    designator ``ATTR`` or a free ``STRING``) on the bottom layer carries its
+    ``angle`` and its ``x``/``y`` in **two different frames**: the anchor is in
+    board coordinates, the direction is in the *bottom view's*, i.e. the frame
+    whose x axis is the mirror of the board's. The measured box is the top-face
+    box **reflected in x about the anchor**, so the advance axis is
+    ``u = (cos a, sin a)`` with its x component negated. Calibrated on editor
+    3.2.186 / connector 0.5.13: one 0603 placed at ``{top,bottom} ×
+    {0°,90°,180°,270°}`` plus four more bottom ones, each designator's own
+    record compared against the host's own primitive bbox
+    (``pcb.geometry --bboxIds``) — twelve readings. Evidence:
+    ``outputs/190s/evidence.md`` and ``outputs/190s/live/``.
+
+    The equivalent wording is 「in the mirrored frame the text runs along
+    ``u(180 − a)`` with the glyph's own side mirrored too」; this degenerates to
+    "along ``±u(a)``" only when ``a ∈ {0°, 180°}``, which is **why "a bottom
+    designator runs along −u" is the wrong rule to remember**. The parser keeps
+    the raw ``angle`` (``SilkText.stored_angle`` — EasyEDA accumulates whole
+    turns; measured values include 810, 1710, 2250) and exposes the reading
+    through ``SilkText.frame_axes()``; ``corners()`` is ``anchor + lx·u + ly·v``.
+    A ``source == "footprint"`` string is **excluded on purpose**: its anchor is
+    posed by ``ComponentPlacement.transform`` and its angle composed with the
+    placement's, so it is already board-frame geometry.
 
     Also 152: a FOOTPRINT document's ``POLY``/``FILL``/``CIRCLE`` primitives are
     instantiated per placement into ``BoardGeometry.silk_shapes`` with **both**

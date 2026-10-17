@@ -227,6 +227,65 @@ Two consequences worth knowing:
   only comes from the bridge. `Verified ⟹ resolvable` still holds: the exemption
   is exactly the shut gate, and anything else must carry the pair.
 
+### The other way out of the gate: `parts accept-unknown` (191A)
+
+The gate above has two honest exits, and 186 could only *describe* the second
+one: judge the part (verified facts), or **state that it need not be judged**.
+`boardwise parts accept-unknown` is the second one, and it is a *design-intent*
+answer — not a shelf change — so it is written into the DesignIntent contract
+(`core/designintent.py`), the file `checkup` and the rules already read.
+
+```bash
+boardwise parts accept-unknown <MPN|位号> --reason "<为什么接受>" \
+    [--board <板名>] [--file <工程.epro2|工程目录>] [--intent <合同>] [--who <谁>]
+boardwise parts accept-unknown <MPN|位号> --revoke [--board <板名>] --intent <合同>
+```
+
+* **`--reason` is mandatory** for an acceptance (a `--revoke` needs none): a
+  skipped judgement with no stated reason is the silent green light the channel
+  exists to prevent, so an empty one is exit 2 and **no byte is written**.
+* **`--file` is the project, and it is read-only**: it resolves the *same*
+  default contract `checkup` reads (by the project's `projectUuid`), and checks
+  the token really is on that board — a token that is not is a *note*, not a
+  refusal, because an acceptance may legitimately precede the drawing. `--intent`
+  names the contract path explicitly and wins over `--file`.
+* **`--board` scopes the acceptance**: the key is `(part, board)`, so one token
+  on two boards has two entries. Repeating an acceptance for the same key is an
+  **update** (reason/who/when), never a second row.
+* **`--revoke` takes one back.** A revoke that matches nothing is exit 2 and
+  says **"nothing was changed"** — 目标缺失就停下来问, never read as "already
+  cleanly revoked" (R3). The key is `(part, board)`, so a `--revoke` for one
+  board leaves another board's acceptance in place; the command names what is
+  still there rather than leaving the reader to guess.
+
+The contract gains a top-level `acceptedUnknown[]` (`part` / `reason` / `who` /
+`when` / `board` / `provenance` / `stale`), written **only when the list is
+non-empty** — every contract written before this batch keeps its exact bytes and
+digest, which is what lets the rules that pin a contract `sha256` keep pinning
+it. It is deliberately **not** one of the contract's `ENTRY_SECTIONS`: it is not
+a requirement *about the board*, it is an accounting of which judgements a
+review may skip, so it must not enter the document's provenance / draft
+arithmetic.
+
+What the next `checkup` does with it: the accepted part **leaves**
+`unreviewed_parts` (so the datasheet gate no longer owes it) and **appears** in
+the report's own `accepted_unknown[]`, where the reason and the who/when stay
+readable. Nothing is dropped silently — a contract entry that matched no
+placement still comes back as a row, marked `stale`.
+
+**It is not a pass, and the verdict says so.** Accepting a part caps
+`completion.verdict` at `complete-with-open-items`, never `complete`: a part
+nobody judged is an *open item*, not a closed one. `mayQuotePassed` stays false,
+and the quotable conclusion always carries 「另有 N 颗工程师接受未审」. (Whether
+`verdict` actually leaves `incomplete` depends on the rest of the board — another
+open item can still hold it there, and the section prints this run's own verdict
+rather than asserting one.)
+
+**An AI never accepts on the engineer's behalf.** The channel exists because a
+human decided this unknown is acceptable; an acceptance with no human behind it
+is exactly the silent pass this whole section is built to prevent. See
+`docs/review-sop.md` §3.1 for where it sits in the review loop.
+
 ### Wave 1 (039), and the two rule behaviours it measured
 
 Five ICs the boards actually place were curated: **CH340N** (`ic.usb-uart`),
