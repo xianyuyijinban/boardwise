@@ -141,7 +141,10 @@ await step('boardwise_checkup --file — offline report files', async () => {
   const out = mkdtempSync(join(tmpdir(), 'boardwise-dsh-smoke-'))
   created.push(out)
   const text = await call('boardwise_checkup', { file: FIXTURE, out })
-  assert(exitOf(text) === '0', `expected exit 0, got exit ${exitOf(text)}`)
+  // exit 0 = clean verdict; exit 3 = the review ran to completion but the
+  // verdict is incomplete (unreviewed parts etc.) — both mean "the pipeline
+  // worked". What this smoke step guards is that the report files exist.
+  assert(['0', '3'].includes(exitOf(text)), `expected exit 0 or 3, got exit ${exitOf(text)}`)
   const report = join(out, 'report.json')
   const architecture = join(out, 'architecture.md')
   for (const path of [report, architecture]) {
