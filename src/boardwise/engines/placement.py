@@ -206,6 +206,15 @@ class PlacementPart:
     profile: SymbolProfile
     poses: tuple[SymbolPose, ...]
     locked: SymbolPose | None = None
+    #: The origin an engineer's lock pins this part to, **exactly** (515A hole
+    #: 3). The pose alone tells the search *how* the part faces; without the
+    #: point too, the seed snaps the locked origin onto the grid and the search
+    #: translates it like any other part — so a lock whose point sits off the
+    #: lattice, or beside the seed, was guaranteed to be refused downstream by
+    #: the lock checker (``user-lock-violated``): the one input the compiler
+    #: may not quietly ignore, broken by the solver that never read it. Set
+    #: together with ``locked``; ``None`` poses the part free.
+    locked_origin: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
         if not self.part_id:
@@ -337,6 +346,18 @@ class PlacementInput:
 
     def part_ids(self) -> tuple[str, ...]:
         return tuple(sorted(part.part_id for part in self.parts))
+
+    def locked_origins(self) -> dict[str, tuple[float, float]]:
+        """``part id -> the point its lock pins it to``, for the parts that name one.
+
+        Read once by the seed's snap and by the moves themselves; a part absent
+        here is a part the search may place.
+        """
+        return {
+            part.part_id: part.locked_origin
+            for part in self.parts
+            if part.locked_origin is not None
+        }
 
 
 def _part_nets(request: PlacementInput, part_id: str) -> dict[str, str]:
@@ -606,13 +627,13 @@ def relation_holds(
     if kind in (SAME_ROW, VERTICAL_TAP):
         return abs(ay - by) <= slack
     if kind == ABOVE:
-        return ay > by + slack
+        return ay >= by + slack
     if kind == BELOW:
-        return ay < by - slack
+        return ay <= by - slack
     if kind == LEFT_OF:
-        return ax < bx - slack
+        return ax <= bx - slack
     if kind == RIGHT_OF:
-        return ax > bx + slack
+        return ax >= bx + slack
     if kind == ADJACENT:
         gap = (ax - bx, ay - by)
         return abs(_dot(gap, lateral)) <= slack and not _close(
@@ -656,7 +677,15 @@ def relation_miss(
     if kind == RIGHT_OF:
         return max(0.0, (bx + slack) - ax)
     if kind == ADJACENT:
-        return max(0.0, abs(_dot((ax - bx, ay - by), lateral)) - slack)
+        gap = (ax - bx, ay - by)
+        along = abs(_dot(gap, lateral))
+        if along > slack:
+            return along - slack
+        # The line coordinate uses the same sign convention the four order kinds
+        # keep: the miss is the distance *out of* the half-plane the relation
+        # asks for, so 0 is exactly `holds` true and a positive number is `holds`
+        # false — the two functions cannot disagree at the boundary any more.
+        return 0.0 if not _close(_dot(gap, progress), 0.0) else 1.0
     if kind == NEAR:
         return max(0.0, math.hypot(ax - bx, ay - by) - near_limit)
     return float("inf")
@@ -1256,6 +1285,7 @@ def _seed(request: PlacementInput, ranks: Mapping[str, int]) -> _State:
             continue
         poses[part.part_id] = _compact_pose(request, part)
 
+    pinned = request.locked_origins()
     chain = sorted(
         (part.part_id for part in request.parts),
         key=lambda part_id: (ranks.get(part_id, 0), part_id),
@@ -1265,6 +1295,12 @@ def _seed(request: PlacementInput, ranks: Mapping[str, int]) -> _State:
     cursor = 0.0
     for part_id in chain:
         part = request.part(part_id)
+        if part_id in pinned:
+            # 515A hole 3: a lock's origin is stated, not derived — the chain's
+            # own spacing runs around it (the compiler's constructive solver
+            # has anchored the chain on its locks this way since 053).
+            origins[part_id] = pinned[part_id]
+            continue
         half = _extent_along(
             part, poses[part_id], progress
         ) / 2.0
@@ -1276,6 +1312,8 @@ def _seed(request: PlacementInput, ranks: Mapping[str, int]) -> _State:
     # the most pins with — concept 2, read off the netlist rather than a list.
     placed = set(origins)
     for part_id in sorted(set(request.part_ids()) - placed):
+        if part_id in pinned:
+            continue
         owner = _owner_for(request, part_id, placed, ranks)
         side = _branch_side(request, part_id, owner)
         base = origins.get(owner, (0.0, 0.0))
@@ -1373,7 +1411,11 @@ def _snap(
 ) -> dict[str, tuple[float, float]]:
     grid = request.grid
     return {
-        part_id: (round(point[0] / grid) * grid, round(point[1] / grid) * grid)
+        part_id: (
+            origins[part_id]
+            if part_id in request.locked_origins()
+            else (round(point[0] / grid) * grid, round(point[1] / grid) * grid)
+        )
         for part_id, point in sorted(origins.items())
     }
 
@@ -1463,6 +1505,15 @@ def _anneal_with_seed(
     The seed is a parameter rather than ``request.seed`` because ``place`` runs
     the whole search several times and keeps the best drawing; each restart uses
     its own seed, and none of them is random.
+
+    **515A hole 7**: an input whose parts are **all** pinned (every origin a
+    lock's) has no move the search can even propose — translate, turn and swap
+    each roll a locked part, and the repair move has no free endpoint — so the
+    loop would burn the full iteration budget idling. The run answers with the
+    seed state immediately and the stop rule is never reached the dishonest
+    way (by counting nothing); a *partially* locked input keeps the original
+    move flow byte for byte, so every drawing it drew before this batch it
+    draws again identically.
     """
     rng = random.Random(seed)
     current = _State(dict(state.origins), dict(state.poses))
@@ -1472,6 +1523,12 @@ def _anneal_with_seed(
     best_energy = energy
     ids = request.part_ids()
     certainty = {part.part_id for part in request.parts if part.locked is not None}
+    #: Parts whose *origin* is a lock's (515A hole 3): never translated, never
+    #: swapped, never re-seeded — the point is the engineer's, the same contract
+    #: the pose-only half of the lock has always had.
+    pinned = set(request.locked_origins())
+    if ids and all(part_id in pinned for part_id in ids):
+        return best, 0, 0
     ladder = (1, 2, 4, 8)
     #: Temperature: starts at a few grid units' worth of relation miss and cools
     #: geometrically to nearly nothing, so the tail is a hill climb.
@@ -1485,7 +1542,7 @@ def _anneal_with_seed(
         roll = rng.random()
         if roll < 0.30 or not ids:
             part_id = ids[rng.randrange(len(ids))]
-            if part_id in certainty:
+            if part_id in certainty or part_id in pinned:
                 continue
             rung = ladder[rng.randrange(len(ladder))] * request.grid
             dx = rng.choice((-rung, 0.0, rung))
@@ -1501,7 +1558,11 @@ def _anneal_with_seed(
         elif roll < 0.65 and len(ids) >= 2:
             first = ids[rng.randrange(len(ids))]
             second = ids[rng.randrange(len(ids))]
-            if first == second or first in certainty or second in certainty:
+            if (
+                first == second
+                or first in certainty or second in certainty
+                or first in pinned or second in pinned
+            ):
                 continue
             candidate.origins[first], candidate.origins[second] = (
                 candidate.origins[second], candidate.origins[first],

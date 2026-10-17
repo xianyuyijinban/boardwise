@@ -1103,6 +1103,16 @@ def _compile_modules(
     first line of the detail.
     """
     module_budget = ctx.budget.module_budget
+    # 515A hole 1: the flag gate counts ground domains on the **page**, so the
+    # set is derived once here from the page's whole circuit and handed to every
+    # module compile — a module-local circuit keeps only its own grounds (the
+    # view filters the nets), and a module with a single ground would otherwise
+    # always see one domain and draw its SEC_GND with the shared PWR-GND glyph
+    # (see ``drawcompiler._ground_domains``).
+    ground_domains = frozenset(
+        drawcompiler._ground_domain(net.id)
+        for net in ctx.circuit.nets if net.cls == "gnd"
+    )
     failures: list[GrammarFailure] = []
     for module in ctx.modules:
         sub_circuit, sub_presentation = _module_view(
@@ -1114,6 +1124,7 @@ def _compile_modules(
             sub_presentation,
             ctx.book,
             _module_budget_for(module_budget, ctx.budget),
+            page_ground_domains=ground_domains,
         )
         ctx.results[module.id] = compiled
         result.modules[module.id] = compiled

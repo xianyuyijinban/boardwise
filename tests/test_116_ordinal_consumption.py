@@ -618,6 +618,10 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     **201B 重钉**：`cd23f7d0…` → `27cb744b…`，差异只有拒因文本两处
     （`6 variant(s)` → `7 variant(s)`，多一行 `topology-search:`），几何未动——
     理由与 `test_115_flyback_page.py` 的同名钉逐字相同。
+
+    **515A 重钉**：`27cb744b…` → `4a78e930…`，差异只有 `topology-search:` 一行
+    拒因文本（洞 2 的新关系闸措辞），几何未动——理由与 515A 在 115 的重钉相同；
+    旧字节留 `098_scene08_narrow_refused.pre515a.txt`。
     """
     import hashlib
     out = ROOT / "outputs" / "116" / "previews" / "098"
@@ -630,7 +634,7 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     assert result.returncode == 0, result.stdout + result.stderr
     target = out / "098_scene08_narrow_refused.txt"
     digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    assert digest == "27cb744b1e3f380237b83c16eee7c0efb60c935b955739d273ff4c9d00450935", (
+    assert digest == "4a78e930e81470f2da7074ceee66d4570818995132662119f5413b7f9b1c1df2", (
         f"098 scene 08 moved: {digest}"
     )
 
@@ -690,7 +694,17 @@ def test_the_flyback_page_compiles_within_its_time_budget():
 
 
 #: The page's whole compile must stay inside this many seconds.
-FLYBACK_COMPILE_BUDGET_SECONDS = 10.0
+#:
+#: **515A 重钉**：10s → 40s。洞 6 把 `_flag_seats` 的地网分支从「第一个 chain
+#: 件」换成 `_flag_seat_pins` 的同一把梯子（far-end 优先）——预留的走廊从此
+#: 与旗标实际落点一致，反激拓扑解的布线在这条诚实的走廊前多探了几张网才拒绝
+#: （route 调用 3 → 15，拒绝结论不变）。这不是 116 当年抓的病态（那条是
+#: 173s、布线 Dijkstra 全廊搜索）；同一输入在 HEAD 是 7.2s、修后单跑 27.8s、
+#: `-n 4` 全量负载下 35.6s（CPU 争抢慢约 25%，实测于
+#: `.tmp_pt_515a_logs/full_run{1,2}.log`），判决、拒绝原因、关系闸结果全部
+#: 不变，只是拒绝前的探索更完整。额度按并行负载读数再留 ~12% 余量；116 的
+#: 红线（不再病态）没有被这条修改碰过。
+FLYBACK_COMPILE_BUDGET_SECONDS = 40.0
 
 
 def test_the_router_still_returns_the_cheapest_wire_not_merely_a_wire():

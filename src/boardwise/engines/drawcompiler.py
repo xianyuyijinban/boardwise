@@ -655,6 +655,7 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     budget: CompileBudget | None = None,
     *,
     intent: IntentSource | DesignIntent | None = None,
+    page_ground_domains: frozenset[str] | None = None,
 ) -> CompileResult:
     """Compile a drawing, or say why there is none.
 
@@ -679,6 +680,13 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     call on a pair of documents, while a contract is a document of its own. None
     is a drawing that reads no contract, byte-for-byte the one this compiler made
     before the batch.
+
+    ``page_ground_domains`` is the **page's** ground-domain set, keyword-only
+    and ``None`` by default (515A hole 1): the page compiler passes it so a
+    module compiled against a module-local circuit still counts the domains the
+    whole page spells — the flag gate's 绝不并地 question is a page question.
+    A caller that leaves it ``None`` gets the old reading, derived from this
+    circuit's own nets, which is the right one for a standalone compile.
     """
     for value, expected in (
         (circuit_spec, CircuitSpec),
@@ -738,6 +746,8 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         return result
     ctx = prepare.context
     assert ctx is not None
+    if page_ground_domains is not None:
+        ctx.ground_domains = page_ground_domains
 
     # 5. geometry: variants -> plans -> the hard gate.
     seen: set[str] = set()
@@ -1083,6 +1093,12 @@ class _Context:
     #: Cached on the context because the search is the expensive stage and every
     #: variant of a compilation asks the same question of the same documents.
     topology: Any = None
+    #: **515A hole 1**: the ground domains **the whole page** spells, handed in
+    #: by the page compiler (``None`` = derive from this circuit's own nets,
+    #: which is the right answer for a standalone compile). The flag gate counts
+    #: domains on the page, never on the module-local slice — see
+    #: :func:`_ground_domains`.
+    ground_domains: frozenset[str] | None = None
 
     def profile(self, part_id: str) -> SymbolProfile:
         part = self.circuit.part(part_id)
@@ -2540,11 +2556,19 @@ def _topology_request(ctx: _Context) -> placement.PlacementInput:
     """
     parts: list[placement.PlacementPart] = []
     for part_id in sorted(ctx.slots):
+        lock = ctx.locked(part_id)
         parts.append(placement.PlacementPart(
             part_id=part_id,
             profile=ctx.profile(part_id),
             poses=tuple(ctx.accepted[part_id]),
             locked=_locked_pose(ctx, part_id, ctx.accepted[part_id]),
+            # 515A hole 3: the lock's **coordinates** travel with its pose, so
+            # the search anchors the part where the engineer put it instead of
+            # seeding and snapping it wherever the chain wanted — the exact
+            # point, no lattice round, which is the same contract
+            # `_place_chain_and_shelf` honours and `readability._check_locks`
+            # measures (a lock differs by a hair is a lock ignored).
+            locked_origin=(lock.x, lock.y) if lock is not None else None,
         ))
     nets = tuple(
         placement.PlacementNet(
@@ -2587,7 +2611,11 @@ def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
     * **which pin** — a rail's flag hangs at the pin the rail supplies, which is
       the first point on the net belonging to a chain part
       (:func:`_power_flag_pin` reads the same ordering the same way) and, for a
-      net with no chain part on it, the first member by id;
+      net with no chain part on it, the first member by id; a **ground**'s seat
+      is the same ladder :func:`_flag_seat_pins` walks when it places the
+      symbol — the far end first, then the pads by member id (515A hole 6: one
+      ruler for "where does this net's flag go"), so the room is reserved at
+      the pad the flag really stands on;
     * **which way** — a rail's glyph hangs *up* out of the rail and a ground's
       hangs *down*: :func:`flag_glyph_kind` of the net's own symbol decides, which
       is the same fact :func:`_rail_flag_seat` hangs by;
@@ -2612,14 +2640,33 @@ def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
         profile = _net_flag_profile(ctx, net)
         if profile is None:
             continue
-        seat = next(
-            (
-                member for member in members
-                if (ctx.slots.get(member.partition(".")[0]) is not None
-                    and ctx.slots[member.partition(".")[0]].kind == "chain")
-            ),
-            members[0],
-        )
+        if net.cls == "gnd":
+            # 515A hole 6: the ground branch reads the **same** seat ladder the
+            # flag pass does (:func:`_flag_seat_pins` — far end first, then the
+            # net's pads by member id), instead of a second, divergent
+            # "first chain member" reading. Two ladders for one symbol is how
+            # the reservation guards a pad the flag never stands on while the
+            # pad the flag does stand on stays unguarded.
+            expression = _Expression(
+                net=net.id, style="flag",
+                points=tuple(
+                    (member, (0.0, 0.0)) for member in members
+                ),
+                reason="the seat ladder needs only the member ids",
+            )
+            seat_pair = _flag_seat_pins(ctx, expression, net.cls)
+            seat = next(
+                (member for member, _point in seat_pair if member), members[0],
+            )
+        else:
+            seat = next(
+                (
+                    member for member in members
+                    if (ctx.slots.get(member.partition(".")[0]) is not None
+                        and ctx.slots[member.partition(".")[0]].kind == "chain")
+                ),
+                members[0],
+            )
         part_id, _, token = seat.partition(".")
         kind = flag_glyph_kind(profile)
         up = kind != FLAG_GLYPH_KIND_GND
@@ -2629,7 +2676,13 @@ def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
             anchor, net.id,
         )
         xs = [box[0], box[2], 0.0]
-        ys = [box[1], box[3], 0.0, anchor[1]]
+        # 515A hole 6: the reserved room includes **the pin itself** — the box
+        # is stated relative to the pin, and the reservation pass prices
+        # `box_at(pin)`, so a pin that sticks out past the box's own extent
+        # (a symbol's lead reaches further than the glyph) was room the search
+        # never kept clear even though the flag's whole corridor starts there.
+        xs.append(0.0)
+        ys = [box[1], box[3], 0.0, anchor[1], 0.0]
         out.append(placement.FlagReservation(
             part_id=part_id,
             token=token,
@@ -2705,6 +2758,16 @@ def _topology_placement(ctx: _Context) -> _Placement | GrammarFailure:
         answer = _Placement(
             origins=origins, poses=result.poses, residue=residue,
         )
+        # 515A hole 2: the search prices relations as **soft** costs, so its
+        # best answer can still miss one — and the ladder round refuses the
+        # very same condition (`_place_chain_and_shelf` ends with
+        # `_relation_failures` and hands back the first failure). The same
+        # gate runs here, on the search's own answer, so a broken relation is
+        # a refusal naming the pair, never a candidate whose evidence carries
+        # a `grammar-relation-broken` finding while `compile` says ok.
+        conflict = _relation_failures(ctx, answer)
+        if conflict:
+            answer = conflict[0]
     ctx.topology = answer
     return answer
 
@@ -5592,7 +5655,22 @@ def _ground_domain(net_id: str) -> str:
 
 
 def _ground_domains(ctx: _Context) -> set[str]:
-    """The distinct ground domains this circuit's ``gnd``-class nets spell."""
+    """The distinct ground domains **the page** spells, read off the context.
+
+    The count is the flag gate's own question — "does this drawing really have
+    more than one ground?" — and on a multi-module page the honest answer reads
+    the **whole page**: the page compiler compiles each module against a
+    module-local circuit (``_module_view`` filters the nets), so a module that
+    carries a single ground net would otherwise always see one domain and draw
+    every ground on the page with the family's shared glyph — PGND and SEC_GND
+    both drawn as PWR-GND, which is exactly the 绝不并地 defect 173/C names.
+    The page compiler therefore derives the set from the page's whole circuit
+    and hands it in (:func:`pagecompiler._compile_modules`); a standalone
+    module compile, whose circuit *is* the whole drawing, derives it from its
+    own nets — the same set the old body computed.
+    """
+    if ctx.ground_domains is not None:
+        return ctx.ground_domains
     return {
         _ground_domain(net.id) for net in ctx.circuit.nets if net.cls == "gnd"
     }
@@ -7055,6 +7133,14 @@ def _build_candidate(
                         "label at each of its pins"
                     ),
                 )
+                # 515A hole 4: written back, like the flag fallback above — the
+                # passes after the loop read `expressions[net_id]`, and a local
+                # rebinding alone let a rail drawn as a *label* still be read as
+                # a wire there: the ground-symbol pass hung one symbol on it and
+                # the note claimed "pads are joined by the rail" about a rail
+                # nobody drew. The net's own expression is now the truth both
+                # passes read.
+                expressions[net_id] = expression
                 notes.append(f"net {net_id}: wired route not found; labelled instead")
             else:
                 drawn_segments, why = drawn
@@ -7203,12 +7289,25 @@ def _build_candidate(
         )
         if failure is not None:
             return None, failure, []
+        # 515A hole 4: "the pads are joined by the rail" is a claim about the
+        # drawing, so it is read off the drawing — the segments this net
+        # actually carries. A net the wiring could not route (downgraded to a
+        # label by the loop above, now written back into `expressions`) never
+        # reaches this branch: `expression.style != "wire"` skips it, and a
+        # net reached here with **no** segments on it gets the honest sentence
+        # instead of the joined-by-the-rail one.
+        joined = any(item.net == net_id for item in segments)
         notes.append(
             f"net {net_id}: " + (
                 "a ground rail is stated by one symbol of its own — hung at "
                 f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off the "
                 f"rail at its far end beside {pin[0]} (201A sec.1, 088b sec.1); the "
-                "pads are joined by the rail, so no pad needs a mark of its own"
+                + (
+                    "pads are joined by the rail, so no pad needs a mark of its own"
+                    if joined else
+                    "the pads are named by labels of their own — the wiring could "
+                    "not be routed, so no pad is joined by a rail here"
+                )
                 if cls == "gnd" else
                 "a power net carries its own flag — hung at "
                 f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off the "

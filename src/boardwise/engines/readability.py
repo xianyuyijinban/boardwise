@@ -2516,7 +2516,10 @@ def check_page(
     violations: list[HardViolation] = []
     violations.extend(_check_frames_on_the_page(frames, page_layout.page_box))
     violations.extend(_check_frame_separation(frames, module_gap))
-    violations.extend(_check_geometry_framed(plan, placed, frames, membership))
+    violations.extend(_check_geometry_framed(
+        plan, placed, frames, membership,
+        _nets_by_module(circuit_spec, presentation_spec),
+    ))
     violations.extend(_check_part_membership(plan, membership))
     violations.extend(_check_wires_clear_of_frames(plan, frames))
     violations.extend(_check_shared_expressions(
@@ -2690,13 +2693,25 @@ def _check_geometry_framed(
     placed: list[_PlacedPart],
     frames: Mapping[str, Box],
     membership: Mapping[str, tuple[str, ...]],
+    nets_by_module: Mapping[str, tuple[str, ...]] | None = None,
 ) -> list[HardViolation]:
-    """Everything the page draws lies inside some module frame.
+    """Everything the page draws lies inside **its own module's** frame.
 
     The frames are the page's way of saying "this is where module M is", so a
     piece of geometry in no frame is either a frame that does not hold its own
     drawing or a drawing that the page does not account for; both make every
     other page constraint meaningless, which is why this is checked first.
+
+    515A hole 8: "inside **some** frame" was only half the contract, and an
+    anchor that sat in a *neighbour's* frame passed the old test — a module's
+    own flag drawn into another module's box was geometry the gate could not
+    see. So a **label**, a **power symbol** and a **wire end** must sit in a
+    frame of a module that owns a member of the net they name (`nets_by_module`
+    is that reading, from the circuit and the spec; a cross-module wire
+    legitimately ends in either of its two modules, and a net the spec knows
+    no module for keeps the old "some frame" answer). The parts keep the plain
+    containment test: :func:`_check_part_membership` owns the "exactly one
+    claim" question for them, and their evidence already names the claimants.
     """
     if not frames:
         return []
@@ -2705,6 +2720,26 @@ def _check_geometry_framed(
     def framed(box: Box) -> bool:
         """Is this box held by some module frame? (containment, not overlap)"""
         return any(_box_inside(box, frame) for frame in frames.values())
+
+    def own_frames(net_id: str, frames_here: tuple[str, ...]) -> bool:
+        """Is one of `frames_here` a frame of a module the net belongs to?"""
+        if not net_id or nets_by_module is None:
+            return bool(frames_here)
+        owners = nets_by_module.get(net_id, ())
+        return not owners or bool(set(frames_here) & set(owners))
+
+    def anchor_evidence(
+        sentence: str, frames_here: tuple[str, ...], net_id: str, tail: str = ""
+    ) -> str:
+        if not frames_here:
+            return sentence + ", which is in no module frame" + tail
+        return (
+            sentence + ", which is in "
+            + " and ".join(frames_here)
+            + " — but the modules that own members of net " + f"{net_id!r} are "
+            + (", ".join(nets_by_module.get(net_id, ())) or "none named by the spec")
+            + tail
+        )
 
     for part in sorted(placed, key=lambda item: item.part_id):
         box = _part_extent(part)
@@ -2741,39 +2776,45 @@ def _check_geometry_framed(
         # evidence sentence — "and neither is inside a module frame" — was false
         # in both mixed cases it could fire on. One object, one test, one
         # sentence.
-        if _frames_of((label.x, label.y), frames):
+        frames_here = _frames_of((label.x, label.y), frames)
+        if own_frames(label.net, frames_here):
             continue
         out.append(HardViolation(
             kind=KIND_GEOMETRY_OUTSIDE_FRAMES,
             objects=(f"labels[{index}]",),
-            evidence=(
-                f"the label {label.text!r} anchors at ({label.x:g}, {label.y:g}), "
-                "which is in no module frame — a name belongs inside the module "
-                f"whose drawing it names (its box is {_box_text(label.bbox)})"
+            evidence=anchor_evidence(
+                f"the label {label.text!r} anchors at ({label.x:g}, {label.y:g})",
+                frames_here, label.net,
+                " — a name belongs inside the module whose drawing it names "
+                f"(its box is {_box_text(label.bbox)})",
             ),
         ))
     for index, symbol in enumerate(plan.power_symbols):
-        if _frames_of((symbol.x, symbol.y), frames):
+        frames_here = _frames_of((symbol.x, symbol.y), frames)
+        if own_frames(symbol.net, frames_here):
             continue
         out.append(HardViolation(
             kind=KIND_GEOMETRY_OUTSIDE_FRAMES,
             objects=(f"powerSymbols[{index}]",),
-            evidence=(
+            evidence=anchor_evidence(
                 f"the flag for net {symbol.net!r} anchors at "
-                f"({symbol.x:g}, {symbol.y:g}), which is in no module frame"
+                f"({symbol.x:g}, {symbol.y:g})",
+                frames_here, symbol.net,
             ),
         ))
     for index, segment in enumerate(plan.segments):
         for end, point in (("start", segment.points[0]), ("end", segment.points[-1])):
-            if _frames_of(point, frames):
+            frames_here = _frames_of(point, frames)
+            if own_frames(segment.net, frames_here):
                 continue
             out.append(HardViolation(
                 kind=KIND_GEOMETRY_OUTSIDE_FRAMES,
                 objects=(f"segments[{index}]",),
-                evidence=(
-                    f"the wire's {end} ({point[0]:g}, {point[1]:g}) is in no module "
-                    f"frame — a wire end belongs inside the module whose drawing it "
-                    f"is part of (net {segment.net!r})"
+                evidence=anchor_evidence(
+                    f"the wire's {end} ({point[0]:g}, {point[1]:g})",
+                    frames_here, segment.net,
+                    " — a wire end belongs inside the module whose drawing it "
+                    f"is part of (net {segment.net!r})",
                 ),
             ))
     return out

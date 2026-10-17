@@ -409,6 +409,14 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     才跑，跑了就如实记进 ``rejected``。**几何一个字节没动**（这条量的是拒因文件；
     同批的零移动闸量过 83 张预览，SVG/plan 无位移）。旧字节留在
     ``098_scene08_narrow_refused.pre201b.txt``，两版可对拍。
+
+    **515A 重钉**：``27cb744b…`` → ``4a78e930…``，差异**只有一行、仍是拒因文本**：
+    ``topology-search:`` 行从「最小布局 384.5 x 283 …」换成洞 2 新关系闸的措辞
+    （「the relation left-of(C2, U1) is not honoured … measured (360, -50) and
+    (240, 10) …」）——拓扑轮的答案现在必须过与阶梯同一把关系闸，拒绝理由如实
+    换成了闸自己量出的那对。几何一个字节没动（515A 的零移动闸：80 张 svg/json
+    全部 byte-identical）。旧字节留在
+    ``098_scene08_narrow_refused.pre515a.txt``，三版可对拍。
     """
     baseline = (
         ROOT / "outputs" / "114" / "previews" / "098"
