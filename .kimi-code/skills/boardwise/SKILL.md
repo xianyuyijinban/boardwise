@@ -35,12 +35,12 @@ boardwise doctor            # 10 项全绿（skip 不算红）= 装好了；退�
   `boardwise bridge start`；自己管 daemon 的部署用 `BOARDWISE_NO_AUTO_DAEMON=1` 关掉自动拉起。
 - 开发态（从源码 checkout 跑）用仓库自己的解释器：`<你的 checkout>/.venv/Scripts/python.exe -m boardwise.cli <命令>`
   （**按你的 checkout 位置**，别照抄别人机器上的盘符路径）；装了 exe / pip 装好的直接 `boardwise <命令>`。
-- **把这份 skill 装到别的 agent 上**：`boardwise install-skill` 写进 Kimi Code / Claude Code 的
-  用户级 skill 目录（`--harness {kimi,claude,all}`，默认全装；目标位置已有异版先备份成
-  `SKILL.md.bak-<年月日-时分秒>`，同一天装两次是两个备份文件、后者不覆盖前者；
-  **同目录只留最近 3 份 `.bak-*`，更老的进回收站不直删，装完打印保留了几份**，`references/` 同一策略）；别的 harness 跑
-  `boardwise install-skill --agent` —— 它**打印一段
-  引导指令**，整段粘给你的 AI，放哪儿由它自己按自己的约定定（我们不维护 harness 路径表）。
+- **把这份 SOP 交给别的 agent**（与 harness 无关，不依赖专属工具）：`boardwise install-skill`
+  写进 Kimi Code / Claude Code 的用户级 skill 目录（`--harness {kimi,claude,all}`，默认全装；
+  目标已有异版先备份成 `SKILL.md.bak-<年月日-时分秒>`，同一天两次是两个备份、后者不覆盖前者；
+  同目录只留最近 3 份 `.bak-*`，更老的进回收站不直删，`references/` 同一策略，装完打印保留份数）；
+  **dsh 不用装**：它读工作区的 `AGENTS.md`（仓库自带，指向项目地图），`--harness dsh` 只打印原因；
+  别的 harness 跑 `boardwise install-skill --agent`，整段粘给你的 AI，放哪儿由它自己按自己的约定定。
 
 ## 2. 三个进程与两条入口
 

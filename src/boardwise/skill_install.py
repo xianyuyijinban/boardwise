@@ -49,6 +49,31 @@ from pathlib import Path
 #: never wrote to, and the fix has to make the set of them visible, not implicit.
 HARNESSES: tuple[str, ...] = ("kimi", "claude")
 
+#: Harnesses that read the **workspace's** ``AGENTS.md`` instead of a user-level
+#: SKILL.md directory, keyed to the sentence a caller should be told.
+#:
+#: Adding a name here is deliberately **not** adding it to :data:`HARNESSES`:
+#: there is no destination to write, and inventing a path for a harness that has
+#: none is exactly the silent wrong-place write this module was written against.
+#: The CLI turns this into an exit-0 answer (with the reason) instead of
+#: ``unknown harness`` — someone about to switch harnesses deserves the sentence.
+#:
+#: dsh (DeepSeek Harness, 2026-08 developer preview) reads the repository's own
+#: AGENTS.md and walks it into the project's own docs; a boardwise checkout
+#: already carries both. Its plugin contract (``dsh-plugin/``) is a *product*
+#: surface — boardwise's review tools for dsh users — and is unrelated to where
+#: the development harness reads its instructions.
+ADVISORY_HARNESSES: dict[str, str] = {
+    "dsh": (
+        "DeepSeek Harness (dsh) reads AGENTS.md from the workspace, not a "
+        "user-level skill directory, so there is nothing to install: open this "
+        "repository as a dsh workspace and the agent follows AGENTS.md → "
+        "docs/roadmap.md → docs/product-boundary.md → tasks/TASKMAP.md on its "
+        "own. `boardwise install-skill --agent` still prints the generic "
+        "hand-off for a harness whose conventions differ"
+    ),
+}
+
 #: The harness's own directory under the home directory. Its existence *is* the
 #: signal that this harness is on this machine (see :func:`skill_statuses`),
 #: which is why it is named apart from the skill directory inside it: "nothing

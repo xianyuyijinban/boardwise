@@ -5,6 +5,18 @@
 审查闭环、真机纪律 R1–R3、bridge 动作速查、真机坑表、三线命令与交付纪律，全在那里。
 本文件只列最常被违反的红线，**不复制**那份内容；两处说法冲突时以 SKILL.md 为准。
 
+## 项目地图（动手前先读这三份）
+
+- [`docs/roadmap.md`](docs/roadmap.md)——**稳定层**：当前在哪、版本骨架（0.5.x→0.6.0→远景）、
+  五个方向（R1–R5）、绘制主线的验收锚（「一眼认出反激」）。
+- [`docs/product-boundary.md`](docs/product-boundary.md)——**边界**：做什么、不做什么（硬边界清单）、
+  撞车区/独有区、威胁雷达。判断「这算不算我们的活」看它。
+- [`tasks/TASKMAP.md`](tasks/TASKMAP.md)——**任务全图**：001–516+ 的编号/主题/状态（已落/工作树/
+  搁置/在途/规划）/证据路径。按编号查，不按时间查。
+
+`tasks/SCHEDULE.md` 是**滚动排期**（最近几个版本的具体任务与依赖）；
+`PROGRESS.md` 是按时间的**流水账**，**不要从头读**——只在需要查历史细节时 grep 它。
+
 ## 红线
 
 1. **不动 git**：不 `commit` / `add` / `checkout` / `restore` / `push`。任何 git 变更逐次经用户点头。
@@ -60,3 +72,6 @@
   `SKILL.md.bak-<年月日-时分秒>` 再覆盖，别覆盖已经存在的同名备份），复制完用你自己发现 skill 的方式确认它在场。
 - 手上只有 exe、没有仓库：`boardwise install-skill`（Kimi Code / Claude Code 两处）或
   `boardwise install-skill --agent`——后者打印一段引导指令，粘给你在用的 AI，它自己装。
+- **DeepSeek Harness（dsh）不用装 skill**：它读**工作区**的 `AGENTS.md`，本仓库自带一份
+  并已指向 `docs/roadmap.md` / `docs/product-boundary.md` / `tasks/TASKMAP.md`，把仓库当工作区
+  打开即可；`boardwise install-skill --harness dsh` 把这句原因打印出来（exit 0，不写任何文件）。
