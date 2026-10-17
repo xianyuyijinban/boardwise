@@ -57,9 +57,9 @@ npm pack                       # 产出 boardwise-dsh-<version>.tgz
 装进 profile（tarball 方式，不进 npm registry）：
 
 ```sh
-dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.1.tgz
+dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.2.tgz
 # headless / desktop 是**不同** profile，各装一次
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.1.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.2.tgz
 ```
 
 包内 `dsh.bundle.patch` 会把本插件插进 profile 的 layer stack（row id `tool-boardwise`）。
