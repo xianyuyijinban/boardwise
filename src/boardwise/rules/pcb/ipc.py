@@ -51,6 +51,10 @@ contract states the current, the board carries a width, and the comparison that
 matters is 「does this width carry this current」 — and then takes the **minimum**
 width per copper layer from :func:`~boardwise.core.measure.track_width_stats`,
 because the narrowest segment of a net is the one that heats up, not the average.
+516 A2 widens the unit of judgement from the net **name** to the **conductor**:
+one piece of copper can be exported under two names (``IRbus``/``IRBUS`` on 实板
+A), so each declared net is expanded to its overlapping-copper component and the
+component is judged at its narrowest point.
 Insufficient is an **ERROR**: an overloaded conductor is a safety defect (it
 runs hot, it anneals the copper, it is the failure mode that ends in a smoke),
 and it is the one judgement in the PCB side that is not a matter of taste.
@@ -65,7 +69,10 @@ in a band with :func:`~boardwise.core.measure.net_clearance` and warns when the
 measured gap is under the band's number. Ground nets are voltage 0 — not 0 V
 *because of their name* but because a ground net **is** the reference node of the
 board, the same thing :mod:`boardwise.core.power_domains` reads and the same
-thing 126b's supply-net inference rests on.
+thing 126b's supply-net inference rests on. 516 A1 narrowed the exemption: only
+two **grounds**, or copper that geometrically coincides, are one node — two nets
+merely *declared* at the same voltage are judged by the swing bound
+``max(|a|, |b|)`` (:class:`VoltageSpacing` says why).
 
 **The pour blind spot is documented, not papered over.** A pair whose only
 relationship is that one shape sits inside a pour's outer outline is
@@ -83,7 +90,7 @@ from __future__ import annotations
 
 from ..base import Finding, FindingTarget
 from ...core.architecture import generate_architecture
-from ...core.measure import net_clearance, track_width_stats
+from ...core.measure import ClearanceResult, net_clearance, track_width_stats
 from ...core.model import is_ground_net
 from ...core.values import parse_current_amps, parse_voltage_volts
 from .base import PcbReviewContext, PcbRule
@@ -668,11 +675,23 @@ class TrackAmpacity(PcbRule):
     document. A net the contract says nothing about is not a subject and not a
     row: that is what keeps 毕设FOC (92 drawn nets, no contract) silent.
 
+    **The judgement's unit is the conductor, not the name** (516 A2). A board
+    routinely exports one piece of copper under two net names — 实板 A carries
+    ``IRbus`` (the schematic name) and ``IRBUS`` (the PCB name) on one conductor,
+    ``Gear``/``GEAR`` the same. Each declared net is expanded to its **connected
+    component** under 「copper that overlaps on a shared layer」
+    (:func:`_conductor_component`) and the component is judged **once, at its
+    narrowest point** — because the narrower alias is the bottleneck. A declared
+    net that turns out to be one conductor with a net nobody declared gets an
+    **INFO** saying so even when the component passes, so the extra copper the
+    rule measured is never silent.
+
     * a **readable** current (see :func:`declared_currents`) → one row per copper
-      layer that carries the net's tracks: the required width
-      (:func:`required_width_mil`) against the **minimum** measured width on
-      that layer (:func:`~boardwise.core.measure.track_width_stats`), and
-      **ERROR** when the measured one is narrower;
+      layer that carries the conductor's tracks: the required width
+      (:func:`required_width_mil`) against the **minimum** measured width over
+      all the component's nets on that layer
+      (:func:`~boardwise.core.measure.track_width_stats`), and **ERROR** when the
+      measured one is narrower;
     * an **unreadable** declaration — ``"5"`` with no unit, ``"5V"``, prose — →
       **UNKNOWN**, an INFO finding naming the net, quoting the offending text
       and both addresses a current may be written at. This is the one UNKNOWN
@@ -730,7 +749,8 @@ class TrackAmpacity(PcbRule):
         if board is None:
             return []
         currents = declared_currents(ctx)
-        if not currents and not _declared_net_names(ctx):
+        declared = _declared_net_names(ctx)
+        if not currents and not declared:
             # No contract, or a contract that names no net with a current slot at
             # all: **no subject**. 92 nets on 毕设FOC's PCB1 all lack one, and 92
             # UNKNOWN rows saying so would be a wash (the module docstring's
@@ -738,92 +758,186 @@ class TrackAmpacity(PcbRule):
             return []
         findings: list[Finding] = []
         drawn = [net for net in board.net_names() if board.net(net).element_count]
-        for net in sorted(_declared_net_names(ctx) & set(drawn)):
-            if net in currents:
-                findings.extend(self._one_net(ctx, net, *currents[net]))
-            else:
-                findings.append(self._unknown(
-                    ctx, net, 0.0, "", missing=_unreadable_current_reason(ctx, net)
-                ))
+        covered: set[str] = set()
+        # 516 A2: the subject of one judgement is the **conductor**, not the net
+        # name. A board exports `IRbus` in the schematic and `IRBUS` on the PCB
+        # for one piece of copper; judging only the declared half leaves the
+        # other half's 10 mil copper unread. Each declared net is expanded to its
+        # connected component under 「copper that overlaps on a shared layer」,
+        # and the component is judged once, at its narrowest point.
+        for net in sorted(declared & set(drawn)):
+            if net in covered:
+                continue
+            members = _conductor_component(board, net, drawn)
+            covered |= members
+            findings.extend(
+                self._one_component(ctx, sorted(members), currents, declared)
+            )
         return findings
 
-    def _one_net(
-        self, ctx: PcbReviewContext, net: str, amps: float, where: str
+    def _one_component(
+        self,
+        ctx: PcbReviewContext,
+        members: list[str],
+        currents: dict[str, tuple[float, str]],
+        declared: set[str],
     ) -> list[Finding]:
-        """Every row for ``net``: one per copper layer with tracks, or one row."""
-        board = ctx.board
-        stats = track_width_stats(board, net)
-        if not stats.per_layer:
+        """Every row for one conductor (516 A2), one per copper layer with tracks.
+
+        ``members`` is the connected component of net names that are physically
+        one piece of copper: a declared net plus every net whose copper overlaps
+        it on a shared layer (and, transitively, theirs). The judgement is at the
+        **narrowest** width over all members on each layer — the bottleneck is
+        what carries the current, and a rule that judged each name alone would
+        miss the narrower alias.
+
+        The names that are *declared* but carry no readable current still get
+        their UNKNOWN (that is the 「you declared something here and it is not a
+        current」 work order, unchanged). A component that also contains a net the
+        contract never named gets one **INFO** saying so — even when the
+        component passes, because 「the rule measured the copper of net X, which
+        nobody declared」 must not be silent.
+        """
+        declared_members = [net for net in members if net in declared]
+        priced_members = [net for net in declared_members if net in currents]
+        unnamed = [net for net in members if net not in declared]
+        extra: list[Finding] = []
+        if unnamed:
+            extra.append(
+                Finding(
+                    rule_id=self.id,
+                    severity="INFO",
+                    level=self.level,
+                    message=(
+                        f"the declared net {declared_members[0]!r} is one "
+                        f"conductor with unnamed net(s) "
+                        + ", ".join(repr(net) for net in unnamed)
+                        + " (their copper overlaps on a shared layer), so this "
+                        "rule measured their copper too — declare a current for "
+                        "them if they are separate statements, or accept them as "
+                        "this conductor's other names"
+                    ),
+                    evidence=[
+                        f"component: {' ≡ '.join(repr(net) for net in members)}",
+                    ],
+                    target=FindingTarget(net_refs=list(members)),
+                )
+            )
+        if not priced_members:
+            return [
+                self._unknown(
+                    ctx, net, 0.0, "", missing=_unreadable_current_reason(ctx, net)
+                )
+                for net in declared_members
+            ] + extra
+        # The conductor's current is the largest declared on any of its names —
+        # conservative, and the names are one conductor so they should agree.
+        amps, where = max(
+            (currents[net] for net in priced_members), key=lambda item: item[0]
+        )
+        primary = priced_members[0]
+        per_layer: dict[int, dict[str, float]] = {}
+        track_count = 0
+        for net in members:
+            stats = track_width_stats(board=ctx.board, net=net)
+            track_count += stats.track_count
+            for layer_id, layer in stats.per_layer.items():
+                agg = per_layer.get(layer_id)
+                if agg is None:
+                    per_layer[layer_id] = {
+                        "min_width": layer.min_width,
+                        "track_count": layer.track_count,
+                        "total_length": layer.total_length,
+                    }
+                else:
+                    agg["min_width"] = min(agg["min_width"], layer.min_width)
+                    agg["track_count"] += layer.track_count
+                    agg["total_length"] += layer.total_length
+        if not per_layer:
             return [
                 self._unknown(
                     ctx,
-                    net,
+                    primary,
                     amps,
                     where,
                     missing=(
-                        f"the per-layer track widths of net {net!r} — it carries "
-                        f"{stats.track_count} tracks but none of them names a "
+                        f"the per-layer track widths of net {primary!r} — it "
+                        f"carries {track_count} tracks but none of them names a "
                         "copper layer, so there is no width to compare"
-                        if stats.track_count
-                        else f"a track on net {net!r} — this PCB document carries "
-                        "it as pads and pours only"
+                        if track_count
+                        else f"a track on net {primary!r} — this PCB document "
+                        "carries it as pads and pours only"
                     ),
                 )
-            ]
+            ] + extra
+        if len(members) > 1:
+            others = " ≡ ".join(repr(net) for net in members if net != primary)
+            subject = (
+                f"net {primary!r} ≡ {others} (one conductor, {len(members)} names)"
+            )
+        else:
+            subject = f"net {primary!r}"
         findings: list[Finding] = []
-        for layer_id in sorted(stats.per_layer):
-            layer = stats.per_layer[layer_id]
-            outer = _is_outer(board, layer_id)
+        for layer_id in sorted(per_layer):
+            layer = per_layer[layer_id]
+            outer = _is_outer(ctx.board, layer_id)
             if outer is None:
                 findings.append(
                     self._unknown(
                         ctx,
-                        net,
+                        primary,
                         amps,
                         where,
                         missing=(
                             f"whether copper layer {layer_id} is external or "
                             f"internal (the document defines no LAYER record for "
                             f"it), which is what picks the IPC-2221 constant for "
-                            f"net {net!r}"
+                            f"net {primary!r}"
                         ),
                     )
                 )
                 continue
             needed = required_width_mil(amps, inner=not outer)
-            if layer.min_width + 1e-9 >= needed:
+            if layer["min_width"] + 1e-9 >= needed:
                 continue  # margin is silence, not a finding
-            name = board.layer_name(layer_id)
+            name = ctx.board.layer_name(layer_id)
             findings.append(
                 Finding(
                     rule_id=self.id,
                     severity="ERROR",
                     level=self.level,
                     message=(
-                        f"net {net!r} carries {amps:g} A ({where}) but its "
+                        f"{subject} carries {amps:g} A ({where}) but its "
                         f"{'external' if outer else 'internal'} copper on layer "
-                        f"{layer_id} ({name}) is {layer.min_width:.1f} mil wide at "
-                        f"its narrowest, and IPC-2221 at ΔT={TEMP_RISE_C:g} °C / "
-                        f"{COPPER_OZ_PER_FT2:g} oz needs {needed:.1f} mil — "
-                        f"{needed / layer.min_width:.1f}x over the copper that "
+                        f"{layer_id} ({name}) is {layer['min_width']:.1f} mil wide "
+                        f"at its narrowest, and IPC-2221 at ΔT={TEMP_RISE_C:g} °C "
+                        f"/ {COPPER_OZ_PER_FT2:g} oz needs {needed:.1f} mil — "
+                        f"{needed / layer['min_width']:.1f}x over the copper that "
                         "is there"
                     ),
                     evidence=[
-                        f"net {net!r}: {where}",
-                        f"layer {layer_id} ({name}), {layer.track_count} track(s), "
-                        f"min width {layer.min_width:.4f} mil, "
-                        f"total length {layer.total_length:.2f} mil",
+                        f"net {primary!r}: {where}",
+                        f"layer {layer_id} ({name}), {int(layer['track_count'])} "
+                        f"track(s), min width {layer['min_width']:.4f} mil, "
+                        f"total length {layer['total_length']:.2f} mil",
                         f"IPC-2221: k={OUTER_K if outer else INNER_K}, "
                         f"ΔT={TEMP_RISE_C:g} °C, thickness {COPPER_THICKNESS_MIL} mil "
                         f"→ required width {needed:.4f} mil",
-                    ],
+                    ]
+                    + (
+                        [f"one conductor: {' ≡ '.join(repr(n) for n in members)}"]
+                        if len(members) > 1
+                        else []
+                    ),
                     target=FindingTarget(
-                        net_refs=[net],
-                        measurement=_measurement("width", layer.min_width, [layer_id]),
+                        net_refs=list(members),
+                        measurement=_measurement(
+                            "width", layer["min_width"], [layer_id]
+                        ),
                     ),
                 )
             )
-        return findings
+        return findings + extra
 
     def _unknown(
         self,
@@ -864,6 +978,44 @@ class TrackAmpacity(PcbRule):
             evidence=[f"net {net!r} on {ctx.board_title or 'this PCB document'}"],
             target=FindingTarget(net_refs=[net]),
         )
+
+
+def _conductor_component(
+    board: object, seed: str, drawn: list[str]
+) -> set[str]:
+    """Every net name that is physically one conductor with ``seed`` (516 A2).
+
+    Successive hops, not one: two names can overlap the seed while a third
+    overlaps only the second, so the closure is a BFS over 「copper that
+    overlaps on a shared layer」 (:func:`net_clearance` → ``overlapping`` and
+    ``distance <= 0``). A single-hop reading would judge a three-name conductor
+    by the two names it reached from the declared one and leave the third's
+    narrow copper unread — measured on 实板 A, where ``IRbus`` (schematic name)
+    and ``IRBUS`` (PCB name) are one piece of copper and the closure is what
+    makes the rule measure both.
+
+    The walk only ever starts from a declared net and expands from copper that
+    overlaps, so a board's isolated nets are never visited: ``net_clearance`` is
+    asked once per (component member × drawn net) in the worst case, and a
+    declared net with no same-layer overlap costs one pass over the drawn nets.
+    """
+    component = {seed}
+    frontier = [seed]
+    while frontier:
+        current = frontier.pop()
+        for other in drawn:
+            if other in component:
+                continue
+            measured = net_clearance(board, current, other)
+            if (
+                measured is None
+                or not measured.overlapping
+                or measured.distance > 0.0
+            ):
+                continue
+            component.add(other)
+            frontier.append(other)
+    return component
 
 
 # ---------------------------------------------------------------------------
@@ -915,7 +1067,7 @@ class VoltageSpacing(PcbRule):
       voltage map entirely, so the net reads UNKNOWN like any other unpriced
       net; picking one board's number would make a verdict depend on enumeration
       order.
-    * **same potential, or a cross-layer pair** → dropped, and **not** reported
+    * **one node, or a cross-layer pair** → dropped, and **not** reported
       as an UNKNOWN either, for the reason the pour case above gives: the
       missing thing is in the *measurement* or in the *design's own wiring*,
       neither of which an engineer can fix by writing a contract entry. 127b.
@@ -927,19 +1079,28 @@ class VoltageSpacing(PcbRule):
     stays WARN because a spacing shortfall is a **compliance finding against the
     standard**, and the standard's own remedy (increase the gap, or state the
     product's coating class) is a design decision — while an overloaded
-    conductor (:class:`TrackAmpacity`) is the safety one. A measured gap of
-    exactly 0.0 on a shared copper layer says so in the message, because "these
-    two nets' copper touches" is a different fact from "these two are too close"
-    and a reader needs to know which one they are looking at.
+    conductor (:class:`TrackAmpacity`) is the safety one.
 
-    **Two pairs are dropped before the table is consulted** (task 127b):
+    **Two pairs are dropped before the table is consulted** (127b; the first
+    clause narrowed by 516 A1):
 
-    * **same potential** — two nets at the same voltage are not a spacing
-      question (:func:`_same_potential`). 岳裁定 4 named the case: ``GND`` against
-      ``PGND`` is 0 V against 0 V, and two ground islands meeting in one place is
-      a single-point join the designer drew on purpose. The test is the equality,
-      so two 5 V islands get the same answer — nothing is special-cased for
-      grounds except that two ground nets are at one potential by definition.
+    * **one node** (:func:`_same_potential`, 岳 2026-10-17) — a pair is one node,
+      so spacing is not the question, in exactly two cases: **both are grounds**
+      (the board's reference node, met in one place on purpose — 岳裁定 4's
+      ``GND``/``PGND``), or **the two names are the same node the design tied
+      together** — the contract prices them at one potential **and** their copper
+      geometrically coincides (``overlapping`` and ``distance <= 0`` on a shared
+      layer). The old 「the contract wrote the same voltage twice」 clause is
+      **gone on its own**: ``HV`` = 311 V and ``U`` = 311 V are two pieces of
+      copper at a nominal average of 311, and one can sit at 0 while the other is
+      at 311, so their swing is 311 V. Such a pair is now judged by the **swing
+      bound** ``max(|a|, |b|)`` — which is why the old
+      ``required_spacing_mil(0.0) = 4 mil`` reading silently excused a 62.99 mil
+      ``HV``↔``U`` gap on the real board that this band wants at 100. The
+      coincidence half keeps its same-potential qualifier deliberately: two
+      **different**-voltage nets whose copper overlaps are not a single-point
+      join, they are a **short**, and 126c pins that they must still be reported
+      (``+5V`` against ``GND`` at 0.0 mil is a WARN, not an exemption).
     * **cross-layer** — a pair whose closest copper shares no layer
       (:attr:`~boardwise.core.measure.ClearanceResult.shares_a_layer`). Its
       distance is a plan-view projection of shapes separated vertically by at
@@ -948,6 +1109,18 @@ class VoltageSpacing(PcbRule):
       **bottom** placement whose footprint pads all carry ``layerId == 1``, so a
       layer-blind reading reported its ``+24V`` pad 10 as touching a layer-1 GND
       track.
+
+    **The quantity judged is the swing bound for a nominally-equal pair, and the
+    difference otherwise** (516 A1). A pair the contract prices at one potential
+    (``HV``/``U``, both 311 V) is looked up at ``max(|a|, |b|)`` — what separates
+    two conductors is the largest instantaneous difference their own signals can
+    present, and for two nominally-equal magnitudes that bound is the magnitude
+    itself (one at its extreme while the other is at zero). A genuinely
+    different pair (24 V against 5 V) keeps its **difference** — 19 V — because
+    that is the number the standard's own table is indexed by, and 126c pins the
+    message to say ``19 V``. Both readings agree wherever the old code was right;
+    the only rows whose verdict moves are the nominally-equal ones whose old
+    ``4 mil`` reading silenced a real shortfall.
 
     **Measured on 毕设FOC after 127b** (``ProPrj_毕设FOC驱动板``, read-only, no
     contract): PCB1 prices five nets (``+24V`` 24 V, ``+5V`` 5 V, and the three
@@ -1013,22 +1186,32 @@ class VoltageSpacing(PcbRule):
         volts_a, where_a = priced[first]
         volts_b, where_b = priced[second]
         differential = abs(volts_a - volts_b)
-        if _same_potential(first, second, volts_a, volts_b):
-            # 岳裁定 4 (2026-10-07): two nets at the **same potential** are not a
-            # spacing question. GND against PGND is 0 V against 0 V, and the two
-            # meeting in one place is the design's single-point join — exactly
-            # what a two-ground board is supposed to do. Measured: on 毕设FOC's
-            # PCB1 the ``GND``/``PGND`` pair read **0.0 mil** with
-            # ``overlapping=True``, i.e. a "short" the designer drew on purpose.
-            # Neither clause is a special case for grounds: a 5 V net against a
-            # 5 V net is the same statement, and the test is the equality.
-            return None
-        needed = required_spacing_mil(differential)
-        if needed is None:
-            return self._unknown_band(
-                ctx, first, second, volts_a, volts_b, where_a, where_b
-            )
+        same_nominal = differential <= 1e-9
         measured = net_clearance(board, first, second)
+        if _same_potential(first, second, volts_a, volts_b, measured):
+            # 516 A1 (岳 2026-10-17): 「同电位豁免只保留双地或几何重合」. Two nets
+            # are **one node** — and spacing is not the question — in exactly two
+            # cases, and 「the contract wrote the same number twice」 is not one:
+            #
+            # * **two grounds** (`is_ground_net` on both): the board's reference
+            #   node, met in one place on purpose (岳裁定 4, 2026-10-07 — 毕设FOC's
+            #   ``GND``/``PGND`` read 0.0 mil / ``overlapping=True``, a join the
+            #   designer drew);
+            # * **the same node the design tied together**: the contract prices
+            #   the two names at one potential *and* their copper geometrically
+            #   coincides (``overlapping`` and ``distance <= 0`` on a shared
+            #   layer). The same-potential qualifier is load-bearing: two
+            #   **different**-voltage nets whose copper overlaps are a **short**,
+            #   not a single-point join, and 126c pins that they are still
+            #   reported (``+5V``/``GND`` at 0.0 mil is a WARN).
+            #
+            # A pair that is merely *nominally* at one potential (``HV`` and ``U``
+            # both declared 311 V) is **not** exempt: two switching-phase lines
+            # whose averages are both 311 V swing 311 V apart instantaneously
+            # (one at 0 while the other is at 311), and 516 measured ``HV``↔``U``
+            # at 62.99 mil on the real board where IPC-2221 wants 100 — a true
+            # WARN that the old equality test swallowed. It is judged below.
+            return None
         if measured is None:
             # The documented pour blind spot: dropped, not reported. See the
             # class docstring's third paragraph for why this is not an UNKNOWN.
@@ -1044,19 +1227,40 @@ class VoltageSpacing(PcbRule):
             # reported as an UNKNOWN for the reason the pour case is: the
             # missing thing is in the *measurement*, not in the design's facts.
             return None
+        # 516 A1: for a pair the contract prices at **one** potential the quantity
+        # judged is the **swing bound**, not the nominal difference. What
+        # separates two conductors is the largest instantaneous difference their
+        # own signals can present, and for two equal magnitudes that bound is the
+        # magnitude itself — the case where one sits at its extreme while the
+        # other sits at zero. Judging the *difference of averages* put two 311 V
+        # phase lines into the 0–15 V band (``required_spacing_mil(0.0) = 4 mil``),
+        # which is the bug this fixes: it is not a stricter reading of the
+        # difference, it is the wrong quantity. A genuinely different pair keeps
+        # its difference — that is the number the standard's table is indexed by.
+        judged = max(abs(volts_a), abs(volts_b)) if same_nominal else differential
+        needed = required_spacing_mil(judged)
+        if needed is None:
+            return self._unknown_band(
+                ctx, first, second, volts_a, volts_b, where_a, where_b, judged
+            )
         if measured.distance + 1e-9 >= needed:
             return None  # margin is silence
         touching = measured.overlapping and measured.distance <= 0.0
+        statement = (
+            f"share a nominal potential but are not one node, so the swing "
+            f"bound max(|{volts_a:g}|,|{volts_b:g}|) = {judged:g} V is judged"
+            if same_nominal
+            else f"are {judged:g} V apart"
+        )
         return Finding(
             rule_id=self.id,
             severity="WARN",
             level=self.level,
             message=(
                 f"net {first!r} ({volts_a:g} V) and net {second!r} ({volts_b:g} V) "
-                f"are {differential:g} V apart, which IPC-2221 (B2, uncoated) "
-                f"gives {needed:.1f} mil, and the measured gap is "
-                f"{measured.distance:.1f} mil between {measured.element_a} and "
-                f"{measured.element_b}"
+                f"{statement}: IPC-2221 (B2, uncoated) gives {needed:.1f} mil, "
+                f"and the measured gap is {measured.distance:.1f} mil between "
+                f"{measured.element_a} and {measured.element_b}"
                 + (
                     " — those two nets' copper touch on a shared layer, so this "
                     "is a short, not merely a tight gap"
@@ -1070,8 +1274,14 @@ class VoltageSpacing(PcbRule):
                 f"measured {measured.distance:.4f} mil "
                 f"({measured.element_a} / {measured.element_b}), "
                 f"overlapping={measured.overlapping}",
-                f"band {differential:g} V → required {needed:.4f} mil "
-                "(IPC-2221 Table 6-1 column B2)",
+                f"band {judged:g} V → required {needed:.4f} mil "
+                "(IPC-2221 Table 6-1 column B2)"
+                + (
+                    f"; nominal difference {differential:g} V is not the "
+                    "quantity judged (swing bound)"
+                    if same_nominal
+                    else ""
+                ),
             ]
             + conflicts,
             target=FindingTarget(
@@ -1142,15 +1352,21 @@ class VoltageSpacing(PcbRule):
         volts_b: float,
         where_a: str,
         where_b: str,
+        judged: float,
     ) -> Finding:
-        """Beyond :data:`SPACING_TABLE_MAX_V` the simplified table has no answer."""
-        differential = abs(volts_a - volts_b)
+        """Beyond :data:`SPACING_TABLE_MAX_V` the simplified table has no answer.
+
+        ``judged`` is the quantity the table refused (516 A1) — the swing bound
+        for a nominally-equal pair, the difference otherwise — so a message about
+        a pair the table cannot price names the number that was actually asked
+        about.
+        """
         return Finding(
             rule_id=self.id,
             severity="INFO",
             level=self.level,
             message=(
-                f"net {first!r} and net {second!r} are {differential:g} V apart, "
+                f"net {first!r} and net {second!r} are {judged:g} V apart, "
                 f"above the {SPACING_TABLE_MAX_V:g} V the simplified IPC-2221 "
                 "Table 6-1 column reaches, so no spacing is asserted here — that "
                 "band is where clearance and creepage part company and IEC 60950 "
@@ -1164,26 +1380,53 @@ class VoltageSpacing(PcbRule):
         )
 
 
-def _same_potential(first: str, second: str, volts_a: float, volts_b: float) -> bool:
-    """Do these two nets sit at the same potential, so spacing is not the question?
+def _same_potential(
+    first: str,
+    second: str,
+    volts_a: float,
+    volts_b: float,
+    measured: ClearanceResult | None,
+) -> bool:
+    """Are these two nets **one node**, so spacing is not the question? (516 A1)
 
-    **Yes** when they are at the same voltage — which covers the case 岳 ruled
-    on by name (``GND`` against ``PGND``, 0 V against 0 V) without special-casing
-    it, and equally covers two 5 V islands or two 3V3 rails that happen to sit
-    near each other. **Also yes** when both are ground nets, even if one of
-    them reached 0 V by some route other than :func:`is_ground_net` — a ground
-    net is the board's reference node, so two of them are at one potential by
-    definition of what a ground net *is*.
+    岳 2026-10-17 裁定: 「同电位豁免只保留双地或几何重合」. Exactly two clauses,
+    and the old 「same declared voltage」 test is gone — it is *not* one of them:
 
-    The floating-point comparison is exact-ish rather than fuzzy: both numbers
-    come from :func:`declared_voltages`, which only ever stores a value that was
-    parsed out of a declaration or an architecture enumeration. A tolerance of
-    1e-9 V is far below any voltage an engineer writes and far above the float
-    noise two identical sources can produce, which is the band this needs.
+    * **both are ground nets** (:func:`is_ground_net`): a ground net is the
+      board's reference node, so two of them are at one potential by definition
+      of what a ground net *is*. This is 岳裁定 4's ``GND``/``PGND`` case, and it
+      needs no measurement: the pair is one node whatever the copper does;
+    * **the same node the design tied together**: the contract prices the two
+      names at one potential **and** their copper geometrically coincides
+      (``measured.overlapping`` and ``measured.distance <= 0.0``). The two names
+      are then one conductor the designer joined on purpose, which is what 127b's
+      ``GND``/``PGND`` story was about — generalised off grounds. (``net_clearance``
+      only reports ``overlapping`` for a same-layer pair, so a plan-view crossing
+      of two different layers never reaches this clause.)
+
+    The same-potential qualifier on the second clause is **load-bearing**: two
+    **different**-voltage nets whose copper overlaps are not a single-point join,
+    they are a **short**, and the caller must still report them (126c pins that
+    ``+5V`` against ``GND`` at 0.0 mil is a WARN, not an exemption). Reading the
+    clause as bare geometry would swallow that short — the same class of silence
+    this fix exists to remove.
+
+    Anything else is **not** exempt. Two nets the contract prices at the *same
+    number* — ``HV`` = 311 V and ``U`` = 311 V — are two different pieces of
+    copper, and the number is a nominal average: one can sit at 0 while the other
+    is at 311, so the swing between them is 311 V. 516 measured that pair at
+    62.99 mil on the real board where the band wants 100. Treating the equal
+    number as one node is what made that WARN vanish; the caller now judges such
+    a pair by :func:`max` of the two magnitudes instead.
     """
     if is_ground_net(first) and is_ground_net(second):
         return True
-    return abs(volts_a - volts_b) <= 1e-9
+    return bool(
+        abs(volts_a - volts_b) <= 1e-9
+        and measured is not None
+        and measured.overlapping
+        and measured.distance <= 0.0
+    )
 
 
 def _rail_names(ctx: PcbReviewContext, model: object) -> set[str]:

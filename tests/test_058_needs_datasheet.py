@@ -343,13 +343,13 @@ def test_a_missing_reason_is_refused(capsys, tmp_path, monkeypatch):
     out = tmp_path / "out"
     _checkup(out)
     capsys.readouterr()
-    # argparse refuses the absent flag outright (`2` is this CLI's "bad input").
-    with pytest.raises(SystemExit) as caught:
-        _mark(out, "--part", MARKED_PART, "--pins", "FB")
-    assert caught.value.code == 2
+    # 516 A3: `--reason` is no longer an argparse-level requirement — `--merge`
+    # batches a whole sidecar that carries its own reasons — so the command
+    # refuses an absent or empty one itself, with the same exit code 2.
+    assert _mark(out, "--part", MARKED_PART, "--pins", "FB") == 2
     assert "--reason" in capsys.readouterr().err
-    # ... and an empty one is refused by the command itself, not treated as "no
-    # reason given, carry on".
+    # ... and an empty one is refused the same way, not treated as "no reason
+    # given, carry on".
     assert _mark(out, "--part", MARKED_PART, "--pins", "FB", "--reason", "   ") == 2
     assert "--reason" in capsys.readouterr().err
     assert not (out / "needs-datasheet.json").exists()

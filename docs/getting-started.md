@@ -447,6 +447,24 @@ fab/
 
 ---
 
+## 读数据手册（PDF）需要另装 pypdf
+
+`parts fetch` 下 PDF、以及读 PDF 文本，靠的是一个**单独的解释器**里装的 `pypdf`
+（它**不是** boardwise 的依赖，装不上也不影响审查——只是读 PDF 这件事做不了）。
+`pypdf` 需要 **Python ≥ 3.9**；Windows 上这样建一个隔离的小环境，再指给它：
+
+```bash
+py -3.12 -m venv .tmp_pdfenv
+.tmp_pdfenv/Scripts/python.exe -m pip install pypdf
+set BOARDWISE_PDF_PYTHON=.tmp_pdfenv/Scripts/python.exe
+```
+
+（macOS/Linux 把 `.tmp_pdfenv/Scripts` 换成 `.tmp_pdfenv/bin`，`set` 换成 `export`。）
+没装/没指时，boardwise 会用当前解释器去试，并在屏幕上报缺 `pypdf` 与上面的装法——
+按报错照做即可，不用去猜是哪个 Python 版本的问题。
+
+---
+
 ## 常见问题
 
 | 症状 | 先看什么 |

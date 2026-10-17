@@ -1228,9 +1228,17 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 过 `facts_verified`；`_tier_pin` 剥脚名尾号）。判型词表改词边界在 `core/partkind.py`，
     # 不在指纹里；192A 的底层焊盘翻转在 `core/geometry.py`，也不在。夹具判型翻转 2 条
     # （毕设滤波采样/U1、超声波/U1 回到 IC），IC->非IC 0 条，见 `outputs/192b/evidence.md`。
+    # **516A moved the recursive one only** — fc23ac00 -> 10a9d541，direct 仍
+    # `3de90bc4`（第二十七批；岳真机反馈 516 的 A1/A2）。落点是 `rules/pcb/ipc.py`
+    # 一个文件：A1 把「标称同电位」豁免收窄成「双地或几何重合」、其余按摆幅上限
+    # `max(|a|,|b|)` 判（`_same_potential` / `_one_pair`）；A2 把 `pcb-track-ampacity`
+    # 的主体从「网名」展开成「铜的连通分量」（`_conductor_component` / `_one_component`）。
+    # 判决语义的钉在 `tests/test_516_same_potential_spacing.py` 与
+    # `tests/test_516_ampacity_component.py`；本批的 checkup/CLI 改动（A3/B1/B2/C）
+    # 都在 `engines/checkup.py` 与 `cli.py`，不在本配方里。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "3de90bc4"
-    assert recursive == "fc23ac00", (
+    assert recursive == "10a9d541", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

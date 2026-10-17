@@ -37,11 +37,13 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError as exc:  # pragma: no cover - exercised on a machine without pypdf
         print(
             "pdf_text: pypdf is not importable in this interpreter "
-            f"({exc}). Install it in an isolated venv and point "
-            "BOARDWISE_PDF_PYTHON at that interpreter:\n"
-            "  python -m venv .tmp_pdfenv\n"
+            f"({exc}). Install it in an isolated venv built with **Python >= 3.9** "
+            "(pypdf needs it) and point BOARDWISE_PDF_PYTHON at that interpreter:\n"
+            "  py -3.12 -m venv .tmp_pdfenv     # 或任何 >= 3.9 的 python\n"
             "  .tmp_pdfenv/Scripts/python.exe -m pip install pypdf\n"
-            "  set BOARDWISE_PDF_PYTHON=.tmp_pdfenv/Scripts/python.exe",
+            "  set BOARDWISE_PDF_PYTHON=.tmp_pdfenv/Scripts/python.exe\n"
+            "（macOS/Linux 把 .tmp_pdfenv/Scripts 换成 .tmp_pdfenv/bin，"
+            "export 代替 set）",
             file=sys.stderr,
         )
         return 3

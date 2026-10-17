@@ -2992,6 +2992,11 @@ def warning_triage_slots(
         module = next((module_of[ref] for ref in refs if ref in module_of), None)
         slot = {
             "source": "boardwise-rule",
+            # 516 C4: the rule id under the **snake_case** name the rest of the
+            # JSON uses (`findings[].rule_id`), so a triage-slot reader does not
+            # have to parse `evidence` for it. The DRC-derived rows still carry
+            # the camelCase `ruleId`, and the label readers accept both.
+            "rule_id": str(finding.get("rule_id") or ""),
             "severity": "WARN",
             "count": 1,
             "text": str(finding.get("message") or ""),
@@ -3070,6 +3075,45 @@ def merge_triage_sidecar(
             "reason": str(entry.get("reason") or "").strip(),
         })
     return out, len(decisions), unmatched
+
+
+def merge_needs_datasheet_sidecar(
+    unreviewed: list[dict] | None,
+    marked: list[dict] | None,
+    findings: list[dict] | None = None,
+    *,
+    designators: list[str] | None = None,
+) -> tuple[list[dict], int, int]:
+    """Fold ``needs-datasheet.json``'s marks into the worklist on a fresh run (516 A3).
+
+    Returns ``(needs_datasheet, merged, unmatched)``. The datasheet sidecar is
+    the reviewer's ⓪ 先问再判 marks — one row per ``(part, pin)``, written by
+    ``boardwise need-datasheet`` — and the section is rebuilt from the board on
+    every ``checkup``, so without this the marks would read as if nobody had
+    marked anything (measured: 15 marks → re-run → ``reviewerMarked`` 0). This is
+    the datasheet twin of :func:`merge_triage_sidecar`, and it takes the same
+    position: match what still exists, **report** the rest, never delete.
+
+    ``merged`` counts the marks whose ``part`` is a designator this report carries
+    (the board may have changed under a mark), and those are the ones folded into
+    :func:`needs_datasheet_section`; ``unmatched`` counts the rest — a designator
+    that has disappeared, or a typo. An unmatched mark is **kept** in the sidecar
+    as the audit trail; only its fold-in fails, and the caller names the count.
+
+    When ``designators`` is empty the report has no designator list to match
+    against (an old report, or a synthetic one), so every mark folds in rather
+    than being dropped on a fact this function cannot see.
+    """
+    known = {str(name) for name in (designators or [])}
+    rows = [dict(mark) for mark in (marked or []) if isinstance(mark, dict)]
+    if known:
+        matched = [row for row in rows if str(row.get("part") or "").strip() in known]
+        unmatched = len(rows) - len(matched)
+    else:
+        matched = rows
+        unmatched = 0
+    section = needs_datasheet_section(unreviewed, matched, findings)
+    return section, len(matched), unmatched
 
 
 def order_modules_by_warnings(
@@ -3595,6 +3639,74 @@ VERDICT_CANNOT_CLAIM = "不能写「通过」"
 VERDICT_COMPLETE = "complete"
 
 
+#: 516 C1: the short labels the closing sentence counts **rule families** with.
+#: Only the ids the schematic side's ``rules.i18n.RULE_NAMES_ZH`` does not carry
+#: (the PCB rules) live here; anything in neither map falls back to its own id, so
+#: a new rule is named by its id rather than dropped from the summary.
+RULE_FAMILY_LABELS_ZH: dict[str, str] = {
+    "pcb-track-ampacity": "载流",
+    "pcb-voltage-spacing": "间距",
+    "pcb-keepout-violation": "禁布区",
+    "pcb-component-spacing": "器件间距",
+    "pcb-hs-diffpair-inventory": "高速差分对",
+    "pcb-mcu-supply-groups": "MCU 供电",
+    "pcb-mcu-reset-boot": "MCU 复位",
+    "pcb-mcu-crystal-placement": "晶振布局",
+    "pcb-mcu-crystal-keepout": "晶振禁布",
+    "pcb-regulator-cap-distance": "稳压去耦距离",
+    "pcb-regulator-fb-placement": "反馈取样布局",
+    "pcb-foc-decap-proximity": "FOC 去耦",
+    "pcb-foc-ground-plane": "FOC 地平面",
+    "pcb-foc-gate-trace-width": "FOC 栅极线宽",
+    "pcb-foc-track-corners": "FOC 走线转角",
+    "pcb-foc-power-loop-area": "FOC 功率环路",
+    "pcb-foc-ground-domains": "FOC 地分区",
+    "pcb-foc-ground-tie": "FOC 地连接",
+    "pcb-foc-return-path": "FOC 回流路径",
+    "pcb-foc-thermal-via-style": "FOC 散热过孔",
+    "pcb-foc-thermal-via-array": "FOC 散热阵列",
+    "pcb-foc-thermal-exit-path": "FOC 散热出口",
+}
+
+
+def _rule_summary_label(rule_id: str) -> str:
+    """A short label for one rule id in a closing sentence (516 C1)."""
+    if not rule_id:
+        return "未具名规则"
+    from ..rules.i18n import RULE_NAMES_ZH
+
+    return (
+        RULE_FAMILY_LABELS_ZH.get(rule_id)
+        or RULE_NAMES_ZH.get(rule_id)
+        or rule_id
+    )
+
+
+def _rule_summary(report: dict, *, top: int = 3) -> str:
+    """The top-N rule families among the report's **ERROR** findings (516 C1).
+
+    ``oneLiner`` said 「先改 5 项 ERROR」 with no type, so a reader had to open the
+    findings to learn whether the board was blocked by a netlist mistake or by
+    copper. This counts the ERROR findings by rule family and returns
+    「去耦电容 1、载流 4」-shaped prose, or ``''`` when there is no ERROR finding to
+    count — the summary is an **addition** to the counts, never a substitute.
+    """
+    counts: collections.Counter = collections.Counter()
+    for finding in report.get("findings") or []:
+        if not isinstance(finding, dict):
+            continue
+        if str(finding.get("severity") or "").upper() != "ERROR":
+            continue
+        counts[_rule_summary_label(str(finding.get("rule_id") or ""))] += 1
+    if not counts:
+        return ""
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    parts = [f"{label} {count}" for label, count in ordered[:top]]
+    if len(ordered) > top:
+        parts.append(f"另 {sum(count for _, count in ordered[top:])}")
+    return "、".join(parts)
+
+
 def board_report_verdict(report: dict) -> dict:
     """「整工程能不能投板」—— the closing line, from the report's **own** gate.
 
@@ -3655,7 +3767,12 @@ def board_report_verdict(report: dict) -> dict:
     why = [str(reason) for reason in (completion.get("verdictWhy") or [])]
     if blockers:
         can_ship = False
-        line = f"不能投板：先改 {'；'.join(blockers)}（逐条见下）"
+        family = _rule_summary(report)
+        line = (
+            f"不能投板：先改 {'；'.join(blockers)}"
+            + (f"（按规则：{family}）" if family else "")
+            + "（逐条见下）"
+        )
     elif verdict == VERDICT_COMPLETE:
         can_ship = True
         line = (
@@ -5009,7 +5126,13 @@ def _summary_bullet(entry: dict) -> str:
     """One summary entry as a bullet: what it is, plus the reference to check it at."""
     count = entry.get("count")
     number = "计数未知" if count is None else str(count)
-    label = entry.get("ruleName") or entry.get("ruleId") or entry.get("kind") or ""
+    label = (
+        entry.get("ruleName")
+        or entry.get("rule_id")
+        or entry.get("ruleId")
+        or entry.get("kind")
+        or ""
+    )
     net = f" net {entry['net']}" if entry.get("net") else ""
     detail = f" —— {entry['detail']}" if entry.get("detail") else ""
     return f"- `{entry.get('severity')}` {number}x {label}{net}（{entry.get('ref')}）{detail}"

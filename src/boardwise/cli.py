@@ -56,6 +56,7 @@ from .engines.checkup import (
     intent_section,
     layout_review_section,
     marked_parts,
+    merge_needs_datasheet_sidecar,
     merge_triage_sidecar,
     modules_section,
     needs_datasheet_section,
@@ -536,25 +537,52 @@ def build_parser() -> argparse.ArgumentParser:
     )
     need_datasheet.add_argument(
         "--part",
-        required=True,
+        default="",
         metavar="REF",
-        help="The designator whose function is not established (e.g. U7).",
+        help=(
+            "The designator whose function is not established (e.g. U7). "
+            "Required unless --merge is used."
+        ),
     )
     need_datasheet.add_argument(
         "--pins",
-        default="",
+        action="append",
+        default=None,
         metavar="P1,P2",
         help=(
-            "Comma-separated pin names (or numbers) that cannot be explained. "
-            "Omit it for 'the whole device' — the entry then says so."
+            "Pin names (or numbers) that cannot be explained; repeatable, and each "
+            "value may be a comma/space list. **Merge semantics** (516 B2): a later "
+            "call for the same designator takes the **union** of its pins and the "
+            "ones already recorded — it does not replace them. Omit it for 'the "
+            "whole device'. Use --replace-pins to overwrite instead."
+        ),
+    )
+    need_datasheet.add_argument(
+        "--replace-pins",
+        action="store_true",
+        help=(
+            "Drop the designator's existing pin marks before merging --pins, i.e. "
+            "**overwrite** rather than union (516 B2). Without it the default is "
+            "merge, so two calls accumulate pins."
+        ),
+    )
+    need_datasheet.add_argument(
+        "--merge",
+        default="",
+        metavar="SIDECAR.json",
+        help=(
+            "Batch-merge every mark from another `needs-datasheet.json` (516 A3) — "
+            "one command instead of one per designator. `--part`/`--reason` are not "
+            "needed with it, and a mark for a designator the report does not carry "
+            "is reported as unmatched. Combines with --part if both are given."
         ),
     )
     need_datasheet.add_argument(
         "--reason",
-        required=True,
+        default="",
         help=(
             "Why it cannot be judged — what the datasheet would have to say. "
-            "Required: it is the only pointer to what to ask for."
+            "Required with --part: it is the only pointer to what to ask for."
         ),
     )
     need_datasheet.add_argument(
@@ -1243,7 +1271,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     install_skill.add_argument(
-        "--harness", choices=(*skill_install.HARNESSES, "all"), default=None,
+        "--harness", choices=(*skill_install.HARNESSES, *skill_install.ADVISORY_HARNESSES, "all"), default=None,
         help="Which agent harness to act on (default: all of them).",
     )
 
@@ -3840,10 +3868,38 @@ def _intent_contract_console_state(row: dict) -> str:
     return "（**不存在**：本次按全 TODO 报）"
 
 
+def _model_net_names(model: object) -> set[str]:
+    """The net names a model carries, or an empty set (516 B1).
+
+    A :class:`~boardwise.core.model.ProjectModel` raises from ``.nets`` when it
+    holds more than one board (there is no project-wide net list), so the read is
+    guarded: the caller only wants a hint for matching a legacy contract, and an
+    empty set means 「cannot compare」 rather than an error.
+    """
+    try:
+        return set(model.nets)
+    except Exception:  # noqa: BLE001 — a hint, never a gate
+        return set()
+
+
+def _resolve_cli_path(value: str) -> Path:
+    """A path typed on a shell, made absolute and home-aware (516 C2).
+
+    `--intent` takes a path from a shell; a relative one is resolved against the
+    process's working directory, which `cd` can move under a reader who typed the
+    command in one directory and ran it in another. `~` is expanded for the same
+    reason, and resolution is non-strict because the file may not exist yet
+    (`boardwise arch --intent PATH` creates it).
+    """
+    return Path(value).expanduser().resolve()
+
+
 def _load_intent_contract(
     args: argparse.Namespace,
     project_uuid: str,
     notes: list[str],
+    *,
+    nets: set[str] | None = None,
 ) -> tuple[object | None, Path | None, str]:
     """``(contract, path, read_error)`` — the DesignIntent contract a run reads (090 A1).
 
@@ -3857,23 +3913,86 @@ def _load_intent_contract(
     Nothing here writes: reading is the whole contract of this function, and the
     caller reports what it found. An unreadable file is a note and ``(None, path,
     error)`` — never an overwrite, never a crash (053 §2.2's discipline).
+
+    **The default path being absent is looked up a second way (516 B1).** A
+    previous run named its contract after the *export* (``file-<hash>.json``), and
+    after a re-export the uuid-derived name no longer matches — the reader saw
+    「合同缺席」 and had to remember ``--intent`` by hand. When the default is
+    missing, the contract directory is scanned for those export-named contracts
+    and any that mentions a net this board carries is **named in a note**, with
+    the two ways to use it.
     """
     from .core import designintent as di
 
     explicit = str(getattr(args, "intent", "") or "")
-    path = Path(explicit) if explicit else di.default_contract_path(project_uuid)
+    path = (
+        _resolve_cli_path(explicit)
+        if explicit
+        else di.default_contract_path(project_uuid)
+    )
     if not path.is_file():
         if explicit:
             notes.append(
                 f"设计意图合同 {path} 不存在：本次按全 TODO 报告（首次生成用 "
                 f"`boardwise arch {getattr(args, 'file', '') or '<export>'} --intent {path}`）"
             )
+        else:
+            legacy = _legacy_contract_candidates(path.parent, nets=nets)
+            if legacy:
+                notes.append(
+                    f"设计意图合同的默认路径 {path} 不存在，但在 "
+                    f"{path.parent} 里找到按导出命名的旧合同："
+                    + "、".join(str(candidate) for candidate in legacy)
+                    + "——若其中一份是本工程，加 `--intent <path>` 这一次就能用，"
+                    "或跑 `boardwise arch <export> --intent <path>` 迁移到 "
+                    f"{path.name}（迁移后不必再带 --intent）"
+                )
         return None, path, ""
     try:
         return di.DesignIntent.load(path), path, ""
     except di.DesignIntentError as exc:
         notes.append(f"设计意图合同读不了（{exc}）：本次按全 TODO 报告，文件一个字没动")
         return None, path, str(exc)
+
+
+def _legacy_contract_candidates(
+    directory: Path, *, nets: set[str] | None = None
+) -> list[Path]:
+    """Export-named contracts (``file-<hash>.json``) that look like this project (516 B1).
+
+    The name alone says the file was written against an *export* rather than a
+    project uuid; which of them is this board is decided by **a net they share** —
+    a contract that answers ``HV`` on a board that has no ``HV`` is not this
+    project's. With no net list to compare (an unparsed model) every candidate is
+    returned rather than none, because the reader is the one who can tell.
+    """
+    try:
+        candidates = sorted(directory.glob("file-*.json"))
+    except OSError:
+        return []
+    if not candidates:
+        return []
+    if not nets:
+        return candidates
+    from .core import designintent as di
+
+    matched: list[Path] = []
+    for candidate in candidates:
+        try:
+            contract = di.DesignIntent.load(candidate)
+        except Exception:  # noqa: BLE001 — a candidate we cannot read is not a match
+            continue
+        names = {
+            str(getattr(row, "net", "") or "").strip()
+            for row in (
+                list(getattr(contract, "rails", None) or [])
+                + list(getattr(contract, "signals", None) or [])
+            )
+        }
+        names.discard("")
+        if names & nets:
+            matched.append(candidate)
+    return matched
 
 
 def _clean_coverage() -> dict:
@@ -4127,6 +4246,7 @@ def _completion_body(
     coverage: dict | None = None,
     accepted: list[dict] | None = None,
     passive_exempt: list[dict] | None = None,
+    sidecar_needs: dict | None = None,
 ) -> dict:
     """`completion` from counts a caller already has — one shape, two callers.
 
@@ -4387,6 +4507,15 @@ def _completion_body(
         # designators are listed in report.md and the rows are in
         # `report.declaredPassiveExempt`. Additive, like every key beside it.
         "declaredPassiveExempt": len(passive_exempt or []),
+        # 516 A3: what a re-run did with the reviewer's ``needs-datasheet.json``
+        # marks, on its own key rather than buried in `source.notes`. `merged` is
+        # how many marks folded into this report, `unmatched` how many pointed at
+        # a designator the board no longer has (kept in the sidecar, reported
+        # here). Without this a re-run read as 「nobody marked anything」.
+        "sidecarNeedsDatasheet": {
+            "merged": int((sidecar_needs or {}).get("merged", 0) or 0),
+            "unmatched": int((sidecar_needs or {}).get("unmatched", 0) or 0),
+        },
         "coverage": coverage,
         "sourceVersions": {
             "ruleset": ruleset_fingerprint(rule_ids),
@@ -4408,6 +4537,7 @@ def _completion_section(
     coverage: dict | None = None,
     accepted: list[dict] | None = None,
     passive_exempt: list[dict] | None = None,
+    sidecar_needs: dict | None = None,
 ) -> dict:
     """`completion` for a **live run** — the coverage counts come from the model.
 
@@ -4439,6 +4569,7 @@ def _completion_section(
         coverage=coverage,
         accepted=accepted,
         passive_exempt=passive_exempt,
+        sidecar_needs=sidecar_needs,
     )
 
 
@@ -4539,6 +4670,9 @@ def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dic
         # re-reads no model, so it cannot recount; it reads the rows the run
         # wrote rather than dropping the disclosure down to zero.
         passive_exempt=report.get("declaredPassiveExempt") or [],
+        # 516 A3: the sidecar's own merge counts are a fact about the run that
+        # wrote them, carried over like `coverage` — a re-gate re-reads no sidecar.
+        sidecar_needs=previous.get("sidecarNeedsDatasheet") or {},
     )
 
 
@@ -4563,14 +4697,14 @@ class NeedDatasheetError(Exception):
     """The mark could not be applied (no report, unreadable sidecar, bad args)."""
 
 
-def _load_need_marks(out_dir: Path) -> list[dict]:
-    """The reviewer's marks from the sidecar beside the report — ``[]`` if none.
+def _load_need_marks_file(path: Path) -> list[dict]:
+    """The reviewer's marks from one sidecar file — ``[]`` if the file is absent.
 
     A file that cannot be read or parsed is a hard stop for the command that
     would add to it (it must not overwrite an audit trail it could not read),
     but only a missing file for `checkup`, which never writes this file.
     """
-    path = Path(out_dir) / NEEDS_DATASHEET_FILE
+    path = Path(path)
     if not path.is_file():
         return []
     import json
@@ -4589,6 +4723,11 @@ def _load_need_marks(out_dir: Path) -> list[dict]:
     else:
         marks = []
     return [dict(mark) for mark in marks if isinstance(mark, dict)]
+
+
+def _load_need_marks(out_dir: Path) -> list[dict]:
+    """The reviewer's marks from the sidecar beside the report — ``[]`` if none."""
+    return _load_need_marks_file(Path(out_dir) / NEEDS_DATASHEET_FILE)
 
 
 def _write_need_marks(out_dir: Path, marks: list[dict]) -> Path:
@@ -6253,7 +6392,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             (enumeration.section.get("intent") or {}).get("projectUuid") or project_uuid
         )
         contract, contract_path, contract_error = _load_intent_contract(
-            args, enumerated_uuid, notes
+            args,
+            enumerated_uuid,
+            notes,
+            nets=_model_net_names(model),
         )
         if contract is not None:
             try:
@@ -6706,6 +6848,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # reviewer's marks are empty by construction (nobody has read the board yet);
     # `boardwise need-datasheet` merges them in afterwards.
     needs_datasheet = needs_datasheet_section(unreviewed, [], findings)
+    sidecar_needs = {"merged": 0, "unmatched": 0}
     try:
         stale_marks = _load_need_marks(out_dir)
     except NeedDatasheetError as exc:
@@ -6715,13 +6858,28 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         stale_marks = []
         notes.append(f"审查者标记侧车读不了（{exc}）：本次报告按 marked 为空出，文件一个字没动")
     if stale_marks:
-        # The sidecar survives a re-run, so this report would *look* as if the
-        # reviewer had marked nothing. Say so instead (`need-datasheet` is
-        # idempotent, so re-merging costs one command).
-        notes.append(
-            f"侧车 {NEEDS_DATASHEET_FILE} 里有 {len(stale_marks)} 条审查者标记（按 (part, pin) 计）"
-            f"未并入本次报告（checkup 生成时 marked 为空）：跑 `boardwise need-datasheet` 重新合并"
+        # 516 A3: **auto-merge**, the same discipline the triage sidecar has had
+        # since 063. The section is rebuilt from the board on every run, so a
+        # reviewer's marks would otherwise vanish on a re-run and read as 「nobody
+        # marked anything」. Matched marks fold in; the rest are counted and named
+        # (not dropped, not deleted from the sidecar).
+        needs_datasheet, needs_merged, needs_unmatched = merge_needs_datasheet_sidecar(
+            unreviewed,
+            stale_marks,
+            findings,
+            designators=_checkup_model_section(model).get("designators") or [],
         )
+        sidecar_needs = {"merged": needs_merged, "unmatched": needs_unmatched}
+        if needs_merged:
+            notes.append(
+                f"侧车 {NEEDS_DATASHEET_FILE} 里的 {needs_merged} 条审查者标记已自动并入本次报告"
+                f"（按 (part, pin) 匹配；`boardwise need-datasheet` 写入）"
+            )
+        if needs_unmatched:
+            notes.append(
+                f"侧车 {NEEDS_DATASHEET_FILE} 里另有 {needs_unmatched} 条标记没有对应器件"
+                f"（位号可能已消失）：条目留在侧车当审计轨迹，不删"
+            )
     triage = warning_triage_slots(model=model, drc=drc, findings=findings, modules=modules)
     collided = disambiguated_triage_keys(triage)
     if collided:
@@ -6809,6 +6967,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         # the verdict reads them here — the same list the report carries.
         accepted=accepted_rows,
         passive_exempt=passive_exempt,
+        sidecar_needs=sidecar_needs,
     )
     # 073, decided **once**, here: the verdict now decides the exit code, and the
     # report carries `summary.exitCode` — so writing it back into the summary the
@@ -7128,13 +7287,25 @@ def _cmd_need_datasheet(args: argparse.Namespace) -> int:
         return NEED_DATASHEET_NO_REPORT
 
     part = (args.part or "").strip()
-    if not part:
-        print("boardwise need-datasheet: --part 不能为空", file=sys.stderr)
-        return 2
-    # `--pins` is optional: no pins means the whole device is the unknown (058 §三).
-    pins = [pin.strip() for pin in re.split(r"[,\s、]+", args.pins or "") if pin.strip()]
     reason = (args.reason or "").strip()
-    if not reason:
+    merge_path = (args.merge or "").strip()
+    # 516 B2: `--pins` is repeatable and each value may itself be a list; the
+    # pins of one call are a **union** with what the designator already carries
+    # (`--replace-pins` asks for the overwrite instead).
+    pins = list(dict.fromkeys(
+        pin.strip()
+        for value in (args.pins or [])
+        for pin in re.split(r"[,\s、]+", value)
+        if pin.strip()
+    ))
+    if not part and not merge_path:
+        print(
+            "boardwise need-datasheet: --part 不能为空（或用 --merge <sidecar.json> "
+            "批量导入）",
+            file=sys.stderr,
+        )
+        return 2
+    if part and not reason:
         print(
             "boardwise need-datasheet: --reason 必填——写清「为什么解释不了」；"
             "它是这份清单里唯一指向该查什么的线索",
@@ -7163,14 +7334,46 @@ def _cmd_need_datasheet(args: argparse.Namespace) -> int:
     # never silently: a typo that disappears into the gate is worse than one that
     # is refused, because the gate would then hold a question about no part.
     designators = set((report.get("model") or {}).get("designators") or [])
-    if designators and part not in designators:
-        print(
-            f"boardwise need-datasheet: 报告里的位号没有 {part}"
-            f"（model.designators 不含它，共 {len(designators)} 个位号）——标记照记，请核对位号",
-            file=sys.stderr,
-        )
+    added = updated = 0
+    unmatched_merge: list[str] = []
+    if part:
+        if designators and part not in designators:
+            print(
+                f"boardwise need-datasheet: 报告里的位号没有 {part}"
+                f"（model.designators 不含它，共 {len(designators)} 个位号）——标记照记，请核对位号",
+                file=sys.stderr,
+            )
+        if args.replace_pins:
+            # 516 B2: overwrite this designator's pins rather than union with them.
+            marks = [
+                mark for mark in marks
+                if str(mark.get("part") or "").strip() != part
+            ]
+        marks, added, updated = _merge_need_mark(marks, part=part, pins=pins, reason=reason)
+    if merge_path:
+        # 516 A3: one command for a whole sidecar instead of one per designator.
+        try:
+            incoming = _load_need_marks_file(Path(merge_path))
+        except NeedDatasheetError as exc:
+            print(f"boardwise need-datasheet: {exc}", file=sys.stderr)
+            return 2
+        for mark in incoming:
+            source_part = str(mark.get("part") or "").strip()
+            if not source_part:
+                continue
+            source_pin = str(mark.get("pin") or "").strip()
+            source_reason = str(mark.get("reason") or "").strip() or reason or "（从侧车并入）"
+            if designators and source_part not in designators:
+                unmatched_merge.append(source_part)
+            marks, one_added, one_updated = _merge_need_mark(
+                marks,
+                part=source_part,
+                pins=[source_pin] if source_pin else [],
+                reason=source_reason,
+            )
+            added += one_added
+            updated += one_updated
 
-    marks, added, updated = _merge_need_mark(marks, part=part, pins=pins, reason=reason)
     # Rebuilt from the report's own sections, never from a fresh read: the mark
     # adds a question, it does not re-run the review (`unreviewed_parts` stays the
     # facts seed it was, and `mayClaimPassed` keeps its narrow meaning).
@@ -7190,6 +7393,11 @@ def _cmd_need_datasheet(args: argparse.Namespace) -> int:
 
     for line in _need_datasheet_lines(report, needs_datasheet, added=added, updated=updated):
         print(line)
+    if unmatched_merge:
+        print(
+            "  unmatched: " + "、".join(sorted(set(unmatched_merge)))
+            + "（报告里的位号不含它们——标记照记，请核对位号）"
+        )
     if args.json_path is not None:
         payload = json.dumps(
             {
@@ -7240,6 +7448,8 @@ def _need_datasheet_lines(
         state = "已新增"
     elif updated and not added:
         state = "已存在，已更新"
+    elif not added and not updated:
+        state = "无变化（侧车与报告已一致）"
     else:
         state = f"已存在，已更新（另新增 {added} 条）"
     completion = report.get("completion") or {}
@@ -7504,7 +7714,13 @@ def _summary_line(entry: dict) -> str:
     """One line per summary entry — count plus the reference to check it at."""
     count = entry.get("count")
     number = "count unknown" if count is None else str(count)
-    label = entry.get("ruleName") or entry.get("ruleId") or entry.get("kind") or entry.get("severity")
+    label = (
+        entry.get("ruleName")
+        or entry.get("rule_id")
+        or entry.get("ruleId")
+        or entry.get("kind")
+        or entry.get("severity")
+    )
     net = f" net {entry['net']}" if entry.get("net") else ""
     detail = f" — {entry['detail']}" if entry.get("detail") else ""
     return f"[{entry.get('severity')}] {number}x {label}{net} ({entry.get('ref')}){detail}"
@@ -14737,7 +14953,10 @@ def _pdf_python() -> tuple[str, str]:
     for candidate in (Path(".tmp_pdfenv/Scripts/python.exe"), Path(".tmp_pdfenv/bin/python")):
         if candidate.is_file():
             return str(candidate), f"隔离 venv {candidate}"
-    return sys.executable, "当前解释器（需自带 pypdf）"
+    return sys.executable, (
+        "当前解释器（需自带 pypdf；pypdf 要 Python >= 3.9，装法见 "
+        "`boardwise pdf_text` 的报错或 docs/getting-started.md）"
+    )
 
 
 def _pdf_text(pdf: Path) -> tuple[str, str]:
@@ -15348,7 +15567,9 @@ def _cmd_arch(args: argparse.Namespace) -> int:
     out_path = Path(args.out) if args.out else None
     if out_path is not None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-    contract_path = Path(args.intent) if getattr(args, "intent", "") else None
+    contract_path = (
+        _resolve_cli_path(args.intent) if getattr(args, "intent", "") else None
+    )
     contract: object | None = None
     regen: dict | None = None
     md_view = ""
@@ -24734,6 +24955,21 @@ def _cmd_install_skill(args: argparse.Namespace) -> int:
     harnesses = (
         skill_install.HARNESSES if args.harness in (None, "all") else (args.harness,)
     )
+    # Advisory harnesses read the **workspace's** AGENTS.md, so there is no
+    # user-level directory to write (or remove). They are answered out loud and
+    # then skipped: `--harness dsh` must be a sentence, never `unknown harness`,
+    # and it must not quietly write a path this build invented.
+    for harness in (h for h in harnesses if h in skill_install.ADVISORY_HARNESSES):
+        print(
+            f"boardwise install-skill [{harness}]: nothing to "
+            f"{'remove' if args.uninstall else 'install'} — "
+            f"{skill_install.ADVISORY_HARNESSES[harness]}"
+        )
+    harnesses = tuple(
+        h for h in harnesses if h not in skill_install.ADVISORY_HARNESSES
+    )
+    if not harnesses:
+        return 0
     failed = False
 
     if args.uninstall:
