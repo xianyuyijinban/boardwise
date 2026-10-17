@@ -613,7 +613,12 @@ def test_the_pass_moves_nothing_for_the_five_existing_grammars():
 
 
 def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
-    """098 scene 08 承 115 的回归钉：逐字节回到 `cd23f7d0…`。"""
+    """098 scene 08 承 115 的回归钉。
+
+    **201B 重钉**：`cd23f7d0…` → `27cb744b…`，差异只有拒因文本两处
+    （`6 variant(s)` → `7 variant(s)`，多一行 `topology-search:`），几何未动——
+    理由与 `test_115_flyback_page.py` 的同名钉逐字相同。
+    """
     import hashlib
     out = ROOT / "outputs" / "116" / "previews" / "098"
     out.mkdir(parents=True, exist_ok=True)
@@ -625,7 +630,7 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     assert result.returncode == 0, result.stdout + result.stderr
     target = out / "098_scene08_narrow_refused.txt"
     digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    assert digest == "cd23f7d01655411dafe3c103fb748da09b90adcb3772bef1feaf2a46b94bbb81", (
+    assert digest == "27cb744b1e3f380237b83c16eee7c0efb60c935b955739d273ff4c9d00450935", (
         f"098 scene 08 moved: {digest}"
     )
 

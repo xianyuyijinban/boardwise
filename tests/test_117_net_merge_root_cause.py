@@ -481,15 +481,18 @@ def test_a_gap_wider_than_the_collision_does_not_help_so_it_is_topological():
         placed, _ = _soft_placement(ctx)
         assert placed is not None
         wide = _cross_net_pin_coincidences(circuit, ctx, placed)
-        assert len(wide) == 1, (
-            f"GAP=60 leaves {sorted(wide)} — 147c re-measured exactly one, so a "
-            "different number means the geometry moved and this table needs "
-            "re-measuring"
-        )
-        assert sorted(wide[(70.0, -240.0)]) == [
-            ("C11.2", "SEC_GND"), ("C13.1", "SEC_12V")], (
-            f"the wide-rung pair changed: {wide.get((70.0, -240.0))} "
-            f"(all of GAP=60: {sorted(wide)})"
+        # **201B re-measured**: the table above (10/20/40 clean, 60 with exactly
+        # one coincidence) was read while the grammar still stated ruling (a) as
+        # `near` alone. It now states it as the order the ruling is —
+        # `right-of(D3, T1)`, the secondary group on the output side of the
+        # transformer — so the wide rung no longer squeezes the secondary row
+        # together and **GAP=60 is clean too**. The claim this test makes is "the
+        # dodge measures the trail rather than pushing harder", and a clean rung
+        # at every gap is that claim at its strongest; the coordinate and the pair
+        # the old reading named are gone with the crowding they described.
+        assert not wide, (
+            f"GAP=60 leaves {sorted(wide)} — 201B re-measured none after the "
+            "(a) order relation separated the secondary row"
         )
     finally:
         dc.GAP = saved_gap

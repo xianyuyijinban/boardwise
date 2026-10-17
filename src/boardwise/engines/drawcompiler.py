@@ -145,6 +145,7 @@ from boardwise.core.symbolprofile import (
 )
 
 from . import readability
+from . import placement
 from .grammar import bind as bind_grammar
 #: The lattice search and the geometry helpers it is defined in terms of, moved
 #: to `engines/router.py` (112) so the interactive draw flows can route on the
@@ -758,6 +759,12 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         _try_variants(ctx, widened, result, seen, circuit_spec,
                       presentation_spec, book, budget, intent)
 
+    # 201B: the topology search, for the inputs the constructive ladder cannot
+    # draw at all. Identity on every input that compiles, because it is only
+    # reached with `result.ranked` empty.
+    if not result.ranked:
+        _topology_round(ctx, result)
+
     if not result.ranked:
         result.failures = _no_candidate_failures(result, budget)
         return result
@@ -1070,6 +1077,12 @@ class _Context:
     lane_edges: dict[str, list[tuple[str, str, str]]] = field(
         default_factory=dict
     )
+    #: **201B stage 2**: where this compilation's placement came from, once the
+    #: topology search has run — a :class:`_Placement`, or the
+    #: :class:`GrammarFailure` that says why the search could not produce one.
+    #: Cached on the context because the search is the expensive stage and every
+    #: variant of a compilation asks the same question of the same documents.
+    topology: Any = None
 
     def profile(self, part_id: str) -> SymbolProfile:
         part = self.circuit.part(part_id)
@@ -2515,10 +2528,218 @@ def _locked_pose(
     return None
 
 
+def _topology_request(ctx: _Context) -> placement.PlacementInput:
+    """The compiler's own four inputs, handed to the placement search (201B).
+
+    Read off the context rather than re-derived: the part list is ``ctx.slots``,
+    the legal pose set is ``ctx.accepted`` (``_accepted_poses``' own reading of
+    the relations), the netlist is the CircuitSpec, and the relations are the
+    binding's. A second derivation of any of the four would be a second answer to
+    "what did the grammar ask for", which is exactly the shape this batch exists
+    to remove.
+    """
+    parts: list[placement.PlacementPart] = []
+    for part_id in sorted(ctx.slots):
+        parts.append(placement.PlacementPart(
+            part_id=part_id,
+            profile=ctx.profile(part_id),
+            poses=tuple(ctx.accepted[part_id]),
+            locked=_locked_pose(ctx, part_id, ctx.accepted[part_id]),
+        ))
+    nets = tuple(
+        placement.PlacementNet(
+            net_id=net.id,
+            members=tuple(
+                (member.partition(".")[0], member.partition(".")[2])
+                for member in net.members
+            ),
+            cls=net.cls,
+        )
+        for net in ctx.circuit.nets
+    )
+    relations = tuple(
+        placement.PlacementRelation(
+            kind=item.kind, subject=item.subject, object=item.object,
+            reason=item.reason,
+        )
+        for item in ctx.binding.constraints
+    )
+    return placement.PlacementInput(
+        parts=tuple(parts), nets=nets, relations=relations,
+        flag_seats=_flag_seats(ctx),
+        progress=ctx.progress, lateral=ctx.lateral(),
+        side_preferences={
+            role: (ctx.presentation.side_for(role) or fallback)
+            for role, fallback in placement.DEFAULT_SIDE_PREFERENCES.items()
+        },
+        page_box=ctx.budget.page_box, keepouts=tuple(ctx.budget.keepouts),
+        grid=ctx.budget.grid, near_limit=ctx.budget.near_limit,
+        channel=ctx.budget.channel, lane=ctx.budget.lane,
+    )
+
+
+def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
+    """The pins that must keep room for the flags the plan will hang (201B).
+
+    Read from this module's **own** rules, so the reservation and the flag that
+    later uses it cannot be two answers:
+
+    * **which pin** — a rail's flag hangs at the pin the rail supplies, which is
+      the first point on the net belonging to a chain part
+      (:func:`_power_flag_pin` reads the same ordering the same way) and, for a
+      net with no chain part on it, the first member by id;
+    * **which way** — a rail's glyph hangs *up* out of the rail and a ground's
+      hangs *down*: :func:`flag_glyph_kind` of the net's own symbol decides, which
+      is the same fact :func:`_rail_flag_seat` hangs by;
+    * **how much room** — :func:`_flag_box` at the anchor the lead reaches
+      (``FLAG_LEAD`` out along that direction), which is the box the compiler
+      itself keeps free: the glyph, the host's own name row (none for a ground)
+      and :data:`FLAG_CLEARANCE`. The lead's own run from the pin is folded into
+      the same box, because a part standing in the corridor blocks the flag just
+      as surely as one standing on its glyph.
+
+    A net the library carries no flag symbol for is skipped: the plan writes a net
+    label on it instead (:func:`_flag_wire_fallback`), and reserving room for a
+    glyph nobody will draw would push parts apart for nothing.
+    """
+    out: list[placement.FlagReservation] = []
+    for net in sorted(ctx.circuit.nets, key=lambda item: item.id):
+        if net.cls not in ("power", "gnd"):
+            continue
+        members = sorted(net.members)
+        if not members:
+            continue
+        profile = _net_flag_profile(ctx, net)
+        if profile is None:
+            continue
+        seat = next(
+            (
+                member for member in members
+                if (ctx.slots.get(member.partition(".")[0]) is not None
+                    and ctx.slots[member.partition(".")[0]].kind == "chain")
+            ),
+            members[0],
+        )
+        part_id, _, token = seat.partition(".")
+        kind = flag_glyph_kind(profile)
+        up = kind != FLAG_GLYPH_KIND_GND
+        anchor = (0.0, FLAG_LEAD if up else -FLAG_LEAD)
+        box = _flag_box(
+            profile, _flag_rotation((0.0, 1.0 if up else -1.0), kind),
+            anchor, net.id,
+        )
+        xs = [box[0], box[2], 0.0]
+        ys = [box[1], box[3], 0.0, anchor[1]]
+        out.append(placement.FlagReservation(
+            part_id=part_id,
+            token=token,
+            net_id=net.id,
+            box=(min(xs), min(ys), max(xs), max(ys)),
+        ))
+    return tuple(out)
+
+
+def _net_flag_profile(
+    ctx: _Context, net: Any
+) -> SymbolProfile | None:
+    """The library symbol a net's own flag is drawn with, or ``None``.
+
+    The same two lookups the per-net loop makes: a ground's is ``budget.gnd_flag``
+    and a rail's is found under ``budget.power_flag_prefix + net id``. ``None``
+    means this library carries no flag for that net — a fact the plan states
+    (``_missing_flag_symbol``), and one that makes the reservation pointless.
+    """
+    ref = (
+        ctx.budget.gnd_flag if net.cls == "gnd"
+        else f"{ctx.budget.power_flag_prefix}{net.id}"
+    )
+    return ctx.book.get(ref) if ref else None
+
+
+def _topology_placement(ctx: _Context) -> _Placement | GrammarFailure:
+    """Run the placement search once, and keep its answer on the context.
+
+    201B stage 2's whole point: the greedy the compiler used to place parts with
+    could not trade one part's position against another's, so a relation two
+    parts have to keep between their **pins** was unreachable however many poses
+    were tried — the flagship flyback compiled to zero candidates for exactly
+    that reason. The search the task book asked for replaces it; the old solver
+    stays in this module as :func:`_place_chain_and_shelf`, reachable and tested,
+    but nothing in :func:`compile` calls it any more — a fallback nobody routes to
+    is a fallback that rots, and this one is named for what it is so the next
+    reader does not have to guess which of the two is live.
+
+    The residue is the search's own answer read through the compiler's lattice
+    (:func:`_lattice_residue`): a placement whose pin tips do not share one
+    compilation lattice is still a ``layout-unsat`` refusal, because the router
+    downstream can only land on that lattice.
+    """
+    if ctx.topology is not None:
+        return ctx.topology
+    request = _topology_request(ctx)
+    result = placement.place(request)
+    points = [
+        placement.posed_tip(pin.tip, result.poses[part_id], result.origins[part_id])
+        for part_id in sorted(result.poses)
+        for pin in ctx.profile(part_id).pins
+    ]
+    residue = _lattice_residue(points, ctx.budget.grid)
+    if residue is None:
+        answer: _Placement | GrammarFailure = GrammarFailure(
+            category=FAILURE_LAYOUT_UNSAT,
+            subject="lattice",
+            detail=(
+                "the parts' pin tips do not share one compilation lattice of "
+                f"{ctx.budget.grid:g} units, so a grid search cannot reach them "
+                "— the placement search put every part on the lattice and the "
+                "symbols' own pins still disagree"
+            ),
+            action=(
+                "widen SymbolProfile's pin offsets to a multiple of the lattice, "
+                "or pass a budget.grid the pins really sit on"
+            ),
+        )
+    else:
+        origins = dict(result.origins)
+        _anchor_to_page(ctx, origins, result.poses, residue)
+        answer = _Placement(
+            origins=origins, poses=result.poses, residue=residue,
+        )
+    ctx.topology = answer
+    return answer
+
+
 def _place(
     ctx: _Context, variant: _Variant
 ) -> tuple[_Placement | None, GrammarFailure | None]:
+    """Where the parts go: the ladder's constructive layout, or the search (201B).
+
+    Every ladder variant goes to :func:`_place_chain_and_shelf` — the solver this
+    compiler has shipped since 053 — so an input that compiles today compiles to
+    the same page it compiled to before. The one variant whose ``pose_index`` is
+    negative is the topology search: it is not a rung, and
+    :func:`_variants` appends it last, which is what makes it reachable only when
+    the ladder produced no candidate at all.
+    """
+    if variant.pose_index < 0:
+        answer = _topology_placement(ctx)
+        if isinstance(answer, GrammarFailure):
+            return None, answer
+        return answer, None
+    return _place_chain_and_shelf(ctx, variant)
+
+
+def _place_chain_and_shelf(
+    ctx: _Context, variant: _Variant
+) -> tuple[_Placement | None, GrammarFailure | None]:
     """Ranks and lanes -> origins, through the real symbols.
+
+    **Not called by :func:`compile` since 201B stage 2** — it is the solver this
+    compiler shipped from 053 to 201A (chain on one line, branches hung off the
+    pin they share a net with, free parts on a shelf, locks honoured), kept whole
+    because it is still the honest answer to two questions: what a *constructive*
+    placement does with a grammar, and whether a drawing the search refuses can be
+    drawn at all. Everything below this line is that solver, unchanged.
 
     The chain is laid on one line with a pitch per neighbouring pair taken from
     the two parts' own extents plus a wiring channel, scaled by the ladder rung;
@@ -5561,6 +5782,12 @@ def _variants(ctx: _Context) -> list[_Variant]:
     and a pose is only ever varied when the accepted set really has more than one
     geometry. The product is truncated at `budget.max_candidates` in a fixed
     order, so two runs of one input search the same points in the same sequence.
+
+    **201B** leaves this list exactly as it was. The topology search is *not*
+    appended here: a variant in this list is built in the ladder round whatever
+    the rung before it produced, and a solver whose answer replaces the chain's
+    would then move the drawing of inputs that already compile. It is reached
+    from :func:`_topology_round`, which runs only when this list produced nothing.
     """
     choices = max(
         (1, *(len(poses) for poses in ctx.accepted.values() if poses))
@@ -5576,6 +5803,43 @@ def _variants(ctx: _Context) -> list[_Variant]:
             if len(variants) >= ctx.budget.max_candidates:
                 return variants
     return variants
+
+
+def _topology_variant() -> _Variant:
+    """The one point that is not a ladder rung (201B stage 2).
+
+    A negative ``pose_index`` is how :func:`_place` recognises it — no ladder rung
+    can produce one, and a label is a string a caller can rename.
+    """
+    return _Variant(label="topology-search", scale=0.0, pose_index=-1)
+
+
+def _topology_round(ctx: _Context, result: CompileResult) -> None:
+    """Try the placement search — after the ladder, and only if it found nothing.
+
+    This is where 201B's new solver actually lives in the pipeline, and the
+    placement is deliberate. Running it *first* (or as just another rung) would
+    have moved the drawing of every input that already compiles: the search's
+    answer has a different geometry from the constructive chain's, the ranking
+    would compare the two, and pages that are green today would be re-pinned by a
+    solver nobody asked to apply to them. Running it *only when there is nothing
+    else* keeps the promise this repository makes about a new algorithm: it may
+    only add drawings, never replace one that works.
+
+    Reported by name in the notes, because "which solver drew this page" is the
+    first thing a reader of a refusal needs to know.
+    """
+    result.notes.append(
+        f"no candidate from the {len(result.rejected)} constructive variant(s) "
+        f"({_widening_blocker_label(result)}), so the topology search was run: "
+        "one optimisation over the whole drawing instead of a rung of the "
+        "spacing ladder (052 sec.4's constructive model cannot trade one part's "
+        "position against another's, and a pin-level relation needs exactly that)"
+    )
+    _try_variants(
+        ctx, [_topology_variant()], result, set(),
+        ctx.circuit, ctx.presentation, ctx.book, ctx.budget, ctx.intent,
+    )
 
 
 def _try_variants(
@@ -9384,36 +9648,25 @@ def _points_for_relation(
     origin_of: Any,
     pin_of: Any,
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
-    """The two points a relation is measured between.
+    """The two points a relation is measured between — **one reading** (201B).
 
-    Origins by default. Two kinds are measured between the two parts' **pins on
-    the net they share**, when there is one, because that is what those kinds
-    say: the RC shunt's out-side pin lands on the trunk row (053 sec.3), not its
-    whole body, and a branch is "near" the node it hangs off — the pins are the
-    connection, and the body follows within the branch's own span. Measuring whole
-    parts there would refuse a readable branch (and, for `near`, refuse a wide
-    spacing ladder for no electrical reason), while measuring pins for an order
-    kind would let a long pin hide a wrong order.
+    Origins, except for the five kinds measured between the pair's **pins on the
+    net they share** (the RC shunt's out-side pin lands on the trunk row, 053
+    sec.3; a branch is "near" the node it hangs off). The rule itself lives in
+    :func:`boardwise.engines.placement.relation_points_between`, because the layer
+    that *places* the parts now needs it too: for the length of 201B stage 1 the
+    same sentence was measured by two copies of this function, one here and one
+    there, and two copies of one rule is the defect this repository keeps paying
+    for. This stays as the compiler's spelling of it — the signature every caller
+    in this module already uses — and answers by delegation, so there is exactly
+    one place where "which two points" is decided.
     """
-    if item.kind in (SAME_ROW, SAME_COLUMN, HORIZONTAL_TAP, VERTICAL_TAP, NEAR):
-        common = sorted(
-            set(_part_nets(circuit_spec, item.subject).values())
-            & set(_part_nets(circuit_spec, item.object).values())
-        )
-        if common:
-            here = pin_of(
-                item.subject, _token_on(circuit_spec, item.subject, common[0])
-            )
-            there = pin_of(
-                item.object, _token_on(circuit_spec, item.object, common[0])
-            )
-            if here is not None and there is not None:
-                return (here, there)
-    here = origin_of(item.subject)
-    there = origin_of(item.object)
-    if here is None or there is None:
-        return None
-    return (here, there)
+    return placement.relation_points_between(
+        item,
+        nets_of=lambda part_id: _part_nets(circuit_spec, part_id),
+        origin_of=origin_of,
+        pin_of=pin_of,
+    )
 
 
 def _token_on(circuit_spec: CircuitSpec, part_id: str, net: str) -> str:
@@ -9457,37 +9710,21 @@ def _relation_holds(
     the failure 053 sec.5 scenario 12 names ("报告冲突，不静默忽略"). An unknown
     kind now fails here and is reported with its own kind and reason, which is how
     the gap gets noticed.
+
+    **201B stage 2**: the branches themselves now live in
+    :func:`boardwise.engines.placement.relation_holds` and this answers by
+    delegating. The reason is the one this module keeps paying for — the
+    placement layer needs the same sentence measured, and a second copy of it
+    (which stage 1 had, deliberately, because the compiler was off limits then)
+    is a second opinion waiting to drift. The name, the signature and the
+    docstring stay here because eight call sites in this module and four test
+    files read them, and because "the compiler's ruler" is what a reader is
+    looking for when they get here.
     """
-    (ax, ay), (bx, by) = points
-    slack = grid / 2.0
-    if kind == SAME_COLUMN:
-        return abs(ax - bx) <= slack
-    if kind == SAME_ROW:
-        return abs(ay - by) <= slack
-    if kind == HORIZONTAL_TAP:
-        # The stub leaves horizontally, so the junction it leaves from is on a
-        # vertical line: the two arm pins the tap sits between share a column.
-        return abs(ax - bx) <= slack
-    if kind == VERTICAL_TAP:
-        # The mirror: a horizontal chain, the stub leaves downward/upward, and
-        # the two arm pins share a row.
-        return abs(ay - by) <= slack
-    if kind == ABOVE:
-        return ay > by + slack
-    if kind == BELOW:
-        return ay < by - slack
-    if kind == LEFT_OF:
-        return ax < bx - slack
-    if kind == RIGHT_OF:
-        return ax > bx + slack
-    if kind == ADJACENT:
-        gap = (ax - bx, ay - by)
-        return abs(_dot(gap, lateral)) <= slack and not _close(
-            _dot(gap, progress), 0.0
-        )
-    if kind == NEAR:
-        return math.hypot(ax - bx, ay - by) <= near_limit
-    return False
+    return placement.relation_holds(
+        kind, points, grid=grid, near_limit=near_limit, lateral=lateral,
+        progress=progress,
+    )
 
 
 # --------------------------------------------------- the obligations, checked

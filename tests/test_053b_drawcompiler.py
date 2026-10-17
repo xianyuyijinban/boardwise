@@ -3614,15 +3614,31 @@ def test_a_facts_missing_refusal_from_the_grammar_layer_passes_through_verbatim(
     assert result.grammar is not None and not result.grammar.ok
 
 
+def _boxes_overlap(first, second) -> float:
+    """The area two boxes share — the same reading the compiler's own guard uses."""
+    width = min(first[2], second[2]) - max(first[0], second[0])
+    height = min(first[3], second[3]) - max(first[1], second[1])
+    if width <= 0.0 or height <= 0.0:
+        return 0.0
+    return width * height
+
+
 def test_a_keep_out_over_a_body_is_refused_rather_than_drawn_through():
-    """A part cannot dodge a keep-out, so the plan is refused — never returned.
+    """A body never sits inside a reserved region — and 201B finds a way round it.
 
     This is the case the hard gate exists for: the parts' own geometry already
     satisfies everything the compiler checks by construction, so only the
-    *independent* layer can see that a body sits inside a reserved region. A
-    compiler that skipped the gate would hand this plan out (and claim an empty
-    violation list in its evidence); the plan's evidence is therefore filled from
-    the checker's own output rather than from an assumption.
+    *independent* layer can see that a body sits inside a reserved region.
+
+    **201B re-pin.** This used to assert `candidates == []`: the keep-out was
+    derived from where the *constructive* solver put `R1`, and that solver anchors
+    the drawing to the page's corner, so the part had nowhere to go and the plan
+    was refused. The topology search moves parts against each other, and it simply
+    *relocates* the pair out of the reserved box — measured: `R1`'s body lands at
+    `(5, -115)-(25, -75)` against a keep-out of `(-10, -20)-(10, 20)`, no overlap,
+    and the plan passes the gate. A compiler that refuses an input it can legally
+    draw was the weaker answer, so the assertion is now the guard's real property:
+    a candidate exists **and no part's body overlaps the keep-out**.
     """
     scene = scenes()[1]
     health = best_of(scene)[1]
@@ -3633,14 +3649,18 @@ def test_a_keep_out_over_a_body_is_refused_rather_than_drawn_through():
         scene.circuit, scene.presentation, library(),
         dc.CompileBudget(keepouts=(body,)),
     )
-    assert result.candidates == []
-    assert result.categories() == ["layout-unsat"]
-    assert all(failure.action for failure in result.failures)
-    assert result.rejected, "the refusals keep what was tried"
-    assert any(
-        readability.KIND_OUT_OF_PAGE in " ".join(item.violations)
-        for item in result.rejected
-    ), [item.violations for item in result.rejected]
+    assert result.candidates, "the search can move the parts out of a keep-out"
+    assert result.categories() == []
+    for plan in result.candidates:
+        for part in plan.parts:
+            profile = library()[part.symbol_ref]
+            box = dc._body_box(
+                profile, SymbolPose(int(part.rotation), part.mirror),
+                (part.x, part.y),
+            )
+            assert box is None or _boxes_overlap(box, body) == 0.0, (
+                f"{part.part_id} sits inside the keep-out: {box} vs {body}"
+            )
 
 
 def test_an_obligated_net_that_cannot_be_wired_is_layout_unsat_never_a_label():
@@ -3670,15 +3690,20 @@ def test_an_obligated_net_that_cannot_be_wired_is_layout_unsat_never_a_label():
         dc.CompileBudget(keepouts=(trap,)),
     )
 
-    assert result.candidates == []
-    assert result.categories() == ["layout-unsat"]
-    (failure,) = result.failures
-    assert failure.subject == "TAP", failure.subject
-    assert "direct-wire obligation" in failure.detail
-    assert "could not be joined inside the searched corridor" in failure.detail
-    assert "not found inside the budget" in failure.detail, failure.detail
-    assert "move the keep-out" in failure.action
-    assert "direct-wire obligation" in failure.action
+    # **201B re-pin.** The trap is an absolute box drawn around the pin where the
+    # *constructive* solver put it; the topology search relocates the drawing, so
+    # the pin is no longer inside the trap and the net **is** wired (measured:
+    # `TAP` has two segments at `y=-187.5`, and the trap sits at
+    # `(-5,-55)-(5,-45)` with nothing in it). The promise this test guards is "an
+    # obligated net is never answered with a name instead of a conductor", and
+    # that is now asserted directly — which is the stronger claim of the two.
+    assert result.candidates, "the search can wire a net the ladder had trapped"
+    assert result.categories() == []
+    for plan in result.candidates:
+        assert any(
+            segment.net == "TAP" and len(segment.points) >= 2
+            for segment in plan.segments
+        ), "the direct-wire obligation must be a conductor, never only a name"
 
     # The accounting the twelve-scene table uses: every variant the ladder built
     # is recorded as refused, each with its own reason and category, and none of
@@ -3846,6 +3871,11 @@ def test_the_spacing_ladder_stops_when_more_room_cannot_change_the_answer(monkey
             dc.CompileBudget(page_box=page, spacing_ladder=ladder),
         )
         built = {item.variant.split(" pose", 1)[0] for item in result.rejected}
+        # 201B: the topology search is not a rung — it is asked for only when the
+        # ladder found nothing, and it is named `topology-search` with no
+        # `spacing=` prefix. The claim below is about the **ladder's** stop rule,
+        # so the rungs are what is read here.
+        built = {name for name in built if name.startswith("spacing=")}
         stopped = [note for note in result.notes if "stopped at rung" in note]
         assert not result.ok
         # 201A: with the ground expressed as a rail instead of a flag per pad,
@@ -3893,7 +3923,8 @@ def test_the_spacing_ladder_stops_when_more_room_cannot_change_the_answer(monkey
     assert too_small.failures[0].category == dc.FAILURE_LAYOUT_UNSAT, (
         too_small.failures[0].detail
     )
-    assert {item.variant.split(" pose", 1)[0] for item in too_small.rejected} == {
+    assert {item.variant.split(" pose", 1)[0] for item in too_small.rejected
+            if item.variant.startswith("spacing=")} == {
         "spacing=1", "spacing=1.5", "spacing=2.2",
     }, "a refusal room can fix walks the whole ladder"
 

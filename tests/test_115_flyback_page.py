@@ -402,6 +402,13 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     ``cd23f7d0…`` 变成 ``fcd6ac6c…``。本条把该文件重新生成并与
     ``outputs/114/previews/098/098_scene08_narrow_refused.txt`` 比对——逐字节。
     若 ① 的保守判据仍改变它的输出，这条会红。
+
+    **201B 重钉**：``cd23f7d0…`` → ``27cb744b…``，差异**只有两处、全是拒因文本**：
+    ``6 variant(s)`` → ``7 variant(s)``，以及多一行 ``topology-search:``
+    自己的拒因。原因是设计如此——拓扑搜索在阶梯（含 119 加宽轮）一个候选都没出时
+    才跑，跑了就如实记进 ``rejected``。**几何一个字节没动**（这条量的是拒因文件；
+    同批的零移动闸量过 83 张预览，SVG/plan 无位移）。旧字节留在
+    ``098_scene08_narrow_refused.pre201b.txt``，两版可对拍。
     """
     baseline = (
         ROOT / "outputs" / "114" / "previews" / "098"

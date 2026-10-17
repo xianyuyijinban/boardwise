@@ -504,10 +504,14 @@ def test_the_repair_move_is_what_makes_the_flyback_drawing_good():
     这条把两个读数钉住，注释里那句「修复是质量来源」就不能悄悄失效。
     """
     _, result, _ = _flyback_placed()
-    assert result.term("wire-length").value <= 2000.0, (
+    # 阶段二重测（(a) 关系进约束集、旗净空项加入之后）：走线 2170、对角 624.6；
+    # 关掉修复移动（变异 M2）实测 3135 / 829.4，而且那份搜索慢得多（6000 迭代
+    # 不够收敛到停止条件，单文件用例从 26 s 变 162 s）。界线钉在两者之间：修复
+    # 移动的价值是**量出来的**，不是写在注释里的。
+    assert result.term("wire-length").value <= 2500.0, (
         result.term("wire-length").render()
     )
-    assert result.term("spread").value <= 600.0, result.term("spread").render()
+    assert result.term("spread").value <= 680.0, result.term("spread").render()
 
 
 def test_the_transformer_keeps_its_own_pin_split_along_the_chain():
@@ -567,3 +571,82 @@ def test_the_energy_function_reads_each_term_through_its_own_weight():
     assert pl._energy([hard, relation, spread]) == (
         2.0 * pl.W_HARD + 3.0 * pl.W_RELATION + 10.0 * pl.W_SPREAD
     )
+
+
+# --------------------------------------------------- §八 旗位预留（阶段二）
+
+def _seated_request(reservation: tuple[float, float, float, float]) -> pl.PlacementInput:
+    """Two parts 40 units apart, with a flag reservation between them.
+
+    The reservation is stated the way the compiler states it: a box **relative to
+    the pin**, covering the lead's run and the glyph + name row the plan will print
+    (`drawcompiler._flag_box`). Q1's drain pin is at its own origin, so the box
+    lands where the second part is.
+    """
+    return pl.PlacementInput(
+        parts=(
+            pl.PlacementPart("Q1", _nmos(), ALL_POSES),
+            pl.PlacementPart("R1", _resistor("R0402"), ALL_POSES),
+        ),
+        nets=(
+            pl.PlacementNet("SW", (("Q1", "2"), ("R1", "1"))),
+            pl.PlacementNet("VIN", (("Q1", "2"),), cls="power"),
+        ),
+        flag_seats=(
+            pl.FlagReservation(
+                part_id="Q1", token="2", net_id="VIN", box=reservation,
+            ),
+        ),
+        progress=(0.0, -1.0), lateral=(1.0, 0.0),
+        iterations=4000, restarts=3, seed=201,
+    )
+
+
+def test_a_flag_reservation_is_priced_and_the_search_moves_the_part_out():
+    """201B 阶段二：旗位预留项计价，搜索把挡路的件挪开。
+
+    这条钉的是反激最后一个拦路虎的**机制**：编出来的图画到 0 条硬违反之后，
+    卡在旗标阶段——`HVDC` 的旗在供电脚 `T1.1` 周围挂不下（`_rail_flag_seat`
+    的每一档引线都撞别人）。把那一档"别人"合成到这条最小场景里：预留框正好压在
+    第二颗件的位置上。
+    """
+    reservation = (-20.0, 0.0, 20.0, 55.0)
+    request = _seated_request(reservation)
+    # 第一次落位时把第二颗件放在预留框里，代价项必须看得见它。
+    # The intruder is turned across the reservation: a chip resistor at 0deg has
+    # both pins on one vertical line, so its box has no width to intersect with.
+    crowded = pl._State(
+        origins={"Q1": (0.0, 0.0), "R1": (0.0, 20.0)},
+        poses={"Q1": ALL_POSES[0], "R1": SymbolPose(90, False)},
+    )
+    term = pl._flag_room_term(
+        request, pl._pins_of(request, crowded), pl._boxes_of(request, crowded),
+    )
+    assert term.violated, term.render()
+    assert "VIN" in term.detail
+
+    result = pl.place(request)
+    reserved = request.flag_seats[0].box_at(result.origins["Q1"])
+    pins = pl._pins_of(request, pl._State(dict(result.origins), dict(result.poses)))
+    boxes = pl._boxes_of(request, pl._State(dict(result.origins), dict(result.poses)))
+    taken = sum(
+        pl._boxes_overlap(reserved, box)
+        for part_id, box in boxes.items() if part_id != "Q1"
+    )
+    assert taken == 0.0, (
+        f"the search left a part in the flag's room: {reserved} vs {boxes['R1']}"
+    )
+    assert result.term("flag-room").value == 0.0
+    assert pins["Q1"]["2"] is not None
+
+
+def test_a_request_with_no_flag_seat_reserves_nothing():
+    """没声明旗位的请求不评这一项（不是"零违反"，是"不适用"）。"""
+    request = pl.PlacementInput(
+        parts=(pl.PlacementPart("Q1", _nmos(), ALL_POSES),),
+        nets=(pl.PlacementNet("SW", (("Q1", "2"),)),),
+        iterations=50, restarts=1, seed=1,
+    )
+    result = pl.place(request)
+    assert result.term("flag-room").value == 0.0
+    assert "no flag seat" in result.term("flag-room").detail

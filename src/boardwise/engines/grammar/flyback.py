@@ -760,32 +760,48 @@ class FlybackGrammar:
 
         # (a) 副边朝输出侧: the secondary group is stated on the output side of
         # the transformer, which is what makes the isolation boundary vertical.
-        # The isolation boundary is stated as `near` between the transformer's
-        # secondary pin and the rectifier, not as an order kind between the two
-        # parts. An order kind here is measured against **the rectifier's own
-        # pin and its own origin** (`_pin_side_note` says so, and the compiler
-        # refused the page naming the posed pin), and for a chain member those
-        # two points are always on the same axis — so "the secondary is on the
-        # output side of the transformer" can only be measured between the two
-        # *parts*, which is what `near` plus the `below`/`above` pair on the
-        # filter does. The drawing's vertical boundary is stated by those.
+        #
+        # **201B stage 2**: this used to be `near` alone, with a comment saying
+        # an order kind "can only be measured between the two *parts*" and had
+        # been refused by the compiler. Half of that was true and half was not.
+        # The true half: `_points_for_relation` measures an order kind between
+        # the two **origins**, which is exactly the between-two-parts reading the
+        # ruling wants. The false half: the refusal was the *old* stage-2 greedy's
+        # (a chain pitch that never lined the pins up, with a relation violation
+        # killing the whole candidate instead of being repaired), not a property
+        # of the relation — measured 2026-10-17 by a search that can trade one
+        # part's position against another's, which keeps all 33 relations with no
+        # hard violation. So the ruling is stated as what it is, an order, and
+        # `near` stays beside it because it says something the order does not
+        # (the group *hugs* the transformer it rectifies).
+        #
+        # Which of the two words is "the output side" is the declaration's
+        # (`sidePreferences.output`), not this file's — the same `_side_kind`
+        # every sibling grammar reads its sides through.
+        for part_id in (found.sec_d, *found.output_caps):
+            constraints.append(RelativeConstraint(
+                kind=_side_kind(out_side, RIGHT_OF),
+                subject=part_id,
+                object=found.transformer,
+                reason=(
+                    f"岳 110 裁决 a: {part_id} stands on the **output side** of "
+                    f"{found.transformer} — the primary faces the input and the "
+                    f"secondary faces the output (output side {out_side!r} per "
+                    "sidePreferences), so the isolation boundary the drawing "
+                    "shows is a vertical line with nothing but the optocoupler "
+                    "across it. The order is what places the group; the `near` "
+                    "beside it says the group is local to the transformer"
+                ),
+            ))
         for part_id in (found.sec_d, *found.output_caps):
             constraints.append(RelativeConstraint(
                 kind=NEAR,
                 subject=part_id,
                 object=found.transformer,
                 reason=(
-                    f"岳 110 裁决 a: {part_id} is on the output side of "
-                    f"{found.transformer} — the primary faces the input and the "
-                    f"secondary faces the output (output side "
-                    f"{out_side!r} per sidePreferences), so the isolation "
-                    "boundary the drawing shows is a vertical line with nothing "
-                    "but the optocoupler across it. `near` rather than an order "
-                    "kind, because an order kind between the transformer and "
-                    "the rectifier is measured on the **rectifier's** own pin "
-                    "against its own origin, and a chain member's two are "
-                    "always on one axis — the compiler's refusal names the "
-                    "posed pin and says so, and that is what settled this"
+                    f"岳 110 裁决 a: {part_id} hugs {found.transformer} — the "
+                    "secondary is one local group read at a glance, not a rail "
+                    "strung across the sheet"
                 ),
             ))
 

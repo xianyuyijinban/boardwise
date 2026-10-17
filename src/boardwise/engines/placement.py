@@ -93,6 +93,27 @@ W_WIRE = 1.0
 W_FACING = 1.0
 W_SIDE = 2.0
 W_SPREAD = 0.5
+#: Missing air between two parts, in canvas units per unit of shortfall. The
+#: clearance itself is :data:`TEXT_CLEARANCE`.
+W_CLEARANCE = 1.5
+#: Taken room inside a flag's reservation, per **square unit**. The reservation is
+#: an area and the other weights are lengths, so this one is read at its own scale:
+#: a part standing fully inside a 20 x 60 reservation (1200 units²) costs 240,
+#: about as much as missing a relation by 24 units — enough to move a part out of
+#: a flag's way, not enough to outbid the grammar.
+W_FLAG_ROOM = 0.2
+
+#: How much air two parts' extents leave each other, in canvas units.
+#:
+#: Not aesthetics — the plan prints each part's designator and value **beside its
+#: body**, and the readability contract refuses a drawing where that text lands on
+#: another part or on a conductor (`text-overlap`, `text-on-wire`). Measured on
+#: the flyback 2026-10-17: a placement that kept all 33 relations with nothing
+#: overlapping was still refused by the gate for **14** text collisions, every one
+#: of them a pair of parts closer than the text they carry. The search cannot see
+#: where stage 3b will print (that is downstream of it), so it reserves the room
+#: instead: one designator row plus a little air.
+TEXT_CLEARANCE = 15.0
 #: What one unit of a **hard** violation costs. Large on purpose (an overlapping
 #: or off-page drawing is not a drawing), but finite: a search that refuses to
 #: move through a hard-violating state at all cannot get out of one.
@@ -135,6 +156,39 @@ class PlacementError(ValueError):
 
 
 # ------------------------------------------------------------------ the input
+
+
+@dataclass(frozen=True)
+class FlagReservation:
+    """One pin the plan will hang a flag on, and the room that flag needs.
+
+    201B stage 2's last piece. The compiler hangs a rail's own flag at the pin the
+    rail *supplies* (:func:`boardwise.engines.drawcompiler._power_flag_pin`) and
+    draws it as a **vertical run** out of that pin, with the glyph, the host's own
+    name row and :data:`FLAG_CLEARANCE` beyond it. The placement search cannot see
+    any of that — flags are stage 3b — so the room is handed to it as a box
+    measured **by the compiler's own model**
+    (:func:`drawcompiler._flag_box`), stated relative to the pin.
+
+    Relative on purpose: the search moves parts, so the only thing it can use is
+    "this much room, this far out, in this direction from this pin" — and the
+    caller that owns the flag geometry is the one that says how much.
+    """
+
+    part_id: str
+    token: str
+    net_id: str
+    #: The room the flag needs, ``(x0, y0, x1, y1)`` **relative to the pin**:
+    #: the lead's run out of the pin plus the glyph, the name row and the
+    #: clearance, as one box.
+    box: tuple[float, float, float, float]
+
+    def box_at(self, pin: tuple[float, float]) -> Box:
+        """The reservation in page coordinates, for a pin at this point."""
+        return (
+            pin[0] + self.box[0], pin[1] + self.box[1],
+            pin[0] + self.box[2], pin[1] + self.box[3],
+        )
 
 
 @dataclass(frozen=True)
@@ -233,6 +287,10 @@ class PlacementInput:
     parts: tuple[PlacementPart, ...]
     nets: tuple[PlacementNet, ...] = ()
     relations: tuple[PlacementRelation, ...] = ()
+    #: The pins that must keep room for the flag the plan will hang there (201B
+    #: stage 2). Empty is a legitimate request — a circuit whose rails carry no
+    #: flag symbols states none — and the term is then not evaluated at all.
+    flag_seats: tuple[FlagReservation, ...] = ()
     progress: tuple[float, float] = (1.0, 0.0)
     lateral: tuple[float, float] = (0.0, 1.0)
     side_preferences: Mapping[str, str] = field(
@@ -445,52 +503,82 @@ def relation_points(
     pins: Mapping[str, Mapping[str, tuple[float, float]]],
     origins: Mapping[str, tuple[float, float]],
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
-    """The two points a relation is measured between.
+    """The two points a relation is measured between, for one in-module search.
+
+    A thin reading of :func:`relation_points_between` over this module's own
+    state: one implementation, two ways of handing it the parts (the search has a
+    state, the compiler has two callables).
+    """
+    return relation_points_between(
+        relation,
+        nets_of=lambda part_id: _part_nets(request, part_id),
+        origin_of=lambda part_id: origins.get(part_id),
+        pin_of=lambda part_id, token: (pins.get(part_id) or {}).get(token),
+    )
+
+
+def relation_points_between(
+    relation: Any,
+    *,
+    nets_of: Any,
+    origin_of: Any,
+    pin_of: Any,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """The two points a relation is measured between — **the one reading**.
 
     Origins, except for the five kinds ``grammar/base.py`` measures between the
     pair's **pins on the net they share** — a branch belongs to the node its own
-    pin sits on, and a tap is a junction between two arm pins. The compiler's
-    ``_points_for_relation`` splits the ten kinds exactly here; a placement that
-    measured whole bodies for ``same-column`` would be solving a different
-    problem from the one the gate grades.
+    pin sits on, and a tap is a junction between two arm pins. This is
+    ``drawcompiler._points_for_relation``'s own rule, moved here in 201B so that
+    the layer that *places* the parts and the layer that *grades* the finished
+    plan cannot be two rulers for one word (they were for the length of stage 1:
+    the same sentence measured twice by two copies of one rule).
+
+    The three callables are the whole interface because the two callers hold
+    their parts differently — the search holds a state, the compiler holds the
+    CircuitSpec and a profile — and a signature that took either would have made
+    the other convert, which is how a second rule grows back.
+    ``nets_of(part_id)`` is that part's ``pin token -> net id``; ``origin_of``
+    and ``pin_of(part_id, token)`` are the two points.
+
+    Which pin pair a kind is measured between is part of the answer, so it is
+    written out exactly as the compiler wrote it: the **first** token in sorted
+    order on the first shared net that has a point at each end. A version that
+    kept looking for a token whose point existed would be more forgiving than the
+    compiler by exactly the cases this rule is most likely to be asked about.
     """
     if relation.kind in _PIN_KINDS:
-        shared = sorted(
-            set(_part_nets(request, relation.subject).values())
-            & set(_part_nets(request, relation.object).values())
-        )
+        subject_nets = nets_of(relation.subject)
+        object_nets = nets_of(relation.object)
+        shared = sorted(set(subject_nets.values()) & set(object_nets.values()))
         for net_id in shared:
-            here = _pin_point(request, pins, relation.subject, net_id)
-            there = _pin_point(request, pins, relation.object, net_id)
+            here = _pin_on_net(subject_nets, relation.subject, net_id, pin_of)
+            there = _pin_on_net(object_nets, relation.object, net_id, pin_of)
             if here is not None and there is not None:
                 return (here, there)
-    here = origins.get(relation.subject)
-    there = origins.get(relation.object)
+    here = origin_of(relation.subject)
+    there = origin_of(relation.object)
     if here is None or there is None:
         return None
     return (here, there)
 
 
-def _pin_point(
-    request: PlacementInput,
-    pins: Mapping[str, Mapping[str, tuple[float, float]]],
+def _pin_on_net(
+    nets: Mapping[str, str],
     part_id: str,
     net_id: str,
+    pin_of: Any,
 ) -> tuple[float, float] | None:
-    """This part's pin on that net, the **lowest-numbered** one when it has two.
+    """This part's pin on that net — the **lowest-numbered** one when it has two.
 
     One pin per (part, net) is a promise the grammar makes, not a hope here — and
-    when it is broken the compiler's own ``_token_on`` picks the same one (the
-    first in sorted-token order), so the two rulers cannot disagree about which
-    pin a ``same-column`` is measured between.
+    when it is broken this picks the same one the compiler's ``_token_on`` picks
+    (the first in sorted-token order), so the two readings cannot disagree about
+    which pin a ``same-column`` is measured between.
     """
-    here = pins.get(part_id)
-    if not here:
-        return None
-    mine = _part_nets(request, part_id)
-    for token in sorted(mine):
-        if mine[token] == net_id and token in here:
-            return here[token]
+    for token in sorted(nets):
+        if nets[token] == net_id:
+            return pin_of(part_id, token)
     return None
 
 
@@ -893,6 +981,12 @@ def evaluate(request: PlacementInput, state: _State) -> list[CostTerm]:
     )
     out.append(CostTerm("spread", spread, "the drawn extent's diagonal"))
 
+    # 4b. the air the plan's own text needs (see TEXT_CLEARANCE).
+    out.append(_clearance_term(boxes))
+
+    # 4c. the room the plan's own flags need at the pins they hang from.
+    out.append(_flag_room_term(request, pins, boxes))
+
     # 5. the three hard ones.
     out.append(_page_term(request, boxes))
     out.append(_keepout_term(request, boxes))
@@ -962,6 +1056,106 @@ def _overlap_term(boxes: Mapping[str, Box]) -> CostTerm:
     )
 
 
+def _flag_room_term(
+    request: PlacementInput,
+    pins: Mapping[str, Mapping[str, tuple[float, float]]],
+    boxes: Mapping[str, Box],
+) -> CostTerm:
+    """How much of the room the plan's own flags need is taken by parts.
+
+    The compiler hangs a rail's flag at the pin the rail supplies and draws it as
+    a vertical run out of that pin; the placement search cannot see the flag (it
+    is stage 3b's), so the room is handed to it as data
+    (:class:`FlagReservation`) and priced here: **the area of other parts that
+    stands inside the reservation**.
+
+    Measured, and the reason this term exists: on the flyback the search reached a
+    drawing with *zero* readability violations and the flag stage then refused it
+    — `HVDC`'s flag had no legal seat at `T1.1`, because parts stood in the lead's
+    corridor and in the glyph's box. Three global-spacing settings were tried
+    instead of this term (15 / 25 / 40 units of clearance: "0 violations but no seat",
+    "23 text overlaps", "the direct wire no longer routes") — a global scale cannot
+    make room at one pin, which is what a reservation at that pin is for.
+
+    Soft, like every other term but the three hard ones: a crowded flag position
+    is a drawing the plan then refuses, and that refusal is the gate's to make —
+    this prices it so the search can move the part that is in the way.
+    """
+    if not request.flag_seats:
+        return CostTerm(
+            "flag-room", 0.0,
+            "this request states no flag seat, so nothing is reserved",
+        )
+    total = 0.0
+    worst = ("", 0.0)
+    for seat in request.flag_seats:
+        pin = (pins.get(seat.part_id) or {}).get(seat.token)
+        if pin is None:
+            total += 0.0
+            continue
+        reserved = seat.box_at(pin)
+        taken = 0.0
+        for part_id in sorted(boxes):
+            if part_id == seat.part_id:
+                continue
+            taken += _boxes_overlap(reserved, boxes[part_id])
+        if not taken:
+            continue
+        total += taken
+        if taken > worst[1]:
+            worst = (f"{seat.net_id} at {seat.part_id}.{seat.token}", taken)
+    return CostTerm(
+        "flag-room", total,
+        "the area of the parts standing in the room the plan's own flags need "
+        + (f"— the worst is {worst[0]} at {worst[1]:g} units² over "
+           f"{len(request.flag_seats)} reserved seat(s)"
+           if worst[1] > 0.0 else
+           f"— every one of the {len(request.flag_seats)} seat(s) is clear"),
+    )
+
+
+def _clearance_term(boxes: Mapping[str, Box]) -> CostTerm:
+    """How much air neighbouring parts are short of — priced, not enforced.
+
+    Two parts whose extents are closer than :data:`TEXT_CLEARANCE` **along one
+    axis** while their spans along the other still face each other have no room
+    between them for the designator and value the plan will print beside their
+    bodies. This term measures the shortfall and prices it; it is soft because a
+    crowded drawing is a *worse* drawing, not an illegal one, and because a hard
+    version would refuse every input whose parts genuinely fit no further apart —
+    at which point the gate's own text rules are the honest place to say so
+    (they measure where the text actually landed; this measures where it *can*).
+
+    Measured on the flyback: without it the search kept all 33 relations with
+    nothing overlapping and the readability gate still refused the drawing for 14
+    text collisions, every one of them a pair of parts closer than the text they
+    carry.
+    """
+    ids = sorted(boxes)
+    total = 0.0
+    worst = ("", 0.0)
+    for index, first in enumerate(ids):
+        for second in ids[index + 1:]:
+            a, b = boxes[first], boxes[second]
+            gap_x = max(a[0] - b[2], b[0] - a[2])
+            gap_y = max(a[1] - b[3], b[1] - a[3])
+            if gap_x > 0.0 and gap_y > 0.0:
+                continue  # diagonal neighbours: nothing is between them
+            short = TEXT_CLEARANCE - max(gap_x, gap_y)
+            if short <= 0.0 or gap_x > TEXT_CLEARANCE or gap_y > TEXT_CLEARANCE:
+                continue
+            total += short
+            if short > worst[1]:
+                worst = (f"{first}/{second}", short)
+    return CostTerm(
+        "clearance", total,
+        f"how far the neighbouring pairs are short of the {TEXT_CLEARANCE:g} units "
+        "the plan's own designator and value rows need "
+        + (f"— the tightest is {worst[0]} by {worst[1]:g} units" if worst[0]
+           else "— every pair has room"),
+    )
+
+
 def _point_text(point: tuple[float, float]) -> str:
     return f"({point[0]:g}, {point[1]:g})"
 
@@ -988,6 +1182,10 @@ def _energy(terms: Iterable[CostTerm]) -> float:
             total += item.value * W_SIDE
         elif item.name == "spread":
             total += item.value * W_SPREAD
+        elif item.name == "clearance":
+            total += item.value * W_CLEARANCE
+        elif item.name == "flag-room":
+            total += item.value * W_FLAG_ROOM
     return total
 
 
@@ -1004,9 +1202,24 @@ def _ranks(
     and ``above`` say the subject is nearer the power/input end, and the depth is
     the longest path — a part with no order relation gets rank 0 (it will be
     hung off whatever it shares a net with).
+
+    A relation with an endpoint this request has no part for is **skipped here**,
+    and the skip is deliberate rather than defensive. A grammar may name a
+    **net** where a part could stand (`ic_periphery`'s ports do: the relation is
+    about the net's own inlet, not about a component), and such a relation has no
+    bearing on which part is nearer the power end. It is also unmeasurable
+    everywhere else in this module — :func:`relation_points_between` falls back to
+    the endpoint's origin, a net has none, and the pair comes back ``None`` — so
+    the compiler's own checker skips it the same way: two layers agreeing that a
+    net-endpoint relation is not a statement about part positions. This mattered
+    in practice: the zero-move gate's 088/098 previews compile ports stated that
+    way, and an earlier version of this function raised ``KeyError`` on the first
+    one it met.
     """
     after: dict[str, set[str]] = {part_id: set() for part_id in part_ids}
     for relation in relations:
+        if relation.subject not in after or relation.object not in after:
+            continue
         if relation.kind == LEFT_OF or relation.kind == ABOVE:
             after[relation.subject].add(relation.object)
         elif relation.kind == RIGHT_OF or relation.kind == BELOW:

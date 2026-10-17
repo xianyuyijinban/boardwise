@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import json
+import math
 import pathlib
 
 import pytest
@@ -568,9 +569,16 @@ def test_an_unordered_chain_part_is_parked_beside_its_near_partner():
         circuit, presentation, binding, book, dc.CompileBudget(max_candidates=64)
     ).context
     assert ctx is not None
-    # The rectifier is the unordered one: the transformer *is* ordered (the
-    # grammar puts the switch below it), so the rectifier is what gets parked.
-    assert not dc._has_chain_order(ctx, "D3"), "D3 should be the unordered part"
+    # The rectifier used to be the unordered one — the grammar stated `near(D3,
+    # T1)` and nothing else, so the chain's rank order put it at the head of the
+    # chain by designator luck. **201B**: the grammar now states 岳 110's ruling
+    # (a) as the order it is (`right-of(D3, T1)`, the secondary group on the
+    # output side of the transformer), so the rectifier **is** ordered now — and
+    # ordered to exactly what this test measures: clear of its partner, across
+    # the chain's own axis. T1 stays ordered by `below(Q1, T1)`.
+    assert dc._has_chain_order(ctx, "D3"), (
+        "201B: right-of(D3, T1) is ruling (a), so the rectifier is ordered"
+    )
     assert dc._has_chain_order(ctx, "T1"), "T1 is ordered by below(Q1, T1)"
     assert dc._chain_near_partner(ctx, "D3") == "T1"
     placed = _placed(ctx)
@@ -589,14 +597,24 @@ def test_an_unordered_chain_part_is_parked_beside_its_near_partner():
     # 对齐、横向让开」原封不动。118 那句「与脚叫什么无关」在 token 层面对、在
     # **几何**层面不成立，而这一条量的是摆放，所以按原点判。
     # 顺带把「与脚无关」这句落实：断言里不再出现任何脚 token。
+    placed = dc._topology_placement(ctx)
+    # **201B 更新**：这一条量的是"副边整流管摆在变压器旁边、沿轴让开"。那颗件
+    # 以前**没有任何序关系**（语法只说了 `near(D3, T1)`），所以让开是**停车规则**
+    # 顺手做的；现在语法把岳 110d 裁决 (a) 作为序关系吐出来了
+    # （`right-of(D3, T1)`：副边组在变压器的 output 侧），"让开"成了**关系本身**，
+    # 所以它由**拓扑搜索**的落位保证，而不是由旧求解器的停车规则保证——旧的
+    # 位置断言（Δy=0 的"并排"）随停车规则一起退役，留下的是裁决真正要的那一条。
     d3_origin = placed.origins["D3"]
     t1_origin = placed.origins["T1"]
-    assert abs(d3_origin[1] - t1_origin[1]) <= ctx.budget.grid / 2.0, (
-        f"the rectifier is not level with the transformer: {d3_origin} vs "
-        f"{t1_origin}"
-    )
     assert d3_origin[0] > t1_origin[0], (
-        "the rectifier must be drawn clear of the transformer",
+        "right-of(D3, T1) is ruling (a): the rectifier must be drawn clear of the "
+        "transformer on the output side",
+        d3_origin, t1_origin,
+    )
+    assert math.hypot(
+        d3_origin[0] - t1_origin[0], d3_origin[1] - t1_origin[1]
+    ) <= ctx.budget.near_limit, (
+        "near(D3, T1): the rectifier is still local to the transformer",
         d3_origin, t1_origin,
     )
     # And the clearance is real: the drawn body of one does not overlap the
