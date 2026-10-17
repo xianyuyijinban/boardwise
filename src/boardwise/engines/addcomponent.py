@@ -640,7 +640,22 @@ def designator_pool(geometry: Any, model: Any = None) -> list[str]:
     expected to *say* rather than leave implicit.
     """
     names = list(component_origins(geometry))
-    for designator in (getattr(model, "components", None) or {}):
+    # 040b's multi-board façade: ``ProjectModel.components`` **raises** on a
+    # project with more than one board (first-board-wins is the silent loss that
+    # batch removed), and a `getattr(..., None)` does not catch it because the
+    # property raises a ValueError, not AttributeError. A draw plan on a
+    # two-board project therefore died with a traceback before this branch —
+    # measured on a live Board1+Board2 project (515C). ``designators()`` is the
+    # board-aware read that answers for every board, which is also the more
+    # conservative pool: a number used anywhere in the project is avoided.
+    board_aware = getattr(model, "designators", None)
+    if callable(board_aware):
+        project_names = board_aware()
+    elif model is not None:
+        project_names = getattr(model, "components", None) or {}
+    else:
+        project_names = ()
+    for designator in project_names:
         if str(designator) not in names:
             names.append(str(designator))
     return names
