@@ -1,5 +1,5 @@
-# Same rule the connector follows: build artifacts and installed packages are
-# reproducible from source, so they are never committed.
+# node_modules and pack tarballs are reproducible and never committed. lib/ IS
+# committed since 0.1.2: DSH STORE's fixed-commit automation reads the git tree
+# and never runs a build (root .gitignore says why).
 node_modules/
-lib/
 *.tgz
