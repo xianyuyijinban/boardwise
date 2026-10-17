@@ -32,6 +32,24 @@
 `grep -c` 防双执行、不碰 `outputs/011e*` / `014_*` / `015b_*` / `016_*` 与 `tests/fixtures/`
 既有夹具——见 SKILL.md §7。
 
+## 子代理纪律（193 立；**已由机器兜底**）
+
+并行子代理是这台机器上最大的 CPU 来源：三个子代理各开 4 个 xdist worker 再叠加探针/变异
+重跑，旗舰机直接被铺满。四条规矩，**机器侧已经拦住了**（`tests/conftest.py` →
+`tests/_process_guards.py`，机制地图见 `docs/testing-doctrine.md`）——下面写的是为什么，
+不是唯一防线：
+
+1. **单全量**：一次只跑一轮全量 pytest。要并发并发别的，别并发全量（整机槽只有 2）。
+2. **探针/脚本单进程**：一次性探针、变异、测量脚本不许 multiprocessing / 线程池 fan-out；
+   非并发不可时，子进程数 < 4 且总时长 < 30 秒。
+3. **长命令带超时**：前台命令给 timeout，后台任务标 timeout，别让一条挂死的命令把机器占住。
+4. **交卷前清理自己起的子进程**：daemon、watcher、后台 pytest 一律收干净。
+
+机器侧实际拦的是：pytest 进程降到 BELOW_NORMAL 优先级、整机全量并发槽 = 2（拿不到就排队并
+打印提示）、`-n auto` / `-n >4` 直接拒绝（`-n 0` 与 `-n 4` 放行）、OMP/MKL/OpenBLAS/NumExpr
+线程数封顶 1；`BOARDWISE_NO_TEST_GUARDS=1` 一次全关。
+保密是另外四道闸（暂存区正文 / 提交说明 / 发布件 / 推出前 diff+message），见同一份地图。
+
 ## 给 clone 本仓库的 AI（入口指引，不是第五条红线）
 
 - 审查 SOP 的权威文件是

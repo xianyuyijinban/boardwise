@@ -1,0 +1,33 @@
+#!/bin/sh
+# Repo hygiene, gate 3 of 4 (193 §B.1): the **commit message**.
+#
+# The pre-commit hook next to this one reads the staged content, and it cannot
+# see a word typed into the message itself — that is how the 186 round shipped
+# two docstrings and how a name gets into public history in a line nobody diffs.
+# git hands this hook the message file as $1, and hygiene gained `--message`
+# for exactly that file (word list only: a message has no path, so the container
+# allowlist and the baseline have nothing to say about it).
+#
+# Fail **closed** when the tool cannot run. This is the opposite of the pytest
+# process guards, deliberately: a guard that lowers CPU is a courtesy and must
+# never break a run, while a secrecy gate that cannot run has not checked
+# anything — and "it printed nothing, so I committed" is the failure mode.
+set -u
+
+message=${1:-}
+if [ -z "$message" ]; then
+    echo "commit-msg: no message file given; refusing rather than committing unscanned" >&2
+    exit 1
+fi
+
+root=$(git rev-parse --show-toplevel)
+hygiene="$root/tools/check_repo_hygiene.py"
+if [ ! -f "$hygiene" ]; then
+    echo "commit-msg: $hygiene is missing; refusing rather than committing unscanned" >&2
+    exit 1
+fi
+
+# shellcheck source=_python.sh
+. "$root/.githooks/_python.sh"
+
+exec "$py" "$hygiene" --message "$message"

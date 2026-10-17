@@ -1,0 +1,26 @@
+#!/bin/sh
+# Repo hygiene, gate 1 of 4 (193 §B): the **staged content**.
+#
+# This is the guard that used to live as a bare copy in .git/hooks — invisible to
+# any clone, and one file to keep in sync by hand. It is tracked here, and
+# scripts/install-hooks.bat points git at this directory
+# (`git config core.hooksPath .githooks`).
+#
+# `--staged` reads the **index** for both halves: the path list and the content,
+# so a file edited after staging is not what gets checked (188B 低3).
+#
+# Fail closed when the tool cannot run — a secrecy gate that did not run has not
+# checked anything, and "it printed nothing, so I committed" is the failure mode.
+set -u
+
+root=$(git rev-parse --show-toplevel)
+hygiene="$root/tools/check_repo_hygiene.py"
+if [ ! -f "$hygiene" ]; then
+    echo "pre-commit: $hygiene is missing; refusing rather than committing unscanned" >&2
+    exit 1
+fi
+
+# shellcheck source=_python.sh
+. "$root/.githooks/_python.sh"
+
+exec "$py" "$hygiene" --staged

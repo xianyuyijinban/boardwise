@@ -35,3 +35,53 @@ def _no_auto_daemon(monkeypatch):
 # file; the pins for it are in `tests/test_pcb_review_cache.py`.
 import _pcb_cache  # noqa: E402,F401  (after sys.path, like everything else here)
 
+# ---------------------------------------------------------------------------
+# 193 §A: the process/CPU guards — see tests/_process_guards.py for the whole
+# story (why the machine needs them, and why they are wired to two hooks).
+# ---------------------------------------------------------------------------
+import _process_guards  # noqa: E402,F401  (after sys.path, like everything else here)
+
+#: ``invocation_params.args`` is the invocation as pytest received it, which may
+#: or may not carry the program name depending on the entry point (``pytest``,
+#: ``python -m pytest``, ``pytest.main([...])``). Dropped, so the first real
+#: argument is never mistaken for a test path.
+_PROGRAM_NAMES = {"pytest", "pytest.exe", "py.test", "py.test.exe", "__main__.py", "pytest.py"}
+
+
+def pytest_load_initial_conftests(early_config, parser, args):
+    """193 §A: apply the process guards as early as pytest offers.
+
+    Measured on pytest 9.1.1: this hook does **not** fire for a conftest-defined
+    implementation (pluggy snapshots the hook implementations, and the conftest
+    that defines this one is loaded *by* the hook call itself). It is wired
+    anyway — it is the hook 193's task book names, it does fire when this module
+    is loaded as a ``-p`` plugin, and it would fire first on a pytest that
+    changed that ordering. :func:`pytest_configure` below is what actually
+    guards a plain run; ``apply_guards`` runs once whichever comes first.
+    """
+    _process_guards.apply_guards(list(args))
+
+
+def pytest_configure(config):
+    """193 §A: the hook that does fire — before ``pytest_sessionstart``, where
+    xdist spawns its workers, so the concurrency slot covers the whole suite.
+    """
+    invocation = getattr(config, "invocation_params", None)
+    argv = list(invocation.args[1:]) if invocation is not None else sys.argv[1:]
+    if argv and Path(argv[0]).name in _PROGRAM_NAMES:
+        argv = argv[1:]
+    option = getattr(config, "option", None)
+    # The worker count is read off the **command line first**: xdist resolves
+    # `-n auto` into a number in its own `pytest_configure`, and which of the two
+    # configure implementations runs first is not ours to decide — reading only
+    # the parsed option would report `-n 16` (a count nobody typed) for `-n auto`,
+    # and would lose `--maxprocesses` (xdist's cap on auto) with it. The parsed
+    # option is the fallback, for a count that came from `addopts`.
+    typed = _process_guards.numprocesses(argv)
+    _process_guards.apply_guards(
+        argv,
+        positional=list(config.args),
+        numprocesses_value=typed if typed is not None else getattr(option, "numprocesses", None),
+        maxprocesses=getattr(option, "maxprocesses", None),
+    )
+

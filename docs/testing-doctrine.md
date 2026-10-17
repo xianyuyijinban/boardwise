@@ -106,3 +106,37 @@ G4（文档说向下、代码向上，测试钉的是代码）。
 `src/boardwise/__init__.py` / `pyproject.toml` 同号（此前恒 0.1.0 是老 wart，
 `--version` 报不出真版本）。历史散文里的版本语义随之改写——不存在过的中间号
 （如 0.4.31）不许出现在对外文档。
+
+## 进程闸与保密闸的地图（193 立，2026-10-17）
+
+规矩写在文档里只是提醒，闸要装在进程和命令自己走的路上。193 把两件事变成机器拦截：CPU
+（三个子代理各 4 worker 铺满机器）和保密（186 漏掉的 docstring / 提交说明 / 发布件）。
+
+**进程闸**——`tests/_process_guards.py`，由 `tests/conftest.py` 接到
+`pytest_load_initial_conftests` 与 `pytest_configure` 两端，对**任何一次** pytest 调用生效
+（含没读过规矩的人直接调用）。四个机制全部 fail-open（闸自己坏了不许把测试搞死）：
+
+| 机制 | 行为 | 逃逸 |
+| --- | --- | --- |
+| 降优先级 | Windows `BELOW_NORMAL_PRIORITY_CLASS`，POSIX `nice 10`；xdist worker 继承 | — |
+| 整机并发槽 = 2 | 只对**完整套件**生效（带文件名/节点/`-k` 的范围运行不占槽）；`msvcrt.locking` / `fcntl.lockf` 锁 `<BOARDWISE_HOME>/pytest-slots` 的两个字节段；拿不到就排队并打印一行，锁随进程死释放 | `BOARDWISE_NO_TEST_GUARDS=1` |
+| worker 上限 = 4 | `-n auto` / `-n logical` / `-n >4` → `pytest.exit` 使用错误退出；`-n 0`、`-n 4` 放行，`-n auto --maxprocesses=4` 放行（上限才是要点） | 同上 |
+| 线程库封顶 | `OMP/MKL/OPENBLAS/NUMEXPR_NUM_THREADS=1`（`setdefault`，不覆盖显式设置） | 同上 |
+
+测试在 `tests/test_193_process_guards.py`，全部用真 pytest 子进程验证（槽排队、拒绝 `-n auto`、
+范围运行不占槽、槽文件坏掉 fail-open、线程封顶、优先级读回、总闸开关）。
+
+**保密四道闸**——`tools/check_repo_hygiene.py`（词表 `.sensitive-words`，本机私有、gitignored，
+不在场即关闸）。一道比一道靠外：
+
+| 闸 | 模式 | 管什么 | 装在哪 |
+| --- | --- | --- | --- |
+| 1 容器 + 暂存区正文 | （默认）/ `--staged` | 跟踪文件里的工程容器与敏感词；`--staged` 读**索引**而非工作树 | `.githooks/pre-commit` |
+| 2 提交说明 | `--message <file\|->` | commit message（186 的漏点之一：它既不在工作树也不算 `git add` 的内容） | `.githooks/commit-msg` |
+| 3 发布件 | `--assets <file...\|->` | 任意文件原始字节；`.exe/.dll/.pyd` 另叠 PyInstaller **zlib 压缩流**扫描（`packaging/check_exe_secrets.py` 逐流解压后扫） | `packaging/build_exe.py` 构建后**自动**跑；命中 exit 1 |
+| 4 推出前 | 钩子组合 2+3 | `git push` 前扫 outgoing 提交的 message + `git diff`（>100 提交只扫 message 并打印提示） | `.githooks/pre-push` |
+
+钩子不再是 `.git/hooks` 里的裸拷贝：`scripts/install-hooks.bat` 设
+`git config core.hooksPath .githooks`（幂等；旧裸 pre-commit 判等价后进回收站）。三个阶段都
+**fail-closed**：找不到 python 或工具文件就拒绝提交/推送，不许静默放过。命中报告只印
+「敏感词表第 N 条」，从不回显词本身。

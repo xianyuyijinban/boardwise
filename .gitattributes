@@ -1,0 +1,7 @@
+# The git hooks (193 B.1) are POSIX shell scripts, and git runs them with its
+# own sh. With `core.autocrlf=true` (this repository's setting on Windows) a
+# tracked shell script is written back to the working tree with CRLF, and the
+# first line becomes `#!/bin/sh\r` — which git's sh reads as the interpreter
+# `/bin/sh\r: not found`, so the hook stops guarding and says nothing. Pinning
+# these paths to LF is what makes the hooks survive a fresh clone here.
+/.githooks/* text eol=lf

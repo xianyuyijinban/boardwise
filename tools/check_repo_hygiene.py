@@ -13,11 +13,30 @@ which is exactly the review moment this guard exists to force.
 Usage:
     python tools/check_repo_hygiene.py            # check every tracked file
     python tools/check_repo_hygiene.py --staged   # pre-commit: read the index
+    python tools/check_repo_hygiene.py --message <file|->     # a commit message
+    python tools/check_repo_hygiene.py --assets <file...|->   # a release artifact
 
 ``--staged`` is the pre-commit mode, and it reads the **index** for both halves:
 the path list (`git diff --cached`) and the content (:func:`index_blobs`, the blob
 `git show :<path>` would print — see 188B 低3). The working tree is not consulted,
 because a file edited after staging is not what the commit carries.
+
+``--message`` and ``--assets`` are 193's additions, and they exist because the
+gates above can only see two things: **tracked files** and the **moment of
+``git add``**. A name typed into a commit message, or packed into the exe a
+release attaches, has passed every source-level gate by the time anyone notices
+(186 shipped two docstrings that way). Both modes use the sensitive-word list
+only — a commit message and an artifact have no path for the container gate or
+the baseline to mean anything.
+
+``--assets`` scans the **raw bytes** of files that need not be tracked at all
+(the exe ``packaging/build_exe.py`` just built), and for an ``.exe`` it also
+decompresses every zlib stream inside it first: a PyInstaller one-file build
+keeps each embedded file compressed, so the interesting bytes are invisible to a
+plain read (see ``packaging/check_exe_secrets.py``).
+
+``-`` names standard input in both modes, which is how the git hooks feed them
+without a temporary file to create and delete.
 
 Exit 0 = clean, 1 = violations found (they are listed on stderr).
 """
@@ -34,6 +53,14 @@ from typing import Callable
 #: caller happened to be in (`--staged` from a pre-commit hook, a script from
 #: anywhere).
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+#: ``packaging/check_exe_secrets.py`` (the zlib-stream reader `--assets` uses)
+#: lives outside the ``tools`` package, so it needs a path entry to be
+#: importable. Imported lazily by :func:`assets_report`, which reports its
+#: absence out loud rather than failing every commit over a missing module.
+_PACKAGING_DIR = REPO_ROOT / "packaging"
+if str(_PACKAGING_DIR) not in sys.path:
+    sys.path.insert(0, str(_PACKAGING_DIR))
 
 # Project-container formats this guard watches. `.eprj3` is a *directory*
 # (V4 folder format), so the pattern matches any path containing it. `.esch2` is
@@ -553,8 +580,214 @@ def violations(paths: list[str]) -> list[str]:
     return sorted(p for p in paths if _CONTAINER_RE.search(p) and p not in ALLOWLIST)
 
 
+# ---------------------------------------------------------------------------
+# The third and fourth gates: a commit message, and a release artifact (193 §B)
+# ---------------------------------------------------------------------------
+#
+# Both reuse the word vocabulary and the matching of the second gate — the list
+# is the whole vocabulary, and a second matcher would be a second set of bugs.
+# What they add is **where the content comes from**: not this checkout's tracked
+# files, but whatever a person typed into `git commit` and whatever a build put
+# into the artifact it is about to publish.
+#
+# The word itself is still never printed: `word #n` is enough for the owner to
+# find the entry, and printing it here would move the secret into a terminal, a
+# hook log and a CI transcript — the same leak, one layer out.
+
+_BANNER_MESSAGE = (
+    "repo hygiene: 提交说明（commit message）里出现敏感词表条目 —\n"
+    "  提交说明不在文件闸的视野里：它既不是工作树的内容，也不在 `git add`\n"
+    "  的暂存区里（这正是 186 漏两处 docstring 之后仍然漏它的原因）。\n"
+    "  词本身不打印（见下表第 N 条），改掉提交说明再提交。"
+)
+
+_BANNER_ASSETS = (
+    "repo hygiene: 发布件里出现敏感词表条目 —\n"
+    "  发布件不是跟踪文件，源文件闸看不到它；.exe 里的内容多半还被 zlib\n"
+    "  压着，普通读取也看不到。词本身不打印（见下表第 N 条）。"
+)
+
+
+def _read_bytes(name: str) -> bytes | None:
+    """Bytes of ``name``, or of standard input when it is ``-``.
+
+    ``None`` means the file could not be read — reported, never silently
+    treated as empty: an unreadable commit message is exactly the input a gate
+    must not answer "clean" about.
+    """
+    if name == "-":
+        return sys.stdin.buffer.read()
+    try:
+        return Path(name).read_bytes()
+    except OSError as exc:
+        print(f"repo hygiene: cannot read {name}: {exc}", file=sys.stderr)
+        return None
+
+
+def _text_of(data: bytes) -> str:
+    """Any bytes as text, for a gate that has no path to decide text-ness by.
+
+    Sniffed first (:func:`_decode_text`), then UTF-8 with replacement: a commit
+    message is always real text, and an artifact's undecodable stretches still
+    hold ASCII names verbatim.
+    """
+    text = _decode_text(data)
+    return text if text is not None else data.decode("utf-8", "replace")
+
+
+def _hits_in_text(text: str, words: list[str], label: str) -> list[str]:
+    """``label:line (word #n)`` for every word in ``text``, in word order."""
+    combined = _any_word_pattern(words)
+    if combined is None:
+        return []
+    first = combined.search(text)
+    if first is None:
+        return []
+    hits: list[str] = []
+    for index, word in enumerate(words, start=1):
+        match = _word_pattern(word).search(text, first.start())
+        if match is None:
+            continue
+        line = text.count("\n", 0, match.start()) + 1
+        hits.append(f"{label}:{line} (word #{index})")
+    return hits
+
+
+def message_report(text: str, words: list[str], label: str = "提交说明") -> list[str]:
+    """The word hits in a commit message. No baseline: a message has no path."""
+    return _hits_in_text(text, words, label)
+
+
+def assets_report(files: list[str], words: list[str]) -> dict:
+    """Everything the artifact gate found: ``hits`` per file, plus the counts.
+
+    For each file: the raw bytes as text; and for an ``.exe``/``.dll``/``.pyd``
+    additionally every **zlib stream** inside it, decompressed and read
+    (``packaging/check_exe_secrets.py``). ``streams`` is reported so a run that
+    found nothing can still say how much of the artifact it actually opened —
+    "0 hits over 0 streams" and "0 hits over 137 streams" are different answers.
+    """
+    hits: list[str] = []
+    streams = 0
+    unscanned: list[str] = []
+    for name in files:
+        data = _read_bytes(name)
+        if data is None:
+            unscanned.append(name)
+            continue
+        hits.extend(_hits_in_text(_text_of(data), words, f"{name} (原始字节)"))
+        if not _is_exe_name(name):
+            continue
+        try:
+            import check_exe_secrets
+        except ImportError as exc:  # pragma: no cover - only if packaging/ is gone
+            print(
+                f"repo hygiene: 未能载入 packaging/check_exe_secrets.py（{exc}）——"
+                "只扫了原始字节，exe 里的压缩流**没有扫**",
+                file=sys.stderr,
+            )
+            continue
+        for number, stream in enumerate(check_exe_secrets.iter_zlib_streams(data), start=1):
+            streams += 1
+            hits.extend(
+                _hits_in_text(check_exe_secrets.scan_text(stream), words, f"{name} 压缩流 #{number}")
+            )
+    return {"hits": sorted(dict.fromkeys(hits)), "streams": streams, "unscanned": unscanned}
+
+
+#: Suffixes :func:`assets_report` decompresses rather than only reading raw:
+#: a one-file PyInstaller build is an exe, and the same packer builds the DLLs.
+_EXE_SUFFIXES = (".exe", ".dll", ".pyd")
+
+
+def _is_exe_name(name: str) -> bool:
+    return name.lower().endswith(_EXE_SUFFIXES)
+
+
+def _option_values(args: list[str], flag: str) -> list[str]:
+    """The values given to ``flag``: every following token until the next option.
+
+    ``-`` (standard input) is a value, not an option, which is why the test is
+    not simply "starts with a dash".
+    """
+    values: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg == flag:
+            while index < len(args) and (args[index] == "-" or not args[index].startswith("-")):
+                values.append(args[index])
+                index += 1
+        elif arg.startswith(flag + "="):
+            values.append(arg.split("=", 1)[1])
+    return values
+
+
+def message_gate(files: list[str]) -> int:
+    """``--message``: exit 1 when the sensitive list matches a commit message."""
+    words = sensitive_words(REPO_ROOT / SENSITIVE_WORDS_FILE)
+    if not words:
+        print(
+            f"repo hygiene: {SENSITIVE_WORDS_FILE} 不在场，提交说明闸关闭（本机没有词表）",
+            file=sys.stderr,
+        )
+        return 0
+    hits: list[str] = []
+    for name in files:
+        data = _read_bytes(name)
+        if data is None:
+            continue
+        hits.extend(message_report(_text_of(data), words))
+    if not hits:
+        return 0
+    print(_BANNER_MESSAGE, file=sys.stderr)
+    for hit in sorted(dict.fromkeys(hits)):
+        print(f"  HIT: {hit}", file=sys.stderr)
+    for index in sorted({int(hit.rsplit("#", 1)[1].rstrip(")")) for hit in hits}):
+        print(f"  命中敏感词表第 {index} 条（词不打印）", file=sys.stderr)
+    return 1
+
+
+def assets_gate(files: list[str]) -> int:
+    """``--assets``: exit 1 when the sensitive list matches a release artifact."""
+    words = sensitive_words(REPO_ROOT / SENSITIVE_WORDS_FILE)
+    if not words:
+        print(
+            f"repo hygiene: {SENSITIVE_WORDS_FILE} 不在场，发布件闸关闭（本机没有词表）",
+            file=sys.stderr,
+        )
+        return 0
+    report = assets_report(files, words)
+    print(
+        f"repo hygiene: 发布件闸扫了 {len(files)} 个文件、{report['streams']} 个 exe 压缩流",
+        file=sys.stderr,
+    )
+    if not report["hits"]:
+        return 0
+    print(_BANNER_ASSETS, file=sys.stderr)
+    for hit in report["hits"]:
+        print(f"  HIT: {hit}", file=sys.stderr)
+    for index in sorted({int(hit.rsplit("#", 1)[1].rstrip(")")) for hit in report["hits"]}):
+        print(f"  命中敏感词表第 {index} 条（词不打印）", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str]) -> int:
-    staged = "--staged" in argv[1:]
+    args = argv[1:]
+    if "--message" in args or any(arg.startswith("--message=") for arg in args):
+        files = _option_values(args, "--message")
+        if not files:
+            print("repo hygiene: --message needs a file (or - for stdin)", file=sys.stderr)
+            return 2
+        return message_gate(files)
+    if "--assets" in args or any(arg.startswith("--assets=") for arg in args):
+        files = _option_values(args, "--assets")
+        if not files:
+            print("repo hygiene: --assets needs at least one file (or - for stdin)", file=sys.stderr)
+            return 2
+        return assets_gate(files)
+    staged = "--staged" in args
     if staged:
         paths = _git("diff", "--cached", "--name-only", "--diff-filter=ACM")
     else:

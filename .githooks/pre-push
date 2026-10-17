@@ -1,0 +1,80 @@
+#!/bin/sh
+# Repo hygiene, gate 4 of 4 (193 §B.2): **what is about to leave this machine**.
+#
+# Every other gate runs on this side of the network. The moment that matters is
+# the push: after it, a leaked name is in someone else's history and deleting the
+# branch does not take it back. So this hook reads git's pre-push input — one
+# line per ref, "<local ref> <local sha> <remote ref> <remote sha>" — and scans
+#
+#   * the **messages** of every outgoing commit (`--message -`), always; and
+#   * the **diff** those commits carry (`--assets -`, which reads an arbitrary
+#     file or stdin for the word list), when the branch is within 100 commits of
+#     what the remote already has. Past 100 the diff is an initial-import-sized
+#     wall of text nobody is going to read the output of, so only the messages
+#     are scanned and the skip is printed — never silent.
+#
+# The range is built from the two SHAs git hands over, not from
+# `origin/<branch>...HEAD`: a `git push --force` can move history out from under
+# the remote ref, and the SHAs are what is actually being sent.
+#
+# Both scans go through **stdin** on purpose: a hook that writes a temporary file
+# has to delete it, and deletion in this repository is a recycle-bin operation —
+# piping is the honest way to need neither.
+#
+# Fail closed if the tool or the interpreter is missing (see commit-msg).
+set -u
+
+root=$(git rev-parse --show-toplevel)
+hygiene="$root/tools/check_repo_hygiene.py"
+if [ ! -f "$hygiene" ]; then
+    echo "pre-push: $hygiene is missing; refusing rather than pushing unscanned" >&2
+    exit 1
+fi
+
+# shellcheck source=_python.sh
+. "$root/.githooks/_python.sh"
+
+zero=0000000000000000000000000000000000000000
+status=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    # Deleting a remote branch sends nothing but the deletion.
+    [ "$local_sha" = "$zero" ] && continue
+
+    if [ "$remote_sha" = "$zero" ]; then
+        # A remote branch that does not exist yet: scan everything not on a
+        # remote, measured from the merge base with the newest remote ref (or
+        # from the root commit when this clone has no remote refs to compare).
+        tip=$(git rev-list --max-count=1 --remotes 2>/dev/null || true)
+        base=""
+        if [ -n "$tip" ]; then
+            base=$(git merge-base "$local_sha" "$tip" 2>/dev/null || true)
+        fi
+        if [ -z "$base" ]; then
+            base=$(git rev-list --max-parents=0 "$local_sha" | tail -n 1)
+        fi
+        revs="$base..$local_sha"
+    else
+        revs="$remote_sha..$local_sha"
+    fi
+
+    count=$(git rev-list --count "$revs" 2>/dev/null || echo 0)
+    if [ "${count:-0}" -eq 0 ]; then
+        continue
+    fi
+
+    echo "pre-push: 扫 $remote_ref ← $local_ref（$count 个提交）…" >&2
+    if ! git log --format=%B "$revs" < /dev/null | "$py" "$hygiene" --message -; then
+        status=1
+    fi
+
+    if [ "$count" -le 100 ]; then
+        if ! git diff "$revs" < /dev/null | "$py" "$hygiene" --assets -; then
+            status=1
+        fi
+    else
+        echo "pre-push: $count 个提交超出 100，只扫了提交说明；正文**没有扫**" >&2
+    fi
+done
+
+exit $status

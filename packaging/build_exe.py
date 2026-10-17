@@ -14,6 +14,10 @@ The ordering matters and is the reason this is a script rather than a
 3. **PyInstaller**, then a report: where the exe is, how big it is, its sha256,
    and the sha256 of the bundle that went into it. All four go into the release
    notes.
+4. **The artifact gate** (193 §B.3): ``tools/check_repo_hygiene.py --assets``
+   over the exe that was just built — raw bytes plus every zlib stream inside
+   it. A hit stops the build here, which is the last moment before the exe
+   becomes a release attachment.
 
 Usage: ``.venv/Scripts/python.exe packaging/build_exe.py [--skip-npm]``
 Exits non-zero if any step fails; prints one line per step so a build log is
@@ -101,6 +105,25 @@ def main() -> int:
         f"  bundle   {manifest['version']} sha256 {sha256(bundle)}\n"
         f"  build    {time.time() - started:.1f} s"
     )
+
+    # The artifact gate (193 §B.3). Everything above is about reproducing the
+    # exe; this is about not publishing it. The source gates ran before the
+    # build, against a working tree that is not what PyInstaller read — and the
+    # bytes it did read are zlib-compressed inside the exe, so a plain scan of
+    # the file would not see them either. `--assets` decompresses the streams.
+    # A missing word list (any clone, any CI) prints one line and passes; a hit
+    # exits non-zero and this build stops before the exe can be attached to a
+    # release.
+    print(f"\n$ {sys.executable} tools/check_repo_hygiene.py --assets {EXE.name}", flush=True)
+    gate = subprocess.run(
+        [sys.executable, str(REPO / "tools" / "check_repo_hygiene.py"), "--assets", str(EXE)],
+        cwd=REPO,
+    )
+    if gate.returncode != 0:
+        raise SystemExit(
+            "boardwise build_exe: 发布件闸拦下了这个 exe（敏感词表命中，见上方输出）——"
+            "不要发布它。命中报告只印条目号，词在 .sensitive-words 里。"
+        )
     return 0
 
 
