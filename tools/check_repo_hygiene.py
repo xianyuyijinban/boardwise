@@ -38,7 +38,14 @@ plain read (see ``packaging/check_exe_secrets.py``).
 ``-`` names standard input in both modes, which is how the git hooks feed them
 without a temporary file to create and delete.
 
-Exit 0 = clean, 1 = violations found (they are listed on stderr).
+An input that **cannot be read** is exit 1, not a printed line and a 0: a gate
+that could not open its input checked nothing, and "0 hits" over unreadable bytes
+is the one reading a leak hides behind. The check runs before the word-list
+lookup, because whether a file was readable has nothing to do with what the
+vocabulary contains.
+
+Exit 0 = clean, 1 = violations found **or an input that could not be read** (both
+are listed on stderr), 2 = usage error (no value for ``--message`` / ``--assets``).
 """
 from __future__ import annotations
 
@@ -607,6 +614,28 @@ _BANNER_ASSETS = (
     "  压着，普通读取也看不到。词本身不打印（见下表第 N 条）。"
 )
 
+#: S3#2 (2026-10-17): an input the gate could not open is not an input it
+#: checked. Both word modes used to print one line and carry on, and the run
+#: ended at exit 0 — "clean" over a file nobody read, which is the exact reading
+#: a leak hides behind. The words are not needed to say this: whether the input
+#: was readable has nothing to do with what the vocabulary contains, so the check
+#: runs before the word-list lookup and refuses **closed** on every machine.
+_BANNER_UNREADABLE = (
+    "repo hygiene: 输入读不到 — 这一路**没有扫**，读不到 ≠ 干净 —\n"
+    "  闸读不到自己的输入时，唯一诚实的答复是拒绝：一个没能打开的提交说明/\n"
+    "  发布件，在「0 命中」的读数里和「干净」长得一模一样。"
+)
+
+
+def _unreadable_inputs(names: list[str]) -> bool:
+    """Print the refused inputs; ``True`` when there was at least one."""
+    if not names:
+        return False
+    print(_BANNER_UNREADABLE, file=sys.stderr)
+    for name in names:
+        print(f"  UNREADABLE: {name}", file=sys.stderr)
+    return True
+
 
 def _read_bytes(name: str) -> bytes | None:
     """Bytes of ``name``, or of standard input when it is ``-``.
@@ -725,22 +754,35 @@ def _option_values(args: list[str], flag: str) -> list[str]:
 
 
 def message_gate(files: list[str]) -> int:
-    """``--message``: exit 1 when the sensitive list matches a commit message."""
+    """``--message``: exit 1 when the sensitive list matches a commit message.
+
+    S3#2: an input that cannot be read is exit 1 too, and that check runs before
+    the word-list lookup — see :data:`_BANNER_UNREADABLE`.
+    """
+    status = 0
+    unreadable: list[str] = []
+    payloads: list[str] = []
+    for name in files:
+        data = _read_bytes(name)
+        if data is None:
+            unreadable.append(name)
+            continue
+        payloads.append(_text_of(data))
+    if _unreadable_inputs(unreadable):
+        status = 1
+
     words = sensitive_words(REPO_ROOT / SENSITIVE_WORDS_FILE)
     if not words:
         print(
             f"repo hygiene: {SENSITIVE_WORDS_FILE} 不在场，提交说明闸关闭（本机没有词表）",
             file=sys.stderr,
         )
-        return 0
+        return status
     hits: list[str] = []
-    for name in files:
-        data = _read_bytes(name)
-        if data is None:
-            continue
-        hits.extend(message_report(_text_of(data), words))
+    for text in payloads:
+        hits.extend(message_report(text, words))
     if not hits:
-        return 0
+        return status
     print(_BANNER_MESSAGE, file=sys.stderr)
     for hit in sorted(dict.fromkeys(hits)):
         print(f"  HIT: {hit}", file=sys.stderr)
@@ -750,21 +792,31 @@ def message_gate(files: list[str]) -> int:
 
 
 def assets_gate(files: list[str]) -> int:
-    """``--assets``: exit 1 when the sensitive list matches a release artifact."""
+    """``--assets``: exit 1 when the sensitive list matches a release artifact.
+
+    S3#2: what the run **could not open** is part of the answer, and it is exit 1
+    — the old wording ("扫了 1 个文件、0 个 exe 压缩流") counted a file it never
+    read as scanned. The count now names how many of the given files were really
+    opened, and the unreadable ones are listed by name.
+    """
     words = sensitive_words(REPO_ROOT / SENSITIVE_WORDS_FILE)
+    report = assets_report(files, words)
+    status = 0
+    if _unreadable_inputs(report["unscanned"]):
+        status = 1
+    print(
+        f"repo hygiene: 发布件闸扫了 {len(files) - len(report['unscanned'])}/{len(files)} 个文件、"
+        f"{report['streams']} 个 exe 压缩流",
+        file=sys.stderr,
+    )
     if not words:
         print(
             f"repo hygiene: {SENSITIVE_WORDS_FILE} 不在场，发布件闸关闭（本机没有词表）",
             file=sys.stderr,
         )
-        return 0
-    report = assets_report(files, words)
-    print(
-        f"repo hygiene: 发布件闸扫了 {len(files)} 个文件、{report['streams']} 个 exe 压缩流",
-        file=sys.stderr,
-    )
+        return status
     if not report["hits"]:
-        return 0
+        return status
     print(_BANNER_ASSETS, file=sys.stderr)
     for hit in report["hits"]:
         print(f"  HIT: {hit}", file=sys.stderr)

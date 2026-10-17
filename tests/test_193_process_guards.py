@@ -153,10 +153,16 @@ def test_whole_suite_run_queues_behind_two_slots(guard_tmp):
 
 @_guards_on_only
 def test_auto_and_oversized_worker_counts_are_refused(guard_tmp):
-    """`-n auto` and `-n > 4` stop the run; `-n 4` and a capped `auto` pass."""
-    for spelling in (["-n", "auto"], ["--numprocesses=6"], ["-n4", "-q"]):
+    """`-n auto` and `-n > 4` stop the run; `-n 4` and a capped `auto` pass.
+
+    S3#4: `+8` is in the list because the guard's old digits-only test let it
+    through as "not a number", while xdist parsed it to exactly 8 workers
+    (``xdist.plugin.parse_numprocesses("+8") == 8``). The two readers of that one
+    value must agree — the run it would have started is the reason.
+    """
+    for spelling in (["-n", "auto"], ["--numprocesses=6"], ["-n4", "-q"], ["-n", "+8"], ["--numprocesses=+8"]):
         args = [str(PROBE_DIR), *spelling]
-        code, text = _run(args, guard_tmp / ("refuse-" + "-".join(spelling).replace("/", "_")))
+        code, text = _run(args, guard_tmp / ("refuse-" + "-".join(spelling).replace("/", "_").replace("+", "plus")))
         if spelling == ["-n4", "-q"]:
             assert code == 0, text  # `-n4` is `-n 4`: allowed
             continue
@@ -236,3 +242,172 @@ def test_gate_switch_switches_the_guards_off(guard_tmp):
     code, text = _run([str(PROBE_DIR), "-n", "auto", "--maxprocesses", "2"], guard_tmp / "off", env)
     assert code == 0, f"the gate switch must let `-n auto` through; got {code}\n{text}"
     assert ACQUIRED not in text and WAITING not in text, text
+
+
+# ---------------------------------------------------------------------------
+# S3#4 / S3#5: the two judgements, as the units they are
+# ---------------------------------------------------------------------------
+#
+# `numprocesses` and `narrowing_argv` are pure, and the subprocess tests above
+# can only reach the shapes pytest itself will start. These read the functions
+# directly, so the whole spelling table is pinned — including the ones whose only
+# witness is xdist's own parser.
+
+# A plain import, not `importorskip`: these are gate tests, and a guard that
+# quietly skips when its subject moved is the failure mode the guard exists for.
+# `tests/` is on `sys.path` (conftest does the same import).
+import _process_guards as GUARDS  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "argv, value",
+    [
+        (["-n", "+8"], 8),  # S3#4: xdist parses this to 8 (measured); so must we
+        (["--numprocesses=+8"], 8),
+        (["-n", " 8"], 8),
+        (["-n", "08"], 8),
+        (["-n8"], 8),
+        (["-n=8"], 8),
+        (["-n", "4"], 4),
+        (["-n", "auto"], "auto"),
+        (["-n", "logical"], "logical"),
+        (["-n", "eight"], "eight"),  # xdist's own usage error, left to xdist
+        (["-q"], None),
+        ([], None),
+    ],
+)
+def test_worker_counts_are_read_the_way_xdist_reads_them(argv, value):
+    assert GUARDS.numprocesses(list(argv)) == value
+
+
+def test_a_plus_prefixed_count_is_refused_like_the_number_it_is():
+    for argv in (["-n", "+8"], ["--numprocesses=+8"], ["-n", "8"]):
+        message = GUARDS.worker_violation(GUARDS.numprocesses(argv), None)
+        assert message is not None, f"{argv} would have started 8 workers"
+        assert "拒绝 -n 8" in message
+
+
+@pytest.mark.parametrize(
+    "argv, narrow",
+    [
+        (["-k", "x"], True),
+        (["-kfoo"], True),
+        (["--keyword=x"], True),
+        (["tests/test_x.py"], True),
+        (["tests/test_x.py::test_y"], True),
+        # S3#5: subtractive options are not "a range run". They still walk the
+        # suite minus a little, so they take a slot like any whole-suite shape.
+        (["--lf"], False),
+        (["--last-failed"], False),
+        (["--ff"], False),
+        (["--failed-first"], False),
+        (["-m", "slow"], False),
+        (["--markexpr=slow"], False),
+        (["--deselect", "tests/test_x.py"], False),
+        (["--ignore", "tests/test_x.py"], False),
+        (["--ignore=tests/test_x.py"], False),
+        # …and a directory is the whole suite, in either spelling.
+        (["tests/"], False),
+        (["tests"], False),
+        (["."], False),
+        (["--lf", "-n", "4", "-q"], False),
+        (["--lf", "tests/test_x.py"], True),  # the file is still named
+    ],
+)
+def test_only_a_keyword_or_a_name_makes_a_run_a_range_run(argv, narrow):
+    found = GUARDS.narrowing_argv(list(argv))
+    assert bool(found) is narrow, f"{argv} -> {found}"
+
+
+# ---------------------------------------------------------------------------
+# S3#7: the gate switch turns off **all four**, priority and thread caps included
+# ---------------------------------------------------------------------------
+
+#: A child that answers the two questions in-process. It is not a pytest run:
+#: `apply_guards` is what is under test, and a real session would have applied it
+#: before the test could look.
+#:
+#: The priority is reset to NORMAL first, so "it was not touched" is a reading of
+#: this child's own doing rather than an inheritance from the test session (which
+#: the guard has already dropped to BELOW_NORMAL).
+#:
+#: The argv handed to `apply_guards` is **narrow** (`-k`): with the switch off
+#: this child must not queue for one of the machine-wide slots. Measured the hard
+#: way — a bare `apply_guards([])` has the shape of a whole-suite run, so the
+#: control half really did take a slot, and under a *concurrent* full suite
+#: (another agent's) it blocked on `acquire_slot` and the 120 s subprocess
+#: timeout turned this test red for a reason that has nothing to do with the
+#: switch. A test of the priority and the thread caps must not depend on a free
+#: slot; the slot has its own tests above.
+_GATE_CHILD = r"""
+import ctypes, os, sys
+sys.path.insert(0, sys.argv[1])
+import _process_guards as g
+
+kernel32 = None
+if os.name == "nt":
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.SetPriorityClass.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+    kernel32.SetPriorityClass.restype = ctypes.c_int
+    kernel32.GetPriorityClass.argtypes = (ctypes.c_void_p,)
+    kernel32.GetPriorityClass.restype = ctypes.c_uint32
+    kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x20)  # NORMAL
+    before = kernel32.GetPriorityClass(kernel32.GetCurrentProcess())
+
+os.environ[g.GATE_OFF_ENV] = sys.argv[2]
+g.apply_guards(["-k", "gate-probe"])
+
+print("threads:" + ",".join((os.environ.get(name) or "-") for name in g._THREAD_VARS))
+if kernel32 is not None:
+    print("priority:%d->%d" % (before, kernel32.GetPriorityClass(kernel32.GetCurrentProcess())))
+"""
+
+
+def _gate_child(gate: str) -> str:
+    env = _child_env()
+    tests_dir = Path(__file__).resolve().parent
+    completed = subprocess.run(
+        [sys.executable, "-c", _GATE_CHILD, str(tests_dir), gate],
+        cwd=REPO,
+        env=env,
+        capture_output=True,
+        timeout=120,
+    )
+    return (completed.stdout + completed.stderr).decode("utf-8", "replace")
+
+
+def _threads_line(text: str) -> list[str]:
+    line = next(line for line in text.splitlines() if line.startswith("threads:"))
+    return line.split(":", 1)[1].split(",")
+
+
+def test_the_gate_switch_turns_the_thread_caps_off_too():
+    """S3#7: the docstring said "all four" while the code did "two of four".
+
+    The thread caps ran *before* the switch was read (they shared the
+    fail-open-first block with the priority drop), so a run that had explicitly
+    asked for no guards still had its BLAS pools pinned to one thread — and the
+    paragraph promising otherwise was the only thing saying so.
+
+    The control is the second half: the same child, same script, with the switch
+    off, must see the caps. Without it this test would also pass on a guard that
+    simply stopped capping anything.
+    """
+    assert _threads_line(_gate_child("0")) == ["1"] * len(THREAD_VARS), "the probe is not instrumented"
+    assert _threads_line(_gate_child("1")) == ["-"] * len(THREAD_VARS), (
+        "with the gate on, the four thread variables must be left exactly as they were found"
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="priority class is a Windows concept")
+def test_the_gate_switch_leaves_the_priority_alone():
+    text = _gate_child("1")
+    line = next(line for line in text.splitlines() if line.startswith("priority:"))
+    before, after = line.split(":", 1)[1].split("->")
+    assert before == "32", f"the child did not start at NORMAL: {line}"  # BELOW_NORMAL is 16384
+    assert after == "32", f"the gate switch must not drop the priority: {line}"
+
+    control = _gate_child("0")
+    line = next(line for line in control.splitlines() if line.startswith("priority:"))
+    assert line.split("->")[1] == "16384", f"the probe is not instrumented: {line}"

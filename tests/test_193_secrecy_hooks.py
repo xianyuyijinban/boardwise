@@ -103,6 +103,27 @@ def test_message_mode_reads_stdin_and_needs_a_value(tmp_path):
     assert code == 2, text
 
 
+def test_message_mode_refuses_an_input_it_cannot_read(tmp_path):
+    """S3#2: "cannot read the message" used to be one printed line and exit 0.
+
+    An unreadable commit message is the one input a message gate must not answer
+    "clean" about — it never saw a byte of it. The refusal is exit 1, and it does
+    not depend on the word list: whether a file could be opened has nothing to do
+    with what the vocabulary contains (so this test does not skip without a list).
+    """
+    code, text = _run_hygiene("--message", str(tmp_path / "no-such-message.txt"))
+    assert code == 1, text
+    assert "UNREADABLE" in text, text
+    assert "没有扫" in text, text
+
+    # …and a message that *can* be read still passes, so the fix is not "refuse
+    # everything": the same missing path next to a clean one is still exit 1, but
+    # a lone readable file is exit 0.
+    readable = tmp_path / "message.txt"
+    readable.write_text("feat: nothing to see here\n", encoding="utf-8")
+    assert _run_hygiene("--message", str(readable))[0] == 0
+
+
 # ---------------------------------------------------------------------------
 # --assets
 # ---------------------------------------------------------------------------
@@ -159,6 +180,68 @@ def test_assets_mode_passes_a_clean_exe_and_reports_how_much_it_opened(tmp_path)
     assert "个 exe 压缩流" in text, "a clean run must still say how much of the artifact it opened"
 
 
+def test_assets_mode_discloses_and_refuses_an_input_it_cannot_read(tmp_path):
+    """S3#2: the artifact gate counted a file it never opened as scanned.
+
+    The old line said "扫了 1 个文件、0 个 exe 压缩流" for a path that does not
+    exist, and exited 0 — a release artifact nobody read, reported clean. The
+    count is now `opened/given`, the unreadable inputs are named, and the run
+    refuses.
+    """
+    code, text = _run_hygiene("--assets", str(tmp_path / "no-such.exe"))
+    assert code == 1, text
+    assert "UNREADABLE" in text, text
+    assert "扫了 0/1 个文件" in text, text
+
+    # One readable, one not: the readable half is still scanned and the count
+    # says 1/2 — the disclosure is about the input, not about the artifact kind.
+    clean = tmp_path / "clean.exe"
+    clean.write_bytes(b"MZ" + b"\0" * 256 + zlib.compress(b"nothing to see " * 20))
+    code, text = _run_hygiene("--assets", str(clean), str(tmp_path / "gone.exe"))
+    assert code == 1, text
+    assert "扫了 1/2 个文件" in text, text
+    assert "压缩流" in text, text
+
+
+def test_a_truncated_zlib_header_does_not_swallow_the_streams_behind_it(tmp_path):
+    """S3#3 — the probe's shape: a decodable but **cut-off** header ate the file.
+
+    zlib reports no error for a stream that was simply cut short, so a truncated
+    decoy was accepted like a complete one; a stream that never ended has no
+    ``unused_data``, so the scan "resumed" at EOF and every real stream after the
+    decoy went unseen. The decoy is what a byte pair inside a PyInstaller build's
+    loader already looks like — four offsets in 65 thousand are a valid zlib
+    header — so this is a live path, not a contrived one.
+    """
+    sys.path.insert(0, str(REPO / "packaging"))
+    try:
+        import check_exe_secrets
+    finally:
+        sys.path.pop(0)
+
+    word = "SENSITIVEWORDHERE"  # synthetic: the real vocabulary is never spelled in a test
+    real = zlib.compress(f"build for {word} board".encode("utf-8"))
+    decoy = zlib.compress(b"Q" * 4096, 0)[:40]  # header + a truncated stored block
+    body = b"\x90" * 16 + decoy + b"\x55" * 8 + real + b"\x90" * 16
+
+    streams = list(check_exe_secrets.iter_zlib_streams(body))
+    assert streams == [f"build for {word} board".encode("utf-8")], streams
+
+    decoy_file = tmp_path / "decoy.exe"
+    decoy_file.write_bytes(body)
+    control = tmp_path / "control.exe"
+    control.write_bytes(b"\x90" * 16 + b"\x55" * 8 + real + b"\x90" * 16)
+    written = hygiene.assets_report([str(decoy_file)], [word])
+    plain = hygiene.assets_report([str(control)], [word])
+    assert plain["hits"], "the control must hit: the same bytes without the decoy"
+    assert written["streams"] == 1
+    assert written["hits"], "the leak behind a truncated header was not found"
+
+    code, text = _run_hygiene("--assets", str(decoy_file))
+    assert code == 0, "no vocabulary match for a synthetic word: the gate itself is clean"
+    assert "1 个 exe 压缩流" in text, text
+
+
 def test_exe_stream_reader_agrees_with_zlib(tmp_path):
     """The scanner's own contract: the streams it yields are the ones zlib wrote."""
     sys.path.insert(0, str(REPO / "packaging"))
@@ -208,6 +291,7 @@ _LEGACY_PRE_COMMIT = (
 )
 
 _INSTALLER = REPO / "scripts" / "install-hooks.bat"
+_INSTALLER_SH = REPO / "scripts" / "install-hooks.sh"
 
 _skip_without_windows = pytest.mark.skipif(os.name != "nt", reason="install-hooks.bat is a batch file")
 _skip_without_git = pytest.mark.skipif(shutil.which("git") is None, reason="git is not on PATH")
@@ -233,6 +317,8 @@ def hook_repo(tmp_path):
     shutil.copy2(HYGIENE, repo / "tools" / "check_repo_hygiene.py")
     shutil.copy2(EXE_SCANNER, repo / "packaging" / "check_exe_secrets.py")
     shutil.copy2(_INSTALLER, repo / "scripts" / "install-hooks.bat")
+    if _INSTALLER_SH.is_file():
+        shutil.copy2(_INSTALLER_SH, repo / "scripts" / "install-hooks.sh")
     if WORDS_FILE.is_file():
         shutil.copy2(WORDS_FILE, repo / ".sensitive-words")
     _git(repo, "init", "-q")
@@ -328,3 +414,167 @@ def test_commit_msg_hook_refuses_a_message_with_a_word(hook_repo):
     combined = bad.stdout + bad.stderr
     assert "命中敏感词表第" in combined, combined
     assert word not in combined
+
+
+# ---------------------------------------------------------------------------
+# The pre-push hook: a range it cannot resolve is not "nothing to push" (S3#1)
+# ---------------------------------------------------------------------------
+
+_IDENTITY = ("-c", "user.name=guard-test", "-c", "user.email=guard@example.invalid")
+
+
+def _git_raw(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    """Git with the output decoded **by hand**.
+
+    The hooks write UTF-8, and `text=True` would decode it with the console code
+    page (cp936 on this machine) — the assertions below are on Chinese lines the
+    hooks wrote, so the bytes are decoded as UTF-8, explicitly.
+    """
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True)
+
+
+def _out(completed: subprocess.CompletedProcess) -> str:
+    return (completed.stdout + completed.stderr).decode("utf-8", "replace")
+
+
+def _commit(repo: Path, name: str, message: str) -> str:
+    """One commit, staging **only its own file**.
+
+    Not `git add -A`: the fixture's `.sensitive-words` is the real vocabulary
+    (that is the point of it), and the pre-commit hook this repository's own
+    `.githooks` supplies would — correctly — refuse to commit the list into the
+    index.
+    """
+    (repo / f"{name}.txt").write_text(f"{message}\n", encoding="utf-8")
+    _git(repo, "add", f"{name}.txt")
+    _git(repo, *_IDENTITY, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+def _bare_remote_with_a_stranger(tmp_path: Path) -> tuple[Path, str]:
+    """A bare remote whose `main` is a commit **this clone never fetched**.
+
+    That is what makes the pushed range unresolvable locally, and it is the
+    ordinary case: the branch belongs to somebody else, or this is a shallow
+    clone. Git advertises the remote's sha on every push, so the hook receives it
+    with nothing behind it.
+    """
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], cwd=tmp_path, capture_output=True)
+    stranger = tmp_path / "stranger"
+    stranger.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=stranger, capture_output=True)
+    _commit(stranger, "far", "a commit this clone never saw")
+    pushed = _git_raw(stranger, "push", "-q", str(remote), "HEAD:refs/heads/main")
+    assert pushed.returncode == 0, _out(pushed)
+    sha = _out(_git_raw(tmp_path, "--git-dir", str(remote), "rev-parse", "refs/heads/main")).strip()
+    return remote, sha
+
+
+@_skip_without_git
+def test_pre_push_refuses_a_range_it_cannot_resolve(hook_repo, tmp_path):
+    """S3#1: `git rev-list --count` **failing** read as "0 commits to push".
+
+    `count=$(git rev-list --count "$revs" || echo 0)` collapsed two different
+    facts: "the range holds no commits" and "the range could not be resolved at
+    all". The second `continue`s the loop, skips both scans, and leaves the hook
+    at exit 0 — a push that was never scanned, reported clean by the one gate
+    whose whole job is the moment the leak leaves the machine.
+
+    The `--force` makes the pre-fix failure mode visible: two unrelated root
+    commits are a non-fast-forward, so without the fix the hook waves the push
+    through and the remote's `main` moves.
+    """
+    remote, stranger_sha = _bare_remote_with_a_stranger(tmp_path)
+    _git(hook_repo, "config", "core.hooksPath", ".githooks")
+    _commit(hook_repo, "local", "unrelated local history")
+
+    push = _git_raw(hook_repo, *_IDENTITY, "push", "--force", str(remote), "HEAD:refs/heads/main")
+    text = _out(push)
+    assert push.returncode != 0, text
+    assert "无法解析要推出的提交范围" in text, text
+    assert "两个扫描都没跑" in text, text
+    landed = _out(_git_raw(tmp_path, "--git-dir", str(remote), "rev-parse", "refs/heads/main")).strip()
+    assert landed == stranger_sha, "the refused push landed anyway"
+
+
+@_skip_without_git
+def test_pre_push_still_scans_a_range_it_can_resolve(hook_repo, tmp_path):
+    """The other direction: the refusal above must not be "refuse everything".
+
+    A second push hands the hook a remote sha this clone **has**. The range
+    resolves to the one new commit, both scans run, the count is printed, and the
+    push goes through.
+    """
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote)], cwd=tmp_path, capture_output=True)
+    _git(hook_repo, "config", "core.hooksPath", ".githooks")
+    _commit(hook_repo, "one", "first commit")
+    first = _git_raw(hook_repo, *_IDENTITY, "push", "-q", str(remote), "HEAD:refs/heads/main")
+    assert first.returncode == 0, _out(first)
+
+    second_sha = _commit(hook_repo, "two", "second commit")
+    push = _git_raw(hook_repo, *_IDENTITY, "push", str(remote), "HEAD:refs/heads/main", "-v")
+    text = _out(push)
+    assert push.returncode == 0, text
+    assert "扫 refs/heads/main" in text, text
+    assert "1 个提交" in text, text
+    assert "无法解析" not in text, text
+    landed = _out(_git_raw(tmp_path, "--git-dir", str(remote), "rev-parse", "refs/heads/main")).strip()
+    assert landed == second_sha
+
+
+# ---------------------------------------------------------------------------
+# S3#6: the hooks must be **executable** in the index, or POSIX git skips them
+# ---------------------------------------------------------------------------
+
+
+def test_the_tracked_hooks_are_executable_in_the_index():
+    """S3#6: mode 100644 in the index means git never runs the hook — silently.
+
+    Git runs a hook only if the file is executable, and on POSIX the mode that
+    binds is the one the **index** carries, because that is what a clone writes
+    out. All three hooks were 100644, so a POSIX clone got `core.hooksPath`
+    pointing at three files git would never execute: no warning, no refusal, the
+    commit just goes out unguarded. The 193 hooks worked on this machine only
+    because Git for Windows does not consult the bit — which is also why the
+    end-to-end tests in this file never noticed.
+
+    The failing direction is not reproducible here (this machine's git ignores
+    the bit), so the index **is** the observable: `git ls-files -s`.
+    """
+    listing = _git(REPO, "ls-files", "-s", ".githooks").stdout
+    modes = {
+        line.split("\t", 1)[1].strip(): line.split()[0]
+        for line in listing.splitlines()
+        if line.strip()
+    }
+    for hook in (".githooks/pre-commit", ".githooks/commit-msg", ".githooks/pre-push"):
+        assert modes.get(hook) == "100755", (
+            f"{hook} is {modes.get(hook)!r} in the index, not 100755 — POSIX git skips it "
+            "without a word (fix: git update-index --chmod=+x " + hook + ")"
+        )
+
+
+@_skip_without_git
+def test_the_posix_installer_sets_hooks_path_and_the_exec_bit(hook_repo):
+    """`scripts/install-hooks.sh` — the POSIX half install-hooks.bat cannot do.
+
+    The batch file can only set `core.hooksPath`; it says so itself ("a clone that
+    checks these hooks out needs them executable ... this batch file cannot do it
+    for you"). The shell script sets the config **and** chmods the hooks, so the
+    documented POSIX route stops at one command.
+    """
+    shell = shutil.which("sh")
+    if shell is None:
+        pytest.skip("no `sh` on PATH: the POSIX installer cannot be driven here")
+    assert _INSTALLER_SH.is_file(), f"{_INSTALLER_SH} must be tracked with the Windows installer"
+    completed = subprocess.run(
+        [shell, str(hook_repo / "scripts" / "install-hooks.sh")],
+        cwd=hook_repo,
+        capture_output=True,
+    )
+    text = (completed.stdout + completed.stderr).decode("utf-8", "replace")
+    assert completed.returncode == 0, text
+    assert _git(hook_repo, "config", "core.hooksPath").stdout.strip() == ".githooks"
+    assert "chmod +x" in text, text

@@ -27,8 +27,12 @@ the load it prevents):
    layer under xdist: one worker process can still fan out to every core
    through a BLAS thread pool.
 
-``BOARDWISE_NO_TEST_GUARDS=1`` turns all four off (CI, or a deliberate
-measurement run).
+``BOARDWISE_NO_TEST_GUARDS=1`` turns all four off — and "all four" is the whole
+list: with the switch on, nothing is lowered and nothing is capped either (S3#7;
+the priority drop and the thread caps used to run *before* the switch was read,
+so a run that had asked for no guards still got two of them — the docstring said
+"all four" while the code said "two of four"). A deliberate measurement run, and
+CI, want the machine left as they found it.
 
 **Where it is wired in, and why the hook alone is not enough.** 193's task book
 asks for a ``pytest_load_initial_conftests`` hook in ``tests/conftest.py``.
@@ -88,29 +92,32 @@ _THREAD_VARS = (
 )
 
 #: Options that narrow what runs, so the run is **not** a whole-suite run and
-#: does not take a slot. (``-m``/``--markexpr`` is here for the same reason as
-#: ``-k``: it selects a subset; a guard that made those queue behind two full
-#: suites would just teach everyone to set ``BOARDWISE_NO_TEST_GUARDS``.)
+#: does not take a slot. Only two families qualify (S3#5): a **keyword filter**
+#: (``-k``) and *being named* — a file or a node id is matched by the positional
+#: branch of :func:`narrowing_argv`. This is what
+#: ``docs/testing-doctrine.md`` has said all along ("带文件名/节点/`-k` 的范围运行
+#: 不占槽"); the code had a longer list.
+#:
+#: ``-m`` / ``--markexpr``, ``--lf`` / ``--last-failed``, ``--ff`` /
+#: ``--failed-first``, ``--deselect`` and ``--ignore`` are **not** here, and that
+#: is deliberate: they are *subtractive* — they drop what does not match, what
+#: failed last time, or one path — so such a run still walks the whole suite
+#: minus a little and is a hog like any other. ``--collect-only`` is not here
+#: either: it runs no test, but the slots measure a run's **shape**, and a run
+#: shaped like the whole suite takes a slot (use ``BOARDWISE_NO_TEST_GUARDS=1``
+#: for a deliberate measurement).
 _NARROW_FLAGS = frozenset(
     {
         "-k",
         "--keyword",
-        "-m",
-        "--markexpr",
-        "--lf",
-        "--last-failed",
-        "--ff",
-        "--failed-first",
-        "--deselect",
-        "--ignore",
-        "--pyargs",
-        "--collect-only",
-        "--co",
     }
 )
 
 #: Options whose **value** is the next argument: it must be skipped rather than
-#: read as a positional (``-c pytest.ini`` is not "run one file").
+#: read as a positional (``-c pytest.ini`` is not "run one file"). This is what
+#: keeps the subtractive options from leaking their argument into the positional
+#: branch: ``--ignore tests/slow.py`` must not read as "a file was named", or the
+#: very run S3#5 sends to the slots would slip past them through its own filter.
 _VALUE_OPTIONS = frozenset(
     {
         "-c",
@@ -128,6 +135,11 @@ _VALUE_OPTIONS = frozenset(
         "--log-file",
         "--result-log",
         "--import-mode",
+        "-m",
+        "--markexpr",
+        "--deselect",
+        "--ignore",
+        "--ignore-glob",
     }
 )
 
@@ -182,10 +194,20 @@ def _lower_priority() -> None:
 def numprocesses(argv: list[str]) -> "int | str | None":
     """The raw ``-n`` value named on a command line, or ``None``.
 
-    ``int`` for digits, the string itself for ``auto``/``logical``/garbage, so
-    the caller can tell "4" from "auto" without re-parsing. ``-n4``, ``-n=4``
-    and ``--numprocesses=4`` are all read; ``--noconftest`` is not (a glued
-    short option is ``-n`` followed by its value, a long option never is).
+    ``int`` for anything ``int(value, 10)`` accepts, the string itself for
+    ``auto``/``logical``/garbage, so the caller can tell "4" from "auto" without
+    re-parsing. ``-n4``, ``-n=4`` and ``--numprocesses=4`` are all read;
+    ``--noconftest`` is not (a glued short option is ``-n`` followed by its
+    value, a long option never is).
+
+    S3#4: the digits-only test (``value.isdigit()``) let ``-n +8`` and
+    ``--numprocesses=+8`` through as "not a number, not our business", while
+    xdist parsed exactly those to 8 workers (measured:
+    ``xdist.plugin.parse_numprocesses("+8") == 8``, likewise ``" 8 "`` and
+    ``"08"``). Whatever xdist accepts as a number, this must accept as the same
+    number — the guard reads the value the same way xdist does, ``int(value,
+    10)``, and only a value **that is not an integer** falls through to xdist's
+    own usage error.
     """
     for index, arg in enumerate(argv):
         if arg in ("-n", "--numprocesses"):
@@ -201,7 +223,10 @@ def numprocesses(argv: list[str]) -> "int | str | None":
         value = value.strip()
         if not value:
             return None
-        return int(value) if value.isdigit() else value
+        try:
+            return int(value, 10)
+        except ValueError:
+            return value
     return None
 
 
@@ -231,7 +256,15 @@ def worker_violation(value: "int | str | None", maxprocesses: "int | None") -> s
 
 
 def narrowing_argv(argv: list[str]) -> list[str]:
-    """The arguments that make a run a **subset** run rather than a whole suite."""
+    """The arguments that make a run a **subset** run rather than a whole suite.
+
+    Two things count (S3#5): a keyword filter, and a **name** — a file, a node id
+    or a path that exists on disk. A directory is skipped on purpose: `pytest
+    tests/` is the full run in this repository and must take a slot. Options
+    whose argument is not a positional are consumed by :data:`_VALUE_OPTIONS`,
+    which is what keeps `--ignore tests/slow.py` from reading as "a file was
+    named".
+    """
     found: list[str] = []
     index = 0
     while index < len(argv):
@@ -252,7 +285,7 @@ def narrowing_argv(argv: list[str]) -> list[str]:
         if arg.startswith("-"):
             # A short-option cluster: `-k PATTERN` was handled above, `-kPATTERN`
             # is the same filter glued, and `-q`/`-x`/`-s` are not filters.
-            if arg.startswith("-k") or arg.startswith("-m"):
+            if arg.startswith("-k"):
                 found.append(arg)
             continue
         # A positional: a node id, a file, or an existing file. A **directory**
@@ -371,15 +404,22 @@ def apply_guards(
         return
     _applied = True
 
-    # The two fail-open mechanisms first: they must apply even to a run that is
-    # about to be refused, and even with the gate switch on.
+    # The switch first (S3#7): it turns off **all four** mechanisms, so the
+    # priority drop and the thread caps must not run before it is read.
+    if guards_disabled():
+        if verbose:
+            print(
+                f"pytest 进程闸：已由 {GATE_OFF_ENV}=1 关闭（四项全关：不降优先级、不封线程、"
+                "不占槽、不卡 worker 上限）",
+                flush=True,
+            )
+        return
+
+    # The two fail-open mechanisms next: they are fail-open, and they must apply
+    # even to a run that is about to be refused for its worker count.
     _apply_thread_caps()
     _lower_priority()
 
-    if guards_disabled():
-        if verbose:
-            print(f"pytest 进程闸：已由 {GATE_OFF_ENV}=1 关闭", flush=True)
-        return
     if in_child():
         return
 

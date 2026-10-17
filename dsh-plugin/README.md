@@ -125,6 +125,9 @@ dsh SKILL 加载机制与本仓库 SKILL.md 的衔接是后续任务，本插件
 
 - **进程**：spawn 本机 `boardwise` CLI（子进程）；`file` 参数不存在时执行前拒绝，不 spawn。
 - **文件**：只写用户显式给的 `--out` 目录；读取工程文件/报告。不碰其它路径。
+  没给 `--out` 时（`boardwise_checkup`）自己建一个系统临时目录
+  （`os.tmpdir()` 下 `boardwise-dsh-*`，每次一份）——那是**系统临时目录**，不是当前目录，
+  也不会在结束时清理（报告要留给模型读）。
 - **网络**：仅经本机 loopback 访问 boardwise daemon（127.0.0.1:61190，经 CLI）；**不访问任何外部服务**。
 - **失败边界**：CLI 非零 exit 原样作为结果返回（不伪装成功）；stdout 超 32KB 截断并标注；token 形状的值一律打码。
 - **依赖**：运行时零依赖（node 内置模块）；`@deepseek-ai/cordis`、`@deepseek-ai/dsh-tools` 为 peerDependencies，由 dsh profile 提供。

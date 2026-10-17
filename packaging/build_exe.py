@@ -113,7 +113,8 @@ def main() -> int:
     # the file would not see them either. `--assets` decompresses the streams.
     # A missing word list (any clone, any CI) prints one line and passes; a hit
     # exits non-zero and this build stops before the exe can be attached to a
-    # release.
+    # release — and so does an exe the gate could not **open** (S3#2: 读不到 ≠
+    # 干净), which is the same refusal for a different reason.
     print(f"\n$ {sys.executable} tools/check_repo_hygiene.py --assets {EXE.name}", flush=True)
     gate = subprocess.run(
         [sys.executable, str(REPO / "tools" / "check_repo_hygiene.py"), "--assets", str(EXE)],
@@ -121,8 +122,9 @@ def main() -> int:
     )
     if gate.returncode != 0:
         raise SystemExit(
-            "boardwise build_exe: 发布件闸拦下了这个 exe（敏感词表命中，见上方输出）——"
-            "不要发布它。命中报告只印条目号，词在 .sensitive-words 里。"
+            "boardwise build_exe: 发布件闸拦下了这个 exe —— 要么敏感词表命中，要么闸读不到它"
+            "（见上方输出；两种情况都不许发）。"
+            "命中报告只印条目号，词在 .sensitive-words 里。"
         )
     return 0
 

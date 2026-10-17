@@ -24,7 +24,17 @@ and read the text inside.
   its end, leaving the rest in ``unused_data`` — so a 20 MB exe is walked in
   stream-sized steps, not by re-decompressing its tail at every candidate;
 * the scan resumes **after** the bytes that stream consumed, which is what keeps
-  a decompressed payload from being re-scanned as if it were still compressed.
+  a decompressed payload from being re-scanned as if it were still compressed;
+* **a stream counts only when the decompressor reached its end** (``eof``,
+  S3#3): zlib reports no error for a stream that was simply cut off, and a
+  truncated one used to be accepted like a complete one — then "resumed" at EOF,
+  because a stream that never ended has no ``unused_data``. One accidental
+  header followed by garbage (an offset inside the loader or the TOC) therefore
+  swallowed the whole rest of the file, and every real stream after it went
+  unseen. A candidate that does not reach ``eof`` is treated as what it is —
+  two bytes of coincidence — and the scan steps past it by exactly those two
+  bytes (no real stream can start at offset+1: its first byte would have to be
+  ``78``, and the header check already fixed byte 1 of the candidate).
 
 Only top-level streams are returned: a stream nested inside a decompressed
 payload is reported as part of its parent's text, which is what a leak scan
@@ -55,22 +65,32 @@ def iter_zlib_streams(data: bytes, min_bytes: int = _MIN_STREAM_BYTES):
 
     ``min_bytes`` drops the streams too small to be a payload while keeping
     every one that could hold a name.
+
+    A candidate is yielded only when ``decompressor.eof`` is true — see the
+    module docstring (S3#3): a truncated stream decodes without error and
+    consumes everything after it, so accepting one hides every real stream
+    behind it. Rejected candidates cost two bytes, not one: a genuine stream
+    cannot begin at an offset whose two bytes are already a valid header.
     """
     index = 0
     size = len(data)
     while index < size - 1:
         if data[index : index + 2] in _ZLIB_HEADERS:
             stream = None
+            complete = False
             try:
                 decompressor = zlib.decompressobj()
                 stream = decompressor.decompress(data[index:])
+                complete = decompressor.eof
             except zlib.error:
                 stream = None
-            if stream is not None and len(stream) >= min_bytes:
+            if complete and stream is not None and len(stream) >= min_bytes:
                 yield stream
                 consumed = size - index - len(decompressor.unused_data)
                 index += max(consumed, 2)
                 continue
+            index += 2
+            continue
         index += 1
 
 

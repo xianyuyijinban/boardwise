@@ -598,9 +598,17 @@ Two of them are worth a future task:
     ``outputs/190s/evidence.md`` and ``outputs/190s/live/``.
 
     The equivalent wording is 「in the mirrored frame the text runs along
-    ``u(180 − a)`` with the glyph's own side mirrored too」; this degenerates to
-    "along ``±u(a)``" only when ``a ∈ {0°, 180°}``, which is **why "a bottom
-    designator runs along −u" is the wrong rule to remember**. The parser keeps
+    ``u(180 − a)`` with the glyph's own side mirrored too」; it degenerates to
+    "along ``±u(a)``" only when ``a ∈ {0°, 90°, 180°, 270°}`` — a quarter turn
+    leaves the line the text runs on alone (the advance axis turns into its
+    negative at 0°/180° and stays put at 90°/270°), while ``45°``/``135°`` and
+    their odd multiples are where "mirrored" really shows: the bottom box runs on
+    a line the top box does not share at all (measured through
+    ``SilkText.frame_axes``: the two advance axes are parallel at the four
+    quarter turns — cross product 0 — and at 90° to each other at 45°/135°). That
+    is **why "a bottom designator runs along −u" is the wrong rule to remember**:
+    it happens to be right at 0°/180°, is the opposite at 90°/270°, and is not
+    even a sign question at 45°/135°. The parser keeps
     the raw ``angle`` (``SilkText.stored_angle`` — EasyEDA accumulates whole
     turns; measured values include 810, 1710, 2250) and exposes the reading
     through ``SilkText.frame_axes()``; ``corners()`` is ``anchor + lx·u + ly·v``.

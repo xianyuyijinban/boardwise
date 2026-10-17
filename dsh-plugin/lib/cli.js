@@ -18,8 +18,10 @@ export const STDOUT_TAIL_BYTES = 16 * 1024;
 /** The cap the two halves add up to (task 045 §2). */
 export const STDOUT_LIMIT_BYTES = STDOUT_HEAD_BYTES + STDOUT_TAIL_BYTES;
 /** stderr is diagnostic only, so it gets a smaller budget. */
-const STDERR_HEAD_BYTES = 4 * 1024;
-const STDERR_TAIL_BYTES = 4 * 1024;
+export const STDERR_HEAD_BYTES = 4 * 1024;
+export const STDERR_TAIL_BYTES = 4 * 1024;
+/** The cap the two halves add up to. */
+export const STDERR_LIMIT_BYTES = STDERR_HEAD_BYTES + STDERR_TAIL_BYTES;
 /** mkdtemp prefix for the report directory this plugin creates. */
 export const OUT_DIR_PREFIX = 'boardwise-dsh-';
 /** Raised when the CLI cannot be found, or cannot be started once found. */
@@ -93,6 +95,13 @@ export async function runBoardwise(run, cli = resolveCli()) {
         stdout: redactSecrets(out.text()),
         stderr: redactSecrets(err.text()),
         stdoutBytes: out.bytes,
+        stderrBytes: err.bytes,
+        // S4#2: which stream lost bytes is recorded per stream, not folded into one
+        // flag. The folded `truncated` stays (it is the "anything was cut" reading a
+        // caller may already use), but a formatter can no longer say "stdout
+        // truncated" about a run whose *stderr* was the one cut.
+        stdoutTruncated: out.truncated,
+        stderrTruncated: err.truncated,
         truncated: out.truncated || err.truncated,
         timedOut,
         aborted,

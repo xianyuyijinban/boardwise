@@ -160,6 +160,34 @@ describe('runBoardwise: spawning and reporting', () => {
     expect(STDOUT_LIMIT_BYTES).toBe(32 * 1024)
   })
 
+  it('records truncation per stream, not only for the pair (S4#2)', async () => {
+    // stderr over its own (smaller) budget, stdout well under its own: the two
+    // streams must not be conflated — a formatter that only knows the folded
+    // flag has to say "stdout truncated" about a stdout that is complete.
+    installSpawn(child => {
+      child.out('short stdout\n')
+      child.err('e'.repeat(9 * 1024))
+      child.finish(0)
+    })
+    const result = await runBoardwise({ argv: ['checkup'], timeoutMs: 5_000 }, cli)
+    expect(result.stdoutTruncated).toBe(false)
+    expect(result.stderrTruncated).toBe(true)
+    expect(result.truncated).toBe(true)
+    expect(result.stdout).toBe('short stdout\n')
+    expect(result.stderrBytes).toBe(9 * 1024)
+
+    // …and the mirror image: stdout cut, stderr whole.
+    installSpawn(child => {
+      child.out('x'.repeat(64 * 1024))
+      child.err('a warning\n')
+      child.finish(0)
+    })
+    const other = await runBoardwise({ argv: ['checkup'], timeoutMs: 5_000 }, cli)
+    expect(other.stdoutTruncated).toBe(true)
+    expect(other.stderrTruncated).toBe(false)
+    expect(other.stderr).toBe('a warning\n')
+  })
+
   it('keeps head and tail and marks the dropped bytes past 32KB', async () => {
     const head = 'H'.repeat(20 * 1024)
     const middle = 'M'.repeat(5 * 1024)

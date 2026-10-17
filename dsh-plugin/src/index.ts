@@ -16,6 +16,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
   OUT_DIR_PREFIX,
+  STDERR_HEAD_BYTES,
+  STDERR_TAIL_BYTES,
   STDOUT_HEAD_BYTES,
   STDOUT_TAIL_BYTES,
   runBoardwise,
@@ -293,12 +295,21 @@ function formatOutcome(
     }
   }
   lines.push('--- stdout ---', result.stdout.trimEnd() || '(empty)')
-  if (result.truncated) {
+  if (result.stdoutTruncated) {
     lines.push(
       `(stdout truncated: ${result.stdoutBytes} bytes total, head ${STDOUT_HEAD_BYTES} + tail ${STDOUT_TAIL_BYTES} kept)`,
     )
   }
   if (result.stderr.trim() !== '') lines.push('--- stderr ---', result.stderr.trimEnd())
+  // S4#2: the marker names the stream it belongs to. It used to be written for
+  // `stdout || stderr`, so a run whose stderr was the stream that got cut was
+  // reported as "stdout truncated" — and a reader looking for what was dropped
+  // would go to the wrong block, or conclude stdout had lost bytes it still had.
+  if (result.stderrTruncated) {
+    lines.push(
+      `(stderr truncated: ${result.stderrBytes} bytes total, head ${STDERR_HEAD_BYTES} + tail ${STDERR_TAIL_BYTES} kept)`,
+    )
+  }
   const hint = pythonHint(result)
   if (hint !== null) lines.push(`hint: ${hint}`)
   return lines.join('\n')

@@ -332,4 +332,29 @@ describe('output hygiene', () => {
     expect(text).toContain('stdout truncated: 65536 bytes total')
     expect(text).toContain('bytes dropped')
   })
+
+  it('names the stream that was truncated — stderr is not stdout (S4#2)', async () => {
+    // The marker used to be written for `stdout || stderr`, so this exact run
+    // said "stdout truncated" about a stdout of 15 bytes and never mentioned the
+    // 10 KB of diagnostics that were actually cut.
+    installSpawn(child => {
+      child.out('findings: 1 WARN\n')
+      child.err('w'.repeat(10 * 1024))
+      child.finish(0)
+    })
+    const text = await call('boardwise_doctor', {})
+    expect(text).toContain('stderr truncated: 10240 bytes total')
+    expect(text).not.toContain('stdout truncated')
+    expect(text).toContain('findings: 1 WARN')
+
+    // Both cut: both markers, each naming its own stream.
+    installSpawn(child => {
+      child.out('o'.repeat(64 * 1024))
+      child.err('e'.repeat(10 * 1024))
+      child.finish(0)
+    })
+    const both = await call('boardwise_doctor', {})
+    expect(both).toContain('stdout truncated: 65536 bytes total')
+    expect(both).toContain('stderr truncated: 10240 bytes total')
+  })
 })

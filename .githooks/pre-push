@@ -58,8 +58,20 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         revs="$remote_sha..$local_sha"
     fi
 
-    count=$(git rev-list --count "$revs" 2>/dev/null || echo 0)
-    if [ "${count:-0}" -eq 0 ]; then
+    # A range that cannot be resolved is **not** "nothing to push". The two used
+    # to be the same reading — `|| echo 0` turned a failed `rev-list` into a zero
+    # commit count, the loop `continue`d, and the push went out with neither scan
+    # run and exit 0 (the exact fail-open the hook exists to prevent). The remote
+    # SHA routinely does not exist locally (a branch somebody else pushed, a
+    # shallow clone, `--force`), so this is a live path, not a theoretical one.
+    if ! count=$(git rev-list --count "$revs" 2>/dev/null); then
+        echo "pre-push: 无法解析要推出的提交范围（$revs）——**两个扫描都没跑**，拒绝这次推送" >&2
+        echo "pre-push: 远端 sha $remote_sha 多半在本机不存在（别人的分支 / 浅克隆 / 强推）。" >&2
+        echo "pre-push: 先 \`git fetch\` 补齐历史再推；确实要推就先自查提交说明与正文。" >&2
+        status=1
+        continue
+    fi
+    if [ "$count" -eq 0 ]; then
         continue
     fi
 

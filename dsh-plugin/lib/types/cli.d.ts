@@ -14,6 +14,11 @@ export declare const STDOUT_HEAD_BYTES: number;
 export declare const STDOUT_TAIL_BYTES: number;
 /** The cap the two halves add up to (task 045 §2). */
 export declare const STDOUT_LIMIT_BYTES: number;
+/** stderr is diagnostic only, so it gets a smaller budget. */
+export declare const STDERR_HEAD_BYTES: number;
+export declare const STDERR_TAIL_BYTES: number;
+/** The cap the two halves add up to. */
+export declare const STDERR_LIMIT_BYTES: number;
 /** mkdtemp prefix for the report directory this plugin creates. */
 export declare const OUT_DIR_PREFIX = "boardwise-dsh-";
 /** How the CLI was located. */
@@ -67,7 +72,13 @@ export interface CliResult {
     readonly stderr: string;
     /** stdout bytes produced in total, before truncation. */
     readonly stdoutBytes: number;
-    /** Whether stdout (or stderr) lost bytes between head and tail. */
+    /** stderr bytes produced in total, before truncation. */
+    readonly stderrBytes: number;
+    /** Whether **stdout** lost bytes between head and tail. */
+    readonly stdoutTruncated: boolean;
+    /** Whether **stderr** lost bytes between head and tail. */
+    readonly stderrTruncated: boolean;
+    /** Whether either stream lost bytes between head and tail. */
     readonly truncated: boolean;
     /** True when the deadline passed and the child was killed. */
     readonly timedOut: boolean;

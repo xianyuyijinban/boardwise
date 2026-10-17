@@ -103,11 +103,15 @@ Two guards refine it, both reused from the batch that measured them:
   count** — 「this model read two pins」 is evidence, 「nobody counted」 is not.
   A caller that never counted must not get the verdict by accident;
   `pin_floor=False` is that caller saying *its question is not about pin counts*.
-  `MAX_PASSIVE_PINS = 2` on the exemption path is the same guard read backwards.
+  `MAX_PASSIVE_PINS = 2` (over in `engines/checkup.py`, on the unreviewed gate's
+  declared-passive exemption) is the same guard read backwards.
 
 The reader lives in `core`, not in `rules`, because `rules/facts.py` and
-`rules/connectivity.py` have module-level imports of each other — putting it in
-`rules` would create a real import cycle (006c's rule, `tests/test_layer_rules.py`).
+`rules/connectivity.py` would otherwise form a real import cycle: `facts` has a
+**module-level** import of `connectivity` (`parse_resistance_ohms`), and
+`connectivity` only references `facts` **inside a function body**
+(`read_default_library`, at call time) — so `classify_part` living in either one
+would close the loop (006c's rule, `tests/test_layer_rules.py`).
 
 Who calls it: `rules/connectivity` (`DecouplingPerIC`, `ShuntSenseLink`),
 `rules/facts` (`ics()`), `rules/pcb/derating`, `rules/pcb/distance`
