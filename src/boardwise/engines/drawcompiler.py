@@ -4594,21 +4594,31 @@ def _expressions(ctx: _Context, placed: _Placement) -> dict[str, _Expression]:
     return out
 
 
-def _power_needs_flag(
+def _net_needs_flag(
     ctx: _Context, net_id: str, symbols: Sequence[LayoutPowerSymbol]
 ) -> bool:
-    """Is this a rail the plan states without a flag of its own? (069 sec.7)
+    """Is this a wire-style power net the plan states without a flag of its own?
 
-    The ruling: every power net is stated by a power flag inside the module it
-    supplies — 岳, finding the 5 V rail on the landed page named by text alone
-    (「只有文本没有旗 = 缺陷」). A rail drawn as a *wire* has no flag of its own (053
-    sec.7 draws what is local, and this is the one case text was standing in for),
-    so the compiler supplies one. Everything else is left exactly as it is: a bus
-    expressed by flags at every pin, a single-pin rail, and 069 sec.1's far pad
-    brought out to its own flag all already carry one.
+    Two rulings, one question. 069 sec.7 for a **rail**: every power net is
+    stated by a power flag inside the module it supplies — 岳, finding the 5 V
+    rail on the landed page named by text alone (「只有文本没有旗 = 缺陷」). 201A
+    sec.1 for a **ground**: a ground drawn as a rail (which is now every ground
+    with more than one pin, :func:`_expression_style`) is stated by exactly one
+    ground symbol — 「GND 标识重复该合并」, and the same 底轨 shape 088b sec.1 asks
+    for — because connectivity is the wire's job and the symbol is the
+    annotation saying where the net meets reference ground.
+
+    A rail drawn as a *wire* has no flag of its own (053 sec.7 draws what is
+    local, and this is the one case text was standing in for), so the compiler
+    supplies one. A ground whose grammar states a `gnd-outlet` is left to
+    088b's own loop (that obligation *is* the one-symbol promise, and two
+    symbols for one return is what it refuses); a single-pin net is left to the
+    ordinary flag ladder. Everything else is unchanged.
     """
     net = ctx.circuit.net(net_id)
-    if net is None or net.cls != "power":
+    if net is None or net.cls not in ("power", "gnd"):
+        return False
+    if net.cls == "gnd" and net_id in _gnd_outlet_nets(ctx):
         return False
     return not any(symbol.net == net_id for symbol in symbols)
 
@@ -4687,15 +4697,24 @@ def _gnd_outlet_pin(
 def _sibling_name_form(ctx: _Context, net_id: str, cls: str) -> str:
     """How 069 sec.1 names the pads of a net it splits: ``"flag"`` or ``"label"``.
 
-    A rail is named by its power flag and a ground by the ground flag — the kinds
-    the net already has, which is 053 sec.7's own "one style throughout" read for
-    a net of that class — and every other net by a label, which no library has to
-    carry. ``""`` is the answer for a rail whose flag symbol the library does not
-    carry: the two islands 069 makes are joined by a name and nothing else, so
-    such a net keeps 060 sec.2's wire rather than being split into halves nothing
-    could state.
+    A rail is named by its power flag — the kind the net already has, which is
+    053 sec.7's own "one style throughout" read for a net of that class — and
+    every other net by a label, which no library has to carry. ``""`` is the
+    answer for a rail whose flag symbol the library does not carry: the two
+    islands 069 makes are joined by a name and nothing else, so such a net keeps
+    060 sec.2's wire rather than being split into halves nothing could state.
+
+    **201A: a ground is ``""`` too**, and the reason is the same one turned
+    around. 069 sec.2 split a net into named islands because a name per island
+    was the *only* way to join pads a body sits between; a ground now has a rail
+    to be joined by (:func:`_expression_style`), and a per-pad flag is exactly
+    the 「GND 标识重复」 the ruling merges — so the pads of a ground net are wired
+    (060 sec.2's own default: 重复脚默认接上) and the one symbol states the net
+    once. A rail keeps 069's shape unchanged.
     """
-    if cls in ("power", "gnd"):
+    if cls == "gnd":
+        return ""
+    if cls == "power":
         return "flag" if _flag_plan(ctx, net_id, cls)[0] is not None else ""
     return "label"
 
@@ -4880,9 +4899,13 @@ def _expression_style(
         )
     if cls == "gnd":
         return (
-            "flag",
-            "ground is expressed one way throughout (053 sec.3's uniform-gnd): "
-            "every member of this net gets the same flag",
+            "wire",
+            "a ground is a **rail**, not a mark per pad (201A sec.1): its pins "
+            "are joined by a wire and read as one return, and the net is stated "
+            "by exactly one ground symbol — 岳's own 底轨 (088b sec.1), and the "
+            "answer to 「GND 标识重复该合并」. One symbol per ground net, not one "
+            "per pin: connectivity is the wire's, the flag is the annotation "
+            "saying where this net meets reference ground",
         )
     if cls == "power":
         if count > ctx.budget.high_fanout:
@@ -6871,13 +6894,40 @@ def _build_candidate(
     # those runs are obstacles for the router, and put in the per-net loop they
     # cost one 053B scenario 4 s → 40 s of search (measured) without changing a
     # single drawing.
+    #
+    # 201A: the same supply, widened to grounds. A ground net is now drawn as a
+    # wire (:func:`_expression_style`), so this is the one place that gives it its
+    # single symbol — at the rail's **far** end (:func:`_gnd_outlet_pin`, 088b's
+    # own reading of "away from the inlet"), which is where 岳 puts a ground mark
+    # on his own sheet. A ground whose grammar states a `gnd-outlet` is *not* here
+    # (:func:`_net_needs_flag`): 088b's loop below owns that net's one symbol.
     for net_id in order:
         expression = expressions[net_id]
-        if expression.style != "wire" or not _power_needs_flag(ctx, net_id, symbols):
+        if expression.style != "wire" or not _net_needs_flag(ctx, net_id, symbols):
             continue
-        profile, ref = _flag_plan(ctx, net_id, "power")
-        pin = _power_flag_pin(ctx, expression)
+        net = ctx.circuit.net(net_id)
+        cls = net.cls if net is not None else "power"
+        profile, ref = _flag_plan(ctx, net_id, cls)
+        pin = (
+            _gnd_outlet_pin(ctx, expression) if cls == "gnd"
+            else _power_flag_pin(ctx, expression)
+        )
         if profile is None or pin is None:
+            if profile is None:
+                # 143 F1's disclosure, in the shape 201A leaves it: this net is
+                # already drawn as a rail, so the *fallback* is not the
+                # expression — it is this net having **no symbol at all** on the
+                # page. The host prints the net's name along the wire (029-c),
+                # and a reader authorising the plan has to be told that is all
+                # they get.
+                notes.append(
+                    DOWNGRADE_NOTE_PREFIX
+                    + f"net {net_id}: its class ({cls}) says it is stated by a "
+                    f"flag, and the library carries no flag symbol {ref!r} — its "
+                    "rail is drawn with the net's name on the wire itself and "
+                    "**no symbol of its own**. The drawing you are authorising "
+                    "has no flag for this net"
+                )
             continue
         router.reserved_exempt = net_id
         _set_foreign_edges(router, segments, net_id)
@@ -6890,10 +6940,17 @@ def _build_candidate(
         if failure is not None:
             return None, failure, []
         notes.append(
-            f"net {net_id}: a power net carries its own flag — hung at "
-            f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off the "
-            f"rail its pin {pin[0]} supplies (069 sec.7); a rail named by text "
-            "alone would be found by chasing names"
+            f"net {net_id}: " + (
+                "a ground rail is stated by one symbol of its own — hung at "
+                f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off the "
+                f"rail at its far end beside {pin[0]} (201A sec.1, 088b sec.1); the "
+                "pads are joined by the rail, so no pad needs a mark of its own"
+                if cls == "gnd" else
+                "a power net carries its own flag — hung at "
+                f"{_point_text(anchor)} by a {FLAG_JOG:g}-unit vertical run off the "
+                f"rail its pin {pin[0]} supplies (069 sec.7); a rail named by text "
+                "alone would be found by chasing names"
+            )
         )
         router.boxes = [*solids, *router.flag_walls]
 
@@ -8022,7 +8079,20 @@ def _rail_flag(
     (:func:`_rail_flag_room_failure`), because that shape is the one 岳 read as a
     short.
     """
+    net = ctx.circuit.net(net_id)
+    cls = net.cls if net is not None else "power"
     seat = router.flag_seats.get((net_id, pin[0]))
+    if seat is None and cls == "gnd":
+        # 201A: the reservation may have seated this net's one symbol at a
+        # **different** pad of the same rail (`_flag_seat_pins`'s ladder) — the
+        # seat is the reservation pass's decision and this is the same net, so
+        # the first pad it holds a seat for is the answer. Re-deciding here would
+        # be a second decision about one symbol.
+        for other in _flag_seat_pins(ctx, expression, cls):
+            seat = router.flag_seats.get((net_id, other[0]))
+            if seat is not None:
+                pin = other
+                break
     if seat is None:
         anchor, rotation, lead, failure = _rail_flag_seat(
             ctx, placed, net_id, pin[0], pin[1], profile, router, blocked,
@@ -8076,11 +8146,16 @@ def _wire_flag_seats(
         if expression.detached:
             continue
         wanted: list[tuple[str, tuple[float, float], str, bool]] = []
-        if _power_needs_flag(ctx, net_id, ()):
-            pin = _power_flag_pin(ctx, expression)
-            if pin is not None:
-                # 069 sec.7's rail flag: a vertical run off the rail (:func:`_rail_flag_seat`).
-                wanted.append((pin[0], pin[1], "power", True))
+        if _net_needs_flag(ctx, net_id, ()):
+            # 069 sec.7's rail flag / 201A's one ground symbol: both are a
+            # vertical run off the rail (:func:`_rail_flag_seat`). A rail hangs it
+            # at the one pin that supplies it; a **ground** may hang it at any of
+            # its pads, nearest the rail's far end first — 201A sec.3's 「就近挪旗位」,
+            # and the ladder exists because 岳's own bottom rail carries its mark
+            # wherever there is room, not at a pad the circuit picked.
+            candidates = _flag_seat_pins(ctx, expression, cls)
+            for member, point in candidates:
+                wanted.append((member, point, cls, True))
         if net_id in outlets:
             pin = _gnd_outlet_pin(ctx, expression)
             if pin is not None:
@@ -8092,6 +8167,32 @@ def _wire_flag_seats(
                 continue
             out.append((net_id, member, point, profile, ref, want_cls, vertical))
     return out
+
+
+def _flag_seat_pins(
+    ctx: _Context, expression: _Expression, cls: str
+) -> list[tuple[str, tuple[float, float]]]:
+    """Where a wire-style net's **own** symbol may hang, best seat first (201A).
+
+    A rail has one answer and it is not a preference: 069 sec.7 hangs its flag at
+    the pin the rail *supplies* (:func:`_power_flag_pin`), because that is where
+    the reader looks for it.
+
+    A **ground** is a rail with many pads and no single supplying pin, so the
+    order is a reading of the picture: 088b's far end first (背向入口那端, where
+    岳's own sheet puts the ground mark), then the net's remaining pads by member
+    id. That ladder is sec.3 of this batch — 「仍有冲突时降级为就近挪旗位」, never a
+    crossing — and it changes nothing about *which* net carries a symbol, only
+    where on its own rail the symbol stands.
+    """
+    if cls == "gnd":
+        far = _gnd_outlet_pin(ctx, expression)
+        ordered = sorted(expression.points)
+        out = [far] if far is not None else []
+        out.extend(item for item in ordered if item != far)
+        return out
+    pin = _power_flag_pin(ctx, expression)
+    return [pin] if pin is not None else []
 
 
 def _rail_flag_room_failure(
@@ -8292,9 +8393,16 @@ def _seat_wire_flags(
     pass existed. Nothing is taken away.
     """
     walls: list[Box] = []
-    for net_id, member, point, profile, _ref, _cls, vertical in _wire_flag_seats(
+    #: 201A: a **ground** rail carries exactly one symbol, so the first pad of its
+    #: ladder that yields a seat takes the symbol and the rest of that net's
+    #: candidates are passed over (`_flag_seat_pins`). A rail keeps 069 sec.7's
+    #: single answer, and 088b's outlet is its own shape.
+    seated_grounds: set[str] = set()
+    for net_id, member, point, profile, _ref, cls, vertical in _wire_flag_seats(
         ctx, expressions, net_order
     ):
+        if vertical and cls == "gnd" and net_id in seated_grounds:
+            continue
         # A rail flag reaches for 069 sec.7's straight vertical run first and only
         # then for the bent lead (:func:`_rail_flag_seat`); an outlet is placed by
         # the ordinary ladder (:func:`_flag_pin_lead`), which is where 088b puts it.
@@ -8324,6 +8432,8 @@ def _seat_wire_flags(
         _remember_lead(router, net_id, flag_glyph_kind(profile), lead)
         router.flag_seats[(net_id, member)] = (anchor, rotation, lead)
         walls.append(box)
+        if vertical and cls == "gnd":
+            seated_grounds.add(net_id)
     return walls
 
 

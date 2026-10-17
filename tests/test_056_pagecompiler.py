@@ -471,9 +471,13 @@ def test_scene_01_a_rail_across_two_modules_is_flagged_and_so_is_the_ground():
     for module_id in scene.module_ids:
         port = module_of(page, module_id).port("VIN")
         assert port is not None and port.kind == "flag", module_id
-    # The ground is flagged at every member pin of both modules, and no wire
-    # crosses a module boundary for either of them.
-    assert len([item for item in page.plan.power_symbols if item.net == "GND"]) == 4
+    # The ground is stated by **one symbol per module's own rail** (201A: the pads
+    # are joined by the rail, and the symbol is the rail's own annotation — not a
+    # mark per pad), and no wire crosses a module boundary for either net.
+    ground = [item for item in page.plan.power_symbols if item.net == "GND"]
+    assert len(ground) == len(scene.module_ids) == 2, (
+        f"one ground symbol per module, not one per pad: {len(ground)}"
+    )
     assert [segment.net for segment in cross_wires(page)] == []
 
 

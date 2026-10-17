@@ -236,9 +236,9 @@ def test_each_family_hangs_its_own_flag_and_the_drawing_does_not_move():
     counts: dict[str, int] = {}
     for symbol in after.power_symbols:
         counts[symbol.symbol_ref] = counts.get(symbol.symbol_ref, 0) + 1
-    assert counts["PWR-PGND"] == 5 and counts["PWR-SEC_GND"] == 5, (
-        f"every ground pin is named by its own family's flag (069 sec.1); the page "
-        f"hangs {counts}"
+    assert counts["PWR-PGND"] == 1 and counts["PWR-SEC_GND"] == 1, (
+        f"each ground net is stated by **one** symbol of its own family's kind "
+        f"(201A sec.1: 一地一符号, 「GND 标识重复该合并」); the page hangs {counts}"
     )
     assert set(counts) == {"PWR-PGND", "PWR-SEC_GND", "PWR-HVDC", "PWR-SEC_12V"}, (
         f"the page draws {sorted(counts)} — one shared ground symbol means two "

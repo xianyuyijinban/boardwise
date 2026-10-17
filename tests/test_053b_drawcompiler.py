@@ -890,9 +890,11 @@ def test_scene_08_ldo_puts_each_capacitor_on_its_own_side_and_one_ground_style()
                            ("C2.1", "3V3")):
         assert on_a_wire(plan, pin_point(plan, member)), member
 
-    # 地表达统一：one style, one symbol, for every ground pin.
+    # 地表达统一：one style, one symbol for every ground pin — and since 201A one
+    # symbol *in all* for the net: the pads are joined by their own rail, and the
+    # single ground symbol states where that rail meets reference ground.
     ground_flags = [s for s in plan.power_symbols if s.net == "GND"]
-    assert len(ground_flags) == 3
+    assert len(ground_flags) == 1
     assert len({s.symbol_ref for s in ground_flags}) == 1
     assert not [label for label in plan.labels if label.net == "GND"]
 
@@ -3846,8 +3848,12 @@ def test_the_spacing_ladder_stops_when_more_room_cannot_change_the_answer(monkey
         built = {item.variant.split(" pose", 1)[0] for item in result.rejected}
         stopped = [note for note in result.notes if "stopped at rung" in note]
         assert not result.ok
-        assert built == {"spacing=1", "spacing=1.5", "spacing=2.2"}, (
-            f"the ladder should stop at the 3.5x boundary, built {sorted(built)}"
+        # 201A: with the ground expressed as a rail instead of a flag per pad,
+        # this shape refuses one rung earlier — rung 1.5 reproduces rung 1's own
+        # refusals pose for pose, which is exactly the condition the stop keys on,
+        # and the honesty half below still proves no skipped rung hid a drawing.
+        assert built == {"spacing=1", "spacing=1.5"}, (
+            f"the ladder should stop at the 2.2x boundary, built {sorted(built)}"
         )
         assert len(stopped) == 1, result.notes
         assert "text-overlap" in stopped[0], (
