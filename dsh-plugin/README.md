@@ -120,3 +120,11 @@ npm run smoke         # 独立冒烟：import lib/index.js，真起 CLI（见下
 不做 dsh 客户端（浏览器半边）插件、不做主题/UI、不发 npm registry、
 不在 TS 侧实现任何审查逻辑、不提供写操作工具（edit apply 走 CLI）。
 dsh SKILL 加载机制与本仓库 SKILL.md 的衔接是后续任务，本插件只负责工具面。
+
+## 权限与边界（DSH STORE 固定源码审查对应）
+
+- **进程**：spawn 本机 `boardwise` CLI（子进程）；`file` 参数不存在时执行前拒绝，不 spawn。
+- **文件**：只写用户显式给的 `--out` 目录；读取工程文件/报告。不碰其它路径。
+- **网络**：仅经本机 loopback 访问 boardwise daemon（127.0.0.1:61190，经 CLI）；**不访问任何外部服务**。
+- **失败边界**：CLI 非零 exit 原样作为结果返回（不伪装成功）；stdout 超 32KB 截断并标注；token 形状的值一律打码。
+- **依赖**：运行时零依赖（node 内置模块）；`@deepseek-ai/cordis`、`@deepseek-ai/dsh-tools` 为 peerDependencies，由 dsh profile 提供。
