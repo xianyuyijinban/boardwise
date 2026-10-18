@@ -61,7 +61,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Mapping, Sequence
 
 from ..core.geometry import transform_point
@@ -118,6 +118,74 @@ TEXT_CLEARANCE = 15.0
 #: or off-page drawing is not a drawing), but finite: a search that refuses to
 #: move through a hard-violating state at all cannot get out of one.
 W_HARD = 200.0
+
+#: The least air between two pin tips **of different nets**, in canvas units.
+#:
+#: Not aesthetics either, and this one is worse than a crowded drawing: two tips
+#: of different nets on the same point is a **short** that the plan cannot draw
+#: around. The router treats a foreign tip as a wall (`_blocked_points`: a wire
+#: vertex landing on one joins two nets the CircuitSpec keeps apart), so a net
+#: whose obligation runs through that point is refused outright, and a wire that
+#: did run through it would be the short itself.
+#:
+#: Measured on the flyback 2026-10-18: `Q1.3` (net SRC) and `R5.2` (net PGND) at
+#: the same (75, 165), and `SRC`'s direct-wire obligation refused for it — "could
+#: not be joined ... without a wire crossing a body, a text box or a foreign
+#: connection". The term list could not see it: `overlap` and `clearance` measure
+#: part **bodies**, and a pin tip is a point on a body's boundary.
+#:
+#: The reason the number is a **multiple of the lattice**: two tips one lattice
+#: step apart are still one lattice step apart, so any wire drawn on the lattice
+#: between them lands on a lattice node — an arrangement the router has to dodge,
+#: not one it can pass through. Two steps leaves a lattice node on either side of
+#: the pair, which is the least that is worth asking for; `grid * 3` and `grid * 4`
+#: were measured and rejected — at 15 and 20 units the repair pass cannot reach
+#: zero on the flyback at any weight (30 units of shortfall left at `grid * 4`), and
+#: the wider the band, the more of the drawing's own spacing it fights. Two steps
+#: reaches 0.0 on the flyback and leaves every published baseline untouched.
+#:
+#: Measured on the flyback 2026-10-18, all on the topology request:
+#:
+#: | axis | reading |
+#: |---|---|
+#: | `pin-clearance` before this term | 12 pairs of foreign tips inside 25 units, `Q1.3` (SRC) 15 from `R5.2` (PGND) |
+#: | `grid * 2` = 10, `W` 20 / 30 / 40 / 50 / 80 | term 0.0, every relation kept |
+#: | `grid * 2` = 10, `W` 120 | term 0.0 but `right-of(C10, U5)` missed by 2.5 |
+#: | `grid * 3` = 15, `W` 12 / 15 / 20 / 30 | term 0.0, every relation kept, **but** `098` scene 08's published refusal report moved |
+#: | `grid * 4` = 20, `W` 10 | term 30.0 — not reachable |
+#:
+#: The `grid * 3` note is the one that decided the number. That threshold is
+#: **reachable** on the flyback and still wrong, because it changes the answer to
+#: a page that was never crowded: `098` scene 8's refusal report is held to a
+#: byte-for-byte baseline (`tests/test_116_ordinal_consumption.py`), and its
+#: topology answer's own smallest foreign-tip distance is **20.6** units — so at a
+#: 15-unit threshold the repair pass ran there for a problem that did not exist
+#: and the report moved. At `grid * 2` it does not run, and every one of `098`'s
+#: twelve published products comes out byte-identical. A spacing rule that fires
+#: on drawings it has nothing to say about is the wrong rule.
+PIN_CLEARANCE_GRID = 2.0
+
+#: What one unit of the pin-tip shortfall costs. Between :data:`W_RELATION` and
+#: :data:`W_HARD`: a short is a **worse** fault than a crowded drawing, so this is
+#: the one soft term priced above the grammar's own promises — but it stays soft,
+#: because a drawing with one is still a drawing and the gate downstream is the
+#: place that names it (`foreign connection`).
+#:
+#: The value comes from the band the two regressions leave open, measured by
+#: sweeping it against the published topology request at `grid * 2`:
+#:
+#: * `W` 20 / 30 / 40 / 50 / 80 all reach `pin-clearance` 0.0 with every relation
+#:   kept, so the term is not a tuning knob anywhere in that band;
+#: * `W` 120 breaks `right-of(C10, U5)` by 2.5 — that is the ceiling, and it is
+#:   where the term starts outbidding the grammar rather than repairing the short;
+#: * `W` 20 is the floor: the repair pass starts from the first answer and cannot
+#:   clear the last 5 units of shortfall there; `W` 30 and above do clear it.
+#:
+#: 40 is the geometric middle of the band with a factor of three of headroom to
+#: the ceiling. Read it against the relation weight: one 10-unit shortfall costs as
+#: much as four relations missed by 10 units — deliberate, since the short is the
+#: one fault the plan cannot draw past.
+W_PIN_CLEARANCE = 40.0
 
 #: The sides a net class prefers, when the caller states nothing (053 sec.2's
 #: presentation defaults).
@@ -312,6 +380,18 @@ class PlacementInput:
     #: stage 2). Empty is a legitimate request — a circuit whose rails carry no
     #: flag symbols states none — and the term is then not evaluated at all.
     flag_seats: tuple[FlagReservation, ...] = ()
+    #: Whether two pin tips of **different nets** must keep :data:`PIN_CLEARANCE_GRID`
+    #: lattice steps apart (:func:`_pin_clearance_term`). Off by default, because
+    #: turning it on for every page is a different question from the bug that put
+    #: it here: the topology round is the round that draws a whole circuit from a
+    #: grammar, and that is the round whose answer had two foreign tips on one
+    #: point. The ladder's pages are drawn by the constructive solver and are not
+    #: searched through this term until a batch measures what it costs them.
+    #:
+    #: Two tips of the **same** net may share a point: a two-pin part joining both
+    #: ends to one net is a real (if silly) circuit, and nothing is joined that was
+    #: not already joined.
+    pin_clearance: bool = False
     progress: tuple[float, float] = (1.0, 0.0)
     lateral: tuple[float, float] = (0.0, 1.0)
     side_preferences: Mapping[str, str] = field(
@@ -1028,6 +1108,12 @@ def evaluate(request: PlacementInput, state: _State) -> list[CostTerm]:
     # 4c. the room the plan's own flags need at the pins they hang from.
     out.append(_flag_room_term(request, pins, boxes))
 
+    # 4d. the air two **foreign** pin tips need (see PIN_CLEARANCE_GRID). Only
+    #     when the request asks for it: the topology round does, and every page
+    #     the ladder draws keeps its cost list byte for byte.
+    if request.pin_clearance:
+        out.append(_pin_clearance_term(request, pins))
+
     # 5. the three hard ones.
     out.append(_page_term(request, boxes))
     out.append(_keepout_term(request, boxes))
@@ -1197,6 +1283,82 @@ def _clearance_term(boxes: Mapping[str, Box]) -> CostTerm:
     )
 
 
+def _pin_clearance_term(
+    request: PlacementInput,
+    pins: Mapping[str, Mapping[str, tuple[float, float]]],
+) -> CostTerm:
+    """How close two **foreign** pin tips are to sharing a point — priced.
+
+    The one obstacle the term list could not see. ``overlap`` and ``clearance``
+    above measure part **bodies**; a pin tip is a point that may sit on another
+    part's body boundary without the boxes sharing any area at all. Two tips of
+    different nets on one point is a node the editor reads as a connection, so
+    the plan can neither wire through it (`drawcompiler._blocked_points` treats a
+    foreign tip as a wall, and a wire vertex on one joins two nets) nor pass
+    beside it.
+
+    Measured on the flyback 2026-10-18: `Q1.3` (SRC) and `R5.2` (PGND) at the same
+    (75, 165), which is why the `SRC` obligation could not be drawn — "could not
+    be joined ... without a wire crossing a body, a text box or a foreign
+    connection". Every term in the list read 0 on that answer.
+
+    Two tips on the **same** net are not a short (the connection already exists),
+    so they are skipped: a two-pin part with both ends on one net is legal, and
+    charging it would make the search move a part for a non-problem. A tip whose
+    net the netlist does not state is treated as foreign to everything, the
+    conservative reading — nothing in the netlist joins it.
+    """
+    threshold = request.grid * PIN_CLEARANCE_GRID
+    owners: list[tuple[str, str, tuple[float, float], str]] = []
+    assignment: dict[tuple[str, str], str] = {}
+    for net in request.nets:
+        for owner, pin in net.members:
+            if owner in pins and pin in pins.get(owner, {}):
+                assignment.setdefault((owner, pin), net.net_id)
+    for owner in sorted(pins):
+        for pin in sorted(pins[owner]):
+            owners.append((owner, pin, pins[owner][pin], assignment.get((owner, pin), "")))
+    total = 0.0
+    worst = ("", 0.0)
+    for index, (a_owner, a_pin, a_point, a_net) in enumerate(owners):
+        for b_owner, b_pin, b_point, b_net in owners[index + 1:]:
+            if a_owner == b_owner:
+                # Two pins of one **symbol**: their distance is symbol geometry,
+                # not a placement decision — rotation and mirror conserve it and
+                # translation cannot change it, so pricing it would put a constant
+                # into the energy and buy the search nothing. Measured: the
+                # flyback's own transformer keeps `T1.1` and `T1.2` 10 units
+                # apart with nothing the placement can do about it, which is what
+                # capped the threshold at `grid * 2` while the pair was still
+                # counted. The library is the owner of that number, and it is
+                # where a drawing that cannot route between them has to be fixed.
+                continue
+            if a_net and a_net == b_net:
+                continue  # the same net may share a point
+            gap = math.hypot(a_point[0] - b_point[0], a_point[1] - b_point[1])
+            short = threshold - gap
+            if short <= 0.0:
+                continue
+            total += short
+            if short > worst[1]:
+                pair = (
+                    f"{a_owner}.{a_pin} ({a_net or '?'}) and "
+                    f"{b_owner}.{b_pin} ({b_net or '?'})"
+                )
+                worst = (
+                    f"{pair} on the same point {_point_text(a_point)}"
+                    if gap <= 0.0 else f"{pair} by {gap:g} units",
+                    short,
+                )
+    return CostTerm(
+        "pin-clearance", total,
+        f"how far the pin tips of different nets are short of the {threshold:g} units "
+        "they must keep apart "
+        + (f"— the tightest is {worst[0]} ({worst[1]:g} units short)" if worst[0]
+           else "— every pair of foreign tips has room"),
+    )
+
+
 def _point_text(point: tuple[float, float]) -> str:
     return f"({point[0]:g}, {point[1]:g})"
 
@@ -1227,6 +1389,8 @@ def _energy(terms: Iterable[CostTerm]) -> float:
             total += item.value * W_CLEARANCE
         elif item.name == "flag-room":
             total += item.value * W_FLAG_ROOM
+        elif item.name == "pin-clearance":
+            total += item.value * W_PIN_CLEARANCE
     return total
 
 
@@ -1872,6 +2036,20 @@ def place(request: PlacementInput) -> PlacementResult:
     return nothing: the caller gets the best drawing the search found together
     with its own account of what is wrong with it, which is the opposite of the
     silent zero-candidate answer the compiler gives today.
+
+    **The pin-tip repair is a second pass, not a term in the first one**
+    (:attr:`PlacementInput.pin_clearance`). The search runs exactly as it always
+    has with the term switched off, and only an answer that still puts two
+    foreign tips too close is searched again with the term priced. That shape is
+    deliberate, and it is the difference between fixing a bug and re-drawing every
+    page: a first-pass search that *carried* the term would perturb answers that
+    were never crowded, because annealing is a trajectory and a cost that is 0 at
+    the optimum is still not 0 along the way. Measured: with the term in the first
+    pass, `098` scene 08's refusal report moved (its own answer reads
+    `pin-clearance` 0 either way — the search simply took a different path), and
+    `tests/test_116_ordinal_consumption.py` holds that report to a published
+    byte-for-byte baseline. Two passes keep every such baseline intact and still
+    repair the drawing that needs it.
     """
     if not isinstance(request, PlacementInput):
         raise PlacementError(
@@ -1879,15 +2057,38 @@ def place(request: PlacementInput) -> PlacementResult:
         )
     ranks = _ranks(request.relations, request.part_ids())
     seed = _seed(request, ranks)
-    best: tuple[float, _State, int, int, int] | None = None
-    for index in range(max(1, request.restarts)):
-        attempt = request.seed + index
-        state, iterations, accepted = _anneal_with_seed(request, seed, attempt)
-        energy = _energy(evaluate(request, state))
-        if best is None or energy < best[0] - 1e-9:
-            best = (energy, state, iterations, accepted, attempt)
-    assert best is not None
-    _, state, iterations, accepted, attempt = best
+    #: The historical request: the same cost list, the same moves, the same
+    #: answer. `pin_clearance` is the only thing switched off.
+    plain = (
+        replace(request, pin_clearance=False)
+        if request.pin_clearance else request
+    )
+    energy, state, iterations, accepted, attempt = _best_of(plain, seed)
+    if request.pin_clearance:
+        short = _pin_clearance_term(request, _pins_of(request, state))
+        if short.value > 0.0:
+            # A second pass from the answer, with the term priced. It keeps the
+            # relation costs as they are, so it cannot buy spacing by breaking a
+            # promise — `_energy` still sums them at `W_RELATION`.
+            healed, more, taken = _anneal_with_seed(request, state, attempt)
+            healed_energy = _energy(evaluate(request, healed))
+            if healed_energy < energy - 1e-9:
+                state, energy = healed, healed_energy
+                iterations += more
+                accepted += taken
+            seed_note = (
+                f" — the pin-tip repair pass ran: {short.value:g} units of foreign "
+                f"tip shortfall on the first answer, "
+                + (f"the second pass found one with none"
+                   if _pin_clearance_term(request, _pins_of(request, state)).value
+                   <= 0.0 else
+                   f"{_pin_clearance_term(request, _pins_of(request, state)).value:g} "
+                   "units left (the budget ran out before it could be cleared)")
+            )
+        else:
+            seed_note = ""
+    else:
+        seed_note = ""
     costs = evaluate(request, state)
     result = PlacementResult(
         origins=dict(state.origins), poses=dict(state.poses), costs=costs,
@@ -1897,7 +2098,7 @@ def place(request: PlacementInput) -> PlacementResult:
         f"{PLACEMENT_NAME}: {len(request.parts)} part(s), "
         f"{len(request.relations)} relation(s), {request.restarts} restart(s), "
         f"{iterations} iteration(s) on the winning one, {accepted} accepted, "
-        f"seed {attempt}"
+        f"seed {attempt}" + seed_note
     )
     hard = result.hard
     if hard:
@@ -1906,3 +2107,18 @@ def place(request: PlacementInput) -> PlacementResult:
             + "; ".join(item.render() for item in hard)
         )
     return result
+
+
+def _best_of(
+    request: PlacementInput, seed: _State
+) -> tuple[float, _State, int, int, int]:
+    """Every restart searched, the best drawing kept — ``place``'s own search."""
+    best: tuple[float, _State, int, int, int] | None = None
+    for index in range(max(1, request.restarts)):
+        attempt = request.seed + index
+        state, iterations, accepted = _anneal_with_seed(request, seed, attempt)
+        energy = _energy(evaluate(request, state))
+        if best is None or energy < best[0] - 1e-9:
+            best = (energy, state, iterations, accepted, attempt)
+    assert best is not None
+    return best

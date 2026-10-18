@@ -2658,6 +2658,13 @@ def _topology_request(ctx: _Context) -> placement.PlacementInput:
         # page the ladder already draws keeps the one-line seed byte for byte.
         chain=frozenset(ctx.chain),
         flag_seats=_flag_seats(ctx),
+        # The topology round is the round that draws a whole circuit from a
+        # grammar, and the round whose answer had two foreign pin tips on one
+        # point (2026-10-18: `Q1.3` SRC and `R5.2` PGND at the same (75, 165),
+        # which is why the `SRC` obligation could not be drawn). Only this
+        # request states it, so the ladder's pages keep their cost list byte for
+        # byte — the zero-move gate (`tools/116_no_move.py`) measures exactly that.
+        pin_clearance=True,
         progress=ctx.progress, lateral=ctx.lateral(),
         side_preferences={
             role: (ctx.presentation.side_for(role) or fallback)

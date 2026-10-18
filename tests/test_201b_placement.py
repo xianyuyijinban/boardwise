@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import pathlib
 import sys
 import time
@@ -650,3 +651,144 @@ def test_a_request_with_no_flag_seat_reserves_nothing():
     result = pl.place(request)
     assert result.term("flag-room").value == 0.0
     assert "no flag seat" in result.term("flag-room").detail
+
+
+# ------------------------------------------ §九 异网 pin 尖间距（pin-clearance）
+
+def _pin_request(**kwargs) -> pl.PlacementInput:
+    """两颗两脚电阻，网表可调——钉 pin 尖间距这一项的机制。"""
+    base = dict(
+        parts=(
+            pl.PlacementPart("R1", _resistor("R0603"), ALL_POSES),
+            pl.PlacementPart("R2", _resistor("R0603"), ALL_POSES),
+        ),
+        nets=(
+            pl.PlacementNet("A", (("R1", "1"), ("R1", "2"))),
+            pl.PlacementNet("B", (("R2", "1"), ("R2", "2"))),
+        ),
+        progress=(1.0, 0.0), lateral=(0.0, 1.0),
+        iterations=20, restarts=1, seed=3,
+    )
+    base.update(kwargs)
+    return pl.PlacementInput(**base)
+
+
+def test_foreign_pin_tips_closer_than_the_threshold_are_priced():
+    """两个**不同网**的针尖挤在同一点：搜索看得见它，并报出是哪两根。
+
+    这是 2026-10-18 实测的那个 bug 的机制：`Q1.3`（SRC）与 `R5.2`（PGND）同在
+    (75, 165)。`overlap`/`clearance` 量的是**器件 body**，针尖是 body 边界上的
+    一个点，两边都不管——于是这一对在 cost 表里读数是 0，而 router 把外网针尖
+    当墙，SRC 的直连义务就此必然被拒。
+    """
+    request = _pin_request(pin_clearance=True)
+    # pin1 在 -20、pin2 在 +20：两颗件原点相距 40 时，R1.2 (20, 0) 与
+    # R2.1 (20, 0) 同心 —— 正是要说「不许」的那一种。
+    crowded = pl._State(
+        origins={"R1": (0.0, 0.0), "R2": (40.0, 0.0)},
+        poses={"R1": SymbolPose(0, False), "R2": SymbolPose(0, False)},
+    )
+    term = pl._pin_clearance_term(request, pl._pins_of(request, crowded))
+    assert term.violated, term.render()
+    assert "R1.2" in term.detail and "R2.1" in term.detail
+    assert "same point" in term.detail
+    # 距离 0，所以整整欠一个阈值（grid 5 x PIN_CLEARANCE_GRID 3 = 15）。
+    assert term.value == request.grid * pl.PIN_CLEARANCE_GRID
+
+
+def test_a_foreign_pair_inside_the_threshold_is_priced_by_the_gap():
+    """没重合但太近也计——按**欠多少**计，不是二元判定。
+
+    反激落地态的 `Q1.3`/`R5.2` 就是这种：不同点，相距 15，照样是 router
+    过不去的那一类。所以这一项必须量距离，不能只在距离为 0 时报警。
+    """
+    request = _pin_request(pin_clearance=True)
+    # 相距 45：R1.2 (25, 0) 与 R2.1 (25, 0) 差 5，阈值 15，欠 10。
+    close = pl._State(
+        origins={"R1": (0.0, 0.0), "R2": (45.0, 0.0)},
+        poses={"R1": SymbolPose(0, False), "R2": SymbolPose(0, False)},
+    )
+    term = pl._pin_clearance_term(request, pl._pins_of(request, close))
+    assert term.value == request.grid * pl.PIN_CLEARANCE_GRID - 5.0, term.render()
+    assert "by 5 units" in term.detail
+
+
+def test_pin_tips_of_one_net_may_share_a_point():
+    """同一个网的针尖重合不是短路：两脚件共网是合法电路，不该被推着走。"""
+    request = _pin_request(
+        nets=(pl.PlacementNet("A", (("R1", "1"), ("R1", "2"),
+                                    ("R2", "1"), ("R2", "2"))),),
+        pin_clearance=True,
+    )
+    crowded = pl._State(
+        origins={"R1": (0.0, 0.0), "R2": (45.0, 0.0)},
+        poses={"R1": SymbolPose(0, False), "R2": SymbolPose(0, False)},
+    )
+    term = pl._pin_clearance_term(request, pl._pins_of(request, crowded))
+    assert term.value == 0.0, term.render()
+
+
+def test_a_request_that_does_not_ask_has_no_pin_clearance_term():
+    """没声明的请求不评这一项（不是「零违反」，是「不适用」）——ladder 逐字等价。"""
+    request = _pin_request()
+    assert request.pin_clearance is False
+    result = pl.place(request)
+    assert result.term("pin-clearance") is None
+
+
+def test_the_energy_prices_the_shortfall_through_its_own_weight():
+    """这一项**进了 `_energy`**，而且按 `W_PIN_CLEARANCE` 计价。
+
+    只写 term 函数而忘了加权，cost 表会照旧报数、搜索却不挪——这一条钉的是
+    加权本身：同一个 term 值走 `_energy`，乘出来的必须是 `值 × W_PIN_CLEARANCE`
+    （`test_the_energy_function_reads_each_term_through_its_own_weight` 已经是这个
+    形状，这里只补上本项那一条分支）。
+    """
+    term = pl.CostTerm("pin-clearance", 15.0, "two foreign tips on one point")
+    assert pl._energy([term]) == 15.0 * pl.W_PIN_CLEARANCE
+    # 量级：它必须**压过**关系项（短路的代价高于任何美观项），又远低于硬项
+    # 的每单位价（硬项是"这不叫一张图"，不是"这图难看"）。
+    assert pl.W_PIN_CLEARANCE > pl.W_RELATION
+    assert pl.W_PIN_CLEARANCE < pl.W_HARD
+
+
+def test_the_flybacks_placement_keeps_every_foreign_tip_apart():
+    """反激拓扑答案：异网针尖两两满足阈值——本批要修的那个 bug 的行为面。
+
+    这一条用**真三件套**的拓扑请求（`dc._topology_request` 是唯一传
+    `pin_clearance=True` 的地方），量的是 2026-10-18 那对 `Q1.3`(SRC) /
+    `R5.2`(PGND) 那类重合还在不在。
+    """
+    request, _ = _flyback()
+    request = dc._topology_request(
+        dc._prepare(
+            CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json"),
+            PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json"),
+            _flyback()[1].grammar,
+            _library_from(SPECS / "flyback_uc3845.library.json"),
+            dc.CompileBudget(max_candidates=64),
+        ).context
+    )
+    assert request.pin_clearance is True, "the topology round is what asks for this term"
+    result = pl.place(request)
+    pins = pl._pins_of(request, pl._State(dict(result.origins), dict(result.poses)))
+    net_of: dict[tuple[str, str], str] = {}
+    for net in request.nets:
+        for owner, pin in net.members:
+            net_of.setdefault((owner, pin), net.net_id)
+    tips = [
+        (owner, pin, point, net_of.get((owner, pin), ""))
+        for owner in sorted(pins) for pin in sorted(pins[owner])
+        for point in (pins[owner][pin],)
+    ]
+    threshold = request.grid * pl.PIN_CLEARANCE_GRID
+    for index, (a_owner, a_pin, a_point, a_net) in enumerate(tips):
+        for b_owner, b_pin, b_point, b_net in tips[index + 1:]:
+            if a_owner == b_owner or (a_net and a_net == b_net):
+                continue
+            gap = math.hypot(a_point[0] - b_point[0], a_point[1] - b_point[1])
+            assert gap >= threshold, (
+                f"{a_owner}.{a_pin} ({a_net}) and {b_owner}.{b_pin} ({b_net}) "
+                f"are {gap:g} apart, threshold {threshold:g}"
+            )
+    assert result.term("pin-clearance").value == 0.0, result.term("pin-clearance").render()
