@@ -4,6 +4,22 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-10-18] release v0.5.16（**内测**，岳裁 10-18）：审查线资料获取三连
+
+`520` `parts hunt` 批量寻址 + `521` `--apply-facts` 收 AI 读 txt 的产出 + `522` `facts_verified`
+三档，三批合起来把「几十上百份数据手册没人补」这件事从"整个流程卡住"推到"剩两行人工确认"。
+另加 `docs/drawing-algorithm-brief.md`（绘制困境/被证伪的路子/接口清单，给外部算法推演用）。
+
+**三闸**：**实测** 全量 `6352 passed / 25 skipped / 0 failed / 789.12 s`（`-n 4 --dist loadfile`）；
+connector `521 pass` + `tsc --noEmit` 绿；dsh-plugin `50 passed` + build 绿；hygiene 全绿。
+**挖洞**：全量替本批抓出 2 处（`engines/hunt.py` 越层导入 `core` 的私有名 → `core` 加公开别名；
+rulebody 指纹按纪律重钉 `3de90bc4→5eceec18` / `10a9d541→9235d428`），见 `f2bc7d2`。
+**上机**：exe 重打并冒烟（`--version` 报 0.5.16 + connector bundle 0.5.16、`parts hunt --offline`
+零外呼、离线 `checkup` 正常、保密扫描 488 个 exe 压缩流 0 命中），**但 connector 未重载，
+在线对拍这一条留给岳** —— 本批零 bridge 协议改动，故按内测发并如实标出。
+
+产物：exe `f0b732f7…`（14 681 213 B）、bundle `251e80bc…`、tag `v0.5.16`（prerelease）。
+
 ## [2026-10-18] 522：`facts_verified` 拆成三档，计算类规则吃机器核验（520/521 下游闭环）
 
 521 之后一条 facts 已经有**可核验的证据链**（引文逐字在它点的页码上、pin 在文档里、来源是 URL 或
