@@ -9274,6 +9274,7 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
                 {"category": item.category, "detail": item.detail, "action": item.action}
                 for item in result.failures
             ],
+            "failureRounds": result.summarize_failure_rounds(),
             "categories": result.categories(),
             "rejected": [
                 {"variant": item.variant, "reason": item.reason}
@@ -11094,6 +11095,11 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
                 {"variant": item.variant, "reason": item.reason}
                 for item in result.rejected
             ],
+            "moduleFailureRounds": {
+                name: compiled.summarize_failure_rounds()
+                for name, compiled in result.modules.items()
+                if not compiled.ok
+            },
             "modules": {
                 name: {"ok": compiled.ok, "categories": compiled.categories()}
                 for name, compiled in result.modules.items()

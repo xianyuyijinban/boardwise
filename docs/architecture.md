@@ -163,7 +163,14 @@ on purpose, because the compiler is the part that must work with no editor:
   from a reference drawing**: the geometry is computed from pin axes, the
   lattice and the stated page. Its four refusal categories (`facts-missing`,
   `circuit-invalid`, `layout-unsat`, `presentation-poor`) are the vocabulary
-  every caller reports in.
+  every caller reports in. A zero-candidate result's `failures` leads with the
+  **first** variant's own reason (the summary every consumer has always read);
+  551A added `failure_rounds` beside it — one entry per search round that
+  refused (base ladder / widened ladder / topology search), each with that
+  round's own first reason, so a page the ladder refuses for A and the
+  topology search refuses for B shows both, and `summarize_failure_rounds()`
+  renders them as report-ready dicts (falling back to the summary failures for
+  a hand-built result).
 * **the landing step** (`engines/drawapply.py`, 054) turns one candidate into a
   `ChangePlan` of kind `draw-module` (`core/changeplan.py`, the kind 054 added,
   after the five M3 slices, and

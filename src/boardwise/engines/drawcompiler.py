@@ -597,6 +597,37 @@ class Candidate:
         return ", ".join(f"{name}={value:g}" for name, value in zip(names, self.key))
 
 
+@dataclass(frozen=True)
+class FailureRound:
+    """One search round's refusal, kept beside the summary's first one (551A).
+
+    ``round`` names where this refusal came from — ``"base"`` (the ladder's own
+    rungs, 053 sec.4's constructive search), ``"widened"`` (119's pose ladder),
+    ``"topology"`` (201B's placement search) — and ``failure`` is the round's
+    **first** refused variant's measured reason: the same shape the summary
+    leads with, so a reader comparing rounds compares like with like. Every
+    variant's own verdict stays in ``CompileResult.rejected``; a round holds
+    the reason the round's answer leads with, not one line per variant.
+    """
+
+    round: str
+    failure: GrammarFailure
+
+    def __post_init__(self) -> None:
+        if self.round not in FAILURE_ROUNDS:
+            raise CompileError(
+                f"unknown failure round {self.round!r}; 551A fixes them as "
+                f"{list(FAILURE_ROUNDS)}"
+            )
+
+
+#: The rounds a zero-candidate result can name, in the order the compiler
+#: reaches them. The early stages (reference, binding, library, prepare) refuse
+#: before any round runs and are not rounds — their failures are the summary
+#: itself.
+FAILURE_ROUNDS: tuple[str, ...] = ("base", "widened", "topology")
+
+
 @dataclass
 class CompileResult:
     """The compiler's whole answer: candidates, refusals, and what it tried.
@@ -618,6 +649,17 @@ class CompileResult:
     rejected: list[RejectedCandidate] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     grammar: GrammarResult | None = None
+    #: The failure rounds that produced no candidate, in the order the compiler
+    #: reached them — 551A. ``failures`` is the *summary* (the first refusal's
+    #: own reason, the line the report leads with and every existing consumer
+    #: reads); ``failure_rounds`` is where the other exits stay visible: a page
+    #: the ladder refuses for A and the topology search refuses for B carries
+    #: both rounds here, so the report cannot present A as the whole answer.
+    #: Empty on a success, on the early refusals that never reached the rounds
+    #: (the reference, binding, library and prepare stages), and by default for
+    #: a result assembled by hand — :func:`summarize_failure_rounds` backfills
+    #: it into one dict for a reader who wants the pairs.
+    failure_rounds: list[FailureRound] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -643,6 +685,26 @@ class CompileResult:
                 line += f" — try: {item.action}"
             lines.append(line)
         return "\n".join(lines)
+
+    def summarize_failure_rounds(self) -> list[dict[str, str]]:
+        """The rounds as ``{round, category, detail}`` dicts, report-ready.
+
+        A hand-built result with ``failure_rounds`` empty falls back to the
+        summary failures, each under ``"first"`` — the one-round shape the
+        compiler produced before 551A — so a consumer reading this field gets a
+        same-shaped answer from a result that predates the field.
+        """
+        if self.failure_rounds:
+            return [
+                {"round": item.round, "category": item.failure.category,
+                 "detail": item.failure.detail}
+                for item in self.failure_rounds
+            ]
+        return [
+            {"round": "first", "category": item.category,
+             "detail": item.detail}
+            for item in self.failures
+        ]
 
 
 # --------------------------------------------------------------------- entry
@@ -777,6 +839,7 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
 
     if not result.ranked:
         result.failures = _no_candidate_failures(result, budget)
+        result.failure_rounds = _failure_rounds(result)
         return result
 
     result.ranked.sort(key=lambda item: item.key)
@@ -9452,6 +9515,51 @@ def rank_key(
         metrics.get("wire_length", 0.0),
         (box[2] - box[0]) * (box[3] - box[1]),
     )
+
+
+def _failure_rounds(result: CompileResult) -> list[FailureRound]:
+    """Every round's own first refusal, in the order the rounds ran (551A).
+
+    ``result.rejected`` is one flat list — the ladder's rungs, the widened
+    round's rungs and the topology search's answer all append to it — so the
+    rounds are recovered the way the compiler ran them: the labels 119 and 201B
+    write carry the round, and the flat list is in run order. A round with no
+    refusal of its own is absent, so the list stays short and every entry in it
+    is a reason a reader has not been shown yet.
+
+    The **summary stays the first refusal** (the behaviour every existing
+    consumer reads); this is the beside-it list, and the tests below
+    (`tests/test_551a_failure_rounds.py`) pin both halves: old lines unchanged,
+    the second round's reason now visible.
+    """
+    rounds: list[FailureRound] = []
+    seen: set[str] = set()
+    for item in result.rejected:
+        if item.failure is None:
+            continue
+        name = _variant_round(item.variant)
+        if name in seen:
+            continue
+        seen.add(name)
+        rounds.append(FailureRound(round=name, failure=item.failure))
+    order = {name: index for index, name in enumerate(FAILURE_ROUNDS)}
+    return sorted(rounds, key=lambda item: order[item.round])
+
+
+def _variant_round(label: str) -> str:
+    """The round a rejected variant's own label names (551A).
+
+    The labels are the compiler's own contract with itself: 053's rungs are
+    ``spacing=<scale> pose-variant=<i>``, 119's are the same with a
+    `` (widened)`` suffix, 201B's is ``topology-search``. A label that names no
+    round is a hand-built or foreign entry, and it is answered ``"base"`` — the
+    same default every ladder rung carries — rather than guessed at.
+    """
+    if label == "topology-search":
+        return "topology"
+    if "(widened)" in label:
+        return "widened"
+    return "base"
 
 
 def _no_candidate_failures(
