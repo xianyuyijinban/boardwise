@@ -58,6 +58,9 @@ from .engines.checkup import (
     marked_parts,
     merge_needs_datasheet_sidecar,
     merge_triage_sidecar,
+    metadata_conflict_rows,
+    metadata_parameter_rows,
+    metadata_state_counts,
     modules_section,
     needs_datasheet_section,
     order_modules_by_warnings,
@@ -3553,6 +3556,12 @@ def _checkup_report(
     pcb_review: dict | None = None,
     accepted_unknown: list[dict] | None = None,
     declared_passive_exempt: list[dict] | None = None,
+    # 517: the archive-metadata reading, carried beside the declared-passive
+    # trace for the same reason — a shortening of the gate with no trace is a
+    # silent green light. The confirmed/conflict rows and the four buckets.
+    metadata_value_confirmed: list[dict] | None = None,
+    metadata_value_conflicts: list[dict] | None = None,
+    metadata_state_counts: dict[str, int] | None = None,
     shelf_path: str = "",
 ) -> dict:
     """Assemble the report: what was read (batch 2), what was found (batch 3),
@@ -3646,6 +3655,15 @@ def _checkup_report(
         # exemption apply, so "why is this U-designated part not on the list?"
         # has an answer in the report rather than only in the rule.
         "declaredPassiveExempt": list(declared_passive_exempt or []),
+        # 517: the archive-metadata reading of the value-code passives, always
+        # present (an empty list is the honest "nothing was confirmed /
+        # nothing clashed"). `metadataValueConfirmed` is the trace of the
+        # parts the gate dropped on two-source agreement (with **which** two);
+        # `metadataValueConflicts` the WARN rows, every reading written out;
+        # the four buckets ride in `completion.metadataStateCounts`.
+        "metadataValueConfirmed": list(metadata_value_confirmed or []),
+        "metadataValueConflicts": list(metadata_value_conflicts or []),
+        "metadataStates": dict(metadata_state_counts or {}),
         # 058: always present, empty list included — the reviewer's mark channel
         # exists from the first report on (`boardwise need-datasheet` fills it).
         "needs_datasheet": list(needs_datasheet or []),
@@ -4246,6 +4264,8 @@ def _completion_body(
     coverage: dict | None = None,
     accepted: list[dict] | None = None,
     passive_exempt: list[dict] | None = None,
+    # 517: the four metadata buckets, additive like every key beside it.
+    metadata_states: dict[str, int] | None = None,
     sidecar_needs: dict | None = None,
 ) -> dict:
     """`completion` from counts a caller already has — one shape, two callers.
@@ -4507,6 +4527,9 @@ def _completion_body(
         # designators are listed in report.md and the rows are in
         # `report.declaredPassiveExempt`. Additive, like every key beside it.
         "declaredPassiveExempt": len(passive_exempt or []),
+        # 517: the four metadata buckets (元数据已确认 / 冲突 / 缺失 / 不可解析),
+        # read from the rows the run wrote — never recounted here. Additive.
+        "metadataStateCounts": dict(metadata_states or {}),
         # 516 A3: what a re-run did with the reviewer's ``needs-datasheet.json``
         # marks, on its own key rather than buried in `source.notes`. `merged` is
         # how many marks folded into this report, `unmatched` how many pointed at
@@ -4537,6 +4560,8 @@ def _completion_section(
     coverage: dict | None = None,
     accepted: list[dict] | None = None,
     passive_exempt: list[dict] | None = None,
+    # 517: the live run's own reading, computed by the caller from the model.
+    metadata_states: dict[str, int] | None = None,
     sidecar_needs: dict | None = None,
 ) -> dict:
     """`completion` for a **live run** — the coverage counts come from the model.
@@ -4569,6 +4594,7 @@ def _completion_section(
         coverage=coverage,
         accepted=accepted,
         passive_exempt=passive_exempt,
+        metadata_states=metadata_states,
         sidecar_needs=sidecar_needs,
     )
 
@@ -4670,10 +4696,41 @@ def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dic
         # re-reads no model, so it cannot recount; it reads the rows the run
         # wrote rather than dropping the disclosure down to zero.
         passive_exempt=report.get("declaredPassiveExempt") or [],
+        # 517: the same carry-over for the metadata buckets. The confirmed /
+        # conflict rows are read from the report's own sections; the
+        # missing/unparseable buckets ride in the summary the run wrote
+        # (`metadataStates`), which the run always carried — a report that
+        # predates the key answers empty rather than inventing buckets.
+        metadata_states=_metadata_states_carry_over(report, previous),
         # 516 A3: the sidecar's own merge counts are a fact about the run that
         # wrote them, carried over like `coverage` — a re-gate re-reads no sidecar.
         sidecar_needs=previous.get("sidecarNeedsDatasheet") or {},
     )
+
+
+def _metadata_states_carry_over(report: dict, previous: dict) -> dict[str, int]:
+    """The four 517 buckets for a **re-gate**, read from what the run wrote.
+
+    The confirmed bucket is counted from the report's confirmed rows, the
+    conflict bucket from its conflict rows — both are facts the run recorded —
+    and the missing/unparseable buckets from the run's own summary. A summary
+    without the key (pre-517) contributes nothing: fewer buckets, never
+    invented ones.
+    """
+    counts: dict[str, int] = {}
+    confirmed = report.get("metadataValueConfirmed") or []
+    if confirmed:
+        counts["元数据已确认"] = len(confirmed)
+    conflicts = report.get("metadataValueConflicts") or []
+    if conflicts:
+        counts["元数据冲突"] = len(conflicts)
+    stored = previous.get("metadataStateCounts")
+    if isinstance(stored, dict):
+        for name in ("元数据缺失", "元数据不可解析"):
+            value = stored.get(name)
+            if isinstance(value, int) and value > 0:
+                counts[name] = value
+    return counts
 
 
 # --------------------------------------------------------------------------
@@ -6958,6 +7015,12 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # count. The exemption is the datasheet gate's only *shortening* path, so it
     # gets a trace in both places rather than existing only as a rule in code.
     passive_exempt = declared_passive_exemptions(model)
+    # 517: the same read-once-twice discipline for the archive-metadata reading
+    # — the gate's **second** shortening path. Rows for the report sections,
+    # buckets for the completion count, all from this one walk.
+    meta_confirmed = metadata_parameter_rows(model)
+    meta_conflicts = metadata_conflict_rows(model)
+    meta_states = metadata_state_counts(model)
     completion = _completion_section(
         model=model, summary=summary, unreviewed=unreviewed, triage=triage,
         architecture=architecture_section,
@@ -6967,6 +7030,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         # the verdict reads them here — the same list the report carries.
         accepted=accepted_rows,
         passive_exempt=passive_exempt,
+        metadata_states=meta_states,
         sidecar_needs=sidecar_needs,
     )
     # 073, decided **once**, here: the verdict now decides the exit code, and the
@@ -7006,6 +7070,9 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         needs_datasheet=needs_datasheet,
         reviewed_by_shelf=reviewed,
         declared_passive_exempt=passive_exempt,
+        metadata_value_confirmed=meta_confirmed,
+        metadata_value_conflicts=meta_conflicts,
+        metadata_state_counts=meta_states,
         warning_triage=triage,
         layout_review=(
             layout_review_section(source=aesthetics_source, pages=canvas)

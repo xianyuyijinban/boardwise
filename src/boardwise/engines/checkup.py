@@ -28,6 +28,11 @@ from typing import Any, Iterable
 
 from ..core.architecture import STALE_MARK
 from ..core.designintent import INTENT_MISSING
+from ..core.metaparams import (
+    CONFIRMED as META_CONFIRMED,
+    WARN_CONFLICT as META_WARN_CONFLICT,
+    crosscheck as meta_crosscheck,
+)
 from ..core.model import Component, DesignModel, Net, is_ground_net
 from ..core.parts import DESIGNATOR_CATEGORIES
 
@@ -1141,6 +1146,194 @@ def _prefix_of(designator: str) -> str:
     return match.group(0).upper() if match else ""
 
 
+# --------------------------------------------------------------------------
+# 517: the archive's own parameters (level 0) — no network call
+# --------------------------------------------------------------------------
+
+#: The quantity a part's ``kind`` reads its value code in — the narrow map
+#: :func:`boardwise.core.metaparams.mpn_params` asks for. ``inductor`` is in
+#: it to be **refused** (no inductance parser exists to ask), the same
+#: discipline ``_value_decodable`` states for ``L``.
+_META_KIND_OF_KIND: dict[str, str] = {
+    "resistor": "resistor",
+    "capacitor": "capacitor",
+    "inductor": "inductor",
+}
+
+
+def _meta_kind_of(component: Component) -> str:
+    """The ``metaparams`` kind for one component, or ``""`` (read nothing).
+
+    Classified by the shared entry point (:func:`classify_part`) and mapped
+    through the narrow table above: an IC, a connector, a thermistor and
+    everything else this reader has no value grammar for read as ``""`` —
+    asking a value-code question about a part whose quantity is not a
+    resistance or a capacitance is the 188a false-clear shape.
+    """
+    from ..core.partkind import classify_part
+
+    return _META_KIND_OF_KIND.get(classify_part(component, pin_floor=False).kind, "")
+
+
+def _meta_archive_text(component: Component) -> str:
+    """The archive string to read: ``LCSC Part Name``, then ``Type``.
+
+    The two fields :data:`METADATA_TYPE_KEYS` established as the archive's
+    declarations, in the same priority order 189B measured (the type was
+    written in ``LCSC Part Name`` while ``Type`` was empty). ``Supplier
+    Footprint`` is not read here: it names a package, not a parameter.
+    """
+    for key in ("LCSC Part Name", "Type"):
+        text = str(component.props.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _metadata_crosscheck(component: Component, kind: str) -> dict:
+    """The three-way parameter agreement for one component (517).
+
+    ``(rows, state)``: the per-parameter crosscheck rows from
+    :func:`boardwise.core.metaparams.crosscheck` over the three sources, and
+    the component's **overall** state — ``"confirmed"`` when the *value*
+    parameter is confirmed by ≥2 sources agreeing, ``"warn"`` when any
+    parameter's sources clash, ``"missing"`` when the archive states nothing
+    at all, ``"unparseable"`` when the archive has a string but every token
+    was refused. Missing and unparseable are **different answers** — the
+    product's core requirement is that a parse failure never be counted as
+    "the data does not exist".
+    """
+    archive_text = _meta_archive_text(component)
+    rows = meta_crosscheck(
+        archive_text,
+        component.value or "",
+        component.mpn or "",
+        kind=kind,
+    )
+    if rows.get("value", None) is not None and rows["value"].state == META_CONFIRMED:
+        state = "confirmed"
+    elif any(row.state == META_WARN_CONFLICT for row in rows.values()):
+        state = "warn"
+    elif not archive_text:
+        state = "missing"
+    elif not rows:
+        state = "unparseable"
+    else:
+        # The archive stated something readable (a tolerance, a power …) but
+        # the value did not confirm: it is neither missing nor a conflict.
+        state = "partial"
+    return {"rows": rows, "state": state, "archive": archive_text}
+
+
+def metadata_parameter_rows(model) -> list[dict]:
+    """One row per passive whose parameters the archive confirmed (517).
+
+    The trace for the rows :func:`unknown_parts` does **not** list because of
+    their value (the gate's second shortening path, beside 192B ⑤'s
+    declared-passive exemption): a part that leaves the datasheet worklist
+    because two sources agreed on its value has to say so, with **which two**
+    — the evidence is the deliverable, not a side effect. Read off the same
+    predicate the gate applies, so the rows cannot disagree with the gate.
+    """
+    rows: list[dict] = []
+    for designator, component, boards in _parts_with_boards(model):
+        if _prefix_of(designator) not in _VALUE_CODE_PREFIXES:
+            continue
+        kind = _meta_kind_of(component)
+        if not kind:
+            continue
+        result = _metadata_crosscheck(component, kind)
+        value_row = result["rows"].get("value")
+        if value_row is None or value_row.state != META_CONFIRMED:
+            continue
+        rows.append({
+            "designator": designator,
+            "kind": kind,
+            "archive": result["archive"],
+            "value": value_row.readings.get("mpn", next(iter(value_row.readings.values()), 0.0)),
+            "confirmedBy": list(value_row.agreeing),
+            "readings": {
+                param: {
+                    "state": row.state,
+                    "readings": row.readings,
+                    "evidence": row.evidence,
+                }
+                for param, row in result["rows"].items()
+            },
+            **_board_field(
+                boards,
+                mpn=str(component.mpn or "").strip(),
+                name=str(component.props.get("device_name") or component.value or ""),
+                value=component.value,
+            ),
+        })
+    return rows
+
+
+def metadata_conflict_rows(model) -> list[dict]:
+    """One row per passive whose parameter sources **clash** (517).
+
+    Two readings that disagree — archive against board, archive against MPN,
+    board against MPN — are a WARN with every reading written out, never a
+    silent pick. Same walk, same predicate as :func:`metadata_parameter_rows`.
+    """
+    rows: list[dict] = []
+    for designator, component, boards in _parts_with_boards(model):
+        if _prefix_of(designator) not in _VALUE_CODE_PREFIXES:
+            continue
+        kind = _meta_kind_of(component)
+        if not kind:
+            continue
+        result = _metadata_crosscheck(component, kind)
+        conflicts = {
+            param: row
+            for param, row in result["rows"].items()
+            if row.state == META_WARN_CONFLICT
+        }
+        if not conflicts:
+            continue
+        rows.append({
+            "designator": designator,
+            "kind": kind,
+            "archive": result["archive"],
+            "boardValue": component.value,
+            "mpn": str(component.mpn or "").strip(),
+            "params": {
+                param: {
+                    "state": row.state,
+                    "readings": row.readings,
+                    "evidence": row.evidence,
+                }
+                for param, row in conflicts.items()
+            },
+            **_board_field(
+                boards,
+                mpn=str(component.mpn or "").strip(),
+                name=str(component.props.get("device_name") or component.value or ""),
+                value=component.value,
+            ),
+        })
+    return rows
+
+
+def _value_confirmed_by_metadata(component: Component) -> bool:
+    """May the gate drop this part's 「值不可知」 reason on metadata evidence (517)?
+
+    Exactly the confirmation rule, applied to the one parameter the gate is
+    about: the **value** is confirmed when ≥2 of the three sources state it
+    and agree. Two available and clashing is a WARN — it never silently
+    clears, so this answers False for a conflict. One source alone confirms
+    nothing either: a reading with nothing to check against is carried, not
+    credited.
+    """
+    real_kind = _meta_kind_of(component)
+    if not real_kind:
+        return False
+    result = _metadata_crosscheck(component, real_kind)
+    value_row = result["rows"].get("value")
+    return value_row is not None and value_row.state == META_CONFIRMED
+
+
 def _parts_with_boards(model) -> list[tuple[str, Component, list[str]]]:
     """``(designator, component, board titles)`` — one row per **placement** (040b).
 
@@ -1209,6 +1402,16 @@ def unknown_parts(model: DesignModel) -> list[dict]:
             prefix in _VALUE_CODE_PREFIXES
             and classify_part(component).kind != KIND_THERMISTOR
             and not _value_decodable(prefix, component)
+            # 517: the archive's own parameters are the level-0 answer. A part
+            # whose value ≥2 of the three sources (archive metadata / board
+            # ``Value`` / MPN) state **and agree on** is a value the review can
+            # use, so 「值不可知」 would be a lie about it — the reason is not
+            # recorded, and the evidence rides in `metadataValueConfirmed[]`
+            # / report.md. ``UNKNOWN_REASON_UNDECODABLE``'s own meaning is
+            # untouched: it still names exactly 「MPN 值码解不出，板上 Value
+            # 也读不出」, and this check is asked *beside* it, before the
+            # reason is written, not instead of the decoders.
+            and not _value_confirmed_by_metadata(component)
         ):
             reasons.append(UNKNOWN_REASON_UNDECODABLE)
         if not (component.lcsc_part or "").strip():
@@ -1352,6 +1555,41 @@ REASON_CLASS_MISSING_MATERIAL = "真缺资料"
 #: that would not have helped.
 CLASS_ORDER: tuple[str, ...] = (REASON_CLASS_UNDECODABLE, REASON_CLASS_MISSING_MATERIAL)
 
+# --------------------------------------------------------------------------
+# 517: the metadata reading, **inside** the class split — the four answers the
+# archive gave, counted separately because a parse failure is not "missing
+# data" (the batch's core requirement).
+# --------------------------------------------------------------------------
+
+#: 517's four sub-answers, beneath 186 §C's two classes. One passive's archive
+#: metadata read:
+#:
+#: * 「元数据已确认」 — ≥2 of the three sources (archive / board ``Value`` /
+#:   MPN) state the value and agree. The gate already dropped these (the row
+#:   is not in the list below at all); the count is the trace of what the
+#:   archive bought;
+#: * 「元数据冲突」 — ≥2 sources available and they disagree: a WARN, every
+#:   reading written out, never a silent pick;
+#: * 「元数据缺失」 — no archive string at all (no ``LCSC Part Name``, no
+#:   ``Type``): the data genuinely does not exist in the archive;
+#: * 「元数据不可解析」 — an archive string is there and **nothing** in it
+#:   parsed. This is a *tool* failure, not missing data — counting it as
+#:   「缺失」 would send the engineer hunting a datasheet for what is a
+#:   parser gap, which is exactly the conflation this batch exists to end.
+#:
+#: A part the archive read but neither confirmed nor warned (a readable
+#: tolerance, no readable value) lands in none of the four: it was never on
+#: the value question's list.
+META_STATE_CONFIRMED = "元数据已确认"
+META_STATE_CONFLICT = "元数据冲突"
+META_STATE_MISSING = "元数据缺失"
+META_STATE_UNPARSEABLE = "元数据不可解析"
+
+META_STATE_ORDER: tuple[str, ...] = (
+    META_STATE_CONFIRMED, META_STATE_CONFLICT, META_STATE_MISSING,
+    META_STATE_UNPARSEABLE,
+)
+
 
 def unreviewed_reason_class(reason: str) -> str:
     """Which of the two classes one reason belongs to (186 §C, 188B).
@@ -1397,6 +1635,73 @@ def unreviewed_counts_by_class(unreviewed: list[dict] | None) -> dict[str, int]:
         for name in unreviewed_classes(row):
             counts[name] = counts.get(name, 0) + 1
     return {name: counts[name] for name in CLASS_ORDER if name in counts}
+
+
+def _meta_state_of_component(component: Component) -> str | None:
+    """Which of the four 517 answers one passive's archive gave, or ``None``.
+
+    ``None`` — the part is not a value-code passive this reader reads (an IC,
+    a connector, an inductor), so it is not in the metadata question at all
+    and must not be counted in any of the four buckets.
+    """
+    if not _meta_kind_of(component):
+        return None
+    result = _metadata_crosscheck(component, _meta_kind_of(component))
+    state = result["state"]
+    return {
+        "confirmed": META_STATE_CONFIRMED,
+        "warn": META_STATE_CONFLICT,
+        "missing": META_STATE_MISSING,
+        "unparseable": META_STATE_UNPARSEABLE,
+        "partial": None,
+    }.get(state)
+
+
+def metadata_state_counts(model) -> dict[str, int]:
+    """The four 517 buckets over one model's **value-code passives** (517).
+
+    Walked over the same placements the gate walks (:func:`_parts_with_boards`)
+    and restricted to the same population the value question is about —
+    ``_VALUE_CODE_PREFIXES`` designators that are not thermistors — so the four
+    numbers cannot disagree with the gate they sit under. Confirmed parts are
+    counted here **although they are not in `unreviewed_parts[]`**: the bucket
+    is the trace of what the archive bought, and a count that only covered the
+    rows below it could not state that.
+    """
+    from ..core.partkind import KIND_THERMISTOR, classify_part
+
+    counts: dict[str, int] = {}
+    for designator, component, _boards in _parts_with_boards(model):
+        if _prefix_of(designator) not in _VALUE_CODE_PREFIXES:
+            continue
+        if classify_part(component).kind == KIND_THERMISTOR:
+            continue
+        state = _meta_state_of_component(component)
+        if state is None:
+            continue
+        counts[state] = counts.get(state, 0) + 1
+    return {name: counts[name] for name in META_STATE_ORDER if name in counts}
+
+
+def metadata_state_counts_from_rows(
+    rows: list[dict], confirmed_rows: list[dict]
+) -> dict[str, int]:
+    """The same four buckets for a **report** being re-gated (058's path).
+
+    The re-gate re-reads no model, so it cannot re-walk placements; it reads
+    the rows the run wrote — the confirmed trace and the conflict rows — and
+    reconstructs the buckets from them. The missing/unparseable buckets cannot
+    be recovered from a conflict-only section, so they are taken from the
+    completion summary the run wrote (``metadataStateCounts``); a summary
+    without the key (a pre-517 report) answers empty, and the honest
+    degradation is fewer buckets rather than invented ones.
+    """
+    counts: dict[str, int] = {}
+    for _row in confirmed_rows or []:
+        counts[META_STATE_CONFIRMED] = counts.get(META_STATE_CONFIRMED, 0) + 1
+    for _row in rows or []:
+        counts[META_STATE_CONFLICT] = counts.get(META_STATE_CONFLICT, 0) + 1
+    return {name: counts[name] for name in META_STATE_ORDER if name in counts}
 
 
 #: The fixed line the 未审器件 section must carry (186 §C, P1). The accident it
@@ -4477,6 +4782,59 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
                 "两类的下一步相反：「工具读不懂」不是缺资料——再喂 PDF 也没用，"
                 "要补的是读法（板上 `Value` / 解码器）；「真缺资料」才轮到去要手册。"
             )
+            # 517: the metadata reading, **inside** the class split. The four
+            # buckets are walked over the model's passives (not the rows above:
+            # confirmed parts are not in `unreviewed_parts[]` any more — that
+            # is the point), so they come from the report's own sections.
+            meta_counts = report.get("metadataStateCounts")
+            if isinstance(meta_counts, dict) and meta_counts:
+                lines.append("")
+                lines.append(
+                    "归档元数据（LCSC Part Name / Type，零网络）："
+                    + " · ".join(
+                        f"{name} {meta_counts[name]}" for name in META_STATE_ORDER
+                        if name in meta_counts
+                    )
+                )
+                lines.append(
+                    "「已确认」= 归档/板上 Value/MPN 至少两路一致，已不再要手册；"
+                    "「冲突」= 两路读数打架（逐路读数见 `metadataValueConflicts[]`）；"
+                    "「缺失」= 归档字段为空；「不可解析」= 有字段但没读出来——"
+                    "**这是读法缺口，不是缺资料**，两类分开计数。"
+                )
+            # 517: the confirmed parts' evidence — which two sources agreed.
+            # A part that left the gate has to be findable, or the shortening
+            # is exactly the silent green light the section forbids.
+            confirmed_meta = report.get("metadataValueConfirmed") or []
+            if confirmed_meta:
+                lines.append("")
+                lines.append(
+                    f"**归档元数据确认、未要手册的件（{len(confirmed_meta)}）**："
+                )
+                for row in confirmed_meta:
+                    lines.append(
+                        f"- `{row.get('designator')}` 值 "
+                        f"{row.get('value', 0):g}（确认依据："
+                        + " + ".join(row.get("confirmedBy") or [])
+                        + f"；归档：{row.get('archive') or '—'}）"
+                    )
+            conflicts_meta = report.get("metadataValueConflicts") or []
+            if conflicts_meta:
+                lines.append("")
+                lines.append(
+                    f"**元数据冲突（{len(conflicts_meta)}）**——逐路读数，先核对再动手："
+                )
+                for row in conflicts_meta:
+                    for param, detail in (row.get("params") or {}).items():
+                        readings = "、".join(
+                            f"{name}={value:g}" for name, value in detail["readings"].items()
+                        )
+                        lines.append(
+                            f"- `{row.get('designator')}` {param}：{readings}"
+                            f"（归档：{row.get('archive') or '—'}；"
+                            f"板上：{row.get('boardValue') or '—'}；"
+                            f"MPN：{row.get('mpn') or '—'}）"
+                        )
         lines.append("")
         lines.append("| 位号 | MPN | 供应商 | 缺哪些 fact | 工程师给 | 立创找 | 官网搜 |")
         lines.append("|---|---|---|---|---|---|---|")
