@@ -312,6 +312,9 @@
 | 515A | v0.5.15 绘制引擎修洞（缝1/缝2） | 规划 | tasks/515a_draw_holes.md |
 | 515B | 发版前挖洞修复（S3#1–7 + S4#1–5） | 已落（`337f742`） | outputs/515b/evidence.md |
 | 516 | 审查反馈（岳真机实测 A/B/C 级） | 已落（`6ef9ded`） | tasks/516_review_feedback.md |
+| 551A | 分轮失败报告（`failures` 不再只保第一条） | 已落（`f56dced`） | outputs/algo_eval/（子代理 393） |
+| 551B | L0 榨干归档元数据：被动件参数三路交叉（元数据 / 板上值 / MPN 值码） | 在途（子代理 396，`.tmp_meta_parse`） | docs/roadmap.md §7 |
+| 551C | L2 datasheet 搜索：子代理并行（≤5 并发 / 每批 3–5 颗）、PDF 不进主上下文、三档可信度 | 规划 | docs/roadmap.md §7 |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）
 
