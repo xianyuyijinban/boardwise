@@ -903,7 +903,7 @@ def _fact_pins_of(facts: dict[str, Any]) -> list[str]:
     """Every pin number a *validated* facts object claims.
 
     Read off the validated shape rather than the raw answer, so this cannot
-    disagree with what :func:`boardwise.core.parts._facts_from_json` accepted.
+    disagree with what :func:`boardwise.core.parts.facts_from_json` accepted.
     All five kinds that hold a pin are walked, not just ``supply_pins``: a claim
     that invented a bypass capacitor's pin number would otherwise reach the shelf
     through the one kind this function forgot, and that is the kind a reader
@@ -1006,13 +1006,13 @@ def check_claim(
     do not check is deliberately absent from this function: whether VDDA really
     supplies driver A is not a question a regex answers, so it is not asked.
     """
-    from ..core.parts import FACTS_KEYS, PartError, _facts_from_json, _check_keys
+    from ..core.parts import FACTS_KEYS, PartError, check_keys, facts_from_json
 
     refusals: list[dict[str, str]] = []
 
     # --- gate 4 (checked first): the schema `core.parts` already owns ------
     #
-    # Not a second copy of the rules. `_facts_from_json` is what `parts add
+    # Not a second copy of the rules. `facts_from_json` is what `parts add
     # --facts` runs and what the shelf loader runs, so a claim accepted here is a
     # claim the shelf can actually hold — and a key added to one vocabulary
     # cannot be unknown to the other.
@@ -1021,12 +1021,12 @@ def check_claim(
         refusals.append({"gate": SCHEMA, "detail": "facts 为空或不是对象"})
     else:
         try:
-            facts_body = _facts_from_json(facts, "facts")
+            facts_body = facts_from_json(facts, "facts")
         except PartError as exc:
             refusals.append({"gate": SCHEMA, "detail": str(exc)})
         else:
             unknown = sorted(set(facts) - set(FACTS_KEYS))
-            if unknown:  # pragma: no cover - _facts_from_json refuses these
+            if unknown:  # pragma: no cover - facts_from_json refuses these
                 refusals.append(
                     {"gate": SCHEMA, "detail": f"未知的 facts 键：{', '.join(unknown)}"}
                 )
@@ -1049,7 +1049,7 @@ def check_claim(
                 refusals.append({"gate": SCHEMA, "detail": f"{spot} 不是对象"})
                 continue
             try:
-                _check_keys(item, ("page", "text"), spot)
+                check_keys(item, ("page", "text"), spot)
             except PartError as exc:
                 refusals.append({"gate": SCHEMA, "detail": str(exc)})
                 continue

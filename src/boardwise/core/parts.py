@@ -1989,6 +1989,17 @@ def save_corrections(corrections: LibraryCorrections, path: str | Path) -> Path:
     return file
 
 
+#: The two validators a caller **outside** `core` needs, under public names.
+#: `tests/test_layer_rules.py` refuses a private name crossing a layer boundary,
+#: and `engines/hunt.py` (521's `--apply-facts`) has to validate an answer file
+#: with the same judgment `parts add` uses — a second copy of the rules would be
+#: a second answer to "is this a fact the shelf can load". Aliases rather than a
+#: rename: the underscore spellings have a dozen in-package callers, and
+#: renaming them would be a large diff that changes no behaviour.
+check_keys = _check_keys
+facts_from_json = _facts_from_json
+
+
 __all__ = [
     "CATEGORY_TO_PREFIX",
     "CORRECTIONS_KIND",
@@ -2051,4 +2062,6 @@ __all__ = [
     "resolve_component_facts",
     "resolve_facts",
     "save_parts",
+    "check_keys",
+    "facts_from_json",
 ]
