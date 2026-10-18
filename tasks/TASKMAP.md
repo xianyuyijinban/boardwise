@@ -360,6 +360,8 @@
 | release v0.5.14 | 挖洞修复+192 批+190S | 已落 | tag `v0.5.14`（`5914ee2`/`f2c53ae`） |
 | release v0.5.15 | 515B + 516（201C 踢出） | 已发（tag `v0.5.15`） | tasks/SCHEDULE.md |
 | release v0.5.16 | 520 + 521 + 522（审查线资料获取三连）+ 绘图推演简报；内测 | 已发（tag `v0.5.16`，prerelease） | tasks/SCHEDULE.md；PROGRESS |
+| 524 | **v0.5.16 挖洞补做**（5 缝只读 swarm，12 条高严重级全修：引文闸子串/pin 未绑引文/两规则绕档位/审计无 dest/offline 假话/shelf 清身份/null 变 verified） | 已落（`8c87070`） | PROGRESS；6 条新回归 |
+| release v0.5.17 | v0.5.16 的洞修复；内测 | 已发（tag `v0.5.17`，prerelease）；v0.5.16 notes 已标「请用 0.5.17」 | tasks/SCHEDULE.md |
 
 ## 待人工核对（不猜测，按原文保守入表）
 
