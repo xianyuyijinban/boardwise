@@ -187,6 +187,11 @@ boardwise parts hunt --file board.epro2 --out .tmp_hunt --offline
 # stage two: hand the found URLs back in — same download / extract / land path
 boardwise parts hunt --file board.epro2 --out .tmp_hunt --apply answers.json
 
+# stage three: hand the facts **you read out of the .txt** back in. Every quote
+# must appear verbatim on the page it cites, or the claim is refused outright.
+boardwise parts hunt --file board.epro2 --out .tmp_hunt \
+    --offline --cache ~/.boardwise/datasheets --apply-facts facts.json
+
 # land the extracted candidates on a shelf (never the default: a batch run must
 # not quietly edit a curated file)
 boardwise parts hunt --file board.epro2 --out .tmp_hunt --shelf ~/.boardwise/parts.json
@@ -293,6 +298,114 @@ writes carries `facts_verified: false`, and an entry whose facts already drive
 rules is never overwritten by a candidate. A hunt run shortens the shelf's work;
 it never closes a part's gate — that still needs a human reading the pages and
 flipping the flag.
+
+### Stage three: the reading is handed over, `--apply-facts` (521)
+
+**Why the extractor is not the answer.** Measured on
+`tests/fixtures/级联多电平-驱动模块_2026-09-27.epro2` (46 parts, 24 unique
+C-numbers, 15 PDFs obtained): **0 `extracted`, 45 `no-facts`** — `UCC21520DWR`'s
+52-page TI datasheet included, and that text reads perfectly. Widening the
+extractor's supply-name vocabulary from 11 names to 39 moved it from **0/15 to
+0/15**, not one part. The root cause is layout, not vocabulary: a real
+recommended-operating-conditions table is in **columns** (`VCCI VCCI Input supply
+voltage 3 18 V` — the two numbers separated by nothing but space) while `_RANGE`
+only understands an explicit `to`/`-`, and a pin name may sit on a line of its own
+(`VDDA,`). **This channel's output is a PDF plus a page-marked `.txt`; the facts
+are produced by an AI reading the `.txt`, and the tool's job is to check the
+quotes.**
+
+So `--apply-facts <file>` is the third stage, alongside `--apply`'s URL replay.
+The answer file is closed:
+
+```jsonc
+[
+  {
+    "designator": "U2",              // or lcsc / mpn — designator > lcsc > mpn
+    "facts": {                        // the `PartEntry.facts` schema
+      "supply_pins": [
+        {
+          "pins": ["3", "8"],
+          "name": "VCCI",
+          "mode": "operating",
+          "v_operating": [3, 18],
+          // A `provenance` must point back at its source: an `http(s)` URL, or a
+          // `file:` path for a datasheet handed over by hand. Writing
+          // `C601651.txt, p.4` is refused by the schema gate — measured here, it
+          // was the first thing this batch's own example answer got wrong.
+          "provenance": "file:C601651.pdf, p.4"
+        }
+      ]
+    },
+    "quotes": [                      // evidence, one per cited page
+      {"page": 4, "text": "VCCI 3 P Primary-side supply voltage."},
+      {"page": 5, "text": "VCCI VCCI Input supply voltage 3 18 V"}
+    ]
+  }
+]
+```
+
+Measured end to end on the real board (`--offline`, zero outbound): those quotes
+came back `facts-accepted 1` and landed one candidate sidecar; changing the last
+quote to `3 19 V` came back `facts-rejected 1` with `refusal: quote-not-found`,
+`facts: {}`, and **no `candidates/` directory at all** — not an empty file, not a
+written-then-deleted one.
+
+An unknown key anywhere in that file is a **file** error (exit 2), not a
+per-record refusal: a misspelt `quote` that was ignored would turn a
+well-evidenced claim into a refused one for a reason its author cannot see.
+
+**Four gates, and what each one is for.** In the order they are checked:
+
+1. **Schema** — `core/parts.py`'s own `_facts_from_json`, not a second copy, so
+   nothing is accepted here that the shelf would then refuse to load. Checked
+   first because a claim the loader cannot represent has no pins to look for.
+2. **Page numbers** — `page` must be within `1..len(pages)`. A citation past the
+   end of the document points at evidence that is not there; clamping it would
+   be inventing a citation.
+3. **Quotes verbatim** — every `quotes[].text` must appear on the page it cites,
+   compared after stripping the ends and folding runs of whitespace into one
+   space. **Folding is the only relaxation**: a text layer wraps an 80-character
+   cell across two lines, and a quote crossing the wrap is still that sentence;
+   but case, digits, units and order are compared exactly, because those are the
+   characters a hallucinated table gets wrong while looking right. This is the
+   one mechanism that stops "an AI writes a plausible-looking pin table", so it
+   has a test that proves **one changed character is refused**, and that test is
+   mutation-verified (turn the comparison off and it goes red).
+4. **Pins printed somewhere** — each pin a fact names must occur in the document
+   as a standalone token. **Occurrence only, never semantics**: the tool does not
+   check that pin 16 is really VDDA, because that is a reading of the circuit and
+   a tool pretending to it is the confident-garbage generator this stage exists
+   to avoid. What it does catch is the cheap failure — pins invented for a pin
+   count the package does not have.
+
+Outcomes, and what lands:
+
+| outcome | meaning |
+|---|---|
+| `facts-accepted` | every quote was found verbatim on its page; the facts land as a **candidate** |
+| `facts-rejected` | a gate said no; **nothing** lands — no shelf entry, no sidecar |
+
+A refusal names its gate in the report's `refusals` field and in the markdown:
+`quote-not-found`, `page-out-of-range`, `pin-not-in-document`, `schema`,
+`no-document` (stage one never got this part's PDF, so there is nothing to check
+the claim against — not a judgement on the quote), `duplicate-claim` (one part,
+two claims in the same file; the second would silently win).
+
+**`--offline` is the point of this stage, not a limitation.** Everything the gate
+needs is a UTF-8 page dump already on disk, so `--offline --apply-facts` works and
+makes **zero** outbound calls — which is what makes this route usable on a board
+whose identity may not leave the machine. There is a test for exactly that, and
+its seams raise if called.
+
+**Accepted is not verified.** The gate checks the *evidence*, not the
+*conclusion*: "this sentence is on page 5" is a claim a machine can settle,
+"VDDA supplies driver A" is not. So `facts-accepted` entries still land as
+`facts_verified: false` with provenance kind `hunt-read` (distinct from
+`hunt-extract`, so a reader can tell whose reading it was), and a refused claim
+writes no `candidates/<designator>.candidate.json` — the sidecar is the artefact
+someone hands to `parts add --facts`, and a file that exists for a refused claim
+would walk past the gate it just failed. Trust tiers for accepted-vs-verified are
+522's subject; this batch deliberately does not add a `machine_verified` field.
 
 
 ### The uuid pair, in the same command: `parts add --resolve` (187c)
@@ -710,7 +823,7 @@ from a catalog row would silently downgrade the provenance.
 | `src/boardwise/engines/harvest.py` | board → entries; merging; the verifier seam; applying corrections |
 | `src/boardwise/engines/catalog.py` | the JLC SMT client and the product-detail reader, each behind a fetcher seam |
 | `src/boardwise/engines/select.py` | offline/online ranking, and C-number resolution |
-| `src/boardwise/engines/hunt.py` | 520: batch channel decision, the guarded search query, the fetch path, the cache, the audit log, the report shapes |
+| `src/boardwise/engines/hunt.py` | 520: batch channel decision, the guarded search query, the fetch path, the cache, the audit log, the report shapes; 521: the `--apply-facts` quote gate (`check_claim`) |
 | `tools/harvest_parts.py` | the harvesting CLI (`--check`, `--verify`, `--rehome`) |
 | `tools/backfill_datasheets.py` | the datasheet-link CLI (network, per C-number, resumable) |
 | `blocklib/parts.json` | the library |

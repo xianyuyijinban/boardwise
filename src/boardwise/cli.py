@@ -2246,6 +2246,17 @@ def build_parser() -> argparse.ArgumentParser:
             "`unknown-designator` row and the rest are processed normally."
         ),
     )
+    parts_hunt.add_argument(
+        "--apply-facts", default=None, metavar="PATH", dest="apply_facts",
+        help=(
+            "Stage three: a JSON list of {designator|lcsc|mpn, facts, quotes} — what an "
+            "AI or an engineer read out of the cached <C-number>.txt. Every quote must "
+            "appear VERBATIM on the page it cites (whitespace runs folded) or the claim "
+            "is `facts-rejected` and nothing of it lands. Accepted claims still land as "
+            "candidates (facts_verified: false): the gate checks the evidence, not the "
+            "reading. Needs no network — the dump is already on disk."
+        ),
+    )
     pick = parts_sub.add_parser(
         "select",
         help=(
@@ -15527,6 +15538,80 @@ def _hunt_answers(path: str) -> tuple[list[dict], str]:
     return answers, ""
 
 
+def _hunt_claims(path: str) -> tuple[list[dict], str]:
+    """``(claims, error)`` — the `--apply-facts` file, validated at the door.
+
+    521 §2.1 calls the shape *closed*, and this is where closed means something:
+    a record's keys, a quote's keys. The reason is the same one `core.parts` uses
+    for a facts object — a misspelt key (`"quote"` for `"quotes"`) that was
+    ignored would turn a well-evidenced claim into a refused one for a reason the
+    writer cannot see, or worse, an ignored key could carry a claim past a gate.
+    So an unknown key is a **file** error (exit 2) rather than a per-record
+    refusal: nothing in it can be checked until the shape is right, and the whole
+    file has the same typo.
+
+    The gates themselves are not applied here. This function answers "is this a
+    well-formed answer file", which is a question about JSON; whether the quotes
+    are on their pages is a question about a document, and it is asked per record
+    once the document is in hand (:func:`boardwise.engines.hunt.check_claim`).
+    """
+    import json
+
+    from boardwise.engines import hunt
+
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        return [], f"读不了 {path}: {exc}"
+    except ValueError as exc:
+        return [], f"{path} 不是合法 JSON: {exc}"
+    if not isinstance(raw, list):
+        return [], (
+            f"{path}: 期望一个列表（[{{designator, facts, quotes}}, …]），"
+            f"拿到 {type(raw).__name__}"
+        )
+    claims: list[dict] = []
+    for index, item in enumerate(raw):
+        where = f"{path}[{index}]"
+        if not isinstance(item, dict):
+            return [], f"{where}: 期望一个对象"
+        stray = sorted(set(item) - {"designator", "lcsc", "mpn", "facts", "quotes"})
+        if stray:
+            return [], (
+                f"{where}: 不认识的键 {', '.join(stray)} —— 答案文件是闭合的"
+                "（只收 designator/lcsc/mpn/facts/quotes），拼错的键会让一条有证据的"
+                "claim 变成没证据的"
+            )
+        locators = {
+            key: str(item.get(key) or "").strip()
+            for key in ("designator", "lcsc", "mpn")
+            if str(item.get(key) or "").strip()
+        }
+        if not locators:
+            return [], f"{where}: 没有 designator/lcsc/mpn，点不到板上任何一颗"
+        for position, quote in enumerate(item.get("quotes") or []):
+            if not isinstance(quote, dict):
+                continue
+            extra = sorted(set(quote) - {"page", "text"})
+            if extra:
+                return [], (
+                    f"{where}.quotes[{position}]: 不认识的键 {', '.join(extra)}"
+                    "（引文只有 page / text）"
+                )
+        claims.append(
+            {
+                "locators": locators,
+                "facts": item.get("facts"),
+                # Passed through as-is: `check_claim` is the one place that
+                # decides what a wrong shape means for the *claim*, and it has to
+                # see the original to say so.
+                "quotes": item.get("quotes"),
+                "index": index,
+            }
+        )
+    return claims, ""
+
+
 def _hunt_match(
     rows: list[tuple[str, object]], locators: dict[str, str]
 ) -> tuple[int, str] | None:
@@ -15636,6 +15721,12 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
         if error:
             print(f"boardwise parts hunt: {error}", file=sys.stderr)
             return 2
+    claims: list[dict] = []
+    if getattr(args, "apply_facts", None):
+        claims, error = _hunt_claims(args.apply_facts)
+        if error:
+            print(f"boardwise parts hunt: {error}", file=sys.stderr)
+            return 2
 
     # --- overlay the answers onto the rows they address ---------------------
     unmatched: list[dict] = []
@@ -15683,6 +15774,103 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
             )
         )
 
+    # --- stage three: the facts someone read out of the page dump -----------
+    #
+    # It runs **after** stage one, and that order is the point: stage one is what
+    # puts `<C-number>.txt` on disk for a reader to read. A claim replaces its
+    # part's row rather than adding a second one, because "this part has facts"
+    # and "this part has no facts" are answers to the same question and a report
+    # holding both would be a report where the reader picks.
+    claimed: set[str] = set()
+    for claim in claims:
+        locator = "; ".join(f"{key}={value}" for key, value in claim["locators"].items())
+        hit = _hunt_match(rows, claim["locators"])
+        if hit is None:
+            outcomes.append(
+                hunt.Outcome(
+                    designator=str(claim["locators"].get("designator", "")),
+                    channel="",
+                    identity={
+                        "lcsc": str(claim["locators"].get("lcsc", "")),
+                        "mpn": str(claim["locators"].get("mpn", "")),
+                    },
+                    outcome=hunt.UNKNOWN_DESIGNATOR,
+                    notes=[
+                        f"答案文件里的这一条点不到板上任何器件（{locator}），其余照常处理"
+                    ],
+                )
+            )
+            continue
+        index, how = hit
+        target = located[index]
+        identity = dict(target.identity)
+        target.notes = [
+            *notes_by_designator.get(target.designator, []),
+            f"--apply-facts 的 claim（按 {how} 对上）",
+        ]
+
+        # The document this claim is checked against: whatever stage one (or an
+        # earlier run) already put on disk. No network, no pypdf — a page dump is
+        # a UTF-8 file, which is the whole reason this stage works offline.
+        key = target.designator
+        pages = (
+            hunt.read_document(cache, identity)
+            if (identity.get("lcsc") or identity.get("mpn"))
+            else None
+        )
+        record = hunt.Claim(locators=claim["locators"], matched_by=how)
+        outcome: hunt.Outcome
+        if key in claimed:
+            record.refuse(
+                hunt.DUPLICATE_CLAIM,
+                f"{key} 在这份答案文件里出现了不止一次；后一条会静默盖掉前一条，"
+                "两条都不收——合并成一条再交",
+            )
+            outcome = hunt.claim_outcome(record, target)
+        elif pages is None:
+            record.refuse(
+                hunt.NO_DOCUMENT,
+                f"{key} 在缓存里还没有 PDF/全文（{cache.directory(identity)}）"
+                "—— 先跑一遍不带 --apply-facts 的 hunt 把资料取回来",
+            )
+            outcome = hunt.claim_outcome(record, target)
+        else:
+            facts_body, refusals = hunt.check_claim(
+                facts=claim["facts"],
+                quotes=claim["quotes"],
+                pages=pages,
+                document="\n".join(pages),
+            )
+            record.facts = facts_body
+            record.quotes = [
+                quote for quote in (claim["quotes"] or []) if isinstance(quote, dict)
+            ]
+            record.refusals = [*record.refusals, *refusals]
+            pdf_path = cache.path_for(identity)
+            outcome = hunt.claim_outcome(
+                record,
+                target,
+                pdf_file=str(pdf_path) if pdf_path.is_file() else "",
+            )
+        claimed.add(key)
+        # Replace this part's row: one part, one answer. The refused claim's own
+        # facts are deliberately **not** carried over from the stage-one row —
+        # a `facts-rejected` row that still carried facts would be a row the shelf
+        # writer picks up, and "refused, but landed anyway" is the one reading this
+        # gate must not permit. If stage one had produced facts of its own, the
+        # note says so, so the reader knows where to look.
+        for position, existing in enumerate(outcomes):
+            if existing.designator == key:
+                if existing.facts and not outcome.facts:
+                    outcome.notes.append(
+                        "注意：第一阶段（正则提取器）对这颗也给过候选 facts，"
+                        "它们不在这一行里 —— 这一行只有被拒的 claim"
+                    )
+                outcomes[position] = outcome
+                break
+        else:
+            outcomes.append(outcome)
+
     counts = hunt.counts_of(outcomes)
     plan, plan_notes = hunt.plan_rows(outcomes)
 
@@ -15729,27 +15917,32 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
     )
 
     # --- the per-part candidate sidecars, in `parts fetch`'s own shape -------
+    #
+    # Only an accepted row gets one. A `facts-rejected` row writes no sidecar even
+    # if some earlier stage left facts on it: the sidecar is the artefact someone
+    # hands to `parts add --facts`, and a file that exists for a refused claim is a
+    # file that walks past the gate it just failed.
     candidates = out_dir / "candidates"
     written_sidecars: list[Path] = []
     for item in outcomes:
-        if not item.facts:
+        if not item.facts or item.outcome == hunt.FACTS_REJECTED:
             continue
         sidecar = candidates / f"{_hunt_slug(item.designator)}.candidate.json"
         sidecar.parent.mkdir(parents=True, exist_ok=True)
+        body = {
+            "label": _hunt_label(model, item.designator) or item.designator,
+            "url": item.url,
+            "facts": item.facts,
+            "designator": item.designator,
+            "identity": item.identity,
+        }
+        # The quotes travel with the facts they justify: a reviewer re-checking a
+        # claim needs the sentence and the page, not a pointer to a report that
+        # may be gone by then.
+        if item.quotes:
+            body["quotes"] = list(item.quotes)
         sidecar.write_text(
-            json.dumps(
-                {
-                    "label": _hunt_label(model, item.designator) or item.designator,
-                    "url": item.url,
-                    "facts": item.facts,
-                    "designator": item.designator,
-                    "identity": item.identity,
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
+            json.dumps(body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
         written_sidecars.append(sidecar)
 
@@ -15765,6 +15958,21 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
             print(f"  {outcome:20} {counts[outcome]}")
     if args.offline:
         print("  --offline: 一次外呼都没有（审计文件里有 0 行）")
+    if claims:
+        # The count alone is not the answer a reader of stage three needs: one
+        # refused claim out of one is a *file* to fix, one out of forty is a
+        # detail, and the terminal is where that distinction is read.
+        accepted = counts.get(hunt.FACTS_ACCEPTED, 0)
+        refused = counts.get(hunt.FACTS_REJECTED, 0)
+        # The parenthetical belongs to whichever half the count is about: "拒 N
+        # 条（一条都没落架）" is only true while N > 0, and on an all-accepted run
+        # that sentence read as "0 refused, nothing landed" — the opposite of what
+        # happened. Say the outcome, not a fixed clause.
+        landed = f"拒 {refused} 条" + ("（都没落架）" if refused else "")
+        print(
+            f"  --apply-facts: {len(claims)} 条 claim，"
+            f"收 {accepted} 条（引文逐字对上），{landed}"
+        )
     print(f"report: {out_dir / 'hunt-report.json'}")
     print(f"plan:   {out_dir / 'hunt-plan.json'}（{len(plan)} 条要搜）")
     print(f"md:     {out_dir / 'hunt-report.md'}")
@@ -15893,7 +16101,11 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
     updated = 0
     skipped = 0
     for outcome in outcomes:
-        if not outcome.facts:
+        # A refused claim lands nothing, whatever else is on its row. Belt and
+        # braces on top of `claim_outcome` not filling `facts` for it: the write
+        # to a curated file is the irreversible half, so the gate is re-stated at
+        # the point of writing rather than trusted to have held upstream.
+        if not outcome.facts or outcome.outcome == "facts-rejected":
             continue
         lcsc = (outcome.identity.get("lcsc") or "").upper()
         mpn = outcome.identity.get("mpn") or ""
@@ -15905,6 +16117,11 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
             skipped += 1
             continue
         key = existing.key if existing is not None else _hunt_candidate_key(mpn, lcsc, by_key)
+        # Provenance says what produced the claim, because the two routes carry
+        # different evidence: `hunt-extract` is a regex's guess, `hunt-read` is
+        # someone's reading with quotes this run checked verbatim. Both are
+        # candidates; only one of them had its evidence re-read by a machine.
+        read = outcome.read_by_someone
         entry = PartEntry(
             key=key,
             mpn=mpn,
@@ -15915,11 +16132,15 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
             facts=outcome.facts,
             facts_verified=False,
             provenance=PartProvenance(
-                kind="hunt-extract",
+                kind="hunt-read" if read else "hunt-extract",
                 source=outcome.url,
                 designators=[outcome.designator],
                 note=(
-                    "candidate facts written by `parts hunt` (520): 自动提取，"
+                    "candidate facts written by `parts hunt --apply-facts` (521): "
+                    "AI/人读 txt 写的，每条引文都在它点的页码上逐字校验过 —— "
+                    "收的是证据不是结论，未经核验（facts_verified: false）"
+                    if read
+                    else "candidate facts written by `parts hunt` (520): 自动提取，"
                     "未经核验（facts_verified: false）——逐条对着 text dump 的页码核过再翻 true"
                 ),
             ),

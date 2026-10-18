@@ -317,7 +317,7 @@
 | 551A | 分轮失败报告（`failures` 不再只保第一条） | 已落（`f56dced`） | outputs/algo_eval/（子代理 393） |
 | 551B | L0 榨干归档元数据：被动件参数三路交叉（元数据 / 板上值 / MPN 值码） | 已落（`c51e3e8`） | docs/roadmap.md §7 |
 | 551C | L2 datasheet 搜索：子代理并行（≤5 并发 / 每批 3–5 颗）、PDF 不进主上下文、三档可信度 | 第一段已落（520）；三档可信度仍规划 | docs/roadmap.md §7 |
-| 521 | datasheet 提取器扩面：供给名白名单只有 11 个（`VDDA`/`VDDB`/`VCCI` 全不在），实测 46 颗 0 提取 | 规划 | 本批 520 实测发现 |
+| 521 | 提取面：**不做「扩正则」**——AI 读 `.txt` 写 facts，工具当收件闸（六道校验，最硬一条是引文逐字） | 已落（本批，待提交） | tasks/521_ai_facts.md；docs/parts.md §Stage three |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）
 

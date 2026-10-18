@@ -50,6 +50,17 @@ known (a C-number, or an `--apply` URL) comes back `deferred-online` — a re-ru
 without the flag fetches it — and only the parts whose sole channel is a search
 engine come back `needs-search`. See :func:`execute`'s ``offline`` branch for why
 that line sits where it does.
+
+The **third** stage (521, `--apply-facts`) is the answer to a measured fact: the
+narrow extractor in `engines/datasheet.py` got **0 facts out of 46 real parts**,
+so the reading of a datasheet is handed over instead of guessed at. Someone (an
+AI, an engineer) reads the `<C-number>.txt` this module already writes and
+returns `{facts, quotes}`; :func:`check_claim` then accepts the claim only if
+every quote appears **verbatim** on the page it cites. The tool judges the
+evidence and never the conclusion — it cannot tell whether "VDDA is pin 16" is
+true, and it can tell whether that sentence is on page 4. Accepted claims land as
+candidates (`facts_verified: false`) like everything else here; refused ones land
+nothing at all.
 """
 
 from __future__ import annotations
@@ -109,6 +120,20 @@ DEFERRED_ONLINE = "deferred-online"
 NO_IDENTITY = "no-identity"
 UNKNOWN_DESIGNATOR = "unknown-designator"
 CACHED = "cached"
+#: Stage three (521): facts a reader — an AI or a human — wrote down after
+#: reading the page dump, and every quote in the claim was found **verbatim** on
+#: the page it cites. Accepted is not verified: the tool checked the evidence's
+#: wording, not the reading's correctness, so the entry still lands as a
+#: candidate (`facts_verified: false`).
+FACTS_ACCEPTED = "facts-accepted"
+#: The other half of stage three, and the reason the stage exists: a claim with
+#: a quote that does not appear on its page is refused, and **nothing** of it
+#: lands — no shelf entry, no candidate sidecar. Kept as one outcome with the
+#: failed gate named in the notes rather than as four outcomes
+#: (`quote-not-found`, `page-out-of-range`, …) because those four are sentences
+#: about the *answer file*, and a reader sorting a report by outcome wants to
+#: know at a glance how many claims were turned away.
+FACTS_REJECTED = "facts-rejected"
 
 #: Every outcome this module can produce, in report order. A value outside this
 #: tuple is a bug, and :func:`counts_of` says so rather than quietly grouping it.
@@ -125,6 +150,8 @@ OUTCOMES: tuple[str, ...] = (
     NEEDS_SEARCH,
     NO_IDENTITY,
     UNKNOWN_DESIGNATOR,
+    FACTS_ACCEPTED,
+    FACTS_REJECTED,
 )
 
 # --- the two channels (plus the one that is not a channel) ------------------
@@ -350,9 +377,25 @@ class Outcome:
     notes: list[str] = field(default_factory=list)
     facts: dict[str, Any] = field(default_factory=dict)
     pdf: dict[str, str] = field(default_factory=dict)
+    #: Stage three (521): the quote each fact was checked against, and the gate
+    #: that refused a claim — ``[]`` for every other outcome. A machine-readable
+    #: refusal is worth the field because "which half of the answer file is wrong"
+    #: is what a reader acts on, and the same sentences in ``notes`` are prose.
+    quotes: list[dict[str, Any]] = field(default_factory=list)
+    refusals: list[dict[str, str]] = field(default_factory=list)
+
+    @property
+    def read_by_someone(self) -> bool:
+        """Whether these facts came from a person's reading rather than a regex.
+
+        A property rather than a field: it is exactly the accepted stage-three
+        outcome, and a second copy of that fact on the object is a second thing
+        that can disagree with itself.
+        """
+        return self.outcome == FACTS_ACCEPTED
 
     def as_json(self) -> dict[str, Any]:
-        return {
+        body = {
             "designator": self.designator,
             "channel": self.channel,
             "identity": dict(self.identity),
@@ -362,6 +405,12 @@ class Outcome:
             "pdf": dict(self.pdf),
             "facts": self.facts,
         }
+        # Written only when the stage ran, so a 520-shaped row keeps its bytes.
+        if self.quotes:
+            body["quotes"] = list(self.quotes)
+        if self.refusals:
+            body["refusals"] = list(self.refusals)
+        return body
 
 
 def _detail_outcome(detail: ProductDetail) -> tuple[str, str]:
@@ -782,6 +831,360 @@ class AuditLog:
         return len(self.entries)
 
 
+# --- stage three (521): facts read by someone, checked by this module -------
+#
+# Why a gate and not a parser. 520 measured the shape of the problem: 46 parts
+# of a real board, 15 PDFs, **0** extracted facts — including `UCC21520DWR`'s
+# 52-page TI datasheet whose text reads perfectly. The reason is not a missing
+# word in a vocabulary: a real recommended-operating-conditions table is laid out
+# in columns (`VCCI VCCI Input supply voltage 3 18 V`), the two numbers separated
+# by nothing but space, and a pin name may sit on its own line (`VDDA,`). Widening
+# `SUPPLY_NAMES` from 11 names to 39 moved the count from **0/15 to 0/15**: the
+# pin rows were already recognised, and there was no range row for them to join.
+#
+# So the reading is handed over — an AI reads the `<C-number>.txt` that 520
+# already writes, page-marked, and writes down what the page says. This module
+# then does the one thing it can do deterministically, and refuses to do the one
+# thing it cannot: **it checks the evidence, not the conclusion.** A claim whose
+# quote is not on its page verbatim is refused outright; a claim whose quote *is*
+# there is accepted as a *candidate*, because "the sentence exists" is not "the
+# sentence means what the reader says it means". That is why nothing here sets
+# `facts_verified`: 521 accepts evidence, 522 is where trust tiers live.
+
+
+#: What a quote may be found on, per refusal: the gate names the failure, so the
+#: report says which sentence of the claim to go fix.
+QUOTE_NOT_FOUND = "quote-not-found"
+PAGE_OUT_OF_RANGE = "page-out-of-range"
+PIN_NOT_IN_DOCUMENT = "pin-not-in-document"
+SCHEMA = "schema"
+#: The one refusal that is about the *answer file* rather than the document: a
+#: record that names no part at all cannot be checked against anything.
+NO_LOCATOR = "no-locator"
+#: There is nothing to check the claim against: stage one never obtained this
+#: part's PDF, so there is no page dump in the cache. Not a judgement on the
+#: claim — the reader may be quoting a datasheet the tool has never seen — which
+#: is exactly why it is its own gate rather than `quote-not-found`.
+NO_DOCUMENT = "no-document"
+#: One part, two claims. The second would silently overwrite the first, and a
+#: file that does that is a file whose author will believe both ran.
+DUPLICATE_CLAIM = "duplicate-claim"
+
+
+def fold_whitespace(text: str) -> str:
+    """Whitespace-folded text, for the one comparison a quote gets.
+
+    Folding is the *only* relaxation, and it is not a fudge factor: a PDF's text
+    layer wraps an 80-character cell across two lines, and a quote that crosses
+    the wrap is still that sentence on that page. Everything else — case, hyphens,
+    units, digit order — is compared exactly, because those are the characters a
+    hallucinated table gets wrong while looking right.
+
+    ``\\s`` covers the non-breaking space and the column of tabs a table produces,
+    so one rule handles both a wrapped sentence and a two-column row.
+    """
+    return re.sub(r"\s+", " ", (text or "")).strip()
+
+
+def quote_is_on_page(quote: str, page_text: str) -> bool:
+    """Is ``quote`` on this page, verbatim apart from whitespace runs?"""
+    needle = fold_whitespace(quote)
+    if not needle:
+        return False
+    return needle in fold_whitespace(page_text)
+
+
+def _fact_pins_of(facts: dict[str, Any]) -> list[str]:
+    """Every pin number a *validated* facts object claims.
+
+    Read off the validated shape rather than the raw answer, so this cannot
+    disagree with what :func:`boardwise.core.parts._facts_from_json` accepted.
+    All five kinds that hold a pin are walked, not just ``supply_pins``: a claim
+    that invented a bypass capacitor's pin number would otherwise reach the shelf
+    through the one kind this function forgot, and that is the kind a reader
+    checks last. ``led`` and ``ldo`` carry no pins and need nothing here.
+    """
+    pins: list[str] = []
+    for entry in facts.get("supply_pins") or []:
+        pins.extend(str(pin) for pin in entry.get("pins") or [])
+    for entry in facts.get("required_caps") or []:
+        if entry.get("pin"):
+            pins.append(str(entry["pin"]))
+    for entry in facts.get("must_connect") or []:
+        if entry.get("pin"):
+            pins.append(str(entry["pin"]))
+    for entry in facts.get("pull_required") or []:
+        if entry.get("pin"):
+            pins.append(str(entry["pin"]))
+    nc = facts.get("nc_pins") or {}
+    pins.extend(str(pin) for pin in nc.get("pins") or [])
+    return pins
+
+
+#: A pin number as an **independent token** anywhere in a document: `3` must not
+#: be found inside `VDDA3` or inside `30`, or every claim passes. A hyphen counts
+#: as a separator (`3-18 V` is how half the real corpus writes a range), so
+#: `VDDA-3` does match — the failure this refuses is a digit glued to a word or
+#: buried in a longer number, which is what an invented pin looks like.
+_PIN_TOKEN = r"(?<![0-9A-Za-z]){pin}(?![0-9A-Za-z])"
+
+
+def pin_appears(pin: str, document: str) -> bool:
+    """Does this pin number occur as a standalone token in the whole document?
+
+    Occurrence only. The gate does **not** check that the pin belongs to the
+    named signal, or that a voltage row is about the rail the claim says: that is
+    a reading of the circuit, and a tool that pretended to it would be the
+    confident-garbage generator this whole line of work exists to avoid. What it
+    does catch is the cheaper failure — a table of pins invented for a pin count
+    the package does not have.
+
+    The check is document-wide rather than per-page because a pin table and the
+    electrical table live on different pages of every datasheet ever printed.
+    """
+    token = re.escape(str(pin or "").strip())
+    if not token:
+        return False
+    return re.search(_PIN_TOKEN.format(pin=token), document) is not None
+
+
+@dataclass
+class Claim:
+    """One record of an `--apply-facts` file, and what the gate said about it.
+
+    The three parts stay together because that is the unit the gate judges: the
+    locators say *which* document, ``facts`` is the claim, ``quotes`` is the
+    evidence the claim is only as good as. A record whose quotes are refused
+    contributes nothing — not a partial shelf entry, not a partial sidecar — and
+    this object is what the report prints instead.
+
+    ``refusals`` is a list of ``{"gate", "detail"}`` pairs rather than one string
+    because a claim can fail more than one way at once (a page out of range and a
+    pin nobody printed), and a report that named only the first would make the
+    second a surprise on the next run.
+    """
+
+    locators: dict[str, str]
+    facts: dict[str, Any] = field(default_factory=dict)
+    quotes: list[dict[str, Any]] = field(default_factory=list)
+    refusals: list[dict[str, str]] = field(default_factory=list)
+    #: ``"designator"`` / ``"lcsc"`` / ``"mpn"`` — which locator found the part,
+    #: carried into the report the same way `--apply` reports how it matched.
+    matched_by: str = ""
+
+    @property
+    def accepted(self) -> bool:
+        return not self.refusals
+
+    def refuse(self, gate: str, detail: str) -> None:
+        self.refusals.append({"gate": gate, "detail": detail})
+
+
+def check_claim(
+    *, facts: Any, quotes: Any, pages: list[str], document: str
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """``(facts, refusals)`` — the four gates of 521 §2.2, in rejection order.
+
+    Order matters and is the argument of this function. **Schema first**, because
+    a claim the loader cannot represent has no pins to look for and no page
+    numbers that mean anything: reporting `pin-not-in-document` on it would be a
+    complaint about a shape nobody agreed to. Then **page numbers**, then
+    **quotes**, then **pins** — cheapest and most specific first, and the last two
+    in that order because a quote names the page it is checked against, while a
+    pin is checked against the document.
+
+    The document is passed in rather than derived from ``pages`` here: the two
+    differ in what they mean (`\\n`.join is what the token test wants, and a
+    caller may have the marked text already).
+
+    ``refusals`` is empty exactly when the claim may land. Everything the gates
+    do not check is deliberately absent from this function: whether VDDA really
+    supplies driver A is not a question a regex answers, so it is not asked.
+    """
+    from ..core.parts import FACTS_KEYS, PartError, _facts_from_json, _check_keys
+
+    refusals: list[dict[str, str]] = []
+
+    # --- gate 4 (checked first): the schema `core.parts` already owns ------
+    #
+    # Not a second copy of the rules. `_facts_from_json` is what `parts add
+    # --facts` runs and what the shelf loader runs, so a claim accepted here is a
+    # claim the shelf can actually hold — and a key added to one vocabulary
+    # cannot be unknown to the other.
+    facts_body: dict[str, Any] = {}
+    if not isinstance(facts, dict) or not facts:
+        refusals.append({"gate": SCHEMA, "detail": "facts 为空或不是对象"})
+    else:
+        try:
+            facts_body = _facts_from_json(facts, "facts")
+        except PartError as exc:
+            refusals.append({"gate": SCHEMA, "detail": str(exc)})
+        else:
+            unknown = sorted(set(facts) - set(FACTS_KEYS))
+            if unknown:  # pragma: no cover - _facts_from_json refuses these
+                refusals.append(
+                    {"gate": SCHEMA, "detail": f"未知的 facts 键：{', '.join(unknown)}"}
+                )
+
+    # --- gate 2: every cited page exists ----------------------------------
+    #
+    # A page number is what a human re-checks a fact against, so a citation past
+    # the end of the document is not a typo to be clamped — the claim points at
+    # evidence that is not there.
+    usable: list[dict[str, Any]] = []
+    if not isinstance(quotes, list) or not quotes:
+        # 521 §2.1: quotes are the evidence, and a claim without evidence is the
+        # one thing this stage cannot accept. Said as `quote-not-found` because
+        # that is the gate an empty list fails.
+        refusals.append({"gate": QUOTE_NOT_FOUND, "detail": "这条 claim 没有 quotes（没有出处）"})
+    else:
+        for index, item in enumerate(quotes):
+            spot = f"quotes[{index}]"
+            if not isinstance(item, dict):
+                refusals.append({"gate": SCHEMA, "detail": f"{spot} 不是对象"})
+                continue
+            try:
+                _check_keys(item, ("page", "text"), spot)
+            except PartError as exc:
+                refusals.append({"gate": SCHEMA, "detail": str(exc)})
+                continue
+            page = item.get("page")
+            text = item.get("text")
+            if isinstance(page, bool) or not isinstance(page, int):
+                refusals.append(
+                    {"gate": SCHEMA, "detail": f"{spot}.page 要是整数，拿到 {page!r}"}
+                )
+                continue
+            if not isinstance(text, str) or not text.strip():
+                refusals.append(
+                    {"gate": SCHEMA, "detail": f"{spot}.text 要是非空字符串，拿到 {text!r}"}
+                )
+                continue
+            if not 1 <= page <= len(pages):
+                refusals.append(
+                    {
+                        "gate": PAGE_OUT_OF_RANGE,
+                        "detail": f"{spot}.page={page} 不在 1..{len(pages)} 里"
+                        f"（`{spot}.text` 是 {text.strip()[:60]!r}）",
+                    }
+                )
+                continue
+            usable.append({"page": page, "text": text})
+
+    # --- gate 1: every quote is on the page it cites ----------------------
+    #
+    # The batch's whole reason to exist. Folding whitespace is the only
+    # relaxation (see :func:`fold_whitespace`); one changed character is a
+    # different sentence, and a different sentence is what a hallucinated pin
+    # table looks like one keystroke away from a real one.
+    for quote in usable:
+        page = quote["page"]
+        if not quote_is_on_page(quote["text"], pages[page - 1]):
+            refusals.append(
+                {
+                    "gate": QUOTE_NOT_FOUND,
+                    "detail": f"第 {page} 页里找不到引文 {fold_whitespace(quote['text'])[:80]!r}",
+                }
+            )
+
+    # --- gate 3: the pins a claim names were printed somewhere -------------
+    if facts_body:
+        for pin in _fact_pins_of(facts_body):
+            if not pin_appears(pin, document):
+                refusals.append(
+                    {
+                        "gate": PIN_NOT_IN_DOCUMENT,
+                        "detail": f"pin {pin!r} 在这份文档里从没以独立 token 出现过",
+                    }
+                )
+
+    return facts_body, refusals
+
+
+def claim_outcome(claim: Claim, located: "Located", *, pdf_file: str = "") -> Outcome:
+    """One :class:`Claim` → one accepted-or-refused :class:`Outcome`.
+
+    Split out of the command because it is the whole of stage three's *policy*,
+    and policy that only exists inside a CLI function is policy no test can call
+    with an awkward input. Everything it decides is a sentence about the claim:
+    what it was checked against (``pdf``), which quotes were taken, which gate
+    said no.
+
+    A refused claim carries the facts it *tried* to land in no field at all — the
+    refusal is the report's whole content, and leaving the claim visible would
+    invite a reader to hand-copy it onto a shelf past the gate. What a reader gets
+    instead is the gate's reason, which is what they can act on.
+    """
+    identity = dict(located.identity)
+    if claim.accepted:
+        return Outcome(
+            designator=located.designator,
+            channel=located.channel,
+            identity=identity,
+            outcome=FACTS_ACCEPTED,
+            url=str(located.url or ""),
+            notes=[
+                *located.notes,
+                f"{len(claim.quotes)} 条引文都在它点的页码上逐字找到"
+                f"（判据：去首尾空白、连续空白折成一个空格）",
+                "收的是证据不是结论：facts_verified 仍为 false",
+            ],
+            facts=claim.facts,
+            pdf={"file": pdf_file} if pdf_file else {},
+            quotes=[
+                {"page": int(quote["page"]), "text": str(quote["text"])}
+                for quote in claim.quotes
+            ],
+        )
+    return Outcome(
+        designator=located.designator,
+        channel=located.channel,
+        identity=identity,
+        outcome=FACTS_REJECTED,
+        url=str(located.url or ""),
+        notes=[
+            *located.notes,
+            "拒收，一条都没落架、没写 candidate：",
+            *[f"{item['gate']}: {item['detail']}" for item in claim.refusals],
+        ],
+        pdf={"file": pdf_file} if pdf_file else {},
+        refusals=list(claim.refusals),
+        quotes=[
+            {"page": quote.get("page"), "text": quote.get("text")}
+            for quote in claim.quotes
+            if isinstance(quote, dict)
+        ],
+    )
+
+
+def read_document(cache: "Cache", identity: dict[str, str]) -> list[str] | None:
+    """The page dump for one identity, from the cache, with no PDF work at all.
+
+    Stage three reads what stage one already wrote. Three files say the same
+    thing and they exist for three different readers: the PDF is the artefact, the
+    marked ``.txt`` is what a person (or an AI) reads, and the per-page JSON is
+    what this function wants. Deciding between them here means the command never
+    has to know which of the three is missing — and a cache entry that has only
+    the marked text is re-split rather than re-extracted, because pypdf is the
+    expensive and environment-dependent half, and it is not needed to count
+    ``<<<page N>>>`` markers.
+
+    ``None`` means "no document for this part yet", which is a different sentence
+    from "this document has no pages".
+    """
+    from .datasheet import pages_from_marked_text
+
+    pages = cache.read_pages(identity)
+    if pages is not None:
+        return pages
+    marked_path = cache.text_path(identity)
+    try:
+        marked = marked_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return pages_from_marked_text(marked)
+
+
 # --- the report shapes -----------------------------------------------------
 
 
@@ -851,6 +1254,10 @@ OUTCOME_MEANING: dict[str, str] = {
     DEFERRED_ONLINE: "工具自己能取，只是这次没联网（`--offline`）；去掉它重跑即可，不用搜",
     NO_IDENTITY: "既无合法 C 号也无 MPN，只能由工程师自己给",
     UNKNOWN_DESIGNATOR: "回灌文件里点了板上没有的位号",
+    FACTS_ACCEPTED: "AI/人读 txt 写回的 facts，每一条引文都在它点的页码上逐字找到了"
+    "（收的是**证据**，不是结论：仍未核验，facts_verified=false）",
+    FACTS_REJECTED: "读回的 facts 有一道闸没过（引文对不上/页码越界/pin 没出现过/schema），"
+    "**一条都没落架、没写 candidate**",
 }
 
 
@@ -947,6 +1354,21 @@ def markdown_report(
         )
     for note in plan_notes or []:
         todo.append(f"- {note}")
+    refused = [o for o in outcomes if o.outcome == FACTS_REJECTED]
+    if refused:
+        # Naming the gate per part, because the fix differs: a quote that is not
+        # on the page means the answer file was wrong, a pin nobody printed means
+        # the wrong document was read, and neither is fixed by re-running.
+        detail = "；".join(
+            f"{item.designator}："
+            + "、".join(sorted({str(refusal.get("gate", "")) for refusal in item.refusals}))
+            for item in refused[:12]
+        )
+        todo.append(
+            f"- **{len(refused)} 条读回的 facts 被拒收**（{detail}）："
+            "引文对不上原页/页码越界/pin 没出现过/schema —— 这些一条都没落架，"
+            "修答案文件里那条引文再 `--apply-facts` 重交"
+        )
     if not todo:
         todo.append("- 没有：每颗器件都拿到了 PDF 与候选 facts")
     lines += todo
