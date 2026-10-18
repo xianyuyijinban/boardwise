@@ -1440,11 +1440,16 @@ def _chain_direction(
             continue
         if relation.subject not in request.chain or relation.object not in request.chain:
             continue
-        if ranks.get(relation.subject, 0) <= ranks.get(relation.object, 0):
-            continue
         if progress[1] == 0.0:
             continue
-        wanted = 1.0 if relation.kind == ABOVE else -1.0
+        # ``_ranks`` gives the part drawn **first** the smaller rank (it is a
+        # distance to the end of the chain), so ``ranks[subject] < ranks[object]``
+        # means the subject is painted earlier in the walk. A subject that is
+        # painted earlier must sit **lower** to satisfy ``below``, which means the
+        # walk itself has to climb — the sign applied here is the one the produced
+        # drawing needs, not the one the word "below" suggests.
+        earlier = ranks.get(relation.subject, 0) < ranks.get(relation.object, 0)
+        wanted = 1.0 if (relation.kind == BELOW) == earlier else -1.0
         if wanted * progress[1] > 0:
             return progress
         return (progress[0], -progress[1])
