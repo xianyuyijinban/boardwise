@@ -63,6 +63,7 @@ from boardwise.engines.checkup import (
     unreviewed_counts_by_class,
 )
 from boardwise.rules.base import OUTCOME_STATES
+from boardwise.rules.archclosure import OpenDrainPullup
 from boardwise.rules.decap import DecapRequiredCaps
 from boardwise.rules.facts import (
     DomainVsRange,
@@ -486,6 +487,19 @@ REAL_ANSWERS = [{
     "quotes": [
         {"page": 5, "text": "VCCI VCCI Input supply voltage 3 18 V"},
         {"page": 4, "text": "VCCI 3 P Primary-side supply voltage."},
+        # Pin 8 has its own row in the pin table; one quote per pin is what the
+        # gate requires now (`pins: ["3","8"]` and one row cited leaves pin 8
+        # unsupported — measured: that refusal is what made this file red).
+        {
+            "page": 4,
+            "text": "VCCI 8 P Primary-side supply voltage. This pin is internally shorted to pin 3.",
+        },
+        # Every pin the claim names needs a line of its own cited: the gate now
+        # asks whether the pin was printed **in the block this claim quotes**
+        # (a digit is a standalone token dozens of times on this document, so
+        # document-wide occurrence proved nothing). `7` is the NC pin, and this
+        # is the line that says so on page 4.
+        {"page": 4, "text": "NC 7 – No Internal connection."},
     ],
 }]
 
@@ -641,3 +655,85 @@ def test_parts_show_prints_the_three_tiers_and_what_each_drives(tmp_path, capsys
     for tier in FACTS_TRUST_TIERS:
         assert tier in out
     assert "未人工确认" in out
+
+
+# --------------------------------------------------------------------------
+# §挖洞回归（v0.5.16 发出去时都还开着，逐条实测）
+# --------------------------------------------------------------------------
+
+
+def test_a_null_trust_key_is_an_error_not_a_silent_verified(tmp_path):
+    """Measured hole: `raw.get("facts_trust")` could not tell `{"facts_trust": null}`
+    from `{}`, so a file that meant `candidate` but wrote a null opened every rule
+    to facts nobody checked — the one thing this field exists to prevent.
+
+    The distinction is made on `in raw`, on both keys.
+    """
+    shelf = tmp_path / "parts.json"
+    shelf.write_text(
+        json.dumps(
+            {
+                "kind": "boardwise-part-library",
+                "version": 2,
+                "parts": [
+                    {"key": "ic.ldo.x", "facts": dict(LDO_FACTS), "facts_trust": None}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(PartError):
+        load_parts(shelf)
+
+    shelf.write_text(
+        json.dumps(
+            {
+                "kind": "boardwise-part-library",
+                "version": 2,
+                "parts": [
+                    {"key": "ic.ldo.x", "facts": dict(LDO_FACTS), "facts_verified": None}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(PartError):
+        load_parts(shelf)
+
+
+def test_the_open_drain_rule_does_not_drive_a_conclusion_from_a_machine_tier():
+    """Measured hole: `OpenDrainPullup` read `entry.facts` directly — no tier gate,
+    no label — so a `machine_verified` entry produced the same `VIOLATION` as a
+    human's, and 522's whole ruling (a connection conclusion needs a signature)
+    did not apply to it."""
+    facts = {
+        "pull_required": [
+            {
+                "pin": "5",
+                "to": "VCC",
+                "expected_value": "10k",
+                "open_drain": True,
+                "provenance": "file:C47773.pdf, p.3",
+            }
+        ]
+    }
+    model = DesignModel()
+    model.components["U9"] = Component(
+        uid="u9", designator="U9", mpn="DRV8313", lcsc_part="C47773",
+        pins=[Pin("5", "nFAULT", None)],
+    )
+    machine = PartLibrary(parts=[_entry(FACTS_TRUST_MACHINE, facts=facts,
+                                       key="ic.driver.test", mpn="DRV8313",
+                                       category="ic.driver")])
+    human = PartLibrary(parts=[_entry(FACTS_TRUST_VERIFIED, facts=facts,
+                                      key="ic.driver.test", mpn="DRV8313",
+                                      category="ic.driver")])
+
+    machine_states = _states(OpenDrainPullup(library=machine), model)
+    human_states = _states(OpenDrainPullup(library=human), model)
+
+    assert human_states["VIOLATION"], "a human-signed entry must still be judged"
+    assert machine_states["VIOLATION"] == [], (
+        "a machine-verified claim is not a signature; the pin's pull-up is a "
+        "connection conclusion"
+    )

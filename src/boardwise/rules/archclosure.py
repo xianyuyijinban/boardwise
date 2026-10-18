@@ -144,6 +144,7 @@ from ..core.designintent import (
     write_path,
 )
 from ..core.model import Component, DesignModel, is_ground_net
+from ..core.partkind import shelf_declaration
 from ..core.parts import PartEntry
 from ..core.power_domains import domain_of, infer_net_domains, voltage_from_net_name
 from ..core.values import parse_voltage_volts
@@ -339,8 +340,12 @@ def _resistor_like(rule: FactsRule, comp: Component | None) -> bool:
     if comp is None:
         return False
     entry = rule.entry_for(comp)
-    if entry is not None and entry.category:
-        return entry.category == "resistor"
+    # 522: `shelf_declaration`, not a bare `entry.category` — this was the
+    # second of four copies of that read, and the bare one let a machine-verified
+    # entry declare its own kind (a conclusion) without a signature.
+    declared = shelf_declaration(entry)
+    if declared:
+        return declared == "resistor"
     return parse_resistance_ohms(comp.value or "") is not None
 
 
@@ -588,6 +593,14 @@ class OpenDrainPullup(FactsRule):
         for comp in _components(model):
             entry = self.entry_for(comp)
             if entry is None:
+                continue
+            # 522: judging "is this open-drain output pulled up" is a
+            # **connection conclusion**, so a machine-verified entry may not
+            # drive it. Without this the rule read `entry.facts` directly and
+            # returned the same `VIOLATION`, same wording, with no
+            # 「未人工确认」 anywhere — the label lived only in the rules that
+            # asked `_category_state` first.
+            if not self.admissible(entry):
                 continue
             for record in self._open_drain_records(entry):
                 rows.append(self._row(model, guesses, comp, record))

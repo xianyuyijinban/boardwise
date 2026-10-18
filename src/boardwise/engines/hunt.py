@@ -288,8 +288,16 @@ def assert_request_is_identity(request: str, *, lcsc: str = "", mpn: str = "") -
     designator, or a redacted form (`C2977…`). Verbatim equality with the
     C-number or the MPN, or the line is not written: a recorder that accepted
     anything would make the whole file decoration.
+
+    **Empty is allowed, and means what it says** (measured hole): a part with no
+    C-number and no MPN can still be fetched when an `--apply` file named its URL,
+    and the old contract made that call raise `IdentityLeak` mid-batch — the whole
+    run died on a part the board simply had no identity for. Recording ``""`` is
+    the honest line: no identity was sent, and ``dest`` says where the call went.
     """
     request = str(request or "")
+    if not request:
+        return ""
     for value in (lcsc, mpn):
         if value and request == value:
             return request
@@ -297,6 +305,33 @@ def assert_request_is_identity(request: str, *, lcsc: str = "", mpn: str = "") -
         f"audit request {request!r} is neither the C-number {lcsc!r} nor the MPN "
         f"{mpn!r} verbatim; the audit log may only record a part's identity"
     )
+
+
+def dest_of(url: str) -> str:
+    """Where an outbound call went, as a **host** — or ``file:<path>``/``cached``.
+
+    The audit log needs this because ``request`` answers a different question
+    ("what about the board left") and a line that names only the identity cannot
+    tell a reader that an `--apply` answer sent it to an arbitrary host. Host
+    only: a path or query is exactly where board information would hide, and the
+    reader of this file is checking "did anything go somewhere odd", not
+    reproducing a request.
+
+    Never raises: an unparseable URL records ``"<unparsed>"``, which is itself the
+    finding, and refusing to write the line would hide that the call happened.
+    """
+    from urllib.parse import urlsplit
+
+    text = str(url or "").strip()
+    if not text:
+        return "cached"
+    if text.startswith("file:"):
+        return text
+    try:
+        host = urlsplit(text).hostname or ""
+    except ValueError:
+        return "<unparsed>"
+    return host or "<unparsed>"
 
 
 # --- execution: the seams --------------------------------------------------
@@ -489,6 +524,15 @@ def execute(
     identity = dict(located.identity)
     lcsc, mpn = identity.get("lcsc", ""), identity.get("mpn", "")
     labelled = label or mpn or lcsc
+    # A part the board gives no identity for (a test point) can still be fetched
+    # when an answer file names its URL. It needs a cache directory, and the only
+    # stable handle is the address itself — reduced to a digest, because a URL's
+    # path is where board information would ride along. Prefixed `anon-` so it
+    # cannot be mistaken for a part number by anyone reading the cache.
+    if not (lcsc or mpn) and located.url:
+        identity["anonymous"] = (
+            "anon-" + hashlib.sha256(located.url.encode("utf-8")).hexdigest()[:16]
+        )
 
     # --- the cache first: the identity is the key, so a warm cache answers
     # without resolving an address at all (and `--offline` can still hand over
@@ -536,6 +580,7 @@ def execute(
         audit.record(
             channel="lcsc-detail",
             request=assert_request_is_identity(lcsc, lcsc=lcsc),
+            dest="wmsc.lcsc.com",
             http="" if detail.code is None else str(detail.code),
         )
         url = detail.pdf_url
@@ -567,6 +612,10 @@ def execute(
     audit.record(
         channel=located.channel,
         request=assert_request_is_identity(lcsc or mpn, lcsc=lcsc, mpn=mpn),
+        # 522's follow-up: the line used to name only the identity, so an
+        # `--apply` answer could send that request — and the C-number — to any
+        # host and the file would still read "only a C-number left the machine".
+        dest=dest_of(url),
         http="" if downloaded.status is None else str(downloaded.status),
         payload=downloaded.payload,
     )
@@ -711,33 +760,48 @@ class Cache:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
 
-    def key(self, identity: dict[str, str]) -> str:
+    def key(self, identity: dict[str, str], *, hint: str = "") -> str:
+        """The directory name for one part: its C-number, else its MPN.
+
+        ``hint`` is the last resort and it exists because of a measured crash: a
+        part with **no** identity (a test point the board gives no C-number or MPN
+        for) can still be fetched when an `--apply` file names its URL, and raising
+        here killed the batch at the download step. The hint is the URL, reduced to
+        a digest — stable for the run, and it carries nothing about the board the
+        way a URL's path might. Prefixed so a digest can never be mistaken for a
+        part number by a reader of the cache directory.
+        """
         lcsc = (identity.get("lcsc") or "").strip()
         if lcsc:
             return lcsc.upper()
         mpn = re.sub(r"[^A-Za-z0-9._-]+", "_", identity.get("mpn") or "").strip("_")
-        if not mpn:
-            raise IdentityLeak("a cache key needs an identity; this part has none")
-        return mpn
+        if mpn:
+            return mpn
+        anonymous = (identity.get("anonymous") or "").strip()
+        if anonymous:
+            return anonymous
+        if hint:
+            return "anon-" + hashlib.sha256(hint.encode("utf-8")).hexdigest()[:16]
+        raise IdentityLeak("a cache key needs an identity; this part has none")
 
-    def directory(self, identity: dict[str, str]) -> Path:
-        return self.root / self.key(identity)
+    def directory(self, identity: dict[str, str], *, hint: str = "") -> Path:
+        return self.root / self.key(identity, hint=hint)
 
-    def path_for(self, identity: dict[str, str]) -> Path:
-        key = self.key(identity)
-        return self.directory(identity) / f"{key}.pdf"
+    def path_for(self, identity: dict[str, str], *, hint: str = "") -> Path:
+        key = self.key(identity, hint=hint)
+        return self.root / key / f"{key}.pdf"
 
-    def text_path(self, identity: dict[str, str]) -> Path:
-        key = self.key(identity)
-        return self.directory(identity) / f"{key}.txt"
+    def text_path(self, identity: dict[str, str], *, hint: str = "") -> Path:
+        key = self.key(identity, hint=hint)
+        return self.root / key / f"{key}.txt"
 
-    def pages_path(self, identity: dict[str, str]) -> Path:
-        key = self.key(identity)
-        return self.directory(identity) / f"{key}.pages.json"
+    def pages_path(self, identity: dict[str, str], *, hint: str = "") -> Path:
+        key = self.key(identity, hint=hint)
+        return self.root / key / f"{key}.pages.json"
 
-    def meta_path(self, identity: dict[str, str]) -> Path:
-        key = self.key(identity)
-        return self.directory(identity) / f"{key}.meta.json"
+    def meta_path(self, identity: dict[str, str], *, hint: str = "") -> Path:
+        key = self.key(identity, hint=hint)
+        return self.root / key / f"{key}.meta.json"
 
     def write_pages(self, identity: dict[str, str], marked: str) -> None:
         path = self.pages_path(identity)
@@ -799,27 +863,60 @@ def payload_digest(payload: bytes) -> str:
 class AuditLog:
     """Every outbound call, one JSON line each — the only proof of what was sent.
 
-    ``request`` is **never** a URL: the URL is a link the service handed us (or a
-    file an answer named), and recording it would document the opposite of the
-    claim this file exists to support. What the line says is the part's identity —
-    the C-number or the MPN, verbatim — and :func:`assert_request_is_identity`
-    refuses anything else. ``sha256`` ties a downloaded PDF to the line that
-    fetched it.
+    Two fields, because there are two questions and one of them was unanswerable:
 
-    Lines are appended as they happen, so a run killed halfway still has the
-    record of what it had already sent.
+    * ``request`` is the part's **identity** — the C-number or the MPN, verbatim
+      — and :func:`assert_request_is_identity` refuses anything else. This is
+      what the file exists to show: the only thing about the board that left the
+      machine was a part number.
+    * ``dest`` is **where it went**, as a host (``datasheet.lcsc.com``,
+      ``wmsc.lcsc.com``) or ``file:<path>`` for an answer that named a local file,
+      or ``cached``. Without it the file claimed "only a C-number left" while
+      `--apply` could send that C-number — and the request itself — to any host an
+      answer file named. Measured: an `--apply` URL of
+      ``https://attacker.example/collect?board=x`` produced one line whose only
+      trace was ``request=C2977777``.
+
+    The host, not the URL: a path or query is where board information would hide
+    (``?board=x``), and this file is read by a person checking a claim, not by a
+    proxy. A host is enough to answer "did anything go somewhere it should not
+    have", which is the question.
+
+    ``sha256`` ties a downloaded PDF to the line that fetched it. Lines are
+    appended as they happen, so a run killed halfway still has the record of what
+    it had already sent — the file is truncated once per run by the caller, not
+    appended across runs (see :meth:`start`).
     """
 
     path: Path
     entries: list[dict[str, Any]] = field(default_factory=list)
 
+    def start(self) -> None:
+        """Empty the file for this run.
+
+        Not a truncate-on-append: "the audit file is the evidence for this run"
+        and "keep the last run's lines" cannot both be true, and appending across
+        runs made `--offline` print 「审计文件里有 0 行」 over a file holding two
+        lines from the previous one — the one mode whose whole purpose is a claim
+        about what was not sent.
+        """
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("", encoding="utf-8")
+
     def record(
-        self, *, channel: str, request: str, http: str = "", payload: bytes = b""
+        self,
+        *,
+        channel: str,
+        request: str,
+        http: str = "",
+        payload: bytes = b"",
+        dest: str = "",
     ) -> None:
         entry = {
             "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
             "channel": channel,
             "request": request,
+            "dest": dest,
             "http": http,
             "bytes": len(payload),
             "sha256": payload_digest(payload),
@@ -891,12 +988,56 @@ def fold_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
+#: How short a quote may be before it stops being evidence. A one-character
+#: "quote" matches any page (`V` is on every datasheet), and a two-token one
+#: (`3 V`) matches a hundred. The floor is what turns "some text appears on this
+#: page" into "this *sentence* appears on this page" — measured: a real claim's
+#: shortest useful quote (`VCCI 3 P Primary-side supply voltage.`) is 40
+#: characters and 8 tokens.
+QUOTE_MIN_CHARS = 10
+QUOTE_MIN_TOKENS = 3
+
+
 def quote_is_on_page(quote: str, page_text: str) -> bool:
-    """Is ``quote`` on this page, verbatim apart from whitespace runs?"""
+    """Is ``quote`` on this page, verbatim apart from whitespace runs?
+
+    Two things beyond the substring test, and both are load-bearing:
+
+    * **a floor** (:data:`QUOTE_MIN_CHARS` / :data:`QUOTE_MIN_TOKENS`). A bare
+      substring test passes on a single character — `V` occurs on every page of
+      every datasheet — so "the quote is on the page" was true for quotes that
+      are not quotes. This was measured, not suspected.
+    * **word boundaries on both ends**. Even a long snippet must not be found
+      *inside* a longer word or number: that is how a real sentence becomes a
+      match for a different one. A quote that starts mid-word (`CCI 3 P …`) is
+      not the document's sentence.
+    """
     needle = fold_whitespace(quote)
-    if not needle:
+    if len(needle) < QUOTE_MIN_CHARS or len(needle.split()) < QUOTE_MIN_TOKENS:
         return False
-    return needle in fold_whitespace(page_text)
+    pattern = r"(?<![0-9A-Za-z])" + re.escape(needle) + r"(?![0-9A-Za-z])"
+    return re.search(pattern, fold_whitespace(page_text)) is not None
+
+
+def _folded_lines(page_text: str) -> list[str]:
+    return [fold_whitespace(line) for line in page_text.splitlines()]
+
+
+def lines_around_quote(page_text: str, needle: str, *, max_lines: int = 4) -> list[str]:
+    """The page's lines that a (folded) quote actually spans, or ``[]``.
+
+    Folding collapses a wrap, so a quote that crosses two printed lines exists in
+    neither of them alone. A sliding window over folded lines rebuilds the block
+    the quote came from, and the block is what a pin has to be printed in — see
+    :func:`pin_appears_in_evidence`.
+    """
+    lines = _folded_lines(page_text)
+    for width in range(1, max_lines + 1):
+        for start in range(len(lines)):
+            block = " ".join(lines[start : start + width]).strip()
+            if block and needle in block:
+                return lines[start : start + width]
+    return []
 
 
 def _fact_pins_of(facts: dict[str, Any]) -> list[str]:
@@ -935,22 +1076,58 @@ _PIN_TOKEN = r"(?<![0-9A-Za-z]){pin}(?![0-9A-Za-z])"
 
 
 def pin_appears(pin: str, document: str) -> bool:
-    """Does this pin number occur as a standalone token in the whole document?
+    """Does this pin number occur as a standalone token **anywhere**?
 
-    Occurrence only. The gate does **not** check that the pin belongs to the
-    named signal, or that a voltage row is about the rail the claim says: that is
-    a reading of the circuit, and a tool that pretended to it would be the
-    confident-garbage generator this whole line of work exists to avoid. What it
-    does catch is the cheaper failure — a table of pins invented for a pin count
-    the package does not have.
-
-    The check is document-wide rather than per-page because a pin table and the
-    electrical table live on different pages of every datasheet ever printed.
+    Kept because it is the cheap question a caller may still want, and because
+    :func:`pin_appears_in_evidence` is stated as a narrowing of it. **It is not a
+    gate on its own**: on a real datasheet a single digit (`1`) occurs dozens of
+    times as a standalone token, so "appears somewhere in the document" is true
+    for essentially any pin number a claim invents. Measured on one 52-page gate
+    driver datasheet: 73 of the numbers 1..120 "appear".
     """
     token = re.escape(str(pin or "").strip())
     if not token:
         return False
     return re.search(_PIN_TOKEN.format(pin=token), document) is not None
+
+
+def pin_appears_in_evidence(
+    pin: str, pages: list[str], quotes: list[dict[str, Any]]
+) -> bool:
+    """Was this pin printed on a line the claim **itself** quotes? (521's hole)
+
+    This is the gate, and it is a narrowing of :func:`pin_appears` in the one
+    direction that matters: a claim is only as good as its evidence, so a pin
+    number has to be printed in the block its quotes came from. Without it the
+    two halves of a claim were never tied together — a real quote from page 4
+    plus an invented pin table passed every gate, because "the quote is on the
+    page" and "the pin is somewhere in the document" are both true for text the
+    two never shared.
+
+    Measured on `UCC21520DWR`'s 52-page datasheet: `pin 1` is a standalone token
+    46 times document-wide and once inside the quoted pin-table lines, so the old
+    test accepted an invented `pin: "1"` and this one refuses it.
+
+    A quote whose block cannot be located contributes nothing: it already failed
+    :func:`quote_is_on_page`, and a pin is not allowed to lean on evidence the
+    page test refused.
+    """
+    wanted = str(pin or "").strip()
+    if not wanted:
+        return False
+    for quote in quotes:
+        page = quote.get("page")
+        if not isinstance(page, int) or isinstance(page, bool):
+            continue
+        if not 1 <= page <= len(pages):
+            continue
+        needle = fold_whitespace(quote.get("text") or "")
+        if not needle:
+            continue
+        for line in lines_around_quote(pages[page - 1], needle):
+            if re.search(_PIN_TOKEN.format(pin=re.escape(wanted)), line):
+                return True
+    return False
 
 
 @dataclass
@@ -1092,14 +1269,26 @@ def check_claim(
                 }
             )
 
-    # --- gate 3: the pins a claim names were printed somewhere -------------
-    if facts_body:
+    # --- gate 3: the pins a claim names were printed in its own evidence ---
+    #
+    # Not "somewhere in the document": a digit occurs as a standalone token
+    # dozens of times on any datasheet, so document-wide occurrence accepted
+    # essentially every invented pin. The pin has to be in the block the claim
+    # quoted — that is the only thing tying ``facts`` to ``quotes``, and without
+    # it a real page-4 quote plus an invented pin table passed all six gates.
+    #
+    # **Only asked when the evidence above held.** A quote that failed the page
+    # test already made the pins unsupported; reporting a second refusal for the
+    # same cause would tell a reader to fix two things when fixing the quote is
+    # the whole of the work.
+    if facts_body and not refusals:
         for pin in _fact_pins_of(facts_body):
-            if not pin_appears(pin, document):
+            if not pin_appears_in_evidence(pin, pages, usable):
                 refusals.append(
                     {
                         "gate": PIN_NOT_IN_DOCUMENT,
-                        "detail": f"pin {pin!r} 在这份文档里从没以独立 token 出现过",
+                        "detail": f"pin {pin!r} 没出现在这条 claim 引的任何一行里"
+                        "（引文是唯一证据；只在文档别处出现过不算）",
                     }
                 )
 
@@ -1186,9 +1375,17 @@ def read_document(cache: "Cache", identity: dict[str, str]) -> list[str] | None:
     marked_path = cache.text_path(identity)
     try:
         marked = marked_path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, ValueError):
+        # A `.txt` that is not UTF-8 is a document this run cannot read, which is
+        # `no-document` — the same answer as a missing file, and never a crash
+        # mid-batch (measured hole).
         return None
-    return pages_from_marked_text(marked)
+    pages = pages_from_marked_text(marked)
+    # An empty split means the dump carries no `<<<page N>>>` markers at all, so
+    # the file is not a page dump. Returning `[]` made every quote fail as
+    # `page-out-of-range 1..0` — a complaint about the claim when the document is
+    # what is wrong (measured hole).
+    return pages or None
 
 
 # --- the report shapes -----------------------------------------------------
@@ -1375,8 +1572,24 @@ def markdown_report(
             "引文对不上原页/页码越界/pin 没出现过/schema —— 这些一条都没落架，"
             "修答案文件里那条引文再 `--apply-facts` 重交"
         )
+    # `--offline` (and an `--apply` URL under it) puts every part it does not
+    # fetch into `deferred-online`, and that outcome was in **no** todo branch —
+    # so a pure offline run — the normal path of the flag — printed
+    # 「没有：每颗器件都拿到了 PDF 与候选 facts」 while holding zero PDFs.
+    # Measured on a 46-part board: 45 `deferred-online`, and that sentence.
+    deferred = [o for o in outcomes if o.outcome == DEFERRED_ONLINE]
+    if deferred:
+        fetchable = [o for o in deferred if o.channel == CHANNEL_C_NUMBER]
+        todo.append(
+            f"- **{len(deferred)} 颗还没取，但工具自己能取**"
+            f"（其中 {len(fetchable)} 颗有合法 C 号，其余是回灌文件给了地址）："
+            "去掉 `--offline` 重跑就会去取，**不用搜**"
+        )
     if not todo:
-        todo.append("- 没有：每颗器件都拿到了 PDF 与候选 facts")
+        todo.append(
+            "- 没有：每颗器件都拿到了 PDF 与候选 facts"
+            "（这一句只在没有 deferred-online / no-facts / 无身份时出现）"
+        )
     lines += todo
 
     lines += [

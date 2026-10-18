@@ -34,7 +34,7 @@ import re
 from dataclasses import dataclass, field
 
 from ..core.model import Component, DesignModel, Net
-from ..core.partkind import KIND_IC, classify_part
+from ..core.partkind import KIND_IC, classify_part, shelf_declaration
 from ..core.parts import (
     FACTS_TRUST_CANDIDATE,
     FACTS_TRUST_MACHINE,
@@ -382,6 +382,30 @@ class FactsRule(OutcomeRule):
     def _allow_machine(self) -> bool:
         """This rule's answer to "may a machine-verified fact drive me?"."""
         return not self.REQUIRES_HUMAN_VERIFIED
+
+    def admissible(self, entry: PartEntry) -> bool:
+        """May **this** rule act on this entry at all? (522's hole, measured)
+
+        The tier gate lives in :func:`_category_state` mixed with the category
+        read, which is right for the rules that need a classification to have a
+        subject. Two rules do not: their subject is one fact kind
+        (``pull_required``) and they read ``entry.facts`` directly — so they got
+        the machine tier's facts with **no gate and no label**. Measured: an
+        open-drain pin with no pull-up came back `VIOLATION` from a
+        `machine_verified` entry, same wording, same evidence, and no
+        「未人工确认」 anywhere — a conclusion rule acting on facts its own
+        docstring says need a signature.
+
+        One place to ask, so a rule that reads ``entry.facts`` without going
+        through ``_category_state`` cannot forget. ``candidate`` never passes
+        (`__post_init__` already holds its facts back; this is belt and braces),
+        and ``machine_verified`` passes only for a rule that computes a number.
+        """
+        if entry.facts_trust == FACTS_TRUST_CANDIDATE:
+            return False
+        if entry.facts_trust == FACTS_TRUST_MACHINE:
+            return self._allow_machine
+        return True
 
     def _trust_note(self, entry: PartEntry) -> str:
         """The 「未人工确认」 sentence for a machine-verified finding, or ``""``.
@@ -1835,15 +1859,28 @@ class UsbCcPulldown(FactsRule):
         entry falls back to the value, which is how the rule has always let a
         part with no MPN be judged at all."""
         entry = self.entry_for(comp)
-        if entry is not None and entry.category:
-            return entry.category == "resistor"
+        # `shelf_declaration`, not `entry.category`: 522's hole, measured. A bare
+        # read let a `machine_verified` entry declare "this is a resistor" (and a
+        # connector "this is a connector"), which is a conclusion — the same one
+        # `partkind.shelf_declaration` refuses below `verified`. This was the
+        # third of four copies of that read; there is one gate now.
+        declared = shelf_declaration(entry)
+        if declared:
+            return declared == "resistor"
         return parse_resistance_ohms(comp.value or "") is not None
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
         rows: list[tuple[Outcome, str | None]] = []
         for comp in model.components.values():
             entry = self.entry_for(comp)
-            if entry is None or entry.category != "connector":
+            if entry is None or shelf_declaration(entry) != "connector":
+                continue
+            # 522: this rule judges a **connection obligation**, so it may not
+            # act on a machine-verified claim. Without this the same entry said
+            # `NOT_APPLICABLE` at `candidate` and `VIOLATION` at
+            # `machine_verified` — two opposite assertions about one claim,
+            # decided by the tier and never labelled.
+            if not self.admissible(entry):
                 continue
             pulls = (entry.facts or {}).get("pull_required") or []
             if not pulls:

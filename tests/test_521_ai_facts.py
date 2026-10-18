@@ -92,6 +92,13 @@ def ucc21520() -> DesignModel:
 #: The true reading of pages 2 and 4 — pin 3/8 = VCCI, 16 = VDDA, 11 = VDDB,
 #: recommended operating range 3–18 V. Written here by hand from the text above,
 #: which is the point: this is what a reader returns, and what the gate judges.
+#:
+#: **One quote per pin**, and that is now load-bearing: 522's follow-up made the
+#: pin gate ask "was this pin printed in the block this claim quotes?" instead of
+#: "anywhere in the document", because a single digit occurs as a standalone
+#: token dozens of times on any real datasheet. A claim that names four pins and
+#: quotes one row of them has three unsupported pins, and refusing that is the
+#: whole difference between a checked claim and a plausible one.
 GOOD_FACTS = {
     "supply_pins": [
         {
@@ -118,6 +125,12 @@ GOOD_FACTS = {
 
 GOOD_QUOTES = [
     {"page": 2, "text": "VCCI 3 P Primary-side supply voltage."},
+    {"page": 2, "text": "VDDA 16 P Secondary-side power for driver A."},
+    {"page": 2, "text": "VDDB 11 P Secondary-side power for driver B."},
+    {
+        "page": 2,
+        "text": "VCCI 8 P Primary-side supply voltage. Internally shorted to pin 3.",
+    },
     {"page": 4, "text": "VCCI VCCI Input supply voltage 3 18 V"},
 ]
 
@@ -696,3 +709,69 @@ def test_a_refused_claim_carries_no_facts_into_its_row():
     assert outcome.outcome == hunt.FACTS_REJECTED
     assert outcome.facts == {}
     assert outcome.read_by_someone is False
+
+
+# --------------------------------------------------------------------------
+# §挖洞回归：两条实测成立的绕过路径（v0.5.16 发出去时都还开着）
+# --------------------------------------------------------------------------
+
+
+def test_a_one_character_quote_is_not_evidence():
+    """Measured hole: the quote gate was a bare substring test.
+
+    `V` occurs on every page of every datasheet, so quoting it "proved" that the
+    quote was on the page — and this gate is the batch's entire reason to exist.
+    A floor of :data:`hunt.QUOTE_MIN_CHARS` characters and
+    :data:`hunt.QUOTE_MIN_TOKENS` tokens, plus word boundaries on both ends, is
+    what makes the question "is this *sentence* here" rather than "does some of
+    these characters appear".
+    """
+    assert not hunt.quote_is_on_page("V", PAGES[1])
+    assert not hunt.quote_is_on_page("3", PAGES[3])
+    assert not hunt.quote_is_on_page("3 18 V", PAGES[3])  # a range, not a sentence
+    assert not hunt.quote_is_on_page("VCCI 3 P", PAGES[1])  # three tokens, too short
+    # ...and the real sentence still passes, so the floor is a floor and not a wall.
+    assert hunt.quote_is_on_page("VCCI 3 P Primary-side supply voltage.", PAGES[1])
+
+
+def test_a_real_quote_with_an_invented_pin_is_refused():
+    """Measured hole: ``facts`` and ``quotes`` were never tied together.
+
+    A genuine quote from the pin table plus an invented ``pin: "16"`` passed
+    every gate, because "the quote is on the page" and "the pin appears in the
+    document" are both true for text the two never shared — ``16`` is printed on
+    page 2, one line below the quoted row. The gate now asks whether the pin was
+    printed *in the block the claim quoted*, which is the only thing that makes
+    the quotes evidence for the facts rather than for themselves.
+    """
+    invented = {
+        "supply_pins": [
+            {
+                "pins": ["16"],
+                "name": "VDDA",
+                "mode": "operating",
+                "provenance": "file:C601651.pdf, p.2",
+            }
+        ]
+    }
+    only_the_vcci_row = [
+        {"page": 2, "text": "VCCI 3 P Primary-side supply voltage."}
+    ]
+    facts, refusals = hunt.check_claim(
+        facts=invented,
+        quotes=only_the_vcci_row,
+        pages=PAGES,
+        document=DOCUMENT,
+    )
+    assert facts  # the shape itself is fine
+    assert [item["gate"] for item in refusals] == [hunt.PIN_NOT_IN_DOCUMENT]
+
+    # And the same pin passes once its own row is quoted — the gate is narrow,
+    # not a blanket refusal of anything that names a pin.
+    _facts, refusals = hunt.check_claim(
+        facts=invented,
+        quotes=[{"page": 2, "text": "VDDA 16 P Secondary-side power for driver A."}],
+        pages=PAGES,
+        document=DOCUMENT,
+    )
+    assert refusals == []

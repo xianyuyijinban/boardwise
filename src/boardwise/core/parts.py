@@ -1284,20 +1284,30 @@ def _facts_trust_of(raw: dict[str, Any], where: str) -> str:
     Absent both keys → :data:`FACTS_TRUST_VERIFIED`, the 039 default: the 109
     entries written before either field existed are human-curated and this batch
     must not demote them.
+
+    **A key that is present and ``null`` is an error, not "absent"** (522's
+    hole, measured). `raw.get` cannot tell `{"facts_trust": null}` from `{}`, so a
+    file that meant to say `candidate` but wrote a null opened every rule to
+    facts nobody checked — the one thing this field exists to prevent. The
+    distinction is made on `in raw` rather than on the value, on both keys.
     """
-    declared = raw.get("facts_trust")
-    legacy = raw.get("facts_verified")
-    if legacy is not None and not isinstance(legacy, bool):
-        raise PartError(
-            f"{where}.facts_verified must be true or false, got {legacy!r}"
-        )
-    if declared is not None:
+    declared: str | None = None
+    if "facts_trust" in raw:
+        declared = raw["facts_trust"]
         if not isinstance(declared, str) or declared not in FACTS_TRUST_TIERS:
             raise PartError(
                 f"{where}.facts_trust: {declared!r} is not one of "
                 f"{', '.join(FACTS_TRUST_TIERS)}; the vocabulary is extended by "
                 "decision, not by typo"
             )
+    legacy: bool | None = None
+    if "facts_verified" in raw:
+        legacy = raw["facts_verified"]
+        if not isinstance(legacy, bool):
+            raise PartError(
+                f"{where}.facts_verified must be true or false, got {legacy!r}"
+            )
+    if declared is not None:
         if legacy is not None:
             agreed = FACTS_TRUST_VERIFIED if legacy else FACTS_TRUST_CANDIDATE
             if declared != agreed:

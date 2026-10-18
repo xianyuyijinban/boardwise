@@ -15641,6 +15641,15 @@ def _hunt_answers(path: str) -> tuple[list[dict], str]:
             return [], f"{where}: 没有 designator/lcsc/mpn，点不到板上任何一颗"
         if not url:
             return [], f"{where}: 没有 url"
+        # `--apply` hands this tool a URL and the tool fetches it. Only http(s) is
+        # a datasheet: `file://` would read the local disk on the tool's behalf,
+        # and `data:`/`ftp:` are not datasheets at all. Refused at the door, where
+        # the message can name the record — the fetch site cannot.
+        if not url.lower().startswith(("http://", "https://")):
+            return [], (
+                f"{where}: url 必须是 http(s)，拿到 {url[:80]!r} —— "
+                "本地文件走 `--file`，答案文件只回传下载地址"
+            )
         answers.append({"locators": locators, "url": url, "index": index})
     return answers, ""
 
@@ -15696,6 +15705,15 @@ def _hunt_claims(path: str) -> tuple[list[dict], str]:
         }
         if not locators:
             return [], f"{where}: 没有 designator/lcsc/mpn，点不到板上任何一颗"
+        # `"quotes": 5` used to reach the gate and raise TypeError, killing the
+        # whole CLI on a malformed *file* — which is a file error, not a
+        # per-claim refusal (measured hole).
+        raw_quotes = item.get("quotes")
+        if raw_quotes is not None and not isinstance(raw_quotes, list):
+            return [], (
+                f"{where}.quotes: 要是列表，拿到 {type(raw_quotes).__name__}"
+                "（引文是 [{{page, text}}, …]）"
+            )
         for position, quote in enumerate(item.get("quotes") or []):
             if not isinstance(quote, dict):
                 continue
@@ -15789,8 +15807,11 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
     # Created even when nothing is sent: an absent audit file cannot be told
     # apart from a run that was never audited, and this file is the whole
     # evidence for "only a C-number or an MPN left this machine".
-    audit.path.parent.mkdir(parents=True, exist_ok=True)
-    audit.path.touch(exist_ok=True)
+    # 522's follow-up: *this run's* evidence, not a pile across runs. Appending
+    # let `--offline` print 「审计文件里有 0 行」 over a file still holding the
+    # previous run's two lines — in the one mode whose whole point is a claim
+    # about what was NOT sent.
+    audit.start()
     cache = _hunt_cache(args)
 
     # The reader is a **batch precondition**, not a per-part outcome (520
@@ -16250,8 +16271,25 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
             key=key,
             mpn=mpn,
             lcsc=lcsc,
+            # Identity and parameters are **inherited**, never rebuilt (522's
+            # hole, measured). Keeping only `value`/`category` and dropping the
+            # uuid pair, `params`, `manufacturer`, the datasheet link and the
+            # footprint name turned "add facts to a shelf entry" into "replace
+            # the entry with a facts-only stub" — and an entry without its uuids
+            # can no longer be lifted to `verified` at all, because 039's schema
+            # requires the pair for exactly that. `--shelf` is supposed to enrich.
             value=existing.value if existing is not None else "",
             category=existing.category if existing is not None else "",
+            manufacturer=existing.manufacturer if existing is not None else "",
+            deviceUuid=existing.deviceUuid if existing is not None else "",
+            libraryUuid=existing.libraryUuid if existing is not None else "",
+            footprint_name=existing.footprint_name if existing is not None else "",
+            footprint_name_verified=(
+                existing.footprint_name_verified if existing is not None else None
+            ),
+            params=dict(existing.params) if existing is not None else {},
+            datasheetUrl=existing.datasheetUrl if existing is not None else "",
+            basic=existing.basic if existing is not None else None,
             datasheetPdfUrl=outcome.url,
             facts=outcome.facts,
             facts_trust=(

@@ -1237,7 +1237,7 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `tests/test_516_ampacity_component.py`；本批的 checkup/CLI 改动（A3/B1/B2/C）
     # 都在 `engines/checkup.py` 与 `cli.py`，不在本配方里。
     # **522 moved BOTH (主代理重钉)** — direct 3de90bc4 -> 5eceec18，recursive
-    # 10a9d541 -> 9235d428（第二十八批；`facts_verified` 布尔拆成 `facts_trust`
+    # 10a9d541 -> 9235d428 -> eb48cb9b（第二十八批 522 及其挖洞修复）；`facts_verified` 布尔拆成 `facts_trust`
     # 三档）。落点全在 `rules/`：`_category_state` 加 `allow_machine` 关键字参数、
     # `FactsRule.REQUIRES_HUMAN_VERIFIED` 与十一条算数字的规则设 False（域/压差/
     # 去耦/LED/分压/RC/TVS/LDO/distance/rail-clash）、`present_rows` 统一贴
@@ -1246,8 +1246,8 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # verdict 不涂绿）；`core/parts.py`、`core/power_domains.py`、
     # `core/partkind.py`、`engines/checkup.py` 的改动不在本配方里。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "5eceec18"
-    assert recursive == "9235d428", (
+    assert old_digest == "46e1f698"
+    assert recursive == "eb48cb9b", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

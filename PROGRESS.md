@@ -4,6 +4,19 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-10-18] v0.5.17：v0.5.16 挖洞补做，修掉 521/522 的核心绕过
+
+**v0.5.16 是在没做挖洞闸的情况下发的**（岳当场指出）。补做 5 缝只读 swarm（寻址/下载/缓存/审计 · 521 六道闸 · 档位装载 · 规则分派 · 报告与既有测试），
+出 12 条高严重级洞，**全部落在已发布的 v0.5.16 里**，其中最坏的是三条：
+
+1. **521 的「引文逐字」闸是纯子串比较** —— 引文写一个字符 `V` 也能过（每页都有），这条闸是 521 存在的全部理由。修：`QUOTE_MIN_CHARS=10` + `QUOTE_MIN_TOKENS=3` + 两端词边界（`(?<![0-9A-Za-z])…(?![0-9A-Za-z])`）。
+2. **`pin_appears` 对单位数 pin 等于没闸** —— 一份 52 页手册里 `1..120` 有 73 个「以独立 token 出现」。更根本的是**引文与事实从未绑定**：真引文 + 编造的 facts 六道闸全过。修：新 `pin_appears_in_evidence` —— pin 必须印在**这条 claim 引的那几行**里（`lines_around_quote` 按 fold 后的行做滑窗重建跨行块），一次同时钉死两条洞。
+3. **522 的核心裁定被两条规则绕过** —— `OpenDrainPullup` / `UsbCcPulldown` 直接读 `entry.facts`、不走 `_category_state`、不打「未人工确认」标签，`machine_verified` 驱动了**连接结论**（本该要签名）；`UsbCcPulldown` 更在同一条目上按档位给出 **`NOT_APPLICABLE` 与 `VIOLATION` 两种相反断言**。修：`FactsRule.admissible(entry)` 单一入口 + 两处接上；四处裸读 `entry.category` 改走 `partkind.shelf_declaration`。
+
+其余修复：`facts_trust: null` 从「静默变 verified」改成**报错**（`raw.get` 分不清 `{null}` 与 `{}`，一个写坏的文件就能把暂扣的 facts 全打开）；`--shelf` 重建条目时**继承** `uuid` 对 / `params` / `manufacturer` / footprint（原来会清空，"加 facts"变成"把条目换成 facts 外壳"，且没有 uuid 对就再也升不了 verified）；审计文件新增 **`dest`**（host）——原来 `request` 只记身份，`--apply` 可以把请求发到任意主机而审计仍读作「只发了一个 C 号」；审计**每次运行清空**（原来 `--offline` 复用 `--out` 时终端印「0 行」而文件里是上一轮的 2 行）；`--apply` 的 URL 只收 **http(s)**（原 `file://` 会替答案文件读本地盘）；`--offline` 的报告不再说「每颗器件都拿到了 PDF 与候选 facts」（45 颗 `deferred-online` 一颗没拿到时它就这么说）；无身份器件 + 答案给了 URL 不再 `IdentityLeak` 崩整批（缓存键用 URL 摘要，前缀 `anon-`）；`"quotes": 5` 不再 `TypeError`；`.txt` 无 `<<<page>>>` 标记改判 `no-document` 而不是「页码 1..0」。
+
+**读数**：新回归 6 条（引文下限 / 真引文+编造 pin / 审计清空 / offline 报告 / URL scheme / 无身份不崩 / null 档 / OpenDrain 不驱动结论），范围 `732 passed / 1 skipped / 100 s`；全量见下。**挖洞员自己撤回了 1 条误报**（`blank` 未定义 —— 实际已赋值），记在证据里以免下游误传。
+
 ## [2026-10-18] release v0.5.16（**内测**，岳裁 10-18）：审查线资料获取三连
 
 `520` `parts hunt` 批量寻址 + `521` `--apply-facts` 收 AI 读 txt 的产出 + `522` `facts_verified`

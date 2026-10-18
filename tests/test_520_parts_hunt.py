@@ -531,10 +531,14 @@ def test_the_audit_request_must_be_the_identity_verbatim():
         "https://datasheet.lcsc.com/x.pdf",   # a URL is the one thing that must not be recorded
         "C2977…",                             # a redacted form proves nothing
         "C2977777 U1",                        # the designator rides along
-        "",                                   # nothing is not an identity
     ):
         with pytest.raises(hunt.IdentityLeak):
             hunt.assert_request_is_identity(bad, lcsc="C2977777", mpn="ACME1")
+    # **Empty is a different answer from wrong** (measured hole, 522's follow-up).
+    # A part with no C-number and no MPN can still be fetched when an `--apply`
+    # file names its URL; the old contract raised here and killed the batch
+    # mid-run. `""` is recorded instead, and `dest` says where the call went.
+    assert hunt.assert_request_is_identity("", lcsc="", mpn="") == ""
 
 
 def test_every_audit_line_carries_identity_and_a_digest(tmp_path):
@@ -550,8 +554,16 @@ def test_every_audit_line_carries_identity_and_a_digest(tmp_path):
     ]
     assert len(lines) == 2
     for line in lines:
-        assert set(line) == {"ts", "channel", "request", "http", "bytes", "sha256"}
+        assert set(line) == {
+            "ts", "channel", "request", "dest", "http", "bytes", "sha256"
+        }
         assert line["request"] == "C2977777"
+    # `dest` is the field the audit file was missing: `request` answers "what
+    # about the board left", `dest` answers "where did it go". Without the second
+    # an `--apply` answer could send the request to any host and the line would
+    # still read "only a C-number left the machine" (measured hole).
+    assert lines[0]["dest"] == "wmsc.lcsc.com"
+    assert lines[1]["dest"] == "example.invalid"
     assert lines[1]["sha256"] and lines[1]["bytes"] > 0
     assert len(lines[1]["sha256"]) == 64
 
@@ -808,3 +820,115 @@ def test_the_shelf_never_overwrites_facts_that_drive_rules(tmp_path, monkeypatch
     capsys.readouterr()
     assert code == 0
     assert shelf.read_bytes() == before
+
+
+# --------------------------------------------------------------------------
+# §挖洞回归（v0.5.16 发出去时都还开着，逐条实测）
+# --------------------------------------------------------------------------
+
+
+def test_an_offline_run_does_not_inherit_the_previous_runs_audit_lines(tmp_path):
+    """The audit file is *this run's* evidence, not the directory's history.
+
+    Measured: an online run then `--offline` over the same `--out` left the
+    previous two lines on disk while the terminal printed 「审计文件里有 0 行」 over
+    them — in the one mode whose entire purpose is a claim about what was not
+    sent.
+    """
+    log = hunt.AuditLog(tmp_path / "hunt-audit.jsonl")
+    log.record(channel="c-number", request="C2977777", dest="example.invalid")
+    log.record(channel="c-number", request="C2977777", dest="example.invalid")
+    assert len(log.path.read_text(encoding="utf-8").splitlines()) == 2
+
+    fresh = hunt.AuditLog(tmp_path / "hunt-audit.jsonl")
+    fresh.start()
+    assert fresh.path.read_text(encoding="utf-8") == ""
+    assert fresh.outbound == 0
+
+
+def test_the_offline_report_never_says_every_part_has_facts():
+    """Measured: a pure `--offline` run printed 「没有：每颗器件都拿到了 PDF 与候选
+    facts」 while holding **zero** PDFs.
+
+    `deferred-online` was in no todo branch, so the "nothing left" sentence fired
+    on the normal path of the flag. A report that says the opposite of its own
+    contents is worse than a short report.
+    """
+    outcomes = [
+        hunt.Outcome(
+            designator="U1",
+            channel="c-number",
+            identity={"lcsc": "C2977777", "mpn": "ACME1"},
+            outcome=hunt.DEFERRED_ONLINE,
+        ),
+        hunt.Outcome(
+            designator="U2",
+            channel="c-number",
+            identity={"lcsc": "C2977778", "mpn": "ACME2"},
+            outcome=hunt.DEFERRED_ONLINE,
+        ),
+    ]
+    text = hunt.markdown_report(
+        board={"file": "b.epro2", "title": "Board1", "boards": 1},
+        outcomes=outcomes,
+        counts=hunt.counts_of(outcomes),
+        outbound=0,
+        offline=True,
+    )
+    assert "每颗器件都拿到了 PDF" not in text
+    assert "工具自己能取" in text
+    assert "2 颗" in text
+
+
+def test_an_apply_url_must_be_http(tmp_path):
+    """Measured: `--apply` accepted `file://` and `data:` — the tool would read
+    the local disk on an answer file's behalf."""
+    from boardwise import cli as cli_module
+
+    for bad in ("file:///C:/secret.pdf", "data:application/pdf;base64,AAAA", "ftp://x/y.pdf"):
+        path = tmp_path / "answers.json"
+        path.write_text(
+            json.dumps([{"designator": "U1", "url": bad}]), encoding="utf-8"
+        )
+        answers, error = cli_module._hunt_answers(str(path))
+        assert answers == []
+        assert "http" in error
+    good = tmp_path / "ok.json"
+    good.write_text(
+        json.dumps([{"designator": "U1", "url": "https://example.invalid/ds.pdf"}]),
+        encoding="utf-8",
+    )
+    answers, error = cli_module._hunt_answers(str(good))
+    assert error == "" and len(answers) == 1
+
+
+def test_a_part_with_no_identity_does_not_crash_the_batch_when_an_answer_names_a_url(
+    tmp_path,
+):
+    """Measured: `IdentityLeak` propagated out of `execute`, so one part the board
+    had no C-number or MPN for killed the whole run at the download step."""
+    recorder = Recorder()
+    recorder.downloads_ok = True
+    recorder.detail_answers[""] = detail_with_pdf()
+    located = hunt.Located(
+        designator="TP9",
+        channel="no-identity",
+        identity={},
+        url="https://example.invalid/ds.pdf",
+        force_download=True,
+    )
+    cache = hunt.Cache(tmp_path)
+    outcome = hunt.execute(
+        located,
+        hunt.Executor(
+            fetch_detail=recorder.fetch_detail,
+            download=recorder.download,
+            pdf_text=recorder.pdf_text,
+        ),
+        cache=cache,
+        audit=hunt.AuditLog(tmp_path / "audit.jsonl"),
+    )
+    assert outcome.designator == "TP9"
+    assert outcome.outcome in {
+        hunt.NO_FACTS, hunt.EXTRACTED, hunt.PARSE_FAILED, hunt.CACHED
+    }
