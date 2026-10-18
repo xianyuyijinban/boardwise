@@ -123,8 +123,9 @@ spread/对齐项；**Board2/P1 是这条主线的真机试验场**（空页 + �
 **结论：下载通道已经通了，真正卡住的是提取面**——扩它才有下游价值（521）。在那之前，
 `parts hunt` 对 IC 的实际产出是「PDF 落地 + 全文 `.txt` + 诚实标注读不出」，不是 facts。
 
-**`facts_verified` 仍是布尔**。roadmap 下面那张三档表是**目标**，不是现状：520 写出的条目
-一律 `facts_verified: false`，规则一个都不认。三档改造是 schema 变更，要单独一批。
+**三档已落（522）**。`facts_verified` 不再是布尔：`facts_trust` 取
+`candidate` / `machine_verified` / `verified` 三值，039 的旧布尔保留为**只读 property**
+（`== "verified"`），所以三十多处旧读点语义不变。下面是**现状**，不是目标。
 
 **L2 的子代理纪律**（岳 2026-10-18 定）：
 
@@ -138,15 +139,23 @@ spread/对齐项；**Board2/P1 是这条主线的真机试验场**（空页 + �
 - **跨板缓存**：查过的料进货架，后续板子同 MPN 直接命中——第一块板可能 4–5 个子代理，
   之后通常只剩 1–2 个。
 
-**三档可信度**（`facts_verified` 从此是三值）：
+**三档可信度（522 已落）**：
 
-| 档 | 来源 | 能驱动什么 |
+| 档 | 谁来授予 | 能驱动什么 |
 |---|---|---|
-| `candidate` | 单次提取、未交叉 | 什么都不能驱动（现状） |
-| `machine_verified` | AI 检索 + 关键字段两源交叉 + URL | 载流 / 降额 / 间距**计算**；**不驱动安规 / 隔离结论** |
-| `verified` | 人工确认 | 全部 |
+| `candidate` | `parts fetch` 的正则提取、`parts add` 的初稿 | 什么都不能驱动（039 的现状，未松） |
+| `machine_verified` | `parts hunt --apply-facts` 过 521 的六道闸（引文逐字、页码、pin 在文档里、来源可追） | 载流 / 降额 / 间距 / dropout / 区间的**计算**；**不驱动连接结论、安规、隔离** |
+| `verified` | 人工 | 全部 |
 
-报告里 `machine_verified` 的每条事实必须标注「参数来源：AI 检索（URL），未人工确认」。
+**判据：结论 vs 数字。** `FactsRule.REQUIRES_HUMAN_VERIFIED` 默认 **True**（保守）；只有真正
+把事实换算成一个数的规则设 False，逐条列在 `docs/parts.md`「The gate」一节。判「接错了没有」
+的（`conn-nc-and-must-connect` / `pwr-supply-on-known-domain` / `arch-nrst-closure` /
+`arch-opendrain-pullup` / `arch-sense-bias-closure`）保留 True。
+
+**报告不涂绿的物理保证**：`machine_verified` 驱动的每条 finding 都带
+「参数来源：机器核验（`<url 或 file:>`），**未人工确认**」，由
+`core.parts.machine_trust_note` **一个函数**生成；`completion.factsTrust` 报三个数，
+这类件进 `unreviewedByClass` 的「机器核验待人工确认」桶，**不把 verdict 推向 `complete`**。
 
 **保密**：L2 的查询只含**单个 MPN**，不带网名、位号、工程名或电路功能——批量查询料号本身
 就是设计指纹。企业项目可整体关闭 L2（见 `docs/product-boundary.md` 硬边界）。

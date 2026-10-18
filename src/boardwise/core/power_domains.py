@@ -33,7 +33,13 @@ import re
 from dataclasses import dataclass
 
 from .model import DesignModel
-from .parts import PartEntry, PartLibrary, resolve_component_facts
+from .parts import (
+    FACTS_TRUST_MACHINE,
+    PartEntry,
+    PartLibrary,
+    machine_trust_note,
+    resolve_component_facts,
+)
 
 #: Domain states. KNOWN and CONFLICT/UNKNOWN mirror the harness's honesty
 #: split: KNOWN asserts, the other two explain why they cannot.
@@ -268,13 +274,32 @@ def _facts_entry(
 
 
 def infer_net_domains(
-    model: DesignModel, library: PartLibrary
+    model: DesignModel,
+    library: PartLibrary,
+    *,
+    allow_machine: bool = False,
 ) -> dict[str, DomainGuess]:
     """Voltage verdicts for every net that has at least one candidate source.
 
     Nets with no candidate get no entry here; rules that need one must treat
     the absence as UNKNOWN with their own missing_fact (the caller knows what
     it asked for).
+
+    ``allow_machine`` (522) is the **second** half of the tier gate, and it is
+    here because this function is where an LDO's datasheet fact stops being one
+    rule's input and becomes everybody's: ``ldo.fixed_output`` names an output
+    rail's voltage, and from then on *any* rule that quotes a domain is reading
+    that entry. So the tier question has to be asked **once, here**, or a
+    conclusion rule would inherit a machine-verified fact through the net
+    domain without its own gate ever seeing it.
+
+    Default ``False`` — conservative, and byte-identical to 011c for every entry
+    a human curated. A caller whose own rule may act on the machine tier
+    (:attr:`boardwise.rules.facts.FactsRule.REQUIRES_HUMAN_VERIFIED` ``False``)
+    passes ``True`` and gets that entry's declared output voltage too. A
+    machine-verified entry under ``allow_machine=False`` is skipped exactly the
+    way a candidate is: the domain inference falls back to the net's name and the
+    MPN-suffix decode, both of which say what they are.
     """
     candidates: dict[str, list[tuple[float, str]]] = {}
 
@@ -288,11 +313,23 @@ def infer_net_domains(
         entry = entries.get(comp.designator)
         if entry is None or entry.category != "ic.ldo":
             continue
+        if entry.facts_trust == FACTS_TRUST_MACHINE and not allow_machine:
+            # 522: this entry's facts are in `facts` (the calculation rules read
+            # them) but nobody signed them, so they may not name a rail for a
+            # rule that draws a conclusion. Same read as a candidate's absent
+            # facts, for the same reason.
+            continue
         mpn = entry.mpn or comp.mpn
         declared = ldo_output_voltage_facts(entry)
         if declared is not None:
             volts, where = declared
             how = f"declared by the entry's datasheet facts ({where})"
+            if entry.facts_trust == FACTS_TRUST_MACHINE:
+                # 522 §5.5: the source string is what rules quote verbatim, so
+                # the caveat rides in it and every row that names this rail
+                # carries it without each rule having to remember. Same sentence
+                # every finding uses (`machine_trust_note`), not a second wording.
+                how += f" —— {machine_trust_note(entry)}"
         else:
             volts = ldo_output_voltage(mpn)
             # Issue #17 point two: the report has to be able to tell a decoded

@@ -86,8 +86,9 @@ UNKNOWN_REASON_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     for category, pattern in (
         # The part's identity is not in the curated shelf: the work is intake.
         ("shelf-part-unknown", r"identify the part and record"),
-        # The entry exists, the fact keys are empty (or still a candidate
-        # awaiting the facts_verified flip -- the 039 gate's wording).
+        # The entry exists, the fact keys are empty (or still below 522's
+        # `verified` tier — a candidate awaiting curation, or a machine-verified
+        # set awaiting a signature -- the gate's own wording).
         ("shelf-facts-missing", r"\bfacts for "),
         # An obligation is prose, so connectivity alone cannot check it.
         ("free-text-target", r"is free text"),

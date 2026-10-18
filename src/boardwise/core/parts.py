@@ -594,6 +594,91 @@ class PartProvenance:
     note: str = ""
 
 
+#: 522: the three trust tiers a shelf entry's facts can stand at. One name each,
+#: because the report prints them, the CLI explains them and a rule asks for one.
+#:
+#: * :data:`FACTS_TRUST_CANDIDATE` — a machine drafted the claim and nothing
+#:   checked it (`parts fetch`'s regex extractor, `parts add`'s first draft).
+#:   Drives **nothing**; the facts are held in :attr:`PartEntry.candidate_facts`.
+#: * :data:`FACTS_TRUST_MACHINE` — `parts hunt --apply-facts` accepted the claim
+#:   through 521's six gates (every quote found verbatim on the page it names, the
+#:   pin present in the document, the source a URL or a `file:` path). The
+#:   *evidence* was checked by a machine; the *conclusion* was not. Drives
+#:   calculations only (current, derating, spacing, dropout) and never a
+#:   connectivity / safety / isolation conclusion.
+#: * :data:`FACTS_TRUST_VERIFIED` — a human vouched for it. Drives everything.
+#:
+#: The default is ``verified``: the 109 entries written before the tiers existed
+#: carry no key at all and keep behaving exactly as they did (039's ruling, and
+#: `entry_to_json` omits this value for the same reason).
+FACTS_TRUST_VERIFIED = "verified"
+FACTS_TRUST_MACHINE = "machine_verified"
+FACTS_TRUST_CANDIDATE = "candidate"
+
+#: The three values above, in the order the report prints them (strongest first).
+FACTS_TRUST_TIERS: tuple[str, ...] = (
+    FACTS_TRUST_VERIFIED,
+    FACTS_TRUST_MACHINE,
+    FACTS_TRUST_CANDIDATE,
+)
+
+#: What each tier may drive, in the words `parts show` prints and `docs/parts.md`
+#: documents. Kept beside the vocabulary so a new tier cannot be added without
+#: saying what it is allowed to conclude.
+FACTS_TRUST_MEANING: dict[str, str] = {
+    FACTS_TRUST_VERIFIED: "人工核验：驱动全部规则",
+    FACTS_TRUST_MACHINE: (
+        "机器核验（证据链过闸、未人工确认）：只驱动载流 / 降额 / 间距一类的"
+        "计算，不驱动连接结论、安规、隔离"
+    ),
+    FACTS_TRUST_CANDIDATE: "候选：一条规则都不驱动",
+}
+
+
+def machine_trust_note(entry: "PartEntry") -> str:
+    """The sentence every machine-verified **finding** must carry — or ``""``.
+
+    The physical guarantee that a report cannot paint a machine-checked number
+    green: 522's ruling is that ``machine_verified`` may drive a calculation, and
+    a reader who sees one must be able to tell it apart from a human's signature
+    without opening the shelf. Generating the sentence in one place (rather than
+    writing it per rule) is what keeps twelve rule bodies from drifting into
+    twelve different disclaimers — or, on the day one of them forgot, into none.
+
+    Empty for every other tier, so a rule appends it unconditionally to its
+    evidence and a curated entry's row stays byte-identical to what it was.
+    """
+    if getattr(entry, "facts_trust", FACTS_TRUST_VERIFIED) != FACTS_TRUST_MACHINE:
+        return ""
+    return (
+        f"参数来源：机器核验（{_machine_source(entry)}），**未人工确认**"
+    )
+
+
+def _machine_source(entry: "PartEntry") -> str:
+    """Where this entry's machine-checked facts came from: a URL or a `file:` path.
+
+    521's gate refuses a fact whose provenance cites neither, so the first
+    provenance string in the entry's own facts is the answer; the entry-level
+    `provenance.source` (what `parts hunt` wrote: the URL the PDF came from, or
+    `file:<pdf>`) is the fallback for a fact set whose records were written under
+    an older vocabulary. ``"来源未记录"`` only for an entry with neither, which the
+    loaders make impossible to reach and which must still read as a caveat rather
+    than as a clean bill.
+    """
+    for record in (getattr(entry, "facts", None) or {}).values():
+        for item in record if isinstance(record, list) else [record]:
+            if not isinstance(item, dict):
+                continue
+            cited = item.get("provenance")
+            if isinstance(cited, str) and ("http" in cited or "file:" in cited):
+                return cited
+    source = str((getattr(entry, "provenance", None) or PartProvenance()).source or "")
+    if "http" in source or "file:" in source:
+        return source
+    return source or "来源未记录"
+
+
 @dataclass
 class PartEntry:
     """One verified part on the shelf."""
@@ -628,29 +713,55 @@ class PartEntry:
     #: recorded. Every recorded fact carries its own page-cited provenance;
     #: the loader refuses a fact that cannot say where it came from.
     facts: dict[str, Any] | None = None
-    #: 039: the **gate**. An entry authored by `parts add` is a candidate — it
-    #: carries facts a machine drafted and nobody has reviewed — and a rule that
-    #: acted on it would be a machine grading its own homework. `False` means the
-    #: authored facts are held in :attr:`candidate_facts` and `facts` reads None,
-    #: so every consumer sees "no facts" without knowing this field exists; the
-    #: human flips it in the diff, which is what "verified" physically is here.
-    #: The default is `True`: the 94 entries written before this field existed
-    #: keep behaving exactly as they did (`entry_to_json` omits a `True`).
-    facts_verified: bool = True
     #: The authored facts while the gate is closed — kept apart so `parts show`
     #: can print what the candidate claims, and so a review can see the whole
     #: claim before vouching for it.
     candidate_facts: dict[str, Any] | None = None
+    #: 522: **the** trust field — one concept, one name — as one of
+    #: :data:`FACTS_TRUST_TIERS`. It replaced 039's boolean `facts_verified`, which
+    #: survives as the read-only :attr:`facts_verified` property below: 30-odd
+    #: read sites mean the same thing by it ("a human vouched for these facts"),
+    #: and a property keeps them all true without a sweep that could miss one.
+    #:
+    #: Only :data:`FACTS_TRUST_CANDIDATE` closes the gate (see
+    #: :meth:`__post_init__`): a machine-verified entry's facts stay in
+    #: :attr:`facts` because the calculation rules have to read them, and it is
+    #: the rule side (`rules.facts._category_state`'s ``allow_machine``) that
+    #: decides per rule whether this tier is enough.
+    facts_trust: str = FACTS_TRUST_VERIFIED
     provenance: PartProvenance = field(default_factory=PartProvenance)
     notes: list[str] = field(default_factory=list)
 
+    @property
+    def facts_verified(self) -> bool:
+        """`True` only for a human-vouched entry — the 039 gate's own question.
+
+        A **read-only alias**, and deliberately not ``facts_trust == "verified" or
+        == "machine_verified"``: every one of the 30-odd existing read sites asks
+        "did a person sign this?", and the machine tier's answer is no — it was
+        not reviewed by a human, which is the whole reason its findings must be
+        labelled (:func:`machine_trust_note`). Widening the alias would silently
+        relabel a review debt as a review.
+        """
+        return self.facts_trust == FACTS_TRUST_VERIFIED
+
     def __post_init__(self) -> None:
+        # 522: the tier must be one of the three, enforced where the object is
+        # built so no construction route (the loader, a test, a future writer) can
+        # invent a fourth. `entry_from_json` validates too — it has to, because it
+        # must reject a *file* before anything is built from it — and this is the
+        # half that a hand-built entry cannot walk around.
+        if self.facts_trust not in FACTS_TRUST_TIERS:
+            raise PartError(
+                f"facts_trust must be one of {', '.join(FACTS_TRUST_TIERS)}, "
+                f"got {self.facts_trust!r}"
+            )
         # The gate, enforced on the object rather than only in the loader: no
-        # construction route — the file loader, a test, a future writer — may
-        # produce an entry that carries facts a rule can read while
-        # `facts_verified` is false. `entry_from_json` therefore does no move of
-        # its own; this is the one place, and it is idempotent.
-        if self.facts_verified is False and self.facts is not None:
+        # construction route may produce an entry that carries facts a rule can
+        # read while the claim is still nobody's but a machine's draft. 522 moved
+        # the test from 039's boolean to the **candidate** tier alone — a
+        # machine-verified entry's facts stay in `facts` on purpose.
+        if self.facts_trust == FACTS_TRUST_CANDIDATE and self.facts is not None:
             if self.candidate_facts is None:
                 self.candidate_facts = self.facts
             self.facts = None
@@ -834,6 +945,9 @@ _ENTRY_KEYS = (
     "key", "value", "mpn", "lcsc", "manufacturer", "deviceUuid", "libraryUuid",
     "footprint_name", "footprint_name_verified", "params", "datasheetUrl",
     "datasheetPdfUrl", "basic", "category", "facts", "facts_verified",
+    # 522: the tier. Both keys stay accepted so a file written by 039/521 still
+    # loads; `entry_from_json` is where the two are reconciled (or refused).
+    "facts_trust",
     "provenance", "notes",
 )
 _PROVENANCE_KEYS = ("kind", "source", "designators", "note")
@@ -1147,27 +1261,81 @@ def _require_nonempty(value: Any, where: str) -> str:
     return text
 
 
+def _facts_trust_of(raw: dict[str, Any], where: str) -> str:
+    """The tier one file entry declares, reconciling 039's boolean (522 §2.2).
+
+    Three shapes, and no fourth:
+
+    * ``facts_trust`` alone — one of :data:`FACTS_TRUST_TIERS`. Anything else is
+      an **error**, because a typo'd tier that fell back to a default would be a
+      trust claim nobody made (the same discipline `category` uses);
+    * ``facts_verified`` alone — the 039 shape every file written before 522
+      carries: ``true`` → :data:`FACTS_TRUST_VERIFIED`, ``false`` →
+      :data:`FACTS_TRUST_CANDIDATE`;
+    * **both**, when they agree — `true`+`verified`, `false`+`candidate`. When they
+      disagree the file says two different things about one claim, and the loader
+      refuses rather than picking: "which of these did the author mean" is exactly
+      the question a loader must not answer on its own. The agreement pairs above
+      are the only ones accepted, so a hand edit that adds `facts_trust:
+      machine_verified` beside a leftover `facts_verified: false` is refused too
+      — that combination is a real ambiguity (the flag says nobody vouched, the
+      tier says a machine did) and the author has to delete one of them.
+
+    Absent both keys → :data:`FACTS_TRUST_VERIFIED`, the 039 default: the 109
+    entries written before either field existed are human-curated and this batch
+    must not demote them.
+    """
+    declared = raw.get("facts_trust")
+    legacy = raw.get("facts_verified")
+    if legacy is not None and not isinstance(legacy, bool):
+        raise PartError(
+            f"{where}.facts_verified must be true or false, got {legacy!r}"
+        )
+    if declared is not None:
+        if not isinstance(declared, str) or declared not in FACTS_TRUST_TIERS:
+            raise PartError(
+                f"{where}.facts_trust: {declared!r} is not one of "
+                f"{', '.join(FACTS_TRUST_TIERS)}; the vocabulary is extended by "
+                "decision, not by typo"
+            )
+        if legacy is not None:
+            agreed = FACTS_TRUST_VERIFIED if legacy else FACTS_TRUST_CANDIDATE
+            if declared != agreed:
+                raise PartError(
+                    f"{where}: facts_trust {declared!r} and facts_verified "
+                    f"{legacy!r} disagree about the same claim — one entry, one "
+                    "answer (522 §2.2); delete the older key"
+                )
+        return declared
+    if legacy is not None:
+        return FACTS_TRUST_VERIFIED if legacy else FACTS_TRUST_CANDIDATE
+    return FACTS_TRUST_VERIFIED
+
+
 def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
     """Validate one entry. Strict: an unknown key is an error, not ignored."""
     if not isinstance(raw, dict):
         raise PartError(f"{where}: expected an object")
     _check_keys(raw, _ENTRY_KEYS, where)
-    # 039's gate is read first: it decides whether the uuid pair is required
+    # The trust tier is read first: it decides whether the uuid pair is required
     # (immediately below) and whether the authored facts may drive a rule (last).
-    facts_verified = raw.get("facts_verified")
-    if facts_verified is not None and not isinstance(facts_verified, bool):
-        raise PartError(
-            f"{where}.facts_verified must be true or false, got {facts_verified!r}"
-        )
+    facts_trust = _facts_trust_of(raw, where)
     # `deviceUuid`/`libraryUuid` are the pair `sch.place_component` needs, so an
-    # entry a rule acts on must carry them. A **candidate** (`facts_verified:
-    # false`) is the other kind of thing: `parts add` is offline by design and
-    # the pair only comes from the bridge (`lib.device.get`), so demanding it
-    # here would make "scaffold the part now, resolve it when the machine is up"
-    # impossible. Empty uuids are therefore the shut gate's normal shape, and
-    # the flag is the only thing that has to be believed.
+    # entry a rule acts on must carry them. A **candidate** is the other kind of
+    # thing: `parts add` is offline by design and the pair only comes from the
+    # bridge (`lib.device.get`), so demanding it here would make "scaffold the
+    # part now, resolve it when the machine is up" impossible. Empty uuids are
+    # therefore the shut gate's normal shape.
+    #
+    # 522 adds `machine_verified` to that exemption, for the same reason one step
+    # over: `parts hunt --apply-facts` is an **offline** command whose whole point
+    # is that a datasheet on disk needs no bridge (521's `--offline` test asserts
+    # no socket is opened), so demanding a bridge-only field at write time would
+    # make the tier unreachable — the exemption would be a rule nothing can pass.
+    # The pair is still required of `verified`: a human-curated entry is the one
+    # meant to be placeable, and 039's 「Verified ⟹ resolvable」 is about that.
     required = ["key", "lcsc"]
-    if facts_verified is not False:
+    if facts_trust == FACTS_TRUST_VERIFIED:
         required += ["deviceUuid", "libraryUuid"]
     for name in required:
         if not raw.get(name):
@@ -1233,7 +1401,7 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
         basic=_as_opt_bool(raw.get("basic"), f"{where}.basic"),
         category=category,
         facts=facts,
-        facts_verified=True if facts_verified is None else facts_verified,
+        facts_trust=facts_trust,
         provenance=PartProvenance(
             kind=_as_str(prov_raw.get("kind"), f"{where}.provenance.kind"),
             source=_as_str(prov_raw.get("source"), f"{where}.provenance.source"),
@@ -1252,12 +1420,16 @@ def entry_to_json(entry: PartEntry) -> dict[str, Any]:
     an empty ``"category": ""`` on every one of them would be noise that
     pretends a classification happened.
 
-    ``facts_verified`` (039) is written **only when false** — same reason: a
-    ``true`` on the 94 entries written before the field existed would be a
-    claim nobody typed, and would rewrite every line of the shelf. A closed
-    gate writes the entry's ``candidate_facts`` under ``facts`` so the claim
-    is reviewable in the diff; ``candidate_facts`` itself is derived, never
-    serialised.
+    ``facts_trust`` (522) is written **only when it is not ``verified``** — the
+    same ruling 039 made about its boolean, one tier wider: a ``verified`` on the
+    109 entries written before either field existed would be a claim nobody
+    typed, and would rewrite every line of the shelf. So the five legacy values
+    serialise exactly as they did (`facts_verified: false` becomes
+    `facts_trust: "candidate"` on the next write, and nothing else moves), and
+    ``machine_verified`` — a tier a machine granted, which a reader has to see
+    before trusting the number — is always spelled out. A closed gate writes the
+    entry's ``candidate_facts`` under ``facts`` so the claim is reviewable in the
+    diff; ``candidate_facts`` itself is derived, never serialised.
     """
     body: dict[str, Any] = {
         "key": entry.key,
@@ -1284,13 +1456,13 @@ def entry_to_json(entry: PartEntry) -> dict[str, Any]:
     if entry.category:
         body["category"] = entry.category
     # The authored facts go to the file either way: a candidate's claim has to be
-    # reviewable in the diff, which is where the verification happens. A `True`
-    # flag is **not** written, so the 94 pre-039 entries stay byte-identical.
+    # reviewable in the diff, which is where the verification happens. `verified`
+    # is **not** written, so the pre-039 entries stay byte-identical.
     written_facts = entry.facts if entry.facts is not None else entry.candidate_facts
     if written_facts is not None:
         body["facts"] = written_facts
-    if entry.facts_verified is False:
-        body["facts_verified"] = False
+    if entry.facts_trust != FACTS_TRUST_VERIFIED:
+        body["facts_trust"] = entry.facts_trust
     return body
 
 
@@ -1842,6 +2014,11 @@ __all__ = [
     "SHELF_USER_OVERRIDES",
     "CATEGORY_VOCABULARY",
     "FACTS_KEYS",
+    "FACTS_TRUST_CANDIDATE",
+    "FACTS_TRUST_MACHINE",
+    "FACTS_TRUST_MEANING",
+    "FACTS_TRUST_TIERS",
+    "FACTS_TRUST_VERIFIED",
     "IC_DESIGNATOR_CATEGORY",
     "IDENTITY_LCSC",
     "IDENTITY_MPN",
@@ -1861,6 +2038,7 @@ __all__ = [
     "load_libraries",
     "load_parts",
     "looks_like_library_uuid",
+    "machine_trust_note",
     "make_key",
     "merge_libraries",
     "package_slug",

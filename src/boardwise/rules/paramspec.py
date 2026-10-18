@@ -63,6 +63,7 @@ from ..core.power_domains import (
 from ..core.values import parse_voltage_volts
 from .base import Finding, Outcome
 from .facts import FactsRule
+from ..core.parts import FACTS_TRUST_CANDIDATE
 from .railratings import rail_voltage
 from .unproven import unproven_nets, unproven_outcome
 
@@ -388,6 +389,10 @@ class TvsStandoffRail(FactsRule):
         "targetVoltage first and the drawing's own inference second; no margin or "
         "derating coefficient is applied (issue #64)"
     )
+    #: 522: judged number = the TVS's declared stand-off voltage against the rail
+    #: it protects. Both are stated numbers compared with `Vrwm >= rail`; nothing
+    #: here concludes anything about wiring, safety or isolation.
+    REQUIRES_HUMAN_VERIFIED = False
 
     def __init__(self, library=None, intent: IntentSource | None = None) -> None:
         super().__init__(library)
@@ -404,12 +409,15 @@ class TvsStandoffRail(FactsRule):
         ]
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         rows: list[tuple[Outcome, str | None]] = []
         for comp in model.components.values():
             row = self._row(model, comp, guesses)
             if row is not None:
                 rows.append(row)
+        self._stamp_trust(rows, model)
         return rows
 
     def _row(
@@ -467,18 +475,24 @@ class TvsStandoffRail(FactsRule):
         # (task 039 never reached them), so the *type field* is the only thing
         # that says "this is a TVS" and the gate is not a fact gate here —
         # `params` is catalog text, which 039 does not hold back.
-        if not entry.facts_verified:
+        #
+        # 522: the gate now asks the **tier** question rather than 039's boolean,
+        # because this rule computes a margin (`Vrwm` against the rail) and its
+        # `REQUIRES_HUMAN_VERIFIED` is False. `entry.facts_verified` would answer
+        # `false` for a machine-verified entry too, which is the one case this
+        # rule is allowed to act on — read through the tier, not the alias.
+        if entry.facts_trust == FACTS_TRUST_CANDIDATE:
             return (
                 Outcome(
                     rule_id=self.id,
                     state="UNKNOWN",
                     subject=ref,
                     message=(
-                        f"{ref}: 货架条目是候选件（facts_verified=false），其 params "
+                        f"{ref}: 货架条目是候选件（facts_trust=candidate），其 params "
                         f"里的规格在复核之前不驱动任何规则"
                     ),
                     evidence=evidence,
-                    missing_fact=f"复核货架条目 {entry.key}（facts_verified 的翻转）",
+                    missing_fact=f"复核货架条目 {entry.key}（facts_trust 的翻转）",
                 ),
                 "INFO",
             )
@@ -705,6 +719,11 @@ class LdoFixedOutput(FactsRule):
         "refused as evidence about itself, and no tolerance band is invented "
         "(issue #64)"
     )
+    #: 522: judged number = the LDO's declared fixed output against the rail it
+    #: feeds — `declared == rail`, two stated voltages. The rule already refuses
+    #: to let the part's own decode speak for itself, which is the conclusion-
+    #: shaped hazard here; the arithmetic that remains is a comparison.
+    REQUIRES_HUMAN_VERIFIED = False
 
     def __init__(self, library=None, intent: IntentSource | None = None) -> None:
         super().__init__(library)
@@ -721,12 +740,15 @@ class LdoFixedOutput(FactsRule):
         ]
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         rows: list[tuple[Outcome, str | None]] = []
         for comp in self.ics(model):
             row = self._row(model, comp, guesses)
             if row is not None:
                 rows.append(row)
+        self._stamp_trust(rows, model)
         return rows
 
     def _row(

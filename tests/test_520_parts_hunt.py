@@ -793,7 +793,7 @@ def test_the_shelf_never_overwrites_facts_that_drive_rules(tmp_path, monkeypatch
                             }
                         ]
                     },
-                    facts_verified=True,
+                    facts_trust="verified",
                     provenance=PartProvenance(),
                 )
             ]

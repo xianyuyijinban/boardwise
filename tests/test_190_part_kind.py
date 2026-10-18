@@ -178,7 +178,7 @@ def test_an_unverified_entry_declares_nothing():
     """
     candidate = PartLibrary(parts=[_entry(
         key="ic.x", mpn="ACME1", lcsc="C1", category="ic.mcu",
-        facts_verified=False,
+        facts_trust="candidate",
     )])
     component = _comp("U9", mpn="ACME1", lcsc="C1", props={"device_name": "ACME1"},
                       pins=[(str(i), f"P{i}", "A") for i in range(1, 4)])

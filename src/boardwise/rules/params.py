@@ -752,6 +752,12 @@ class LedCurrent(FactsRule):
         "resistance value (4.7k is the counter-example and violates); every "
         "other domain is UNKNOWN"
     )
+    #: 522: judged number = the series resistance (a board value everyone can
+    #: read) against the oracle's window, with the rail's voltage as the domain
+    #: selector. The datasheet contributes no conclusion here — an indicator LED
+    #: needs no facts at all for this rule — so a machine-verified rail voltage
+    #: (`ldo.fixed_output`) is enough to pick the window.
+    REQUIRES_HUMAN_VERIFIED = False
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
         return [outcome for outcome, _s in self._rows(model)]
@@ -932,7 +938,9 @@ class LedCurrent(FactsRule):
         return total, "+".join(parts)
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         rows: list[tuple[Outcome, str | None]] = []
         low, high = LED_SERIES_BOUNDS_3V3
         window = f"[{low:g}, {high:g}] \u03a9"
@@ -1079,6 +1087,7 @@ class LedCurrent(FactsRule):
                     ),
                     "WARN",
                 ))
+        self._stamp_trust(rows, model)
         return rows
 
 
@@ -1101,6 +1110,11 @@ class DividerOutput(FactsRule):
         "the load part's own supply_pins v_operating facts; resistor "
         "tolerance from the shelf's Tolerance parameter"
     )
+    #: 522: judged number = the divider's tap voltage (with its tolerance spread)
+    #: against the load pin's declared input window. Both sides are numbers a
+    #: quote check can settle — 521 verified the v_operating sentence verbatim —
+    #: and nothing here says how anything is wired.
+    REQUIRES_HUMAN_VERIFIED = False
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
         return [outcome for outcome, _s in self._rows(model)]
@@ -1121,7 +1135,9 @@ class DividerOutput(FactsRule):
             return 0.0
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         resistors: dict[str, tuple[Component, float]] = {}
         for comp in model.components.values():
             ohms = parse_resistance_ohms(comp.value or "")
@@ -1201,6 +1217,7 @@ class DividerOutput(FactsRule):
                 ),
                 None,
             ))
+        self._stamp_trust(rows, model)
         return rows
 
     def _check_tap(
@@ -1347,6 +1364,12 @@ class RcCutoff(FactsRule):
     title = "RC networks' -3 dB cutoff, reported as a number"
     level = LEVEL
     source = "house rule (report-only): fc = 1 / (2*pi*R*C)"
+    #: 522: this rule reports a **number** and grades nothing (`fc` from two
+    #: board values). It reads no datasheet fact of its own, but the domain it
+    #: skips on ("a pair sharing a known supply rail is decoupling") reads one,
+    #: so the tier has to be allowed for that read to stay consistent with the
+    #: rules that do.
+    REQUIRES_HUMAN_VERIFIED = False
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
         return [outcome for outcome, _s in self._rows(model)]
@@ -1362,7 +1385,9 @@ class RcCutoff(FactsRule):
         return findings
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         rows: list[tuple[Outcome, str | None]] = []
         pairs: list[tuple[Component, float, Component, float, str]] = []
         resistors: dict[str, float] = {}
@@ -1488,4 +1513,5 @@ class RcCutoff(FactsRule):
                 ),
                 "INFO",
             ))
+        self._stamp_trust(rows, model)
         return rows

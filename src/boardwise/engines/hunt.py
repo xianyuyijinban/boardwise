@@ -59,8 +59,10 @@ returns `{facts, quotes}`; :func:`check_claim` then accepts the claim only if
 every quote appears **verbatim** on the page it cites. The tool judges the
 evidence and never the conclusion — it cannot tell whether "VDDA is pin 16" is
 true, and it can tell whether that sentence is on page 4. Accepted claims land as
-candidates (`facts_verified: false`) like everything else here; refused ones land
-nothing at all.
+**machine-verified** entries (`facts_trust: machine_verified`, 522): the evidence
+chain was checked, the conclusion was not, so they drive calculations and never a
+connectivity/safety conclusion. Refused ones land nothing at all — and a regex
+extraction (stage one) still lands as `candidate`, the tier that drives nothing.
 """
 
 from __future__ import annotations
@@ -123,8 +125,9 @@ CACHED = "cached"
 #: Stage three (521): facts a reader — an AI or a human — wrote down after
 #: reading the page dump, and every quote in the claim was found **verbatim** on
 #: the page it cites. Accepted is not verified: the tool checked the evidence's
-#: wording, not the reading's correctness, so the entry still lands as a
-#: candidate (`facts_verified: false`).
+#: wording, not the reading's correctness, so the entry lands as
+#: ``machine_verified`` (522) — the tier that drives calculations and not
+#: conclusions — rather than as ``verified``.
 FACTS_ACCEPTED = "facts-accepted"
 #: The other half of stage three, and the reason the stage exists: a claim with
 #: a quote that does not appear on its page is refused, and **nothing** of it
@@ -847,9 +850,11 @@ class AuditLog:
 # then does the one thing it can do deterministically, and refuses to do the one
 # thing it cannot: **it checks the evidence, not the conclusion.** A claim whose
 # quote is not on its page verbatim is refused outright; a claim whose quote *is*
-# there is accepted as a *candidate*, because "the sentence exists" is not "the
-# sentence means what the reader says it means". That is why nothing here sets
-# `facts_verified`: 521 accepts evidence, 522 is where trust tiers live.
+# there is accepted as **machine-verified** (522), because "the sentence exists"
+# is not "the sentence means what the reader says it means". 521 built the gate
+# and said so; 522 made the tier it grants explicit — `facts_trust:
+# machine_verified`, never `verified`, and the calculation rules are the ones
+# allowed to read it.
 
 
 #: What a quote may be found on, per refusal: the gate names the failure, so the
@@ -1127,7 +1132,8 @@ def claim_outcome(claim: Claim, located: "Located", *, pdf_file: str = "") -> Ou
                 *located.notes,
                 f"{len(claim.quotes)} 条引文都在它点的页码上逐字找到"
                 f"（判据：去首尾空白、连续空白折成一个空格）",
-                "收的是证据不是结论：facts_verified 仍为 false",
+                "收的是证据不是结论：facts_trust 记 machine_verified"
+                "（驱动计算、标注未人工确认，不驱动连接/安规/隔离结论）",
             ],
             facts=claim.facts,
             pdf={"file": pdf_file} if pdf_file else {},
@@ -1255,7 +1261,7 @@ OUTCOME_MEANING: dict[str, str] = {
     NO_IDENTITY: "既无合法 C 号也无 MPN，只能由工程师自己给",
     UNKNOWN_DESIGNATOR: "回灌文件里点了板上没有的位号",
     FACTS_ACCEPTED: "AI/人读 txt 写回的 facts，每一条引文都在它点的页码上逐字找到了"
-    "（收的是**证据**，不是结论：仍未核验，facts_verified=false）",
+    "（收的是**证据**，不是结论：记 machine_verified，只驱动计算、标注未人工确认）",
     FACTS_REJECTED: "读回的 facts 有一道闸没过（引文对不上/页码越界/pin 没出现过/schema），"
     "**一条都没落架、没写 candidate**",
 }
@@ -1377,9 +1383,11 @@ def markdown_report(
         "",
         "## 诚实边界",
         "",
-        "喂 PDF ≠ 清闸；hunt 只产出 candidate 条目，规则仍然不认它。",
-        "提取出来的 facts 一律 `facts_verified: false`，要清闸仍需逐条对着页码核过、"
-        "再 `boardwise parts add … --verified` 翻 true。",
+        "喂 PDF ≠ 清闸。`--apply-facts` 过了六道闸的条目写 `facts_trust: machine_verified`："
+        "只驱动载流/降额/间距一类的**计算**，每条 finding 标注「未人工确认」，"
+        "不驱动连接结论/安规/隔离。",
+        "自动提取（正则）出来的 facts 一律 `facts_trust: candidate`，一条规则都不驱动。"
+        "要清闸仍需人在货架上把 `facts_trust` 改成 `verified`。",
         "",
         "外呼边界：只发 C 号（detail API）或 MPN（搜索 query）——"
         "`hunt-audit.jsonl` 逐条记 request 字段，它是「没把板子信息发出去」的唯一证据。",

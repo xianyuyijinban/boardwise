@@ -54,7 +54,7 @@ def _entry(
     mpn: str,
     lcsc: str = "C1",
     facts: dict | None = None,
-    facts_verified: bool = True,
+    verified: bool = True,
     datasheet_url: str = "",
     datasheet_pdf_url: str = "",
 ) -> PartEntry:
@@ -68,7 +68,7 @@ def _entry(
         footprint_name="SOT-23-5",
         category="ic.ldo",
         facts=facts,
-        facts_verified=facts_verified,
+        facts_trust="verified" if verified else "candidate",
         datasheetUrl=datasheet_url,
         datasheetPdfUrl=datasheet_pdf_url,
     )
@@ -102,7 +102,7 @@ def _library() -> PartLibrary:
         _entry("ic.known1", mpn="KNOWN1", lcsc="C1",
                facts={"supply_pins": [{"pins": ["1"], "name": "VIN",
                                        "v_operating": [2.2, 5.5], "provenance": PROV}]}),
-        _entry("candidate.cand1", mpn="CAND1", lcsc="C2", facts_verified=False,
+        _entry("candidate.cand1", mpn="CAND1", lcsc="C2", verified=False,
                facts={"supply_pins": [{"pins": ["1"], "name": "VIN",
                                        "v_operating": [2.2, 5.5], "provenance": PROV}]},
                datasheet_pdf_url="https://example.com/cand1.pdf"),
@@ -541,7 +541,7 @@ def test_fetch_with_a_local_pdf_writes_a_gated_candidate(monkeypatch, tmp_path, 
     provenance = entry.candidate_facts["supply_pins"][0]["provenance"]
     assert "p.1" in provenance and "p.2" in provenance, "both halves cite their page"
     assert f"file:{pdf}" in provenance, "an engineer's PDF is cited by its own path"
-    assert "facts_verified=false" in out
+    assert "facts_trust=candidate" in out
     # The text dump landed beside the PDF, page markers and all.
     assert (tmp_path / "datasheets" / "NOWHERE1.txt").read_text(encoding="utf-8") == _MARKED
 

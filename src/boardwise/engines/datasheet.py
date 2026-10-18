@@ -18,7 +18,8 @@ and they are the same three the facts library has always had:
   Reading an abs-max line as an operating range is the classic way to make a
   part look misapplied when it is not.
 
-Everything that comes out of here is written with ``facts_verified: false``: xianyuyijinban's
+Everything that comes out of here is a **candidate** (``facts_trust: candidate``,
+522): xianyuyijinban's
 rule is that a fact extracted in-session may be *used* in the session, but it
 drives no rule until a human vouches for it (039 批①'s gate).
 """
@@ -497,7 +498,7 @@ def candidate_facts(
         )
     else:
         notes.append(
-            "自动提取的候选事实只认窄句式，且**未经入库核验**（facts_verified: false）："
+            "自动提取的候选事实只认窄句式，且**未经入库核验**（facts_trust: candidate）："
             "逐条对着 provenance 里的页码与引文核一遍，再决定入库。"
         )
     if near_misses:

@@ -180,9 +180,15 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 `summary.mayClaimPassed` 就是这道闸（**窄义**：只回答"有没有器件缺手册未审"——没别的意思）；
 **完整结论/总闸看 `completion.verdict`**（`needsDatasheet > 0` ⇒ `incomplete`，与
 `unreviewedParts > 0` 一样让它进不了 `complete`）。
-**喂 PDF ≠ 清闸**（186）：`parts fetch` 只写出 `facts_verified: false` 的候选；清闸是
+**喂 PDF ≠ 清闸**（186）：`parts fetch` 只写出 `facts_trust: candidate` 的候选；清闸是
 `boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`——你读完 PDF 把
-facts 写进货架（每条带出处页码），**由人核验并声明**才驱动规则。板上只有器件名、没有 MPN 的
+facts 写进货架（每条带出处页码），**由人核验并声明**才驱动规则。
+**三档里中间那一档要会读**（522）：`parts hunt --apply-facts` 过了六道闸（引文逐字在它点的
+页码上、pin 在文档里、来源是 URL 或 `file:`）写的是 **`machine_verified`**——证据链是机器核
+过的，结论不是。它能驱动**计算**（载流 / 降额 / 间距 / dropout / 区间），**不能**驱动连接结
+论、安规、隔离；它驱动的每条 finding 都带「参数来源：机器核验（URL），**未人工确认**」，而且它
+**不会**让 `completion.verdict` 变 `complete`——这类件在 `unreviewedByClass` 的
+「机器核验待人工确认」桶里，等着人签字。板上只有器件名、没有 MPN 的
 器件，货架条目按**器件名**也能被认出来（报告里标「按器件名匹配」，证据级别低于 MPN）。
 **第三通道：工程师明示接受**（191A）——`boardwise parts accept-unknown <MPN|位号> --reason "<为什么接受>" [--board <板名>]`
 把「这颗的未知我接受」写进设计意图合同；下一轮 checkup 里该件从 `unreviewed_parts`
@@ -400,8 +406,9 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   取手册（`--file <PDF>` 工程师通道 / 库条目立创链接自动下载 / 都没有就打印官网查询词让你去
   WebSearch），候选事实提取是**窄**的（"引脚表+规格行"同文档才 join，Infineon 那类排版一条
   提不出、如实不改库，全文留给你读——**提取为空时命令会直说，并给出人工路径**）。
-  **`facts_verified: false` 的候选事实不驱动任何规则**（规则视同无 facts 报 UNKNOWN）——
-  **给 PDF ≠ 清闸**。清闸 = 货架条目带**已核验 facts**：
+  **`facts_trust: candidate` 的候选事实不驱动任何规则**（规则视同无 facts 报 UNKNOWN）——
+  **给 PDF ≠ 清闸**。中间的 `machine_verified` 只驱动计算、finding 带「未人工确认」，见上。
+  清闸 = 货架条目带**已核验 facts**：
   `boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`（AI 读完 PDF 写
   facts JSON 走这条；同一命令对货架上已有的候选条目**原地补 facts**，不加 `--verified` 就只
   是候选）。**另一条清闸通道是工程师明示接受**（191A）：

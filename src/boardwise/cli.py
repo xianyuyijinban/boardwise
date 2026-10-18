@@ -77,6 +77,9 @@ from .engines.checkup import (
     unreviewed_parts,
     warning_triage_slots,
 )
+# 522: the tier counts, imported on its own line because it arrived with the
+# three-value `facts_trust` and is not part of the 025/184/186 unreviewed family.
+from .engines.checkup import facts_trust_counts, shelf_machine_unconfirmed
 from .engines.generate import DEFAULT_NAMING_STRATEGY, NAMING_STRATEGIES
 from .core.changeplan import (
     ADD_COMPONENT_KIND,
@@ -2006,7 +2009,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Two jobs in one flow. Identity only (`boardwise parts add <MPN> "
             "--lcsc C1234`): append a candidate entry — no category, no facts, "
-            "facts_verified false, provenance.kind manual-curation. With facts "
+            "facts_trust candidate, provenance.kind manual-curation. With facts "
             "(`--facts <file.json>` / repeated `--fact KEY=JSON`): write those "
             "facts onto the entry — the one already on the shelf when the "
             "identity exists (that is the candidate `parts fetch` left behind), "
@@ -4342,6 +4345,9 @@ def _completion_body(
     # 517: the four metadata buckets, additive like every key beside it.
     metadata_states: dict[str, int] | None = None,
     sidecar_needs: dict | None = None,
+    # 522: the shelf's judged rows, so `factsTrust` can count all three tiers
+    # over every part the shelf spoke about rather than only the unreviewed half.
+    judged_rows: list[dict] | None = None,
 ) -> dict:
     """`completion` from counts a caller already has — one shape, two callers.
 
@@ -4614,6 +4620,20 @@ def _completion_body(
             "merged": int((sidecar_needs or {}).get("merged", 0) or 0),
             "unmatched": int((sidecar_needs or {}).get("unmatched", 0) or 0),
         },
+        # 522 §5.2: the three trust tiers over the parts this run looked at — the
+        # unreviewed rows plus the judged ones, which together are every part the
+        # shelf had anything to say about. Additive like every key beside it.
+        #
+        # **`machineVerified` does not move `verdict`.** A machine-checked fact
+        # set whose quotes 521 verified verbatim is still *unconfirmed*: the
+        # signature is missing, so the part remains an open item and this section
+        # stays `incomplete` (or `complete-with-open-items`) because of it. The
+        # count is here to be **read**, not to be subtracted — and the code says
+        # so because the tempting edit is exactly `if not machine_verified: ...`
+        # inside the verdict arithmetic above, which would turn「证据对上了」into
+        # 「审完了」. `FactsRule.REQUIRES_HUMAN_VERIFIED`'s default is the same
+        # judgement one layer down.
+        "factsTrust": facts_trust_counts([*(unreviewed or []), *(judged_rows or [])]),
         "coverage": coverage,
         "sourceVersions": {
             "ruleset": ruleset_fingerprint(rule_ids),
@@ -4638,6 +4658,9 @@ def _completion_section(
     # 517: the live run's own reading, computed by the caller from the model.
     metadata_states: dict[str, int] | None = None,
     sidecar_needs: dict | None = None,
+    # 522: the run's own `reviewedByShelf[]` rows — the judged half of the shelf,
+    # so the tier counts cover every part the shelf spoke about.
+    judged_rows: list[dict] | None = None,
 ) -> dict:
     """`completion` for a **live run** — the coverage counts come from the model.
 
@@ -4671,6 +4694,7 @@ def _completion_section(
         passive_exempt=passive_exempt,
         metadata_states=metadata_states,
         sidecar_needs=sidecar_needs,
+        judged_rows=judged_rows,
     )
 
 
@@ -4780,6 +4804,11 @@ def _completion_from_report(report: dict, *, needs_datasheet: list[dict]) -> dic
         # 516 A3: the sidecar's own merge counts are a fact about the run that
         # wrote them, carried over like `coverage` — a re-gate re-reads no sidecar.
         sidecar_needs=previous.get("sidecarNeedsDatasheet") or {},
+        # 522: carried over like the sections above — a re-gate observes nothing
+        # new about the shelf, so it reads the rows the run wrote rather than
+        # dropping the tier counts to zero (the same discipline 191A's
+        # `accepted_unknown` and 192B ⑤'s `declaredPassiveExempt` follow).
+        judged_rows=report.get("reviewedByShelf") or [],
     )
 
 
@@ -7107,6 +7136,9 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         passive_exempt=passive_exempt,
         metadata_states=meta_states,
         sidecar_needs=sidecar_needs,
+        # 522: the judged half, read once above (`reviewed`) so the tier counts
+        # and the report section are two renderings of one walk.
+        judged_rows=reviewed,
     )
     # 073, decided **once**, here: the verdict now decides the exit code, and the
     # report carries `summary.exitCode` — so writing it back into the summary the
@@ -13762,6 +13794,8 @@ def _cmd_parts_list(args: argparse.Namespace) -> int:
             "category": part.category,
             "source": library.origin_of(part),
             "factsVerified": part.facts_verified,
+            # 522: the tier, additive beside the boolean.
+            "factsTrust": part.facts_trust,
             "hasFacts": part.facts is not None or part.candidate_facts is not None,
         })
     limit = int(getattr(args, "limit", 0) or 0)
@@ -13945,6 +13979,9 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
 
     from boardwise.core.parts import (
         FACTS_KEYS,
+        FACTS_TRUST_CANDIDATE,
+        FACTS_TRUST_MACHINE,
+        FACTS_TRUST_VERIFIED,
         IDENTITY_NAME,
         is_ic_designator,
     )
@@ -13990,7 +14027,7 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
             gate = None
         else:
             gate = bool(entry.facts_verified)
-        rows.append({
+        fact_rows = {
             "designator": designator,
             "mpn": comp.mpn,
             "lcsc": comp.lcsc_part,
@@ -14003,6 +14040,9 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
             "category": entry.category if entry is not None else "",
             "datasheetUrl": datasheet,
             "factsVerified": gate,
+            # 522: the tier; `factsVerified` keeps its boolean meaning so a reader
+            # written before this batch is unchanged.
+            "factsTrust": "" if entry is None else entry.facts_trust,
             "unverified": gate is False,
             "factsPresent": sorted(facts),
             "missing": missing,
@@ -14010,7 +14050,8 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
             # shelf). `name` means the entry was matched by what the board calls
             # the device, which is weaker evidence than an MPN or a C-number.
             "matchedBy": matched_by,
-        })
+        }
+        rows.append(fact_rows)
         owed += 1 if missing else 0
 
         identity = comp.mpn or comp.lcsc_part or "(no MPN, no C-number)"
@@ -14022,14 +14063,19 @@ def _cmd_parts_missing(args: argparse.Namespace) -> int:
         if entry is None:
             print(f"{designator} {identity} [no shelf entry] — missing {len(missing)} fact(s)")
         else:
-            state = (
-                "true"
-                if entry.facts_verified
-                else "false (candidate — held back from the rules)"
-            )
+            # 522: the tier, spelled out. `facts_verified=false` alone cannot tell
+            # a candidate from a machine-verified claim, and the two need different
+            # next steps (curate vs sign).
+            state = {
+                FACTS_TRUST_VERIFIED: "true",
+                FACTS_TRUST_MACHINE:
+                    "false (machine_verified — computations only, 未人工确认)",
+                FACTS_TRUST_CANDIDATE: "false (candidate — held back from the rules)",
+            }.get(entry.facts_trust or FACTS_TRUST_VERIFIED, "false")
             print(
                 f"{designator} {identity} [{entry.key}] category={entry.category or '-'} "
-                f"facts={len(facts)} missing={len(missing)} facts_verified={state}{by_name}"
+                f"facts={len(facts)} missing={len(missing)} facts_verified={state} "
+                f"facts_trust={entry.facts_trust}{by_name}"
             )
         print(
             f"    present: {', '.join(sorted(facts)) or '(none)'}"
@@ -14097,6 +14143,11 @@ def _entry_dump(entry: object) -> dict:
         "datasheetPdfUrl": entry.datasheetPdfUrl,
         "facts": entry.facts if entry.facts is not None else entry.candidate_facts,
         "factsVerified": bool(entry.facts_verified),
+        # 522: the tier beside the boolean, the same pair every report row
+        # carries. `factsDriving` keeps its own meaning — "a rule may read
+        # `entry.facts`" — which is now true for two tiers, so it is no longer a
+        # synonym for "verified" and never was a synonym for "may conclude".
+        "factsTrust": str(getattr(entry, "facts_trust", "") or ""),
         "factsDriving": entry.facts is not None,
         "provenance": {
             "kind": entry.provenance.kind,
@@ -14193,16 +14244,42 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
     print(f"  params: {len(entry.params)} field(s)")
     print(f"  datasheet: {entry.datasheetUrl or '-'}")
     print(f"  datasheet pdf: {entry.datasheetPdfUrl or '-'}")
-    if entry.facts_verified:
+    # 522 §5.6: the tier, its meaning, and the three-row table it comes from.
+    # `facts_verified` still prints because 039's readers still look for it — and
+    # because `machine_verified` reading `facts_verified = false` is exactly the
+    # distinction this output exists to make visible.
+    tier = getattr(entry, "facts_trust", "") or ""
+    from .core.parts import (
+        FACTS_TRUST_MACHINE,
+        FACTS_TRUST_MEANING,
+        FACTS_TRUST_TIERS,
+        FACTS_TRUST_VERIFIED,
+    )
+
+    print(f"  facts trust: {tier or '-'}")
+    for name in FACTS_TRUST_TIERS:
+        marker = ">" if name == tier else " "
+        print(f"   {marker} {name}: {FACTS_TRUST_MEANING[name]}")
+    if entry.facts_trust == FACTS_TRUST_VERIFIED:
         print(
-            "  gate: facts_verified = true (the field's default) — a rule acts on "
-            "the facts below"
+            "  gate: facts_trust = verified (the default, and the only tier the "
+            "file does not spell out) — a rule acts on every fact below"
+        )
+    elif entry.facts_trust == FACTS_TRUST_MACHINE:
+        print(
+            "  gate: facts_trust = machine_verified — the evidence chain was "
+            "checked by a machine (521: every quote verbatim on the page it "
+            "names) and **no human has confirmed it**: the calculation rules act "
+            "on the facts below and label every finding 「未人工确认」; the "
+            "connectivity/safety/isolation rules do not. Setting facts_trust to "
+            "verified is the review"
         )
     else:
         print(
-            "  gate: facts_verified = false — candidate entry: the facts below are "
-            "recorded but **no rule acts on them**; flipping the flag is the review "
-            "(task 039 §WI-4)"
+            "  gate: facts_trust = candidate — the facts below are recorded but "
+            "**no rule acts on them** (not even a calculation); this entry is "
+            "also unclassified as far as the rules are concerned. Setting "
+            "facts_trust to verified is the review (task 039 §WI-4)"
         )
     if facts:
         print(f"  facts ({len(facts)}):")
@@ -14423,7 +14500,7 @@ def _uuid_requirement_note() -> str:
     one-line message be the whole story.
     """
     return (
-        "facts_verified=true 的条目必须可落板：schema 要求 deviceUuid + libraryUuid"
+        "facts_trust=verified 的条目必须可落板：schema 要求 deviceUuid + libraryUuid"
         "（039 的既有校验，不是本命令加的）。两个 id 来自桥：\n"
         "    boardwise parts add <MPN> --lcsc <C码> --resolve --facts f.json --verified\n"
         "      （--resolve 现查现填，一条命令清闸；需要在线 bridge）\n"
@@ -14641,6 +14718,8 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
     import json
 
     from boardwise.core.parts import (
+        FACTS_TRUST_CANDIDATE,
+        FACTS_TRUST_VERIFIED,
         SHELF_BUILTIN,
         PartEntry,
         PartLibrary,
@@ -14776,7 +14855,11 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
         lcsc=args.lcsc,
         category=str(getattr(args, "category", "") or "").strip(),
         facts=facts or None,
-        facts_verified=bool(args.verified),
+        # 522: `--verified` writes the human tier; without it a `parts add` draft
+        # is `candidate` (never machine-verified — no quote gate ran here).
+        facts_trust=(
+            FACTS_TRUST_VERIFIED if args.verified else FACTS_TRUST_CANDIDATE
+        ),
         deviceUuid=device_uuid,
         libraryUuid=library_uuid,
         provenance=PartProvenance(
@@ -14862,11 +14945,11 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
         return 2
 
     if not facts:
-        gate = "false — curate the facts, then flip the flag in review"
+        gate = "candidate — curate the facts, then move the tier in review"
     elif args.verified:
-        gate = "true — 这些事实驱动规则"
+        gate = "verified — 这些事实驱动全部规则"
     else:
-        gate = "false — 候选不驱动规则；核过页号后重跑本命令加 --verified"
+        gate = "candidate — 候选一条规则都不驱动；核过页号后重跑本命令加 --verified"
     label = "entry" if facts else "candidate"
     print(f"{label} appended: {key} → {library_path} (now {len(reloaded.parts)} entries)")
     if shadowed is not None:
@@ -14883,7 +14966,7 @@ def _cmd_parts_add(args: argparse.Namespace) -> int:
         print(f"  backup: {backup}")
     if facts:
         print(f"  facts: {', '.join(sorted(facts))} (source: {facts_source})")
-    print(f"  gate: facts_verified = {gate}")
+    print(f"  gate: facts_trust = {gate}")
     print(f"next: boardwise parts show {key}")
     if args.json_path:
         print(f"json: {args.json_path}")
@@ -14918,7 +15001,12 @@ def _fill_existing_entry(
     import json
     import shutil
 
-    from boardwise.core.parts import PartError, entry_from_json, entry_to_json
+    from boardwise.core.parts import (
+        FACTS_TRUST_CANDIDATE,
+        PartError,
+        entry_from_json,
+        entry_to_json,
+    )
 
     if existing.key != (args.key or existing.key):
         print(
@@ -14957,16 +15045,22 @@ def _fill_existing_entry(
         print(f"boardwise parts add: {_uuid_requirement_note()}", file=sys.stderr)
         return 2
     body["facts"] = facts
+    # 522: `--verified` writes the human tier (and, per §2.2, the `verified`
+    # value writes no key at all), otherwise `candidate`. The old boolean key is
+    # removed rather than left behind: a file carrying both would be refused by
+    # the loader when the two disagree, and "the flag says false, the tier says
+    # verified" is exactly that ambiguity.
+    body.pop("facts_verified", None)
     if args.verified:
-        body.pop("facts_verified", None)
+        body.pop("facts_trust", None)
     else:
-        body["facts_verified"] = False
+        body["facts_trust"] = FACTS_TRUST_CANDIDATE
     marker = (
         f"facts written by `parts add` ({facts_source}) and declared verified by "
         "hand (`--verified`, 186 §A)"
         if args.verified
         else f"candidate facts written by `parts add` ({facts_source}); "
-        "facts_verified stays false — no rule acts on them until a human says so"
+        "facts_trust stays candidate — no rule acts on them until a human says so"
     )
     body["notes"] = list(existing.notes) + [marker]
     # 188B 中3: the sidecar-vs-command-line identity reading goes into the
@@ -15039,10 +15133,10 @@ def _fill_existing_entry(
         print(f"  backup: {backup}")
     print(f"  facts: {', '.join(sorted(facts))} (source: {facts_source})")
     if args.verified:
-        print("  gate: facts_verified = true — 这些事实现在驱动规则")
-        print("  核验是对文件内容的声明：facts_verified 为 true 的条目不会再写这个键（039）")
+        print("  gate: facts_trust = verified — 这些事实现在驱动全部规则")
+        print("  核验是对文件内容的声明：verified 这个值不写键（039/522）")
     else:
-        print("  gate: facts_verified = false — 候选不驱动规则")
+        print("  gate: facts_trust = candidate — 候选一条规则都不驱动")
         print(f"next: 核过页号后重跑 `boardwise parts add {args.mpn} --lcsc {args.lcsc} "
               f"--facts {args.facts or '<facts.json>'} --verified`")
     if args.json_path:
@@ -15261,6 +15355,7 @@ def _cmd_parts_fetch(args: argparse.Namespace) -> int:
     import shutil
 
     from boardwise.core.parts import (
+        FACTS_TRUST_CANDIDATE,
         PartError,
         entry_from_json,
         entry_to_json,
@@ -15390,18 +15485,26 @@ def _cmd_parts_fetch(args: argparse.Namespace) -> int:
         result["emptyFacts"] = True
         result["notes"] = [
             *notes,
-            "没有提出候选事实 ⇒ 没有写库（facts_verified 的语义是「有一条没人核验的声称」，"
+            "没有提出候选事实 ⇒ 没有写库（facts_trust 的语义是「有一条没人核验的声称」，"
             "没有声称就不该关闸）",
         ]
     else:
         before = entry_to_json(entry)
         body = dict(before)
         body["facts"] = facts
-        body["facts_verified"] = False
+        # 522 §4: `parts fetch` is the regex extractor — it has no quote gate, so
+        # its output stays `candidate`. Both keys are cleared first and the tier
+        # is then written explicitly: an entry that carried `facts_verified: true`
+        # would otherwise combine with the new tier into the ambiguity the loader
+        # refuses, and dropping the boolean alone would leave the tier reading
+        # `verified` (the absent-key default), which is the opposite claim.
+        body.pop("facts_verified", None)
+        body["facts_trust"] = FACTS_TRUST_CANDIDATE
         body["notes"] = list(entry.notes) + [
             f"candidate facts fetched 039 批② from {url or pdf} "
-            f"({channel}）：自动提取，未经核验（facts_verified: false）——"
-            "逐条对着 text dump 的页码核过再翻 true"
+            f"({channel}）：自动提取，未经核验（facts_trust: candidate）——"
+            "逐条对着 text dump 的页码核过再升档；`--apply-facts` 的六道闸是"
+            "升到 machine_verified 的另一条路（521/522）"
         ]
         try:
             candidate = entry_from_json(body, f"fetch[{entry.key}]")
@@ -15434,11 +15537,15 @@ def _cmd_parts_fetch(args: argparse.Namespace) -> int:
             result["written"] = True
             result["entriesOnShelf"] = len(reloaded.parts)
             result["backup"] = str(backup)
-            print(f"  wrote {entry.key}: facts_verified=false（{len(reloaded.parts)} 条）")
+            print(
+                f"  wrote {entry.key}: facts_trust=candidate"
+                f"（{len(reloaded.parts)} 条）"
+            )
             print(f"  backup: {backup}")
         else:
             print("  candidate facts 与现状一致，没有写盘")
-    print("  gate: facts_verified=false —— 这些事实不驱动规则，核验后在 diff 里翻 true")
+    print("  gate: facts_trust=candidate —— 这些事实不驱动规则，核验后在 diff 里改成 "
+          "verified（或走 `--apply-facts` 过闸到 machine_verified）")
     print(f"  下一步：boardwise parts show {entry.key if entry else args.query}；"
           f"全文在 {text_path}")
     if args.json_path:
@@ -15983,7 +16090,11 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
         print(f"shelf: {shelf_note}")
     else:
         print("shelf: 没有写货架（加 --shelf <parts.json> 才写）")
-    print("gate: 一律 facts_verified=false —— 喂 PDF ≠ 清闸，hunt 只产出 candidate 条目")
+    print(
+        "gate: 喂 PDF ≠ 清闸 —— --apply-facts 过了六道闸的写 facts_trust=machine_verified"
+        "（只驱动计算，标注「未人工确认」），自动提取的仍写 candidate；"
+        "人工核过才升 verified"
+    )
     return 0
 
 
@@ -16063,12 +16174,17 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
 
     * an entry whose facts already **drive rules** is never overwritten (an
       unverified claim does not replace something a human vouched for);
-    * every entry written here carries ``facts_verified: false``, so nothing this
-      command produces can be read by a rule.
+    * an entry written from a **refused** claim lands nothing at all;
+    * 522: the tier written is ``machine_verified`` for a claim whose quotes this
+      run found verbatim (521's gate) and ``candidate`` for a regex extraction —
+      the two routes carry different evidence and the file says which one it was.
+      Neither is ``verified``: 喂 PDF ≠ 清闸 still holds, a signature is still owed.
     """
     import shutil
 
     from boardwise.core.parts import (
+        FACTS_TRUST_CANDIDATE,
+        FACTS_TRUST_MACHINE,
         PartEntry,
         PartError,
         PartProvenance,
@@ -16113,14 +16229,22 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
             by_mpn.get(mpn.casefold()) if mpn else None
         )
         if existing is not None and existing.facts is not None:
-            # Its facts drive rules: a candidate may not replace that.
+            # Its facts already drive something: neither a candidate nor a second
+            # machine-verified reading may replace them here. 522 widened the
+            # reach of this guard without changing its reason — a
+            # `machine_verified` entry keeps its facts in `entry.facts` (that is
+            # what lets the calculation rules read them), so a re-run over the
+            # same part is a no-op rather than a rewrite. Re-reading it is what
+            # the answer file is for, not what a second batch run is for.
             skipped += 1
             continue
         key = existing.key if existing is not None else _hunt_candidate_key(mpn, lcsc, by_key)
         # Provenance says what produced the claim, because the two routes carry
-        # different evidence: `hunt-extract` is a regex's guess, `hunt-read` is
-        # someone's reading with quotes this run checked verbatim. Both are
-        # candidates; only one of them had its evidence re-read by a machine.
+        # different evidence: `hunt-extract` is a regex's guess (`candidate`), and
+        # `hunt-read` is someone's reading whose every quote this run found
+        # verbatim on the page it names — which 522 made `machine_verified`: the
+        # **evidence** was checked by a machine, the conclusion still was not, so
+        # it may drive a calculation and never a connectivity/safety conclusion.
         read = outcome.read_by_someone
         entry = PartEntry(
             key=key,
@@ -16130,18 +16254,22 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
             category=existing.category if existing is not None else "",
             datasheetPdfUrl=outcome.url,
             facts=outcome.facts,
-            facts_verified=False,
+            facts_trust=(
+                FACTS_TRUST_MACHINE if read else FACTS_TRUST_CANDIDATE
+            ),
             provenance=PartProvenance(
                 kind="hunt-read" if read else "hunt-extract",
                 source=outcome.url,
                 designators=[outcome.designator],
                 note=(
-                    "candidate facts written by `parts hunt --apply-facts` (521): "
-                    "AI/人读 txt 写的，每条引文都在它点的页码上逐字校验过 —— "
-                    "收的是证据不是结论，未经核验（facts_verified: false）"
+                    "machine-verified facts written by `parts hunt --apply-facts` "
+                    "(521/522): AI/人读 txt 写的，每条引文都在它点的页码上逐字校验过 —— "
+                    "收的是**证据**不是结论：机器核验（facts_trust: machine_verified），"
+                    "驱动载流/降额/间距一类的计算，**未人工确认**，不驱动连接结论、"
+                    "安规、隔离；人工核过后把 facts_trust 改成 verified"
                     if read
                     else "candidate facts written by `parts hunt` (520): 自动提取，"
-                    "未经核验（facts_verified: false）——逐条对着 text dump 的页码核过再翻 true"
+                    "未经核验（facts_trust: candidate）——逐条对着 text dump 的页码核过再翻 true"
                 ),
             ),
             notes=list(existing.notes) if existing is not None else [],
@@ -16174,9 +16302,10 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
     if reloaded is None:
         return f"写 {path} 被验证器拒绝，已回滚：{error}"
     return (
-        f"{path}：新增 {added} 条、更新 {updated} 条候选"
-        f"（facts_verified=false，共 {len(reloaded.parts)} 条）"
-        + (f"，跳过 {skipped} 条已有核验 facts 的" if skipped else "")
+        f"{path}：新增 {added} 条、更新 {updated} 条"
+        f"（读过的写 machine_verified、自动提取的写 candidate；共 "
+        f"{len(reloaded.parts)} 条）"
+        + (f"，跳过 {skipped} 条已有 facts 的" if skipped else "")
     )
 
 

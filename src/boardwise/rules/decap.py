@@ -47,7 +47,6 @@ from .facts import (
     _CATEGORY_UNKNOWN,
     _NON_IC,
     FactsRule,
-    _category_state,
     _facts_absent_reason,
     _gate_review_note,
     _identity,
@@ -403,6 +402,12 @@ class DecapRequiredCaps(FactsRule):
         "the part's own required_caps / must_connect facts (datasheet "
         "provenance); mode sensitivity per task 011d sec.3.1"
     )
+    #: 522: this rule computes a **number** — the capacitance on the pin against
+    #: the capacitance the datasheet requires — so a machine-checked
+    #: `required_caps` record (521 verified the quote verbatim) is enough. Which
+    #: pin needs what is a datasheet reading, not a wiring conclusion; the wiring
+    #: conclusions (`conn-nc-and-must-connect`) keep their human gate.
+    REQUIRES_HUMAN_VERIFIED = False
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
         # Row shape is (outcome, severity), optionally with a third element (the
@@ -453,7 +458,9 @@ class DecapRequiredCaps(FactsRule):
         return hit, voltage_known
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         rows: list[tuple[Outcome, str | None]] = []
         #: "(net, capacitor)" pairs already reported as bridging nothing, so a
         #: rail examined by three parts gets one row about its phantom capacitor
@@ -479,7 +486,7 @@ class DecapRequiredCaps(FactsRule):
                     None,
                 ))
                 continue
-            state = _category_state(entry)
+            state = self._category_state(entry)
             if state == _NON_IC:
                 rows.append((
                     Outcome(
@@ -501,13 +508,16 @@ class DecapRequiredCaps(FactsRule):
                         state="UNKNOWN",
                         subject=comp.designator,
                         message=(
-                            f"{comp.designator}: {_facts_absent_reason(entry)}, "
+                            f"{comp.designator}: "
+                            f"{_facts_absent_reason(entry, allow_machine=self._allow_machine)}, "
                             "so its required capacitors are unknown"
                         ),
                         missing_fact=(
                             f"facts for {comp.designator} (entry {entry.lcsc}, "
                             f"{_identity(comp)}): record required_caps"
-                            + _gate_review_note(entry)
+                            + _gate_review_note(
+                                entry, allow_machine=self._allow_machine
+                            )
                         ),
                     ),
                     None,
@@ -608,6 +618,7 @@ class DecapRequiredCaps(FactsRule):
                         ),
                         "WARN",
                     ))
+        self._stamp_trust(rows, model)
         return rows
 
     def _check_cap_record(

@@ -86,7 +86,11 @@ from ..core.designintent import (
     write_path,
 )
 from ..core.model import Component, DesignModel
-from ..core.parts import PartEntry
+from ..core.parts import (
+    FACTS_TRUST_CANDIDATE,
+    FACTS_TRUST_MACHINE,
+    PartEntry,
+)
 from ..core.power_domains import domain_of, infer_net_domains, ldo_output_pin
 from ..core.railquery import RAIL_VOLTAGE_SLOTS
 from ..core.values import (
@@ -545,6 +549,12 @@ class LdoDissipation(FactsRule):
         "the limit is the shelf's ldo.max_dissipation_mw fact and nothing else "
         "(092 A2b)"
     )
+    #: 522, and the one class in this file that reads facts: `P = (Vin - Vout) x I`
+    #: against the shelf's own `ldo.max_dissipation_mw`. Three stated numbers and
+    #: one product — a calculation, so a machine-verified limit counts (and its
+    #: citation travels in the message). Nothing here says the LDO is wired
+    #: correctly; that is `path-ldo-dropout`'s and the connectivity side's.
+    REQUIRES_HUMAN_VERIFIED = False
 
     def __init__(self, library=None, intent: IntentSource | None = None) -> None:
         super().__init__(library)
@@ -563,11 +573,28 @@ class LdoDissipation(FactsRule):
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
         if self.intent is None:
             return []
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         rows: list[tuple[Outcome, str | None]] = []
         for comp in self.ics(model):
             entry = self.entry_for(comp)
             if entry is None or entry.category != "ic.ldo" or not entry.facts:
+                continue
+            # 522: this rule reads `entry.facts` **directly** (the rail ratings
+            # never went through `_category_state`), so it states the tier
+            # question itself rather than relying on the choke point it does not
+            # use. A candidate's facts are already None by the time anyone gets
+            # here (`PartEntry.__post_init__`), which is why the candidate branch
+            # is unreachable in practice — and it is written out anyway, because
+            # "the gate happens to hold upstream" is not the same statement as
+            # "this rule asks".
+            if entry.facts_trust == FACTS_TRUST_CANDIDATE:
+                continue
+            if (
+                entry.facts_trust == FACTS_TRUST_MACHINE
+                and self.REQUIRES_HUMAN_VERIFIED
+            ):
                 continue
             ldo = entry.facts.get("ldo") or {}
             in_pin = next(
@@ -753,6 +780,7 @@ class LdoDissipation(FactsRule):
                 ),
                 "INFO",
             ))
+        self._stamp_trust(rows, model)
         return rows
 
 

@@ -22,8 +22,8 @@ trustworthy enough to place a part with.
 | `basic` | JLC basic-part flag: `true`/`false` **with evidence**, `null` without |
 | `category` | the electrical class from the vocabulary — absent means "not classified", which a rule reports as UNKNOWN rather than guessing from the designator |
 | `facts` | datasheet claims (039's vocabulary: `supply_pins` / `required_caps` / `nc_pins` / `must_connect` / `pull_required` / `ldo` / `led`), each with its own page-cited provenance. Since issue #17 an `ldo` record may also carry the optional `fixed_output` (`{"volts": 3.3, "provenance": "…, p.3 …"}`): the domain inference then quotes that page instead of decoding the part number, and labels an entry that has none as the **guess** it is |
-| `facts_verified` | the gate: written **only when false**, and absent means true. A candidate (`false`) records a claim nobody has reviewed; no rule acts on it until a human flips the flag in review |
-| `provenance` | `kind` (`board-extract` / `catalog-select` / `manual-curation`), `source`, and `designators` — the accumulating track record |
+| `facts_trust` | **the trust tier (522)**: `candidate` / `machine_verified` / `verified`. Written **only when it is not `verified`**, and an absent key means `verified`. See 「三档可信度」 below — 039's boolean `facts_verified` is still *read* (and is still what an entry's `facts_verified` attribute answers), but it is no longer the field |
+| `provenance` | `kind` (`board-extract` / `catalog-select` / `manual-curation` / `hunt-read` / `hunt-extract`), `source`, and `designators` — the accumulating track record |
 | `notes` | anything a reader must know: a corrected footprint spelling, an unrecognised part class, a disambiguated key |
 
 Two properties are deliberately *tri-state* (`true` / `false` / `null`). "No
@@ -102,14 +102,15 @@ boardwise parts add TPL2981-30DBVR --lcsc C9900000001
   page beside it (`<MPN>.txt`, `<<<page N>>>` markers so a fact can cite its
   page), a narrow extractor proposes `supply_pins` / `required_caps` / `nc_pins`
   records that quote their own line — and the entry is written with
-  `facts_verified: false`. Two deliberate limits: an entry whose facts already
+  `facts_trust: candidate` (the extractor has no quote gate, so its output drives
+  nothing — see 「The gate」). Two deliberate limits: an entry whose facts already
   drive rules is never overwritten without `--force` (an unverified guess does
   not replace something a human vouched for), and when the extractor proposes
   nothing the library is not touched at all (there is no claim, so the gate stays
   open). The third channel — the vendor's own site — is the AI's, via WebSearch;
   the failure output hands over the queries to start from.
 * **`add`** appends a candidate: identity only, `category` empty, no facts,
-  `facts_verified: false`, `provenance.kind: manual-curation`. A duplicate MPN or
+  `facts_trust: candidate`, `provenance.kind: manual-curation`. A duplicate MPN or
   C-number is refused (exit 2) pointing at `parts show`. The write is a
   **JSON-document** edit — a library-wide re-serialisation would reorder keys
   inside existing entries — so it backs the file up to a `.tmp` sibling, re-parses
@@ -293,11 +294,12 @@ sidecars under `candidates/`, in the same `{label, url, facts}` shape `parts
 fetch` writes — so they can be handed straight back to
 `parts add --facts`.
 
-**给 PDF ≠ 清闸；hunt 只产出 candidate 条目，规则仍然不认它。** Every entry this
-writes carries `facts_verified: false`, and an entry whose facts already drive
-rules is never overwritten by a candidate. A hunt run shortens the shelf's work;
-it never closes a part's gate — that still needs a human reading the pages and
-flipping the flag.
+**给 PDF ≠ 清闸；自动提取的条目写 `candidate`。** Every entry this command writes
+from a **regex extraction** carries `facts_trust: candidate`, and an entry whose
+facts already drive rules is never overwritten. A hunt run shortens the shelf's
+work; it never closes a part's gate — that still needs a human reading the pages
+and moving the tier. (Stage three's `--apply-facts` is the exception, and only
+because it has a quote gate: see below.)
 
 ### Stage three: the reading is handed over, `--apply-facts` (521)
 
@@ -397,15 +399,24 @@ makes **zero** outbound calls — which is what makes this route usable on a boa
 whose identity may not leave the machine. There is a test for exactly that, and
 its seams raise if called.
 
-**Accepted is not verified.** The gate checks the *evidence*, not the
-*conclusion*: "this sentence is on page 5" is a claim a machine can settle,
-"VDDA supplies driver A" is not. So `facts-accepted` entries still land as
-`facts_verified: false` with provenance kind `hunt-read` (distinct from
-`hunt-extract`, so a reader can tell whose reading it was), and a refused claim
-writes no `candidates/<designator>.candidate.json` — the sidecar is the artefact
-someone hands to `parts add --facts`, and a file that exists for a refused claim
-would walk past the gate it just failed. Trust tiers for accepted-vs-verified are
-522's subject; this batch deliberately does not add a `machine_verified` field.
+**Accepted is not verified — 522 made it `machine_verified`.** The gate checks
+the *evidence*, not the *conclusion*: "this sentence is on page 5" is a claim a
+machine can settle, "VDDA supplies driver A" is not. So an accepted claim lands as
+`facts_trust: machine_verified` with provenance kind `hunt-read` (distinct from
+`hunt-extract`, so a reader can tell whose reading it was):
+
+* its facts go into `facts` (the **calculation** rules read them: current,
+  derating, spacing, dropout, ranges);
+* the connectivity / safety / isolation rules still answer UNKNOWN for it,
+  because those draw a conclusion and no quote check supplies a signature;
+* every finding it drives carries 「参数来源：机器核验（…），**未人工确认**」;
+* `facts_verified` reads `False` (no human has signed), so the part stays on the
+  未审 list under the `机器核验待人工确认` bucket and `completion.verdict` does not
+  become `complete` because of it. Moving the tier to `verified` is the review.
+
+A refused claim writes no `candidates/<designator>.candidate.json` — the sidecar is
+the artefact someone hands to `parts add --facts`, and a file that exists for a
+refused claim would walk past the gate it just failed.
 
 
 ### The uuid pair, in the same command: `parts add --resolve` (187c)
@@ -444,27 +455,107 @@ boardwise parts add ACME-PWR-1000 --lcsc C9900000001 \
   be handed a literal `None` there, i.e. a `TypeError` in the middle of the
   flow), so the entry always lands in the shelf the review reads back.
 
-### The gate
+### The gate — three trust tiers, one field (522)
 
-`facts_verified: false` means *a claim nobody has vouched for*. The gate is
-enforced where the object is built (`PartEntry.__post_init__`), not only in the
-loader: such an entry reads `facts is None` to every consumer, so no rule needs
-to know the field exists, and the claim itself is kept in `candidate_facts` so
-`parts show` can print what there is to review. Flipping the flag — a line in the
-git diff — *is* the review; that is what "verified" physically means here.
+039's boolean is now a **three-valued** field, `facts_trust`. The reason is a
+measurement: after 521, `parts hunt --apply-facts` accepts a fact only when every
+quote is found **verbatim** on the page it names and the pin is present in the
+document — an evidence chain a machine can and did check — yet the entry was
+still written `facts_verified: false`, so no rule read it and 「工程师不用补手册」
+did not close.
 
-Two consequences worth knowing:
+| tier | granted by | what it drives |
+|---|---|---|
+| `candidate` | `parts fetch`'s regex extractor, `parts add` without `--verified` | **nothing** (039's behaviour, unchanged) |
+| `machine_verified` | `parts hunt --apply-facts` through 521's six gates | current / derating / spacing / dropout / range **calculations**; **not** connectivity conclusions, safety or isolation |
+| `verified` | a human (`parts add --verified`, or the flip in a diff) | everything |
 
-* The rules name the difference. "Its shelf entry has no facts" (a curation task)
-  and "it claims facts nobody has verified" (a **review**) are different work
-  orders, and the UNKNOWN row says which one it is; the `missing_fact` line asks
-  for the flip.
-* A candidate is **unclassified** as well as unusable: `_category_state` answers
-  UNKNOWN for it whatever `category` says, so there is no partial trust and no
-  rule has to remember the gate.
-* A candidate may omit `deviceUuid`/`libraryUuid` — `add` is offline and the pair
-  only comes from the bridge. `Verified ⟹ resolvable` still holds: the exemption
-  is exactly the shut gate, and anything else must carry the pair.
+**The judgement that splits the last two rows is 结论 vs 数字.** A rule that
+answers 「接错了没有」 — is this declared-NC pin really unconnected, does this supply
+pin sit on a known domain, is this open-drain output pulled up — needs a person's
+signature, and no amount of quote-checking supplies one. A rule that answers
+「余量够不够」 — `(Vin - Vout) >= dropout`, is this capacitance ≥ the required one,
+is this track-width/distance over the limit — is arithmetic on numbers the
+evidence chain established, so the machine tier is enough.
+
+`FactsRule.REQUIRES_HUMAN_VERIFIED` defaults to **True** (conservative), and only
+these rules set it False, each saying in its own docstring which number it
+computes:
+
+| rule | the number |
+|---|---|
+| `pwr-domain-vs-range` | measured rail voltage vs the datasheet's `v_operating` / `v_abs_max` window |
+| `path-ldo-dropout` | `(Vin − Vout)` vs `ldo.dropout_max_mv` |
+| `path-ldo-dissipation` | `(Vin − Vout) × I` vs `ldo.max_dissipation_mw` |
+| `decap-required-caps` | capacitance on the pin vs the required capacitance |
+| `param-led-current` | series resistance vs the oracle's window (the rail only selects the window) |
+| `param-divider-output` | tap voltage (± spread) vs the load pin's declared input range |
+| `param-rc-cutoff` | `fc = 1/(2πRC)`, reported and not graded |
+| `sel-tvs-standoff-rail` | `Vrwm` vs the rail it protects |
+| `sel-ldo-fixed-output` | declared output vs the rail it feeds |
+| `arch-rail-voltage-clash` | contract voltage vs the drawing's own reading |
+| `pcb-decap-distance` | pad-to-pad distance in mil vs the rail's tier threshold |
+
+**Every finding a `machine_verified` entry drives carries the label**, generated
+by one function (`core.parts.machine_trust_note`) rather than written per rule:
+
+> 参数来源：机器核验（`<url 或 file:>`），**未人工确认**
+
+That sentence goes into both `evidence` and `message`, and the same caveat rides
+in the *source string* of a rail the domain inference took from such an entry —
+so even a rule that does not read that entry directly cannot quote a
+machine-checked voltage without saying so.
+
+**Compatibility, in both directions** (`entry_from_json` / `entry_to_json`):
+
+* a file with `facts_verified: true` → `verified`; `false` → `candidate`; neither
+  key → `verified` (the 109 entries written before either field existed are
+  curated, and this batch must not demote them);
+* a file with `facts_trust: "<tier>"` → that tier; an **invalid** value is an
+  error, never a silent fallback;
+* both keys at once: accepted when they **agree** (`true`+`verified`,
+  `false`+`candidate`), refused when they disagree — a hand edit that adds
+  `machine_verified` beside a leftover `facts_verified: false` is a real
+  ambiguity and the author has to delete one;
+* writing: only `facts_trust` is written, and **`verified` is not written** (039's
+  ruling, one tier wider), so `blocklib/parts.json` round-trips byte-identically.
+  `machine_verified` is always spelled out, because a machine-granted tier is
+  something a reader has to see.
+
+**Reading `facts_verified` still works**: it is a read-only property that answers
+`facts_trust == "verified"`. Thirty-odd call sites ask "did a person sign this?",
+and the machine tier's answer is no — that is exactly why its findings need a
+label. The property exists so those sites keep their meaning without a sweep that
+could miss one.
+
+**Move a tier by editing the file** — that *is* the review. `facts_trust:
+machine_verified` → `verified` is a human saying "I read the evidence, it holds";
+`candidate` → anything is the same act one step earlier. `parts show` prints the
+tier, the three rows of the table above, and what the gate currently lets through.
+
+Consequences worth knowing:
+
+* **`candidate` did not loosen.** The gate is enforced where the object is built
+  (`PartEntry.__post_init__`), not only in the loader: a candidate reads
+  `facts is None` to every consumer, its claim is kept in `candidate_facts` so
+  `parts show` can print what there is to review, and `_category_state` answers
+  UNKNOWN for it whatever `category` says. There is no partial trust.
+* **`machine_verified` keeps its facts in `facts`** — the calculation rules have
+  to read them — and it is the *rule* that decides per tier
+  (`_category_state(entry, allow_machine=...)`), which is why the gate lives in
+  `_category_state` and `infer_net_domains`, the two places every facts rule
+  passes through.
+* **The rules name the difference.** "Its shelf entry has no facts" (a curation
+  task), "it claims facts nobody has verified" (a **review**), and 「它经过机器核验
+  而本规则要人签字」 are three different work orders, and the UNKNOWN row says which.
+* A candidate **and** a machine-verified entry may omit `deviceUuid`/`libraryUuid`
+  — `parts add` and `parts hunt` are both offline and the pair only comes from
+  the bridge. `verified ⟹ resolvable` still holds.
+* **`machine_verified` never turns `completion.verdict` to `complete`.** The
+  report counts it (`completion.factsTrust.machineVerified`) and files those parts
+  under the `机器核验待人工确认` bucket of `unreviewedByClass`, because an unconfirmed
+  fact set is an open item. That is a code-level refusal, not a convention:
+  `engines/checkup.shelf_can_drive_rules` answers False for the tier.
 
 ### The other way out of the gate: `parts accept-unknown` (191A)
 

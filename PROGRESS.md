@@ -4,6 +4,34 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-10-18] 522：`facts_verified` 拆成三档，计算类规则吃机器核验（520/521 下游闭环）
+
+521 之后一条 facts 已经有**可核验的证据链**（引文逐字在它点的页码上、pin 在文档里、来源是 URL 或
+`file:`），但仍是 `facts_verified: false`，规则一个都不认——「工程师不用补手册」没闭环。本批把闸
+拆成三档：`facts_trust` 取 `candidate` / `machine_verified` / `verified`，039 的布尔降为**只读
+property**（`== "verified"`），三十多处旧读点语义不变；装载器同时认旧布尔（矛盾两键报错）、写出只写
+`facts_trust` 且 `verified` 不写键（`blocklib/parts.json` 109 条往返字节不变）；`__post_init__` 只对
+`candidate` 搬 facts，`machine_verified` 的留在 `facts` 里。规则侧 `_category_state` 加 `allow_machine`
+keyword、`FactsRule.REQUIRES_HUMAN_VERIFIED` 默认 **True**，**判据 = 结论 vs 数字**：判「接错了没有」
+的（NC/must-connect、供电域、NRST、开漏上拉、sense bias）保留 True；算「余量够不够」的 11 条设 False
+（domain-vs-range、ldo-dropout、ldo-dissipation、decap、led/divider/rc、tvs、ldo-fixed-output、
+rail-clash、pcb-decap-distance），每条在 docstring 里写明它算哪个数。域推断 `infer_net_domains` 也加
+`allow_machine`（默认 False），把 LDO 声明的轨压按档放行——否则结论类规则会从网压**绕过**自己的闸。
+「不涂绿」的物理保证：`core.parts.machine_trust_note` **一个函数**生成
+「参数来源：机器核验（`<url 或 file:>`），**未人工确认**」，由 `FactsRule._stamp_trust` 在 `_rows`
+末尾按 subject 统一贴上（不逐处手写）；`completion.factsTrust` 报三档计数，这类件进
+`unreviewedByClass` 第三桶「机器核验待人工确认」，`shelf_can_drive_rules` 对它答 False ⇒ **verdict
+不会因此变 complete**（有测试钉住）。`parts hunt --apply-facts` 过闸写 `machine_verified`
+（读过的）/ `candidate`（正则提取的），`parts fetch`/`parts add` 无 `--verified` 仍 `candidate`；
+`machine_verified` 同 `candidate` 一样可省 uuid 对——`hunt` 是离线命令，要求它就拿不到这一档。
+真板端到端（`级联多电平-驱动模块_2026-09-27.epro2` 的 U2 / C601651，真 52 页 txt，零外呼）三读数：
+条目 `facts_trust == "machine_verified"`；`completion.factsTrust.machineVerified >= 1` 且
+`unreviewedByClass` 有「机器核验待人工确认」（实测 U2/U3 共 2 颗，同一个 UCC21520 位号出现两次）；
+verdict 仍 `incomplete`。测试 `tests/test_522_facts_trust.py` **35 passed**；验收切片
+`-k "facts or shelf or parts or checkup or params or decap or distance or trust"` **749 passed / 3
+skipped**；变异 2/2 CAUGHT（`FactsRule` 默认改 False → 2 条结论类规则红；`machine_trust_note` 永不
+触发 → 标注条红），`cp` 备份 + sha256 还原。
+
 ## [2026-09-30] 076：rc/led 接进未证实网闸（issue #19 跟进①；connector/daemon 零改动仍 **0.4.25**）
 
 岳回帖点名：`param-rc-cutoff`/`param-led-current` 仍不看 `unproven_nets`（同一模型只改它输出逐字相同：并板焊接的「板1 R1+板2 C9」照报 fc=159Hz、LED 照判 OK）。**根因不是漏登记，是 #19 当时的排除理由把自己的代码读错了**——「read one part's own values」对打印的数字成立，对规则问的问题不成立：rc 取 R∩C 的**非地共网**、led 取 LED∩串阻共网并**从远端网读窗口电压**（`_supply_side` 把远端有名的候选全求和，别板电阻能把总阻抬进/抬出窗口）。agent-106 执行 + agent-109（**space-bunny-alpha 首活**）换手复验，主代理架构+复验+抽 diff。修复：两条规则对实际用到的每条网查 unproven、落在未证实网上双向 withhold 成 UNKNOWN；**闸放在 decoupling 跳过之前**——并板还能让整对 RC 静默消失（毕设FOC NET13 三对实测从无声消失变点名拒绝）。顺带机械化登记表漂移闸：每个 `NET_MEMBERSHIP_RULES` 登记 id 发一块全焊接板，「不再拒绝」从一句话变成测试红（`test_no_listed_rule_concludes_on_a_board_whose_every_net_is_welded`）。岳的复现先红后绿翻案；回归：11 单页夹具双档 0 变化、2 多页 project-file 档 0、per-page 92 行/49 subject 预期内诚实降级逐条申报、eval holdout **59/59** + dev 4/5 双保持 UNKNOWN 零迁移；测试 +6 零既有断言改动，全量 **2647 passed**（agent + 主代理亲跑 184.7s），变异 3/3 CAUGHT。**执行插曲（纪律新增）**：agent-106 被人工「叫停」后实际未停、自己跑完了全批（12:05 交卷），agent-109 进场时撞上它仍在变异循环中写 src——**换手前必须核对方 wire.jsonl 末条是 `turn.ended`，不能只信「已叫停」**。任务书 `tasks/076-rc-led-unproven-nets.md`，证据 `evidence/076/`。

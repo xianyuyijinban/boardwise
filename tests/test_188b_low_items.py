@@ -107,7 +107,7 @@ def _entry(key: str, *, mpn: str = "", lcsc: str = "C1", category: str = "",
         deviceUuid=DEVICE_UUID,
         libraryUuid=LIBRARY_UUID,
         facts=dict(facts) if facts else None,
-        facts_verified=verified,
+        facts_trust="verified" if verified else "candidate",
     )
 
 

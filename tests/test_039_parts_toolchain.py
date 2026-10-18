@@ -77,8 +77,11 @@ def _entry(
     lcsc: str = "C1",
     category: str = "ic.ldo",
     facts: dict | None = None,
-    facts_verified: bool = True,
+    verified: bool = True,
 ) -> PartEntry:
+    # 522 replaced the boolean field with the three-value `facts_trust`; this
+    # helper keeps its boolean spelling so every call site below still reads as
+    # "a human vouched" vs "nobody did", and maps it to the tier.
     return PartEntry(
         key=key,
         mpn=mpn,
@@ -89,7 +92,7 @@ def _entry(
         footprint_name="SOT-23-5",
         category=category,
         facts=facts,
-        facts_verified=facts_verified,
+        facts_trust="verified" if verified else "candidate",
     )
 
 
@@ -127,7 +130,7 @@ def test_a_candidate_entry_does_not_drive_a_rule_and_says_why():
     """The whole point: facts nobody verified change no verdict, and the row
     names the reason rather than pretending the file is empty."""
     rule = SupplyOnKnownDomain(
-        library=PartLibrary(parts=[_entry(facts=ALL_FACTS, facts_verified=False)])
+        library=PartLibrary(parts=[_entry(facts=ALL_FACTS, verified=False)])
     )
     states = _states(rule, _model())
     assert states["OK"] == [] and states["VIOLATION"] == []
@@ -141,7 +144,7 @@ def test_the_same_entry_verified_decides_the_rule():
     """The other half: flip the flag and the very same facts drive it. Without
     this, the test above would pass on a rule that never decides anything."""
     rule = SupplyOnKnownDomain(
-        library=PartLibrary(parts=[_entry(facts=ALL_FACTS, facts_verified=True)])
+        library=PartLibrary(parts=[_entry(facts=ALL_FACTS, verified=True)])
     )
     states = _states(rule, _model())
     assert states["UNKNOWN"] == []
@@ -152,7 +155,7 @@ def test_a_candidate_is_unclassified_even_when_the_file_names_a_category():
     """`category: ic.ldo` plus unverified facts is *not* an LDO as far as the
     rules are concerned — there is no partial trust, and the one choke point
     (`_category_state`) is what makes that true for every rule at once."""
-    entry = _entry(facts=ALL_FACTS, facts_verified=False)
+    entry = _entry(facts=ALL_FACTS, verified=False)
     assert entry.category == "ic.ldo"
     (unknown,) = _states(LdoDropout(library=PartLibrary(parts=[entry])), _model())[
         "UNKNOWN"
@@ -164,8 +167,8 @@ def test_a_candidate_is_unclassified_even_when_the_file_names_a_category():
 def test_a_candidate_that_records_nothing_is_told_apart_from_one_that_claims():
     """Two candidates, two different rows: "no facts" and "a claim nobody
     vouched for" are different work orders, and the message says which."""
-    claimed = _entry(facts=ALL_FACTS, facts_verified=False)
-    empty = _entry(facts=None, facts_verified=False)
+    claimed = _entry(facts=ALL_FACTS, verified=False)
+    empty = _entry(facts=None, verified=False)
     messages = {}
     for name, entry in (("claimed", claimed), ("empty", empty)):
         rule = SupplyOnKnownDomain(library=PartLibrary(parts=[entry]))
@@ -178,7 +181,7 @@ def test_a_candidate_that_records_nothing_is_told_apart_from_one_that_claims():
 def test_the_gate_is_enforced_on_the_object_not_only_in_the_loader():
     """A hand-built entry cannot be a hole either: the invariant lives on
     `PartEntry` itself, so no construction route reads facts a rule may not."""
-    entry = _entry(facts=ALL_FACTS, facts_verified=False)
+    entry = _entry(facts=ALL_FACTS, verified=False)
     assert entry.facts is None
     assert entry.candidate_facts == ALL_FACTS
     # ... and a verified entry is untouched.
@@ -353,7 +356,7 @@ def test_missing_matches_the_board_the_way_the_rules_do(capsys, tmp_path):
             mpn="STM32G431RB-FAKE",
             lcsc="C431633",
             facts=None,
-            facts_verified=False,
+            verified=False,
         ),
     )
     code = cli.main(
@@ -362,7 +365,7 @@ def test_missing_matches_the_board_the_way_the_rules_do(capsys, tmp_path):
     out = capsys.readouterr().out
     assert code == 0
     assert "U1 STM32G431RBT6 [candidate.stm32g431rbfake]" in out
-    assert "facts_verified=false (candidate" in out
+    assert "facts_verified=false (candidate" in out  # 522: two tiers say false
     assert "missing: supply_pins" in out
 
 
@@ -401,18 +404,18 @@ def test_show_dumps_identity_facts_provenance_and_the_gate(capsys, tmp_path):
     out = capsys.readouterr().out
     assert code == 0
     assert "CH340N — ic.ch340n" in out
-    assert "gate: facts_verified = true" in out
+    assert "gate: facts_trust = verified" in out
     assert "facts (7):" in out
     assert "ldo:" in out and "dropout_max_mv" in out
     assert "kind: " in out
 
 
 def test_show_marks_a_candidate_and_says_the_rules_hold_it_back(capsys, tmp_path):
-    shelf = _shelf(tmp_path, _entry(facts=ALL_FACTS, facts_verified=False))
+    shelf = _shelf(tmp_path, _entry(facts=ALL_FACTS, verified=False))
     code = cli.main(["parts", "show", "SUPPLY1", "--library", str(shelf)])
     out = capsys.readouterr().out
     assert code == 0
-    assert "gate: facts_verified = false" in out
+    assert "gate: facts_trust = candidate" in out
     assert "no rule acts on them" in out
     # The claim is still printed in full — that is what there is to review.
     assert "dropout_max_mv" in out
@@ -443,7 +446,7 @@ def test_show_that_finds_nothing_offers_neighbours(capsys, tmp_path):
 
 
 def test_show_writes_the_machine_shape(capsys, tmp_path):
-    shelf = _shelf(tmp_path, _entry(facts=ALL_FACTS, facts_verified=False))
+    shelf = _shelf(tmp_path, _entry(facts=ALL_FACTS, verified=False))
     report_path = tmp_path / "show.json"
     code = cli.main(
         ["parts", "show", "SUPPLY1", "--library", str(shelf), "--json", str(report_path)]
@@ -499,7 +502,7 @@ def test_add_appends_a_candidate_and_keeps_every_existing_byte(capsys, tmp_path)
     assert candidate.provenance.kind == "manual-curation"
     assert candidate.deviceUuid == "" and candidate.libraryUuid == ""
     assert "facts_verified is false" in candidate.notes[0]
-    assert "curate the facts, then flip the flag" in out
+    assert "curate the facts, then move the tier in review" in out
     assert "next: boardwise parts show candidate.tpl2981_30dbvr" in out
 
 
@@ -555,7 +558,7 @@ def test_add_then_show_and_missing_agree_about_the_candidate(capsys, tmp_path):
     )
     capsys.readouterr()
     assert cli.main(["parts", "show", "candidate.stm32g431rbt6", "--library", str(shelf)]) == 0
-    assert "gate: facts_verified = false" in capsys.readouterr().out
+    assert "gate: facts_trust = candidate" in capsys.readouterr().out
     code = cli.main(["parts", "missing", "--file", str(BOARD), "--library", str(shelf)])
     out = capsys.readouterr().out
     assert code == 0
@@ -613,7 +616,7 @@ def test_nc_and_must_connect_reports_the_gate_too(capsys, tmp_path):
         key="ic.uart.test",
         mpn="SUPPLY1",
         facts={"nc_pins": {"pins": ["1"], "provenance": PROV}},
-        facts_verified=False,
+        verified=False,
     )
     rules = NcAndMustConnect(library=PartLibrary(parts=[entry]))
     (unknown,) = _states(rules, _model())["UNKNOWN"]

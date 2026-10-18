@@ -362,7 +362,7 @@ def test_resolve_fills_the_pair_so_one_command_closes_the_gate(bridge, capsys, t
     assert entry is not None
     assert (entry.deviceUuid, entry.libraryUuid) == (NEUTRAL_DEVICE, NEUTRAL_LIBRARY)
     assert entry.facts_verified is True and entry.facts == _facts()
-    assert "gate: facts_verified = true" in out
+    assert "gate: facts_trust = verified" in out
     written = json.loads(shelf.read_text(encoding="utf-8"))["parts"][0]
     assert written["deviceUuid"] == NEUTRAL_DEVICE
     assert written["libraryUuid"] == NEUTRAL_LIBRARY

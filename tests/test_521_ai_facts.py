@@ -340,7 +340,7 @@ def test_pins_are_collected_from_every_fact_kind_that_carries_one():
 # --------------------------------------------------------------------------
 
 
-def test_an_accepted_claim_lands_as_a_candidate_and_the_shelf_stays_closed(
+def test_an_accepted_claim_lands_machine_verified_and_the_shelf_stays_unsigned(
     tmp_path, monkeypatch, capsys
 ):
     from boardwise.core.parts import PartLibrary, save_parts
@@ -362,10 +362,18 @@ def test_an_accepted_claim_lands_as_a_candidate_and_the_shelf_stays_closed(
     library = load_parts(shelf)
     assert len(library.parts) == 1
     entry = library.parts[0]
-    # The gate: accepted evidence is still not a verified fact.
-    assert entry.facts_verified is False
-    assert entry.facts is None, "a rule must not be able to read this"
-    assert entry.candidate_facts["supply_pins"]
+    # 522: the evidence chain passed, so the tier is `machine_verified` — 521's
+    # gate checked the **evidence**, and the entry now says exactly that. It is
+    # still not `verified`: `facts_verified` reads False (nobody signed it) and
+    # the facts stay in `facts` so the calculation rules can read them.
+    assert entry.facts_trust == "machine_verified"
+    assert entry.facts_verified is False, (
+        "machine-checked is not human-signed, so 039's question still answers no"
+    )
+    assert entry.facts is not None and entry.facts["supply_pins"], (
+        "the calculation rules have to be able to read what 521 verified"
+    )
+    assert entry.candidate_facts is None, "nothing is held back at this tier"
     assert entry.provenance.kind == "hunt-read", (
         "a reading is not an extractor's guess; provenance says which produced it"
     )

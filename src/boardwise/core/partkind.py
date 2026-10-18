@@ -22,7 +22,7 @@ returned next to the answer so a report can say which signal decided it —
 1. **the shelf** (:data:`boardwise.core.parts.PartEntry.category`) — the
    curated declaration, the strongest signal when an entry has one. The 039
    gate applies when the entry is read here (:func:`_shelf_declaration`): an
-   entry whose ``facts_verified`` is false is *unclassified* as far as rules
+   entry at 522's ``candidate`` trust tier is *unclassified* as far as rules
    are concerned (038/039 批①), the exact discipline ``rules.facts`` applies at
    its own choke point. An entry with no category does not stop the read — it
    has said nothing about the part's kind, which is different from saying
@@ -549,11 +549,13 @@ def shelf_declaration(entry: object | None) -> str:
     """The category an entry declares, or ``""`` when it declares nothing.
 
     **The 039 gate, applied where the entry is read rather than where a rule
-    remembers to.** An entry whose ``facts_verified`` is false is a candidate a
-    machine drafted, so its category is not a declaration a rule may act on —
-    this is the same judgement ``rules.facts._category_state`` makes, and for the
-    same reason: no partial trust. An entry with no category declares nothing
-    about the part's kind and the read falls through to the next step.
+    remembers to.** An entry below ``verified`` is one a rule may not take a
+    *declaration* from: a ``candidate`` was drafted by a machine and checked by
+    nobody, and 522's ``machine_verified`` had its **evidence** checked but not
+    its conclusion — and 判型 is a conclusion (the same reading
+    ``rules.facts._category_state`` makes with ``allow_machine=False``, and for
+    the same reason: no partial trust). An entry with no category declares
+    nothing about the part's kind and the read falls through to the next step.
 
     Public since 192B ③, because *three* readers had grown their own copy of the
     read and two of them had lost the gate: ``rules/pcb/distance.device_facts``
@@ -561,7 +563,14 @@ def shelf_declaration(entry: object | None) -> str:
     category as if the shelf had declared it. A gate whose read is re-implemented
     at two call sites is not a gate; this is the one function they both call.
     """
-    if entry is None or not getattr(entry, "facts_verified", True):
+    # 522: the tier, not 039's boolean. `facts_verified` would answer False for a
+    # `machine_verified` entry too — but the reason to refuse it here is that the
+    # *category* is a **conclusion**, and 522's ruling is that a conclusion needs
+    # a human signature whatever the evidence chain says. So the question is
+    # asked of the tier: only `verified` declares a category to a rule.
+    if entry is None:
+        return ""
+    if getattr(entry, "facts_trust", "verified") != "verified":
         return ""
     return str(getattr(entry, "category", "") or "").strip()
 

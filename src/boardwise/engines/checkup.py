@@ -34,7 +34,12 @@ from ..core.metaparams import (
     crosscheck as meta_crosscheck,
 )
 from ..core.model import Component, DesignModel, Net, is_ground_net
-from ..core.parts import DESIGNATOR_CATEGORIES
+from ..core.parts import (
+    DESIGNATOR_CATEGORIES,
+    FACTS_TRUST_CANDIDATE,
+    FACTS_TRUST_MACHINE,
+    FACTS_TRUST_VERIFIED,
+)
 
 #: How the components were grouped, per module and for the report header.
 MODULE_BASIS_PAGE = "page"
@@ -1055,6 +1060,16 @@ UNKNOWN_REASON_UNCATEGORISED = (
     "货架条目有 facts 但没分类（category 为空；规则按 category 认料，未分类一律 UNKNOWN）"
 )
 
+#: 522: the shelf's facts are machine-verified (521 checked every quote verbatim
+#: on the page it names, and 522 let the calculation rules act on them) and no
+#: human has confirmed them. The next act is a **signature**, not a datasheet:
+#: the PDF is already in the shelf's provenance. This is the reason string the
+#: third `unreviewedByClass` bucket is keyed on.
+UNKNOWN_REASON_MACHINE_UNCONFIRMED = (
+    "货架条目的 facts 是机器核验（证据链已过闸、未人工确认）——"
+    "待人工确认 facts_trust 是否升到 verified"
+)
+
 #: Designator prefixes whose MPN is expected to carry an EIA value code, i.e. the
 #: ones for which "the value cannot be known" is a real signal. An IC's MPN never
 #: carries one, so asking a decoder about it would put every IC on the list.
@@ -1549,11 +1564,23 @@ def unreviewed_counts_by_reason(unreviewed: list[dict] | None) -> dict[str, int]
 #: it belongs to is not counted twice.
 REASON_CLASS_UNDECODABLE = "工具读不懂"
 REASON_CLASS_MISSING_MATERIAL = "真缺资料"
+#: 522's third class: the shelf **has** the facts and a machine checked the
+#: evidence chain (521's quotes-verbatim gate), so neither "fetch a datasheet"
+#: nor "teach the tool to read" is the next act — a person reading the evidence
+#: and signing it is. It is its own bucket rather than folded into 真缺资料
+#: because sending a reader to hunt a PDF the shelf already holds is the mistake
+#: 186 §A spent a batch killing.
+REASON_CLASS_MACHINE_UNCONFIRMED = "机器核验待人工确认"
 
-#: The order the two classes are printed in: the one whose next step is **not**
-#: "fetch a datasheet" goes first, so a reader does not start hunting for a PDF
-#: that would not have helped.
-CLASS_ORDER: tuple[str, ...] = (REASON_CLASS_UNDECODABLE, REASON_CLASS_MISSING_MATERIAL)
+#: The order the three classes are printed in: the ones whose next step is **not**
+#: "fetch a datasheet" go first, so a reader does not start hunting for a PDF
+#: that would not have helped. 522's new bucket sits second — after the tool's own
+#: reading gap (nothing a person can close by reading) and before the hunt.
+CLASS_ORDER: tuple[str, ...] = (
+    REASON_CLASS_UNDECODABLE,
+    REASON_CLASS_MACHINE_UNCONFIRMED,
+    REASON_CLASS_MISSING_MATERIAL,
+)
 
 # --------------------------------------------------------------------------
 # 517: the metadata reading, **inside** the class split — the four answers the
@@ -1592,16 +1619,25 @@ META_STATE_ORDER: tuple[str, ...] = (
 
 
 def unreviewed_reason_class(reason: str) -> str:
-    """Which of the two classes one reason belongs to (186 §C, 188B).
+    """Which class one reason belongs to (186 §C, 188B, 522).
 
     ``UNKNOWN_REASON_UNCATEGORISED`` joins the "read, do not hunt" class: the
     entry is on the shelf, so more datasheets change nothing — what is missing is
     a **class** on the entry (`category`), which is a reading of the shelf rather
     than a document to go and find.
+
+    522 added the third answer, and it is a class of its own rather than a
+    qualifier on either neighbour: ``UNKNOWN_REASON_MACHINE_UNCONFIRMED`` means
+    the facts are on the shelf **and** a machine checked every quote against the
+    page it names (521), so the outstanding work is a person's signature — not a
+    document to fetch (真缺资料) and not a reader to improve (工具读不懂).
     """
+    text = str(reason)
+    if text == UNKNOWN_REASON_MACHINE_UNCONFIRMED:
+        return REASON_CLASS_MACHINE_UNCONFIRMED
     return (
         REASON_CLASS_UNDECODABLE
-        if str(reason) in (UNKNOWN_REASON_UNDECODABLE, UNKNOWN_REASON_UNCATEGORISED)
+        if text in (UNKNOWN_REASON_UNDECODABLE, UNKNOWN_REASON_UNCATEGORISED)
         else REASON_CLASS_MISSING_MATERIAL
     )
 
@@ -1618,6 +1654,39 @@ def unreviewed_classes(row: dict) -> list[str]:
         REASON_CLASS_MISSING_MATERIAL
     }
     return [name for name in CLASS_ORDER if name in classes]
+
+
+def facts_trust_counts(rows: list[dict] | None) -> dict[str, int]:
+    """``{"verified": n, "machineVerified": n, "candidate": n}`` over report rows.
+
+    522 §5.2: the three tiers, counted from the rows the report already carries
+    (`unreviewed_parts[]` + `reviewedByShelf[]`) rather than from a second walk of
+    the shelf — one source, so the section and the counts cannot disagree about
+    the same part.
+
+    The keys are **camelCase** and all three are always present, including the
+    zeros: `completion.factsTrust.machineVerified >= 1` is the reading 522's
+    acceptance quotes, and a missing key would make that check a `KeyError`
+    instead of an honest 0. A row with no `factsTrust` (a report written before
+    this batch, or a part on no shelf) contributes nothing — it is not a tier.
+
+    A part can appear in **both** lists? No: the two lists are complements on
+    :func:`shelf_judgement`, and 522 made `machine_verified` fail that gate, so a
+    machine-verified row is in `unreviewed_parts[]` only. Counting over the union
+    is therefore a plain sum, and the helper takes the caller's concatenation.
+    """
+    counts = {"verified": 0, "machineVerified": 0, "candidate": 0}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        tier = str(row.get("factsTrust") or "")
+        if tier == FACTS_TRUST_VERIFIED:
+            counts["verified"] += 1
+        elif tier == FACTS_TRUST_MACHINE:
+            counts["machineVerified"] += 1
+        elif tier == FACTS_TRUST_CANDIDATE:
+            counts["candidate"] += 1
+    return counts
 
 
 def unreviewed_counts_by_class(unreviewed: list[dict] | None) -> dict[str, int]:
@@ -1736,8 +1805,9 @@ UNREVIEWED_CLEARING_NOTE = (
     "给 PDF ≠ 清闸。清闸 = 货架条目带**已核验 facts**"
     "（`boardwise parts add <MPN> --lcsc <C码> --category <类别> "
     "--facts <facts.json> --verified`；C 码来源：立创商城搜索）"
-    "——喂 PDF（`parts fetch --file`）只写出 `facts_verified: false` 的候选，"
-    "候选不驱动规则、也不清闸；另一条通道是审查者自己标记未知"
+    "——喂 PDF（`parts fetch --file`）只写出 `facts_trust: candidate` 的候选，"
+    "候选不驱动规则、也不清闸（`parts hunt --apply-facts` 过闸写 machine_verified，"
+    "只驱动计算且待人工确认，见 docs/parts.md）；另一条通道是审查者自己标记未知"
     "（`boardwise need-datasheet`），它只会让本节变长，不会让它变空。"
     "**第三通道**（191A）：工程师明示接受这颗的未知——"
     "`boardwise parts accept-unknown <MPN|位号> --reason \"<为什么接受>\" "
@@ -1869,17 +1939,45 @@ def suggested_queries(mpn: str, manufacturer: str = "", value: str = "") -> list
 def shelf_can_drive_rules(entry: object | None) -> bool:
     """Can a rule act on this shelf entry? Facts **and** a category (188B).
 
-    Two requirements, one answer. The facts half is 039's gate (`facts_verified`
-    false leaves ``entry.facts`` None, so a candidate reads as "no facts" here
-    without this function knowing the flag exists); the category half is 188B's
+    Two requirements, one answer. The facts half is 039's gate (a `candidate`
+    leaves ``entry.facts`` None, so it reads as "no facts" here without this
+    function knowing the field exists); the category half is 188B's
     tightening (186 中2) — `rules.facts._category_state` answers UNKNOWN for a
     verified entry whose `category` is empty, so "the shelf has this part" and
     "the shelf can judge it" are different claims and the gate must not credit
     the weaker one.
+
+    **522: a machine-verified entry is not judged either.** Its facts *are* in
+    ``entry.facts`` (the calculation rules read them), so the "no facts" half of
+    this gate no longer catches it — and it must not close a review item on the
+    strength of a machine's reading. This function's question is 「can the review
+    stop here」, and for that tier the answer is no until a person signs the facts
+    (see :func:`shelf_machine_unconfirmed`, which is how the row says so instead
+    of pretending the shelf has nothing).
     """
     if entry is None or getattr(entry, "facts", None) is None:
         return False
+    if getattr(entry, "facts_trust", "") == FACTS_TRUST_MACHINE:
+        return False
     return bool(str(getattr(entry, "category", "") or "").strip())
+
+
+def shelf_machine_unconfirmed(entry: object | None) -> bool:
+    """522: are this entry's facts machine-verified and still unsigned?
+
+    The one shape where the shelf has a complete, evidence-checked fact set that
+    a person has not confirmed. It is **not** 「真缺资料」 — the PDF is in the
+    entry's own provenance — and it is not 「工具读不懂」 either; it is the third
+    class :data:`REASON_CLASS_MACHINE_UNCONFIRMED` exists for. A reader who is
+    sent to fetch a datasheet the shelf already holds is the failure mode 186 §A
+    spent a batch killing, so this is a named predicate rather than an inline
+    comparison each caller re-spells.
+    """
+    return (
+        entry is not None
+        and getattr(entry, "facts_trust", "") == FACTS_TRUST_MACHINE
+        and getattr(entry, "facts", None) is not None
+    )
 
 
 def shelf_judgement(entry: object | None) -> bool:
@@ -1903,6 +2001,12 @@ def shelf_unusable_reason(entry: object) -> str:
                 else "（候选条目未核验）"
             )
         )
+    # 522: the third shape — facts are there and a machine checked the evidence,
+    # and this function is still reached (see `shelf_can_drive_rules`: the tier
+    # fails that gate on purpose). Reaching the categorisation line here would
+    # tell the reader to classify a part whose real gap is a signature.
+    if getattr(entry, "facts_trust", "") == FACTS_TRUST_MACHINE:
+        return UNKNOWN_REASON_MACHINE_UNCONFIRMED
     return UNKNOWN_REASON_UNCATEGORISED
 
 
@@ -2004,9 +2108,16 @@ def unreviewed_parts(
             and not str(entry.category or "").strip()
         )
         no_driving_facts = not shelf_can_drive_rules(entry)
+        # 522: the third class. The shelf holds a complete, evidence-checked fact
+        # set nobody has signed — so the row stays (it is still an open item, and
+        # §5.4 of the task book is explicit that this tier must not walk a part
+        # out of the gate) but its reason names a **signature**, not a hunt.
+        machine_unconfirmed = shelf_machine_unconfirmed(entry)
         reasons = list(known.get((designator, tuple(boards)), {}).get("reasons") or [])
         if not (is_ic and no_driving_facts) and not uncategorised and not reasons:
             continue
+        if machine_unconfirmed and UNKNOWN_REASON_MACHINE_UNCONFIRMED not in reasons:
+            reasons = reasons + [UNKNOWN_REASON_MACHINE_UNCONFIRMED]
         if uncategorised and UNKNOWN_REASON_UNCATEGORISED not in reasons:
             # Always named, whatever the 025 reasons say: it is the reason the
             # shelf cannot judge this part, which is what this section answers.
@@ -2078,6 +2189,14 @@ def unreviewed_parts(
             "shelfKey": entry.key if entry is not None else "",
             "shelfMatchedBy": matched_by,
             "factsVerified": (entry.facts_verified if entry is not None else None),
+            # 522 §5.1: the tier beside the boolean. `factsVerified` keeps its
+            # meaning (a person signed it) so every consumer written before this
+            # batch is unchanged; `factsTrust` is the three-valued answer, and a
+            # machine-verified row is visibly different from both a candidate and
+            # a signed claim.
+            "factsTrust": (
+                getattr(entry, "facts_trust", "") if entry is not None else ""
+            ),
             "factsPresent": sorted(facts),
             "missingFacts": (
                 [key for key in FACTS_KEYS if key not in facts] if is_ic else []
@@ -2131,6 +2250,11 @@ def reviewed_by_shelf(model: DesignModel, *, library: object | None = None) -> l
             "shelfMatchedBy": matched_by,
             "category": str(entry.category or ""),
             "factsVerified": bool(entry.facts_verified),
+            # 522 §5.1: the same additive key as on `unreviewed_parts[]`. This
+            # list is the judged half, so every row here is `verified` today; the
+            # key is present anyway, because a reader joining the two lists must
+            # not have to special-case one of them.
+            "factsTrust": str(getattr(entry, "facts_trust", "") or ""),
             "factsPresent": sorted(entry.facts or {}),
             **_board_field(
                 boards,

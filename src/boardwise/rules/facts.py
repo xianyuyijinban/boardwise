@@ -36,9 +36,12 @@ from dataclasses import dataclass, field
 from ..core.model import Component, DesignModel, Net
 from ..core.partkind import KIND_IC, classify_part
 from ..core.parts import (
+    FACTS_TRUST_CANDIDATE,
+    FACTS_TRUST_MACHINE,
     PartEntry,
     PartLibrary,
     is_ic_designator,
+    machine_trust_note,
     resolve_component_facts,
 )
 from ..core.power_domains import (
@@ -193,15 +196,23 @@ _NON_IC = "non-ic"
 _CATEGORY_UNKNOWN = "unknown"
 
 
-def _category_state(entry: PartEntry) -> str:
-    # The 039 gate, at the one choke point every facts rule passes through: an
-    # entry whose facts are unverified is **unclassified as far as the rules are
-    # concerned**, whatever `category` says. There is no partial trust — an
-    # author who typed a category and facts but has not been reviewed is the
-    # exact case the gate exists for — and putting the check here rather than in
-    # each rule is what keeps a rule from forgetting it. A `true` entry (every
-    # entry written before the field existed) is untouched.
-    if not entry.facts_verified:
+def _category_state(entry: PartEntry, *, allow_machine: bool) -> str:
+    # 039's gate, at the one choke point every facts rule passes through: an entry
+    # whose facts nobody may act on is **unclassified as far as the rules are
+    # concerned**, whatever `category` says. There is no partial trust, and
+    # putting the check here rather than in each rule is what keeps a rule from
+    # forgetting it.
+    #
+    # 522 split the old boolean into three tiers, and `allow_machine` is the
+    # per-rule half of that ruling: `FactsRule.REQUIRES_HUMAN_VERIFIED` (default
+    # True) says whether *this* rule draws a conclusion from the facts, and a
+    # conclusion needs a signature. Only the rules that turn facts into a
+    # **number** (current, derating, spacing, dropout) pass ``allow_machine=True``,
+    # and they are listed one by one in `docs/parts.md` — a tier that silently
+    # unlocked every rule would be the machine grading its own homework again.
+    if entry.facts_trust == FACTS_TRUST_CANDIDATE:
+        return _CATEGORY_UNKNOWN
+    if entry.facts_trust == FACTS_TRUST_MACHINE and not allow_machine:
         return _CATEGORY_UNKNOWN
     category = entry.category or ""
     if category.startswith("ic"):
@@ -216,19 +227,42 @@ def _category_state(entry: PartEntry) -> str:
 #: `entry.facts` None — but they are different work orders: the first is a
 #: curation task, the second a **review**. Only the entry can tell them apart,
 #: so the rule asks it rather than guessing from an empty dict.
+#:
+#: The wording is 039's, unchanged by 522 on purpose: `facts_verified` is still
+#: the property that answers "did a human sign this?", and it is still `false`
+#: for a candidate (and for a machine-verified entry). The shelf's own key is
+#: now `facts_trust`, which `docs/parts.md` and `parts show` explain; a rule's
+#: silence is about the review, not about the file's spelling.
 _GATE_NOTE = (
     " — candidate entry: facts_verified is false, so nothing in it drives a "
     "rule yet (the flip is the review)"
 )
 
+#: 522: what a **machine-verified** entry reads as to a rule that draws a
+#: conclusion. Different from `_GATE_NOTE` on purpose: the candidate's next act is
+#: "read the claim and vouch for it", this one's is "read the evidence and sign" —
+#: 521 already checked every quote verbatim, so what is missing is the human, not
+#: the check.
+_MACHINE_NOTE = (
+    " — machine_verified entry: the evidence chain was checked by a machine "
+    "(521) but no human has confirmed it（未人工确认）, and this rule draws a "
+    "conclusion, so its facts drive nothing here yet (setting facts_trust to "
+    "verified IS the review)"
+)
 
-def _facts_absent_reason(entry: PartEntry) -> str:
+
+def _facts_absent_reason(entry: PartEntry, *, allow_machine: bool = True) -> str:
     """Why the shelf cannot judge this part, in the entry's own terms.
 
-    Three answers, never two: "nothing recorded", "a claim nobody vouched for",
-    and "no facts and not even a verified entry" are three different next acts,
-    and collapsing them would make the report's honest silence a lie.
+    Four answers, never one: "nothing recorded", "a claim nobody vouched for",
+    "no facts and not even a verified entry", and 522's new one — "the machine
+    checked the evidence and this rule still wants a person". They are different
+    next acts, and collapsing them would make the report's honest silence a lie.
     """
+    if entry.facts_trust == FACTS_TRUST_MACHINE and not allow_machine:
+        return "its shelf entry is machine-verified and this rule needs a human" + (
+            _MACHINE_NOTE
+        )
     if entry.facts_verified:
         return "its shelf entry has no facts"
     if entry.candidate_facts:
@@ -236,25 +270,71 @@ def _facts_absent_reason(entry: PartEntry) -> str:
     return "its shelf entry has no facts and is itself unverified" + _GATE_NOTE
 
 
-def _category_absent_reason(entry: PartEntry) -> str:
-    """The same three answers about the classification rather than the facts."""
+def _category_absent_reason(entry: PartEntry, *, allow_machine: bool = True) -> str:
+    """The same answers about the classification rather than the facts."""
+    if entry.facts_trust == FACTS_TRUST_MACHINE and not allow_machine:
+        return "its shelf entry is machine-verified and this rule needs a human" + (
+            _MACHINE_NOTE
+        )
     if entry.facts_verified:
         return "its shelf entry has no category"
     return "its shelf entry is unverified, so it is unclassified too" + _GATE_NOTE
 
 
-def _gate_review_note(entry: PartEntry) -> str:
-    """What a candidate's intake item *is*: a review, not a recording.
+def _gate_review_note(entry: PartEntry, *, allow_machine: bool = True) -> str:
+    """What a blocked entry's intake item *is*: a review, not a recording.
 
-    Empty for every verified entry, so the intake line a curated part produces
-    is byte-identical to what it was before the gate existed.
+    Empty for every entry this rule may act on, so the intake line a curated part
+    produces is byte-identical to what it was before the gate existed — and 522
+    made the machine tier's line say *which* review is owed, since 521 already did
+    the evidence half.
     """
+    if entry.facts_trust == FACTS_TRUST_MACHINE and not allow_machine:
+        return (
+            " — or confirm the machine-checked facts and set facts_trust to "
+            "verified (that confirmation IS the review)"
+        )
     if entry.facts_verified:
         return ""
     return (
         " — or read the recorded facts, and if they are right, set "
         "facts_verified to true (that flip IS the review)"
     )
+
+
+def stamp_machine_trust(
+    rows: list[tuple], entry: PartEntry, start: int = 0
+) -> None:
+    """Label every row from ``start`` on when ``entry``'s facts are machine-verified.
+
+    **The physical guarantee that a report cannot paint a machine-checked number
+    green** (522 §5.5). One function, called by every rule that may act on the
+    machine tier, so the sentence is written once instead of eleven times — and
+    so a rule that forgot cannot be made to look like a rule that decided.
+
+    The label goes into ``evidence`` (the structured list every finding carries,
+    which is what a plan and a JSON reader see) **and** into ``message`` (the one
+    string `report.md`, the terminal and a triage slot quote). Both, because a
+    reader may see either alone, and a caveat that only lives in one of them is a
+    caveat half the readers never get.
+
+    ``entry``'s own tier decides: a ``verified`` entry's rows come back untouched
+    (byte-identical to what they were before this batch existed), and a
+    ``candidate``'s never reach a rule at all. ``start`` is the index the rows
+    for **this** entry begin at, so a per-part loop stamps only its own slice —
+    stamping a curated part's row with a machine caveat would be the opposite
+    error, and an easy one to make by stamping the whole list.
+    """
+    note = machine_trust_note(entry)
+    if not note:
+        return
+    for row in rows[start:]:
+        outcome = row[0] if isinstance(row, tuple) else row
+        if note in outcome.evidence:
+            continue
+        outcome.evidence.append(note)
+        if outcome.message:
+            outcome.message = f"{outcome.message} —— {note}"
 
 
 class FactsRule(OutcomeRule):
@@ -273,6 +353,84 @@ class FactsRule(OutcomeRule):
     """
 
     library_path: str = ""
+
+    #: 522: does this rule draw a **conclusion** from the facts, or does it turn
+    #: them into a **number**? Conservative default — a conclusion (「接错了没有」
+    #: — is this pin NC and connected correctly, is this supply pin on a known
+    #: domain, is the open-drain output pulled up) needs a human signature, and the
+    #: machine tier cannot give one. Only the rules that compute a margin out of
+    #: two stated numbers (current through a resistor, dropout headroom, a
+    #: capacitance against a requirement, a voltage against a range) say ``False``,
+    #: and each of them says in its own docstring which number it computes. The
+    #: list lives in `docs/parts.md` so a new rule's author has one place to check.
+    REQUIRES_HUMAN_VERIFIED = True
+
+    def _category_state(self, entry: PartEntry) -> str:
+        """``_category_state`` with **this rule's** tier question answered.
+
+        The module function takes ``allow_machine`` as a keyword so it stays a
+        pure reading; every call site inside a rule goes through here instead of
+        spelling ``allow_machine=not self.REQUIRES_HUMAN_VERIFIED`` again — one
+        place to get the polarity right, and no call site can forget it (a
+        forgotten argument is a gate that silently shuts, or worse, opens).
+        """
+        return _category_state(
+            entry, allow_machine=not self.REQUIRES_HUMAN_VERIFIED
+        )
+
+    @property
+    def _allow_machine(self) -> bool:
+        """This rule's answer to "may a machine-verified fact drive me?"."""
+        return not self.REQUIRES_HUMAN_VERIFIED
+
+    def _trust_note(self, entry: PartEntry) -> str:
+        """The 「未人工确认」 sentence for a machine-verified finding, or ``""``.
+
+        Every ``allow_machine`` rule appends this to the evidence of the rows it
+        produces (and to their message) — 522 §5.5's physical guarantee that a
+        report cannot show a machine-checked number without saying so. Delegated
+        to :func:`boardwise.core.parts.machine_trust_note` so the sentence is
+        written **once**, not once per rule.
+        """
+        return machine_trust_note(entry)
+
+    def _stamp_trust(self, rows: list[tuple], model: DesignModel) -> None:
+        """Label every row whose subject resolves to a machine-verified entry.
+
+        Called **once at the end** of a rule's ``_rows`` rather than at each
+        ``rows.append``: these bodies branch through a dozen ``continue``s, and a
+        rule that stamped at nine of them and forgot the tenth would be exactly
+        the silent green number 522 §5 forbids. Resolution is the same identity
+        chain the rule judged through (:meth:`entry_for`), so the label names the
+        entry the verdict came from and no other.
+
+        A subject that is not a designator (``"RC survey"``, a net name, a
+        ``"R4/C7"`` pair) resolves to nothing and keeps no label — those rows are
+        not driven by one part's datasheet facts. ``verify=False`` because this is
+        a **reading of what a rule consumed**, not the tier gate itself.
+        """
+        if self.REQUIRES_HUMAN_VERIFIED:
+            # A conclusion rule never acted on machine-verified facts: its rows
+            # are either curated-driven or the UNKNOWN row that says so. Stamping
+            # here would put the caveat on a row that made no claim.
+            return
+        for row in rows:
+            outcome = row[0] if isinstance(row, tuple) else row
+            designator = _subject_designator(outcome.subject)
+            if not designator:
+                continue
+            comp = _component_named(model, designator)
+            if comp is None:
+                continue
+            entry = self.entry_for(comp)
+            note = machine_trust_note(entry) if entry is not None else ""
+            if not note:
+                continue
+            if note in outcome.evidence:
+                continue
+            outcome.evidence.append(note)
+            if outcome.message:
+                outcome.message = f"{outcome.message} —— {note}"
 
     def __init__(self, library: PartLibrary | None = None) -> None:
         self._library = library
@@ -359,7 +517,7 @@ class FactsRule(OutcomeRule):
         if not is_ic_designator(comp.designator):
             return False
         entry = self.entry_for(comp)
-        return entry is not None and _category_state(entry) == _NON_IC
+        return entry is not None and self._category_state(entry) == _NON_IC
 
     def findings_from(self, rows: list[tuple]) -> list[Finding]:
         """VIOLATION rows become findings; the rest is silence with reasons.
@@ -433,6 +591,43 @@ def _identity(comp: Component) -> str:
     bits = [f"mpn {comp.mpn!r}" if comp.mpn else None,
             f"lcsc {comp.lcsc_part!r}" if comp.lcsc_part else None]
     return ", ".join(b for b in bits if b) or "no mpn, no lcsc number"
+
+
+def _subject_designator(subject: str) -> str:
+    """The designator an ``Outcome.subject`` names, or ``""`` if it names none.
+
+    ``"U3"`` and ``"U3 pin16"`` are the two shapes this module's rules state (the
+    same two :func:`boardwise.rules.base.target_from_subject` reads), and the
+    shape is checked rather than parsed loosely: ``"RC survey"``, ``"R4/C7"`` and
+    a bare net name must not become a lookup, because the trust stamp that uses
+    this must never label a row with a part it did not judge.
+    """
+    match = _SUBJECT_SHAPE.match((subject or "").strip())
+    return match.group(1) if match else ""
+
+
+def _component_named(model: DesignModel, designator: str) -> Component | None:
+    """One designator → its component, across whatever the model holds.
+
+    A :class:`DesignModel` keeps one flat ``components`` mapping; a
+    :class:`~boardwise.core.model.ProjectModel`'s per-board models are what the
+    rules actually walk, but every rule here is handed one board's model at a
+    time by the runner (040b), so the flat read is the right one. The second
+    step exists for a caller that hands in a project: find the board that has the
+    designator rather than answering "no such part".
+    """
+    comp = (getattr(model, "components", None) or {}).get(designator)
+    if comp is not None:
+        return comp
+    for board in getattr(model, "boards", None) or []:
+        found = (getattr(board, "components", None) or {}).get(designator)
+        if found is not None:
+            return found
+    return None
+
+
+#: ``U3`` / ``U3 pin16`` — the subject shapes :func:`_subject_designator` reads.
+_SUBJECT_SHAPE = re.compile(r"^([A-Za-z]{1,5}\d{1,4})(?:\s+pin\s*([A-Za-z0-9_]+))?$")
 
 
 #: The four answers a pin-level obligation can get, and they are the rule's own
@@ -736,7 +931,7 @@ class NcAndMustConnect(FactsRule):
                     "ERROR",
                 ))
                 continue
-            state = _category_state(entry)
+            state = self._category_state(entry)
             if state == _NON_IC:
                 rows.append((
                     Outcome(
@@ -759,13 +954,16 @@ class NcAndMustConnect(FactsRule):
                         state="UNKNOWN",
                         subject=comp.designator,
                         message=(
-                            f"{comp.designator}: {_facts_absent_reason(entry)}, "
+                            f"{comp.designator}: "
+                            f"{_facts_absent_reason(entry, allow_machine=self._allow_machine)}, "
                             "so its NC and must-connect constraints are unknown"
                         ),
                         missing_fact=(
                             f"facts for {comp.designator} (entry {entry.lcsc}, "
                             f"{_identity(comp)}): record nc_pins / must_connect"
-                            + _gate_review_note(entry)
+                            + _gate_review_note(
+                                entry, allow_machine=self._allow_machine
+                            )
                         ),
                     ),
                     "ERROR",
@@ -964,7 +1162,9 @@ class SupplyOnKnownDomain(FactsRule):
         return self.findings_from(self._rows(model))
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         rows: list[tuple[Outcome, str | None]] = []
         for comp in self.ics(model):
             entry = self.entry_for(comp)
@@ -986,7 +1186,7 @@ class SupplyOnKnownDomain(FactsRule):
                     None,
                 ))
                 continue
-            state = _category_state(entry)
+            state = self._category_state(entry)
             if state == _NON_IC:
                 rows.append((
                     Outcome(
@@ -1008,13 +1208,16 @@ class SupplyOnKnownDomain(FactsRule):
                         state="UNKNOWN",
                         subject=comp.designator,
                         message=(
-                            f"{comp.designator}: {_facts_absent_reason(entry)}, "
+                            f"{comp.designator}: "
+                            f"{_facts_absent_reason(entry, allow_machine=self._allow_machine)}, "
                             "so its supply pins are unknown"
                         ),
                         missing_fact=(
                             f"facts for {comp.designator} (entry {entry.lcsc}, "
                             f"{_identity(comp)}): record supply_pins"
-                            + _gate_review_note(entry)
+                            + _gate_review_note(
+                                entry, allow_machine=self._allow_machine
+                            )
                         ),
                     ),
                     None,
@@ -1097,6 +1300,12 @@ class DomainVsRange(FactsRule):
     title = "Supply-pin voltage fits the datasheet's operating range"
     level = LEVEL
     source = "the part's own facts (v_operating / v_abs_max, each with datasheet provenance)"
+    #: 522: this rule computes a **margin** — the measured rail voltage against
+    #: the datasheet's declared window — so a machine-checked v_operating (521
+    #: verified the quote verbatim on the page it names) is enough to run the
+    #: arithmetic. What it produces is "3.3 V is inside [3, 18]" or "5.5 V
+    #: exceeds abs max 6", never a statement about what the circuit is wired to.
+    REQUIRES_HUMAN_VERIFIED = False
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
         return [outcome for outcome, _s in self._rows(model)]
@@ -1105,7 +1314,9 @@ class DomainVsRange(FactsRule):
         return self.findings_from(self._rows(model))
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         rows: list[tuple[Outcome, str | None]] = []
         for comp in self.ics(model):
             entry = self.entry_for(comp)
@@ -1127,7 +1338,7 @@ class DomainVsRange(FactsRule):
                     None,
                 ))
                 continue
-            state = _category_state(entry)
+            state = self._category_state(entry)
             if state == _NON_IC:
                 rows.append((
                     Outcome(
@@ -1149,7 +1360,8 @@ class DomainVsRange(FactsRule):
                         state="UNKNOWN",
                         subject=comp.designator,
                         message=(
-                            f"{comp.designator}: {_facts_absent_reason(entry)}, "
+                            f"{comp.designator}: "
+                            f"{_facts_absent_reason(entry, allow_machine=self._allow_machine)}, "
                             "so its operating ranges are unknown"
                         ),
                         missing_fact=(
@@ -1289,6 +1501,7 @@ class DomainVsRange(FactsRule):
                         ),
                         None,
                     ))
+        self._stamp_trust(rows, model)
         return rows
 
 
@@ -1302,6 +1515,11 @@ class LdoDropout(FactsRule):
     title = "LDO headroom (Vin - Vout) clears the dropout fact"
     level = LEVEL
     source = "the part's own ldo.dropout_max_mv fact (datasheet provenance)"
+    #: 522: `(Vin - Vout) >= dropout_max_mv` is two stated numbers subtracted and
+    #: compared — the rule's own docstring calls it arithmetic, and it says
+    #: nothing about whether the LDO is wired the right way round (that is the
+    #: connectivity side's question). A machine-verified dropout therefore counts.
+    REQUIRES_HUMAN_VERIFIED = False
 
     def outcomes(self, model: DesignModel) -> list[Outcome]:
         return [outcome for outcome, _s in self._rows(model)]
@@ -1310,13 +1528,15 @@ class LdoDropout(FactsRule):
         return self.findings_from(self._rows(model))
 
     def _rows(self, model: DesignModel) -> list[tuple[Outcome, str | None]]:
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         rows: list[tuple[Outcome, str | None]] = []
         for comp in self.ics(model):
             entry = self.entry_for(comp)
             if entry is None:
                 continue  # unknown supply identity is PWR/CONN-2's report
-            state = _category_state(entry)
+            state = self._category_state(entry)
             if state == _NON_IC:
                 rows.append((
                     Outcome(
@@ -1338,13 +1558,16 @@ class LdoDropout(FactsRule):
                         state="UNKNOWN",
                         subject=comp.designator,
                         message=(
-                            f"{comp.designator}: {_category_absent_reason(entry)}, "
+                            f"{comp.designator}: "
+                            f"{_category_absent_reason(entry, allow_machine=self._allow_machine)}, "
                             "so whether it is an LDO is unknown"
                         ),
                         missing_fact=(
                             f"category and ldo facts for {comp.designator} "
                             f"(entry {entry.lcsc}, {_identity(comp)})"
-                            + _gate_review_note(entry)
+                            + _gate_review_note(
+                                entry, allow_machine=self._allow_machine
+                            )
                         ),
                     ),
                     None,
@@ -1479,6 +1702,7 @@ class LdoDropout(FactsRule):
                     ),
                     "ERROR",
                 ))
+        self._stamp_trust(rows, model)
         return rows
 
 

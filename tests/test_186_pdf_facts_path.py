@@ -100,7 +100,7 @@ def _entry(key: str, *, mpn: str = "", lcsc: str = "C1", category: str = ""):
 
     039's rule, met here rather than worked around: an entry a rule acts on must
     be placeable, so it carries `deviceUuid`+`libraryUuid`. A candidate
-    (`facts_verified=False`) is the one shape allowed to omit them.
+    (the `candidate` tier) is the one shape allowed to omit them.
     """
     from boardwise.core.parts import PartEntry
 
@@ -153,9 +153,13 @@ def test_a_new_entry_can_be_written_with_verified_facts(capsys, tmp_path):
     # and a claim nobody typed would rewrite every line of the shelf (039).
     raw = json.loads(shelf.read_text(encoding="utf-8"))
     written = raw["parts"][0]
+    # 522: neither key is written for `verified` — the tier is the schema's
+    # default and a claim nobody typed would rewrite every line of the shelf
+    # (039's ruling, carried to the three-value field).
     assert "facts_verified" not in written
+    assert "facts_trust" not in written
     assert written["facts"] == _facts()
-    assert "gate: facts_verified = true" in out
+    assert "gate: facts_trust = verified" in out
 
 
 def test_verified_without_facts_is_refused(capsys, tmp_path):
@@ -199,8 +203,8 @@ def test_facts_without_verified_stay_a_candidate(capsys, tmp_path):
     assert entry.facts is None, "a candidate's claim is held back from the rules"
     assert entry.candidate_facts == _facts()
     raw = json.loads(shelf.read_text(encoding="utf-8"))["parts"][0]
-    assert raw["facts_verified"] is False and raw["facts"] == _facts()
-    assert "gate: facts_verified = false" in out
+    assert raw["facts_trust"] == "candidate" and raw["facts"] == _facts()
+    assert "gate: facts_trust = candidate" in out
 
 
 @pytest.mark.parametrize(

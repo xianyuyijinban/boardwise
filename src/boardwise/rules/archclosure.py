@@ -416,6 +416,13 @@ class ArchRailVoltageClash(FactsRule):
         "drawing's own net-voltage inference (core.power_domains); the grade is "
         "the intent's own provenance (093 A3a, 093 §〇)"
     )
+    #: 522: judged number = the contract's declared rail voltage against the
+    #: drawing's own reading — two voltages compared for equality, which is a
+    #: calculation on stated numbers. The rule already refuses to say *which* of
+    #: the two is wrong ("谁错由人裁"), so it is not the conclusion the tier gate
+    #: protects; a machine-verified `ldo.fixed_output` naming the drawing's side
+    #: is enough to run the comparison, and the caveat rides in its source string.
+    REQUIRES_HUMAN_VERIFIED = False
 
     def __init__(self, library=None, intent: IntentSource | None = None) -> None:
         super().__init__(library)
@@ -441,7 +448,9 @@ class ArchRailVoltageClash(FactsRule):
             # No contract, no requirement, nothing to contradict — the subject
             # *is* the declaration (092 A2b's reading, unchanged).
             return []
-        guesses = infer_net_domains(model, self.library)
+        guesses = infer_net_domains(
+            model, self.library, allow_machine=self._allow_machine
+        )
         rows: list[tuple[Outcome, str | None, FindingTarget | None]] = []
         for rail in self.intent.document.rails:
             declared = str(rail.value("targetVoltage") or "").strip()

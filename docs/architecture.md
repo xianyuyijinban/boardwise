@@ -79,9 +79,11 @@ reason:
 
 1. **the shelf** (`core.parts.PartEntry.category`) — the curated declaration,
    strongest when present. The 039 gate applies here (`shelf_declaration`): an
-   entry with `facts_verified: false` is *unclassified* to the rules. An entry
-   with **no** category does not stop the read — it has said nothing, which is
-   not the same as saying "not an IC".
+   entry at the `candidate` trust tier (`facts_trust`, 522 — previously the
+   boolean `facts_verified: false`) is *unclassified* to the rules, and so is a
+   `machine_verified` one, because the category is itself a conclusion a machine
+   is not allowed to draw. An entry with **no** category does not stop the read —
+   it has said nothing, which is not the same as saying "not an IC".
 2. **the declarations about the part itself** — the 立创 metadata fields
    (`METADATA_TYPE_KEYS`: `Type` / `LCSC Part Name` / `Supplier Footprint`), then
    the part's own `footprint` / `value` / `mpn` / `device_name`. Metadata before

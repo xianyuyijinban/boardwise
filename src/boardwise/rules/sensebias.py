@@ -189,7 +189,7 @@ class SamplingBias(FactsRule):
     def _entry_category(self, comp: Component) -> str:
         """货架条目声明的 category——**过 039 门**（192B ③）。
 
-        `facts_verified: false` 的候选条目是机器起草的：`core.partkind` 与
+        `candidate`（以及 522 的 `machine_verified`）条目不是人能签字的声明：`core.partkind` 与
         `rules.facts` 都拒绝把它当声明读，而这里曾经直接取 `entry.category`，
         于是同一条目「判型入口说没声明、本规则说有」——门只在一处存在就等于没有。
         门本身在 `core.partkind.shelf_declaration`，两处调用点共用一份。

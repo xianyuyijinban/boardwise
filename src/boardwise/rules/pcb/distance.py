@@ -426,8 +426,10 @@ def device_facts(comp: object, library=None) -> DeviceFacts:
     text = f"{text} {props.get('device_name', '') or ''}"
     return DeviceFacts(
         designator=str(getattr(comp, "designator", "") or ""),
-        # 192B ③: the 039 gate, through the one function that holds it. A
-        # ``facts_verified: false`` entry is a candidate a machine drafted, and
+        # 192B ③: the 039 gate, through the one function that holds it — asked of
+        # 522's tier now (`shelf_declaration` reads `facts_trust`). A `candidate`
+        # entry was drafted by a machine, a `machine_verified` one had its
+        # evidence checked and not its conclusion, and
         # without this call the whole point of the gate was undoable one step
         # later: `classify_part` refused the category and `device_facts` handed
         # the same category over as `shelf_category`, so `classify_device`
@@ -653,7 +655,16 @@ def _supply_nets(model: object) -> set[str]:
     library = read_default_library()
     names: set[str] = set()
     for _title, board_model in _board_models(model):
-        for name, guess in infer_net_domains(board_model, library).items():
+        # 522: `allow_machine=True` on purpose, and this is the one place in the
+        # PCB side that says so. This function answers 「which nets does this
+        # reading treat as supply nets at all」 — a scope question, not a margin
+        # — and its consumer (`pcb-decap-distance`) computes an edge-to-edge
+        # **distance** in mil against a declared tier threshold. `grid` (the
+        # task book's "spacing" in the same sentence) and `tier` are that
+        # threshold's own inputs.
+        for name, guess in infer_net_domains(
+            board_model, library, allow_machine=True
+        ).items():
             if guess.state == "KNOWN" and guess.volts is not None:
                 names.add(name)
     return names
