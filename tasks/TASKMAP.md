@@ -318,7 +318,8 @@
 | 551B | L0 榨干归档元数据：被动件参数三路交叉（元数据 / 板上值 / MPN 值码） | 已落（`c51e3e8`） | docs/roadmap.md §7 |
 | 551C | L2 datasheet 搜索：子代理并行（≤5 并发 / 每批 3–5 颗）、PDF 不进主上下文、三档可信度 | 第一段已落（520）；**三档可信度已落（522）** | docs/roadmap.md §7 |
 | 521 | 提取面：**不做「扩正则」**——AI 读 `.txt` 写 facts，工具当收件闸（六道校验，最硬一条是引文逐字） | 已落（本批，待提交） | tasks/521_ai_facts.md；docs/parts.md §Stage three |
-| 522 | `facts_verified` 布尔 → `facts_trust` 三档（`candidate` / `machine_verified` / `verified`）；计算类规则吃机器核验，结论类仍要人工；finding 统一标注「未人工确认」；verdict 不涂绿 | 已落（本工作树，待岳终裁/提交） | tasks/522_facts_trust.md；tests/test_522_facts_trust.py；docs/parts.md §The gate |
+| 522 | `facts_verified` 布尔 → `facts_trust` 三档（`candidate` / `machine_verified` / `verified`）；计算类规则吃机器核验，结论类仍要人工；finding 统一标注「未人工确认」；verdict 不涂绿 | 已落（`05b0302`；follow-up `f2bc7d2` 修层边界+重钉指纹） | tasks/522_facts_trust.md；tests/test_522_facts_trust.py；docs/parts.md §The gate |
+| 523 | `category` 的授予路径：`--apply-facts` 只写 facts 不写分类，机器核验的件仍判不了（报告已如实点出两条待办） | 规划 | 522 真板三读数的已知边界 |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）
 
@@ -357,7 +358,8 @@
 | release v0.5.12 | R1 桥能力补齐 | 已落 | — |
 | release v0.5.13 | R2 PCB 审查加深 | 已落 | tag `v0.5.13` |
 | release v0.5.14 | 挖洞修复+192 批+190S | 已落 | tag `v0.5.14`（`5914ee2`/`f2c53ae`） |
-| release v0.5.15 | 515B + 516（201C 踢出） | 在途 | tasks/SCHEDULE.md |
+| release v0.5.15 | 515B + 516（201C 踢出） | 已发（tag `v0.5.15`） | tasks/SCHEDULE.md |
+| release v0.5.16 | 520 + 521 + 522（审查线资料获取三连）+ 绘图推演简报；内测 | 已发（tag `v0.5.16`，prerelease） | tasks/SCHEDULE.md；PROGRESS |
 
 ## 待人工核对（不猜测，按原文保守入表）
 
