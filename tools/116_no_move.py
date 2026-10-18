@@ -26,7 +26,12 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PY = ROOT / ".venv" / "Scripts" / "python.exe"
+# The interpreter that runs the preview tools: this one. A worktree has no
+# `.venv` of its own (`untracked`, so it never enters git), and pinning the path
+# to `ROOT/.venv/Scripts/python.exe` is what made the zero-move gate fail with
+# `CreateProcess ... FileNotFoundError` for anyone running it inside a worktree
+# (reported by 551A's run, 2026-10-18).
+PY = Path(sys.executable)
 SCRATCH = ROOT / "outputs" / "116"
 TOOLS = ("053b_previews", "056_previews", "088_previews", "088b_previews",
          "098_previews")
