@@ -169,6 +169,132 @@ boardwise parts add ACME-PWR-1000 --lcsc C9900000001 --category ic.ldo \
 
 The same flow is what the report's 未审器件 section points at: **给 PDF ≠ 清闸**.
 
+### Bulk addressing: `parts hunt` (520)
+
+`fetch` answers one part at a time, which does not scale to a board with forty.
+`hunt` is the same pipeline over a whole board, split so that the deterministic
+half stays here and the half that needs a search engine becomes a **work order**
+rather than a guess.
+
+```bash
+# stage one: classify every part, fetch what the catalog can give, write the work order
+boardwise parts hunt --file board.epro2 --out .tmp_hunt
+
+# CI / a board whose identity may not leave the machine: zero calls, work order only
+# (C-number parts come back `deferred-online` — the tool could fetch them itself)
+boardwise parts hunt --file board.epro2 --out .tmp_hunt --offline
+
+# stage two: hand the found URLs back in — same download / extract / land path
+boardwise parts hunt --file board.epro2 --out .tmp_hunt --apply answers.json
+
+# land the extracted candidates on a shelf (never the default: a batch run must
+# not quietly edit a curated file)
+boardwise parts hunt --file board.epro2 --out .tmp_hunt --shelf ~/.boardwise/parts.json
+```
+
+**The three channels.** Every component is classified by its *own identity field*
+(`c-number` / `mpn-only` / `no-identity`). The C-number is matched by shape
+(`^C\d{4,}$`), never trusted: measured on `tests/fixtures/llc_board.epro2`, 4 of
+its 27 non-empty `lcsc_part` values hold an **MPN**. Those fall through to the
+search channel — asking the product endpoint about a part number would spend a
+request to learn that the catalog has never heard of it, and the report would
+blame the part.
+
+**The work order.** `hunt-plan.json` holds only `{designator, mpn, query}` per
+part that still needs a PDF, with `query` always the template
+`"<mpn>" datasheet pdf`. A part with no MPN is **not** on the list even though it
+also needs a datasheet: there is nothing to search for, and an empty query is a
+work item that looks like coverage and is not. Those are counted separately and
+named as the engineer's own job.
+
+**Outcomes** (closed set — every one is a different next step):
+
+| outcome | meaning |
+|---|---|
+| `extracted` | PDF downloaded, and the narrow extractor proposed facts |
+| `cached` | an earlier run already downloaded and extracted this identity |
+| `pdf-unavailable` | the service answered and the part has no PDF |
+| `service-unknown` | the service answered `result: null` — the catalog does not hold this C-number |
+| `no-pdf-url` | the answer carries no usable `pdfUrl` (no field, or no `result` object) |
+| `download-failed` | what came back was not a PDF (landing page / 404), never handed to the extractor |
+| `no-facts` | the PDF **was** read (page count and `.txt` are real) and the narrow extractor found nothing it recognises |
+| `parse-failed` | the text reader itself failed on this document (a broken file, or a machine without `pypdf`) |
+| `deferred-online` | the tool can obtain this one itself — this run was `--offline`; not a work-order row |
+| `needs-search` | an MPN and no PDF, and no address the tool can get: a row in `hunt-plan.json` |
+| `no-identity` | neither a valid C-number nor an MPN: only an engineer can supply one |
+| `unknown-designator` | an `--apply` record named a designator this board does not have |
+
+`no-facts` and `parse-failed` are split because they answer two different
+questions and send a reader two different places. Measured on
+`tests/fixtures/级联多电平-驱动模块_2026-09-27.epro2` (46 parts, 24 unique
+C-numbers, 41 s cold): **45 `no-facts`, 0 `extracted`** — including
+`UCC21520DWR`'s 52-page TI datasheet, whose text reads perfectly and whose supply
+rails are spelled `VDDA`/`VDDB`/`VCCI`, none of which the extractor's vocabulary
+carries. Calling those rows "unparseable" would have sent the reader hunting for
+a better PDF that does not exist. The narrow vocabulary is a **known limit of the
+extractor**, not a property of the datasheet, and closing it is a separate task.
+Note that a missing `pypdf` is *not* reported per part at all: `parts hunt`
+probes the reader **once, before the batch**, and exits 2 with an install line
+rather than downloading forty PDFs to produce forty rows that blame the files.
+
+`deferred-online` exists because `--offline` used to file every C-number part
+under `needs-search`, which put 45 parts the tool can fetch itself onto a work
+order read as "go run a search". A work order is advice; advice a re-run answers
+for free is wrong advice, and it is worst in the one mode chosen by an operator
+who is being careful.
+
+`pdf-unavailable`, `service-unknown` and `no-pdf-url` are deliberately three
+values: "the vendor publishes no datasheet", "the number is wrong" and "the
+service did not answer" are one line apart in a report and three different phone
+calls in a review. Collapsing them is how a tool sends an engineer to search for
+a part it never asked about.
+
+**Why a download is checked before it is read.** Both vendors answer a 404 or a
+throttled request with a landing page and a 200 status. A text dump of that page
+extracts to nothing, and "extracted nothing" cannot be told apart from "this
+datasheet is outside the narrow extractor's reach" — so the bytes are checked for
+the PDF magic (and `text/*` refused outright) *before* the extractor sees them.
+`--apply`'s answers take the same path, for the same reason: a second
+implementation of "fetch and extract" would be a second set of failure modes
+nobody tests.
+
+**Privacy: only a C-number or an MPN leaves the machine.** The one request the
+detail channel can make is `productCode=<C-number>`; the one query text the tool
+can *generate* is the template above, and `assert_query_is_safe` refuses anything
+that is not that template with the MPN substituted (a designator, a board title, a
+net name, a value — each contributes a character outside the allowed set, and a
+reordering is refused too, because one template is what produced every query).
+Every outbound call lands a line in `hunt-audit.jsonl`
+(`{ts, channel, request, http, bytes, sha256}`) whose `request` must be the
+C-number or the MPN **verbatim** — never a URL, never a redacted form, because
+this file is the only artefact that can prove what was sent. `--offline` makes
+both outbound seams unreachable, and a warm cache still answers (a cache is a
+local file; the flag forbids the network, not the disk).
+
+**Cache.** `--cache <dir>` (default `~/.boardwise/datasheets`) is keyed by the
+part's identity — the C-number first, since one C-number is one part by
+definition, while two MPNs differing in case or in a vendor's suffix are not
+certainly the same part. Each key is a directory: the PDF, the `<key>.txt` page
+dump a curator reads, the per-page JSON, and a small meta file recording the URL
+so a cached row can still name where it came from. `--no-cache` moves the store
+inside `--out`: this run's downloads travel with its report and the next run
+starts from nothing.
+
+**Artefacts in `--out`.** `hunt-report.json` (every part, its channel, identity,
+outcome, notes, facts and PDF), `hunt-plan.json` (the work order),
+`hunt-report.md` (one page: counts by outcome, then what is left for a human) and
+`hunt-audit.jsonl`. Extracted facts also land as `<designator>.candidate.json`
+sidecars under `candidates/`, in the same `{label, url, facts}` shape `parts
+fetch` writes — so they can be handed straight back to
+`parts add --facts`.
+
+**给 PDF ≠ 清闸；hunt 只产出 candidate 条目，规则仍然不认它。** Every entry this
+writes carries `facts_verified: false`, and an entry whose facts already drive
+rules is never overwritten by a candidate. A hunt run shortens the shelf's work;
+it never closes a part's gate — that still needs a human reading the pages and
+flipping the flag.
+
+
 ### The uuid pair, in the same command: `parts add --resolve` (187c)
 
 The 186 flow still had one step in it that needed the bridge by hand: the uuid
@@ -584,6 +710,7 @@ from a catalog row would silently downgrade the provenance.
 | `src/boardwise/engines/harvest.py` | board → entries; merging; the verifier seam; applying corrections |
 | `src/boardwise/engines/catalog.py` | the JLC SMT client and the product-detail reader, each behind a fetcher seam |
 | `src/boardwise/engines/select.py` | offline/online ranking, and C-number resolution |
+| `src/boardwise/engines/hunt.py` | 520: batch channel decision, the guarded search query, the fetch path, the cache, the audit log, the report shapes |
 | `tools/harvest_parts.py` | the harvesting CLI (`--check`, `--verify`, `--rehome`) |
 | `tools/backfill_datasheets.py` | the datasheet-link CLI (network, per C-number, resumable) |
 | `blocklib/parts.json` | the library |

@@ -262,6 +262,23 @@ def urllib_product_fetcher(product_code: str, *, timeout: float = 15.0) -> dict[
     return decoded
 
 
+#: The shapes an answer from the product page can take, **named**. 520's hunt
+#: report counts them separately, and a caller that had to re-derive them from
+#: :attr:`ProductDetail.notes` would be parsing prose: "this part has no PDF" is a
+#: fact about the part, "the catalog does not know this C-number" is a fact about
+#: the number, and "the service did not answer" is a fact about the run — a report
+#: that merged them would send an engineer to search for a part the tool never
+#: asked about.
+DETAIL_ANSWERED = "answered"
+DETAIL_UNKNOWN = "unknown-c-number"
+DETAIL_UNANSWERED = "unanswered"
+#: A `result` object was read but it carries no `pdfUrl` key at all — a different
+#: claim from `"pdfUrl": null` ("the field says no PDF"), and one a report has to
+#: keep apart: the first says the *response shape* is not what a datasheet
+#: lookup expects, the second is the service's own answer about the part.
+DETAIL_NO_PDF_FIELD = "no-pdf-url-field"
+
+
 @dataclass
 class ProductDetail:
     """What the product page says about one C-number.
@@ -271,6 +288,10 @@ class ProductDetail:
     both leave :attr:`pdf_url` empty, and only one of them is a fact about the
     part. The caller decides what to do with each; neither is ever filled in by
     a guess.
+
+    :attr:`state` is that same distinction in the vocabulary a report can count
+    (:data:`DETAIL_ANSWERED` / :data:`DETAIL_UNKNOWN` / :data:`DETAIL_UNANSWERED`),
+    so no caller has to string-match ``notes`` to tell the three apart.
     """
 
     lcsc: str
@@ -279,6 +300,8 @@ class ProductDetail:
     code: int | None = None
     #: True when a `result` object was read, whatever it contained.
     answered: bool = False
+    #: :data:`DETAIL_ANSWERED`, :data:`DETAIL_UNKNOWN` or :data:`DETAIL_UNANSWERED`.
+    state: str = DETAIL_UNANSWERED
     notes: list[str] = field(default_factory=list)
 
 
@@ -318,6 +341,7 @@ def fetch_product_detail(fetcher: ProductFetcher, lcsc: str) -> ProductDetail:
             # the service answers `{"code":200,"result":null,"ok":true}`. That is
             # a fact about the part ("the catalog does not know this number"), and
             # it is worded as such rather than as a malformed response.
+            detail.state = DETAIL_UNKNOWN
             detail.notes.append(
                 f"the service answered `result: null` for {wanted} — the catalog "
                 "does not know this C-number"
@@ -326,11 +350,17 @@ def fetch_product_detail(fetcher: ProductFetcher, lcsc: str) -> ProductDetail:
             detail.notes.append("the response carries no `result` object")
         return detail
     detail.answered = True
+    detail.state = DETAIL_ANSWERED
     if detail.code is not None and detail.code != 200:
         detail.notes.append(f"the service answered code={detail.code}")
     raw = result.get("pdfUrl")
     if isinstance(raw, str) and raw.strip():
         detail.pdf_url = raw.strip()
+    elif "pdfUrl" not in result:
+        # No key at all: a shape the datasheet lookup does not expect, which is
+        # one step earlier in the chain than "the field says there is no PDF".
+        detail.state = DETAIL_NO_PDF_FIELD
+        detail.notes.append("the product object carries no `pdfUrl` key")
     else:
         detail.notes.append("the product carries no `pdfUrl`")
     return detail
@@ -340,6 +370,10 @@ __all__ = [
     "CatalogCandidate",
     "CatalogClient",
     "CatalogError",
+    "DETAIL_ANSWERED",
+    "DETAIL_NO_PDF_FIELD",
+    "DETAIL_UNANSWERED",
+    "DETAIL_UNKNOWN",
     "DETAIL_URL",
     "Fetcher",
     "JLC_URL",

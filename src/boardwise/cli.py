@@ -2182,6 +2182,70 @@ def build_parser() -> argparse.ArgumentParser:
     parts_fetch.add_argument(
         "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result."
     )
+    parts_hunt = parts_sub.add_parser(
+        "hunt",
+        help="Address every part of a board at once, and hand back the search work order.",
+        description=(
+            "The batch half of `parts fetch` (520). Every component of a board is classified "
+            "into one of three channels — a valid 立创 C-number (asked about via the product "
+            "detail API, which sends the C-number and nothing else), an MPN only (needs a "
+            "search engine), or no identity at all (the engineer's own job). Whatever comes "
+            "back as a PDF is checked for the PDF magic before the extractor sees it: a "
+            "landing page or a 404 is `download-failed`, never a text dump that reads as "
+            "'the datasheet says nothing'. Four artefacts land in --out: "
+            "hunt-report.json (every part and its outcome), hunt-plan.json (the parts that "
+            "need a search, as {designator, mpn, query} only), hunt-report.md (the one-page "
+            "read) and hunt-audit.jsonl (one line per outbound call — the evidence that only "
+            "a C-number or an MPN left the machine). `--apply answers.json` is the second "
+            "stage: hand-found URLs come back in and go through the same download / extract "
+            "/ land path. Nothing here verifies anything: entries land with "
+            "facts_verified: false, so 喂 PDF ≠ 清闸 still holds. Exit 0 report written / "
+            "2 the input or an answers file cannot be read."
+        ),
+    )
+    parts_hunt.add_argument(
+        "--file", required=True, help="The .epro2 / .eprj3 project to address (read-only)."
+    )
+    parts_hunt.add_argument(
+        "--out", required=True, help="Where the four artefacts and the candidate sidecars go."
+    )
+    parts_hunt.add_argument(
+        "--offline", action="store_true",
+        help=(
+            "Classification and work order only: not a single outbound call (an injected "
+            "fetcher that raises goes unused). CI and confidential boards use this."
+        ),
+    )
+    parts_hunt.add_argument(
+        "--shelf", default=None, metavar="PATH",
+        help=(
+            "Write the extracted facts into this parts.json as candidates. Without it only "
+            "the sidecars under --out are written — a batch run does not quietly edit a shelf."
+        ),
+    )
+    parts_hunt.add_argument(
+        "--cache", default=None, metavar="DIR",
+        help="Cross-board PDF cache (default: <boardwise home>/datasheets).",
+    )
+    parts_hunt.add_argument(
+        "--no-cache", action="store_true",
+        help=(
+            "Do not reuse PDFs across runs: the store moves inside --out, so this run's "
+            "downloads travel with its report and the next run starts from nothing."
+        ),
+    )
+    parts_hunt.add_argument(
+        "--limit", type=int, default=0, metavar="N",
+        help="Only the first N parts, for a batched run (default 0 = all).",
+    )
+    parts_hunt.add_argument(
+        "--apply", default=None, metavar="PATH",
+        help=(
+            "Stage two: a JSON list of {designator|lcsc|mpn, url} to replay through the same "
+            "download/extract/land path. A designator the board does not have becomes an "
+            "`unknown-designator` row and the rest are processed normally."
+        ),
+    )
     pick = parts_sub.add_parser(
         "select",
         help=(
@@ -15032,6 +15096,40 @@ def _pdf_python() -> tuple[str, str]:
     )
 
 
+def _pdf_runtime_problem() -> str | None:
+    """``None`` when the pypdf helper can run, else one line saying why it cannot.
+
+    Checked **once, before the batch** (520 follow-up), not per part. Why it
+    matters: without this probe a run on a machine whose interpreter has no
+    pypdf downloads every PDF, extracts nothing, and reports 45 `parse-failed`
+    rows — which reads as "45 datasheets this extractor cannot read" and is the
+    wrong diagnosis. The real answer is one sentence about the environment, and
+    the cost of learning it must not be the whole batch.
+
+    A `--offline` run never gets here: it downloads nothing, so it extracts
+    nothing, and asking it for a PDF reader would be a false precondition.
+    """
+    import subprocess
+
+    python, how = _pdf_python()
+    try:
+        proc = subprocess.run(
+            [python, "-c", "import pypdf"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"跑不动 {python}（{how}）：{exc}"
+    if proc.returncode == 0:
+        return None
+    return (
+        f"{python}（{how}）里没有 pypdf，提取器跑不起来。"
+        "装法：`<python> -m pip install pypdf`（pypdf 要 Python >= 3.9），"
+        "或用 BOARDWISE_PDF_PYTHON 指向一个装了它的解释器；详见 docs/getting-started.md。"
+        f"底层报错：{(proc.stderr or '').strip()[:200]}"
+    )
+
+
 def _pdf_text(pdf: Path) -> tuple[str, str]:
     """Run the pypdf helper in the interpreter that has pypdf; ``(text, how)``.
 
@@ -15069,24 +15167,50 @@ def _download_pdf(url: str, dest: Path) -> int:
     vendors answer an unauthenticated or 404 request with an HTML error page, and
     a text dump of that page would look like "the datasheet says nothing".
     """
+    downloaded = _fetch_url(url)
+    if not downloaded.ok:
+        raise ValueError(downloaded.note)
+    if not downloaded.payload.startswith(b"%PDF"):
+        head = downloaded.payload[:80].decode("utf-8", "replace").replace("\n", " ")
+        raise ValueError(
+            f"下载回来的不是 PDF（{len(downloaded.payload)} B，开头 {head!r}）："
+            "多是被拒绝或 404 的 HTML 错误页"
+        )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(downloaded.payload)
+    return len(downloaded.payload)
+
+
+def _fetch_url(url: str) -> "Download":
+    """One GET, as a :class:`boardwise.engines.hunt.Download`.
+
+    The single place a datasheet's bytes are read over the wire. `parts fetch`
+    goes through :func:`_download_pdf` (which keeps its raise-on-non-PDF
+    contract) and `parts hunt` uses this object directly, so the two commands
+    cannot disagree about the User-Agent, the timeout, or what a body is — 520's
+    point in having one download in the code base.
+    """
     import urllib.error
     import urllib.request
+
+    from boardwise.engines.hunt import Download
 
     request = urllib.request.Request(url, headers={"User-Agent": _DOWNLOAD_UA})
     try:
         with urllib.request.urlopen(request, timeout=90) as response:  # noqa: S310
             payload = response.read()
+            content_type = str(response.headers.get("Content-Type") or "")
+            status = getattr(response, "status", None)
     except (urllib.error.URLError, OSError) as exc:
-        raise ValueError(f"下载失败：{exc}") from exc
-    if not payload.startswith(b"%PDF"):
-        head = payload[:80].decode("utf-8", "replace").replace("\n", " ")
-        raise ValueError(
-            f"下载回来的不是 PDF（{len(payload)} B，开头 {head!r}）："
-            "多是被拒绝或 404 的 HTML 错误页"
-        )
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(payload)
-    return len(payload)
+        return Download(ok=False, note=f"下载失败：{exc}")
+    except Exception as exc:  # noqa: BLE001 - a transport failure is one outcome
+        return Download(ok=False, note=f"下载失败：{exc}")
+    return Download(
+        ok=True,
+        payload=payload,
+        content_type=content_type,
+        status=status if isinstance(status, int) else None,
+    )
 
 
 def _parts_fetch_report(args: argparse.Namespace, entry: object | None) -> list[str]:
@@ -15312,6 +15436,527 @@ def _cmd_parts_fetch(args: argparse.Namespace) -> int:
         )
         print(f"json: {args.json_path}")
     return 0
+
+
+def _hunt_cache(args: argparse.Namespace) -> "hunt.Cache":
+    """The PDF store this run uses: ``--cache``, else the home default, else run-local.
+
+    ``--no-cache`` does not mean "no PDF lands anywhere" — a download has to land
+    somewhere or there is nothing to extract from and nothing to show a curator.
+    It means **no cross-run reuse**: the store moves inside ``--out``, so this
+    run's PDFs travel with its report and a second run starts from nothing.
+    `--offline` is the flag that forbids the network; conflating the two would
+    make "I want a fresh copy" and "I may not dial out" the same switch.
+    """
+    from boardwise.core.config import boardwise_home
+    from boardwise.engines import hunt
+
+    if getattr(args, "no_cache", False):
+        return hunt.Cache(Path(args.out) / "pdf")
+    root = getattr(args, "cache", "") or str(boardwise_home() / "datasheets")
+    return hunt.Cache(root)
+
+
+def _hunt_parts(model: object) -> tuple[list[tuple[str, object]], list[str]]:
+    """``([(designator, component)], notes)`` for every board of a model.
+
+    Board order, designators sorted inside a board — the same order `parts
+    missing` prints, so a reader diffing the two lists is not also diffing two
+    orderings. A designator placed on **two boards** is hunted once and said so in
+    the notes: the identity is the same part either way, and a second row would
+    double the counts for one datasheet.
+    """
+    notes: list[str] = []
+    seen: dict[str, list[str]] = {}
+    rows: list[tuple[str, object]] = []
+    boards = list(getattr(model, "boards", None) or [])
+    if boards:
+        for board in boards:
+            title = getattr(getattr(board, "board", None), "title", "") or ""
+            for designator in sorted(board.components):
+                if designator in seen:
+                    seen[designator].append(title)
+                    continue
+                seen[designator] = [title]
+                rows.append((designator, board.components[designator]))
+    else:
+        for designator in sorted(getattr(model, "components", {}) or {}):
+            rows.append((designator, model.components[designator]))
+    for designator, titles in seen.items():
+        if len(titles) > 1:
+            notes.append(
+                f"位号 {designator} 出现在多块板（{'、'.join(t for t in titles if t)}），只寻了一次"
+            )
+    return rows, notes
+
+
+def _hunt_answers(path: str) -> tuple[list[dict], str]:
+    """``(answers, error)`` — the `--apply` file, validated at the door.
+
+    ``[{"designator"|"lcsc"|"mpn": …, "url": …}, …]``. Every record must name the
+    part **some** way and carry a URL; a record that does neither would silently
+    become an `unknown-designator` row, which is a different complaint and would
+    bury the typo the reader has to fix.
+    """
+    import json
+
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        return [], f"读不了 {path}: {exc}"
+    except ValueError as exc:
+        return [], f"{path} 不是合法 JSON: {exc}"
+    if not isinstance(raw, list):
+        return [], f"{path}: 期望一个列表（[{{designator, url}}, …]），拿到 {type(raw).__name__}"
+    answers: list[dict] = []
+    for index, item in enumerate(raw):
+        where = f"{path}[{index}]"
+        if not isinstance(item, dict):
+            return [], f"{where}: 期望一个对象"
+        url = str(item.get("url") or "").strip()
+        locators = {
+            key: str(item.get(key) or "").strip()
+            for key in ("designator", "lcsc", "mpn")
+            if str(item.get(key) or "").strip()
+        }
+        if not locators:
+            return [], f"{where}: 没有 designator/lcsc/mpn，点不到板上任何一颗"
+        if not url:
+            return [], f"{where}: 没有 url"
+        answers.append({"locators": locators, "url": url, "index": index})
+    return answers, ""
+
+
+def _hunt_match(
+    rows: list[tuple[str, object]], locators: dict[str, str]
+) -> tuple[int, str] | None:
+    """``(row index, how)`` for one answer, by designator → C-number → MPN.
+
+    Designator first because it is what a person reads off the schematic and what
+    an AI that was handed `hunt-plan.json` writes back; the identity steps exist so
+    an answer found by part number still lands on the right row. Exact, and the
+    C-number case-folded — the same identity discipline `core.parts.find_facts`
+    applies, for the same reason: a near-miss here attaches one part's datasheet
+    to another part.
+    """
+    if "designator" in locators:
+        wanted = locators["designator"]
+        for index, (designator, _component) in enumerate(rows):
+            if designator == wanted:
+                return index, "designator"
+        return None
+    from boardwise.engines.hunt import identity_of
+
+    if "lcsc" in locators:
+        wanted = locators["lcsc"].upper()
+        for index, (_designator, component) in enumerate(rows):
+            if identity_of(component)["lcsc"] == wanted:
+                return index, "lcsc"
+        return None
+    wanted = locators["mpn"].casefold()
+    for index, (_designator, component) in enumerate(rows):
+        if (identity_of(component)["mpn"] or "").casefold() == wanted:
+            return index, "mpn"
+    return None
+
+
+def _cmd_parts_hunt(args: argparse.Namespace) -> int:
+    """520: address every part of a board at once, and hand back the leftovers.
+
+    Two entry points, one pipeline. Without ``--apply`` this is the **first**
+    stage: each part is classified (C-number / MPN-only / no identity), the
+    C-number ones are asked about, and whatever cannot be obtained becomes a row
+    in `hunt-plan.json` — the work order for the half that needs a search engine.
+    With ``--apply`` it is the **second** stage: a hand-found URL per part comes
+    back in and goes through the *same* download → PDF check → extract → land
+    path, which is the point — a second implementation of "fetch and extract"
+    would be a second set of failure modes nobody tests.
+
+    Nothing here verifies anything. Every entry this writes carries
+    `facts_verified: false`, and the report says so in as many words: 喂 PDF ≠ 清闸.
+    """
+    import json
+
+    from boardwise.engines import hunt
+    from boardwise.engines.catalog import urllib_product_fetcher
+
+    project = Path(args.file)
+    try:
+        model, _board = _load_model(project, view="schematic")
+    except (EncryptedProjectError, ValueError, OSError) as exc:
+        print(f"boardwise parts hunt: cannot read {project}: {exc}", file=sys.stderr)
+        return 2
+
+    rows, board_notes = _hunt_parts(model)
+    if args.limit and args.limit > 0:
+        rows = rows[: args.limit]
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    audit = hunt.AuditLog(out_dir / "hunt-audit.jsonl")
+    # Created even when nothing is sent: an absent audit file cannot be told
+    # apart from a run that was never audited, and this file is the whole
+    # evidence for "only a C-number or an MPN left this machine".
+    audit.path.parent.mkdir(parents=True, exist_ok=True)
+    audit.path.touch(exist_ok=True)
+    cache = _hunt_cache(args)
+
+    # The reader is a **batch precondition**, not a per-part outcome (520
+    # follow-up). Learning "this interpreter cannot read PDFs" after downloading
+    # 45 of them turns one environment sentence into 45 rows of `parse-failed`,
+    # which reads as a fact about the datasheets.
+    if not args.offline:
+        problem = _pdf_runtime_problem()
+        if problem:
+            print(f"boardwise parts hunt: {problem}", file=sys.stderr)
+            return 2
+
+    executor = hunt.Executor(
+        fetch_detail=urllib_product_fetcher,
+        download=_fetch_url,
+        pdf_text=_pdf_text,
+    )
+
+    located: list[hunt.Located] = []
+    notes_by_designator: dict[str, list[str]] = {}
+    for designator, component in rows:
+        channel = hunt.judge_channel(component)
+        located.append(
+            hunt.Located(
+                designator=designator,
+                channel=channel,
+                identity=hunt.identity_of(component),
+            )
+        )
+        notes_by_designator[designator] = []
+
+    answers: list[dict] = []
+    if args.apply:
+        answers, error = _hunt_answers(args.apply)
+        if error:
+            print(f"boardwise parts hunt: {error}", file=sys.stderr)
+            return 2
+
+    # --- overlay the answers onto the rows they address ---------------------
+    unmatched: list[dict] = []
+    for answer in answers:
+        hit = _hunt_match(rows, answer["locators"])
+        if hit is None:
+            unmatched.append(answer)
+            continue
+        index, how = hit
+        target = located[index]
+        target.url = answer["url"]
+        # A hand-picked URL is a newer answer than whatever the cache holds.
+        target.force_download = True
+        notes_by_designator[target.designator].append(
+            f"--apply 回灌的地址（按 {how} 对上）"
+        )
+
+    outcomes: list[hunt.Outcome] = []
+    by_designator = {item.designator: item for item in located}
+    for item in located:
+        item.notes = notes_by_designator.get(item.designator, [])
+        outcomes.append(
+            hunt.execute(
+                item,
+                executor,
+                cache=cache,
+                audit=audit,
+                label=_hunt_label(model, item.designator),
+                offline=bool(args.offline),
+            )
+        )
+    for answer in unmatched:
+        locator = "; ".join(f"{key}={value}" for key, value in answer["locators"].items())
+        outcomes.append(
+            hunt.Outcome(
+                designator=str(answer["locators"].get("designator", "")),
+                channel="",
+                identity={
+                    "lcsc": str(answer["locators"].get("lcsc", "")),
+                    "mpn": str(answer["locators"].get("mpn", "")),
+                },
+                outcome=hunt.UNKNOWN_DESIGNATOR,
+                url=answer["url"],
+                notes=[f"回灌文件里的这一条点不到板上任何器件（{locator}），其余照常处理"],
+            )
+        )
+
+    counts = hunt.counts_of(outcomes)
+    plan, plan_notes = hunt.plan_rows(outcomes)
+
+    board = {
+        "file": str(project),
+        "title": _hunt_board_title(model),
+        "boards": len(getattr(model, "boards", None) or []) or 1,
+        "parts": len(outcomes),
+        "offline": bool(args.offline),
+        "out": str(out_dir),
+        "cache": str(cache.root),
+    }
+
+    report = {
+        "board": board,
+        "counts": counts,
+        "parts": [item.as_json() for item in outcomes],
+        "notes": [*board_notes, *plan_notes],
+        "outbound": audit.outbound,
+        "outcomes": list(hunt.OUTCOMES),
+    }
+    (out_dir / "hunt-report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    (out_dir / "hunt-plan.json").write_text(
+        json.dumps(
+            {"board": {"file": str(project), "title": board["title"]}, "parts": plan},
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (out_dir / "hunt-report.md").write_text(
+        hunt.markdown_report(
+            board=board,
+            outcomes=outcomes,
+            counts=counts,
+            outbound=audit.outbound,
+            offline=bool(args.offline),
+            plan_notes=plan_notes,
+        ),
+        encoding="utf-8",
+    )
+
+    # --- the per-part candidate sidecars, in `parts fetch`'s own shape -------
+    candidates = out_dir / "candidates"
+    written_sidecars: list[Path] = []
+    for item in outcomes:
+        if not item.facts:
+            continue
+        sidecar = candidates / f"{_hunt_slug(item.designator)}.candidate.json"
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text(
+            json.dumps(
+                {
+                    "label": _hunt_label(model, item.designator) or item.designator,
+                    "url": item.url,
+                    "facts": item.facts,
+                    "designator": item.designator,
+                    "identity": item.identity,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        written_sidecars.append(sidecar)
+
+    # --- the shelf, only when asked -----------------------------------------
+    shelf_note = ""
+    if args.shelf:
+        shelf_note = _hunt_write_shelf(args.shelf, outcomes)
+
+    # --- the terminal -------------------------------------------------------
+    print(f"{project}: {len(outcomes)} part(s) addressed, {audit.outbound} outbound call(s)")
+    for outcome in hunt.OUTCOMES:
+        if counts.get(outcome):
+            print(f"  {outcome:20} {counts[outcome]}")
+    if args.offline:
+        print("  --offline: 一次外呼都没有（审计文件里有 0 行）")
+    print(f"report: {out_dir / 'hunt-report.json'}")
+    print(f"plan:   {out_dir / 'hunt-plan.json'}（{len(plan)} 条要搜）")
+    print(f"md:     {out_dir / 'hunt-report.md'}")
+    print(f"audit:  {out_dir / 'hunt-audit.jsonl'}（{audit.outbound} 行）")
+    if written_sidecars:
+        print(f"candidates: {len(written_sidecars)} 件写在 {candidates}")
+    if shelf_note:
+        print(f"shelf: {shelf_note}")
+    else:
+        print("shelf: 没有写货架（加 --shelf <parts.json> 才写）")
+    print("gate: 一律 facts_verified=false —— 喂 PDF ≠ 清闸，hunt 只产出 candidate 条目")
+    return 0
+
+
+def _hunt_slug(designator: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", designator or "part").strip("_") or "part"
+
+
+def _hunt_board_title(model: object) -> str:
+    """The first board's title — the one board-aware label the report needs.
+
+    A project's boards each have a title, and a hunt over a multi-board project is
+    one report; naming the first is a label, not a claim about the others (`board.
+    boards` carries the count, and the parts list carries every designator).
+    """
+    boards = list(getattr(model, "boards", None) or [])
+    if not boards:
+        return ""
+    return str(getattr(getattr(boards[0], "board", None), "title", "") or "")
+
+
+def _hunt_label(model: object, designator: str) -> str:
+    """``"<manufacturer> <MPN>"`` for a designator — what a fact's provenance names.
+
+    Read back off the model rather than carried alongside, because the label is
+    prose for a human and the identity is the structured pair every decision uses;
+    keeping one copy of the second is what keeps them from disagreeing.
+    """
+    for board in list(getattr(model, "boards", None) or []):
+        component = board.components.get(designator)
+        if component is None:
+            continue
+        parts = [
+            str(getattr(component, "manufacturer", "") or "").strip(),
+            str(getattr(component, "mpn", "") or "").strip(),
+        ]
+        return " ".join(part for part in parts if part)
+    component = (getattr(model, "components", {}) or {}).get(designator)
+    if component is None:
+        return ""
+    return " ".join(
+        part
+        for part in (
+            str(getattr(component, "manufacturer", "") or "").strip(),
+            str(getattr(component, "mpn", "") or "").strip(),
+        )
+        if part
+    )
+
+
+def _hunt_candidate_key(mpn: str, lcsc: str, taken: dict) -> str:
+    """A free ``candidate.<slug>`` key — `_candidate_key`'s rule, made unique.
+
+    The same naming rule `parts add` uses (never a second slug style), plus the
+    one thing a batch needs and a single add does not: two parts on one board can
+    share a slug (`candidate.<mpn>` for an MPN the shelf has under a different
+    key), and appending `-<n>` keeps both instead of the second silently
+    overwriting the first.
+    """
+    base = _candidate_key(mpn, lcsc)
+    key = base
+    suffix = 2
+    while key in taken:
+        key = f"{base}-{suffix}"
+        suffix += 1
+    return key
+
+
+def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
+    """Land the extracted facts on a shelf as **candidates**. Returns what happened.
+
+    The same JSON-document write `parts fetch` performs, for the same reasons: a
+    library-wide re-serialisation reorders every other entry's keys, so only the
+    touched entries' bytes move, the file is backed up first, and the result is
+    re-parsed with the real validator before the write is called done.
+
+    Two refusals, both inherited from the existing discipline:
+
+    * an entry whose facts already **drive rules** is never overwritten (an
+      unverified claim does not replace something a human vouched for);
+    * every entry written here carries ``facts_verified: false``, so nothing this
+      command produces can be read by a rule.
+    """
+    import shutil
+
+    from boardwise.core.parts import (
+        PartEntry,
+        PartError,
+        PartProvenance,
+        entry_to_json,
+        load_parts,
+    )
+
+    path = Path(shelf_path)
+    try:
+        library = load_parts(path)
+        raw = (
+            json.loads(path.read_text(encoding="utf-8"))
+            if path.is_file()
+            else {
+                "kind": "boardwise-part-library",
+                "version": 2,
+                "sources": [],
+                "notes": [],
+                "parts": [],
+            }
+        )
+    except (OSError, ValueError, PartError) as exc:
+        return f"没有写：读不了 {path}（{exc}）"
+
+    by_key = library.by_key()
+    by_lcsc = {part.lcsc.upper(): part for part in library.parts if part.lcsc}
+    by_mpn = {part.mpn.casefold(): part for part in library.parts if part.mpn}
+
+    added = 0
+    updated = 0
+    skipped = 0
+    for outcome in outcomes:
+        if not outcome.facts:
+            continue
+        lcsc = (outcome.identity.get("lcsc") or "").upper()
+        mpn = outcome.identity.get("mpn") or ""
+        existing = (by_lcsc.get(lcsc) if lcsc else None) or (
+            by_mpn.get(mpn.casefold()) if mpn else None
+        )
+        if existing is not None and existing.facts is not None:
+            # Its facts drive rules: a candidate may not replace that.
+            skipped += 1
+            continue
+        key = existing.key if existing is not None else _hunt_candidate_key(mpn, lcsc, by_key)
+        entry = PartEntry(
+            key=key,
+            mpn=mpn,
+            lcsc=lcsc,
+            value=existing.value if existing is not None else "",
+            category=existing.category if existing is not None else "",
+            datasheetPdfUrl=outcome.url,
+            facts=outcome.facts,
+            facts_verified=False,
+            provenance=PartProvenance(
+                kind="hunt-extract",
+                source=outcome.url,
+                designators=[outcome.designator],
+                note=(
+                    "candidate facts written by `parts hunt` (520): 自动提取，"
+                    "未经核验（facts_verified: false）——逐条对着 text dump 的页码核过再翻 true"
+                ),
+            ),
+            notes=list(existing.notes) if existing is not None else [],
+        )
+        body = entry_to_json(entry)
+        if existing is not None:
+            for index, item in enumerate(raw.get("parts") or []):
+                if item.get("key") == existing.key:
+                    raw["parts"][index] = body
+                    updated += 1
+                    break
+        else:
+            raw.setdefault("parts", []).append(body)
+            added += 1
+        by_key[key] = entry
+        if lcsc:
+            by_lcsc[lcsc] = entry
+        if mpn:
+            by_mpn[mpn.casefold()] = entry
+
+    if not (added or updated):
+        return f"没有写 {path}（{skipped} 件已有核验过的 facts，其余没有提取出候选）"
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existed = path.is_file()
+    backup = path.with_suffix(path.suffix + ".tmp")
+    if existed:
+        shutil.copy2(path, backup)
+    reloaded, error = _write_shelf_document(path, raw, existed=existed, backup=backup)
+    if reloaded is None:
+        return f"写 {path} 被验证器拒绝，已回滚：{error}"
+    return (
+        f"{path}：新增 {added} 条、更新 {updated} 条候选"
+        f"（facts_verified=false，共 {len(reloaded.parts)} 条）"
+        + (f"，跳过 {skipped} 条已有核验 facts 的" if skipped else "")
+    )
 
 
 def _parts_accept_who(explicit: str) -> str:
@@ -25357,6 +26002,7 @@ PARTS_COMMANDS = {
     "add": _cmd_parts_add,
     "accept-unknown": _cmd_parts_accept_unknown,
     "fetch": _cmd_parts_fetch,
+    "hunt": _cmd_parts_hunt,
 }
 
 BOM_COMMANDS = {
