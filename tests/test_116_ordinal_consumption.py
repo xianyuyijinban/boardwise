@@ -622,6 +622,10 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     **515A 重钉**：`27cb744b…` → `4a78e930…`，差异只有 `topology-search:` 一行
     拒因文本（洞 2 的新关系闸措辞），几何未动——理由与 515A 在 115 的重钉相同；
     旧字节留 `098_scene08_narrow_refused.pre515a.txt`。
+
+    **D1 重钉**：`4a78e930…` → `1e7a8583…`，仍是 `topology-search:` 一行文本：
+    折返 seed 让拓扑轮在这张 300x200 的小页上过了关系闸，拒绝退回「区域装不下」。
+    旧字节留 `098_scene08_narrow_refused.pre_d1.txt`。
     """
     import hashlib
     out = ROOT / "outputs" / "116" / "previews" / "098"
@@ -634,7 +638,7 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     assert result.returncode == 0, result.stdout + result.stderr
     target = out / "098_scene08_narrow_refused.txt"
     digest = hashlib.sha256(target.read_bytes()).hexdigest()
-    assert digest == "4a78e930e81470f2da7074ceee66d4570818995132662119f5413b7f9b1c1df2", (
+    assert digest == "1e7a858392b7f3c43590c1ad3a9e2606ff660ff963a0e2473643980d83ae43c6", (
         f"098 scene 08 moved: {digest}"
     )
 

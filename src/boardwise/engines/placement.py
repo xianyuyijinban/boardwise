@@ -296,6 +296,18 @@ class PlacementInput:
     parts: tuple[PlacementPart, ...]
     nets: tuple[PlacementNet, ...] = ()
     relations: tuple[PlacementRelation, ...] = ()
+    #: The parts that form the drawing's **chain** (one node per rank, read along
+    #: ``progress``). Empty — the default — keeps the historical seed: every part
+    #: on one line, which is what every page that compiles today was drawn by.
+    #:
+    #: When it is stated, :func:`_seed` walks the chain in rank order and **folds**
+    #: it: a ``right-of`` / ``left-of`` between the next chain node and the one just
+    #: placed turns the walking direction from ``progress`` onto ``lateral``. The
+    #: flyback needs exactly this — its chain runs vertically (Q1's column), and
+    #: ``right-of(D3, T1)`` asks the secondary branch to leave that column
+    #: sideways, which a one-dimensional line cannot do at any weight or pose
+    #: (measured: ``outputs/algo_eval/DIAGNOSIS_same_column.md`` §7).
+    chain: frozenset[str] = frozenset()
     #: The pins that must keep room for the flag the plan will hang there (201B
     #: stage 2). Empty is a legitimate request — a circuit whose rails carry no
     #: flag symbols states none — and the term is then not evaluated at all.
@@ -1286,6 +1298,8 @@ def _seed(request: PlacementInput, ranks: Mapping[str, int]) -> _State:
         poses[part.part_id] = _compact_pose(request, part)
 
     pinned = request.locked_origins()
+    if request.chain:
+        return _seed_folding(request, ranks, poses, pinned)
     chain = sorted(
         (part.part_id for part in request.parts),
         key=lambda part_id: (ranks.get(part_id, 0), part_id),
@@ -1327,6 +1341,153 @@ def _seed(request: PlacementInput, ranks: Mapping[str, int]) -> _State:
     return _State(origins=_snap(request, origins), poses=poses)
 
 
+def _seed_folding(
+    request: PlacementInput,
+    ranks: Mapping[str, int],
+    poses: dict[str, SymbolPose],
+    pinned: Mapping[str, tuple[float, float]],
+) -> _State:
+    """The chain walked as a **path that may turn**, not as one line.
+
+    Rank still grows along ``progress`` — that is concept 1, and the reason the
+    drawing reads in flow order. What a line cannot express is a relation that
+    asks the *next* chain node to leave the current walk direction **sideways**:
+    the flyback states ``right-of(D3, T1)`` between two chain nodes, so the
+    secondary upright sits beside the transformer's column instead of below it.
+    A line puts every chain node on one axis, so that statement is unreachable at
+    any weight, any pose and any search budget (measured:
+    ``outputs/algo_eval/DIAGNOSIS_same_column.md`` §7).
+
+    An order kind between two chain parts is exactly the statement "turn here",
+    and :func:`_turns_after` reads it off the grammar rather than off a constant —
+    so a grammar that states no such relation gets the same straight line the
+    historical seed draws.
+
+    Parts outside the chain hang off their busiest neighbour
+    (:func:`_owner_for`), the branch rule the one-line seed could never reach
+    because every part used to be in the line.
+    """
+    known = set(request.part_ids())
+    chain = sorted(
+        (part_id for part_id in request.chain if part_id in known),
+        key=lambda part_id: (ranks.get(part_id, 0), part_id),
+    )
+    lateral = _unit(request.lateral)
+    origins: dict[str, tuple[float, float]] = {}
+    at = (0.0, 0.0)
+    direction = _chain_direction(request, ranks, _unit(request.progress))
+    for index, part_id in enumerate(chain):
+        if part_id in pinned:
+            # A lock's coordinate is the engineer's: the walk resumes from it
+            # rather than stepping past it, so the chain reads through the lock.
+            origins[part_id] = pinned[part_id]
+            at = pinned[part_id]
+            continue
+        half = _extent_along(
+            request.part(part_id), poses[part_id], direction
+        ) / 2.0
+        origin = (
+            at[0] + direction[0] * half,
+            at[1] + direction[1] * half,
+        )
+        origins[part_id] = origin
+        at = (
+            origin[0] + direction[0] * (half + request.channel),
+            origin[1] + direction[1] * (half + request.channel),
+        )
+        if index + 1 < len(chain) and _turns_after(
+            request, part_id, chain[index + 1]
+        ):
+            direction = _turn_direction(request, part_id, chain[index + 1], lateral)
+
+    placed = set(origins)
+    for part_id in sorted(known - placed):
+        if part_id in pinned:
+            # A locked part outside the chain still has to end up in the state:
+            # `_seed` never met this case because its "chain" held every part.
+            origins[part_id] = pinned[part_id]
+            placed.add(part_id)
+            continue
+        owner = _owner_for(request, part_id, placed, ranks, order_first=True)
+        side = _branch_side(request, part_id, owner)
+        base = origins.get(owner, (0.0, 0.0))
+        distance = request.lane + _extent_along(
+            request.part(part_id), poses[part_id], request.lateral
+        ) / 2.0
+        origins[part_id] = (
+            base[0] + side[0] * distance, base[1] + side[1] * distance,
+        )
+        placed.add(part_id)
+    return _State(origins=_snap(request, origins), poses=poses)
+
+
+def _chain_direction(
+    request: PlacementInput,
+    ranks: Mapping[str, int],
+    progress: tuple[float, float],
+) -> tuple[float, float]:
+    """Which way the chain runs: ``progress``, unless a stated order says otherwise.
+
+    ``_ranks`` puts a ``below``'s subject **after** its object, so the walk
+    reaches it later; if the kind then says that later node sits *below*, the walk
+    has to descend along y, not climb. Without this the flyback's ``below(R5, Q1)``
+    is broken at the seed by construction — the search can still repair it, but a
+    seed that starts on the wrong side of every vertical order pays for it at every
+    restart (measured: ``outputs/algo_eval/DIAGNOSIS_same_column.md`` §7).
+    """
+    for relation in request.relations:
+        if relation.kind not in (ABOVE, BELOW):
+            continue
+        if relation.subject not in request.chain or relation.object not in request.chain:
+            continue
+        if ranks.get(relation.subject, 0) <= ranks.get(relation.object, 0):
+            continue
+        if progress[1] == 0.0:
+            continue
+        wanted = 1.0 if relation.kind == ABOVE else -1.0
+        if wanted * progress[1] > 0:
+            return progress
+        return (progress[0], -progress[1])
+    return progress
+
+
+def _turns_after(request: PlacementInput, here: str, following: str) -> bool:
+    """Does the grammar ask ``following`` to leave ``here`` sideways?
+
+    Read off the stated order kinds, not off a layout constant: a ``right-of`` or
+    ``left-of`` whose subject is the next chain node and whose object is the one
+    just placed is the grammar saying "this node continues beside, not beyond".
+    """
+    for relation in request.relations:
+        if relation.subject != following or relation.object != here:
+            continue
+        if relation.kind in (LEFT_OF, RIGHT_OF):
+            return True
+    return False
+
+
+def _turn_direction(
+    request: PlacementInput,
+    here: str,
+    following: str,
+    lateral: tuple[float, float],
+) -> tuple[float, float]:
+    """Which way the walk turns: the side the order kind names, on ``lateral``.
+
+    ``right-of`` asks for a larger x, so the turn takes whichever sign of
+    ``lateral`` points that way; ``left-of`` the other. The caller has already
+    established that one of the two is stated (:func:`_turns_after`).
+    """
+    for relation in request.relations:
+        if relation.subject != following or relation.object != here:
+            continue
+        if relation.kind == RIGHT_OF:
+            return lateral if lateral[0] > 0 else (-lateral[0], -lateral[1])
+        if relation.kind == LEFT_OF:
+            return lateral if lateral[0] < 0 else (-lateral[0], -lateral[1])
+    return lateral
+
+
 def _compact_pose(request: PlacementInput, part: PlacementPart) -> SymbolPose:
     """The pose whose box is smallest along the chain — the seed's own choice.
 
@@ -1361,8 +1522,25 @@ def _owner_for(
     part_id: str,
     placed: set[str],
     ranks: Mapping[str, int],
+    *,
+    order_first: bool = False,
 ) -> str:
-    """The neighbour this part should hang off: most shared pins, then rank, then id."""
+    """The neighbour this part should hang off: most shared pins, then rank, then id.
+
+    ``order_first`` (D1, the folding seed only) reads an ``above`` / ``below`` /
+    ``left-of`` / ``right-of`` the grammar states about this part **before** the
+    pin count: that relation names the node the branch is drawn against, so
+    hanging it off any other neighbour is how ``below(C10, U5)`` ends up measured
+    between C10 and whatever happened to share the most pins.
+    """
+    if order_first:
+        for relation in request.relations:
+            if relation.kind not in (ABOVE, BELOW, LEFT_OF, RIGHT_OF):
+                continue
+            if relation.subject == part_id and relation.object in placed:
+                return relation.object
+            if relation.object == part_id and relation.subject in placed:
+                return relation.subject
     mine = _part_nets(request, part_id)
     best: tuple[tuple[int, int, str], str] | None = None
     for owner in sorted(placed):
@@ -1388,7 +1566,32 @@ def _branch_side(
     The branch's "other net" — the one it does not share with its owner — is what
     says which way its body goes, which is the reading ``_branch_slot`` makes and
     the reason a decoupling capacitor sits between a pin and its rail.
+
+    An ``above`` / ``below`` the grammar states about **this** part is read first
+    (D1): it names the side outright, which outranks a net-class preference. The
+    flyback's ``below(C10, U5)`` is the case — C10 hangs off the feedback node,
+    its own net's class says nothing about which way, and the one-line seed never
+    read the statement at all.
     """
+    lateral = _unit(request.lateral)
+    for relation in request.relations:
+        if relation.kind in (ABOVE, BELOW):
+            if relation.subject == part_id:
+                return (0.0, 1.0) if relation.kind == ABOVE else (0.0, -1.0)
+            if relation.object == part_id:
+                return (0.0, -1.0) if relation.kind == ABOVE else (0.0, 1.0)
+            continue
+        if relation.kind in (LEFT_OF, RIGHT_OF):
+            # ``x`` is whether the *subject* sits on the +lateral side of the
+            # object; a part named as the object wants the opposite side.
+            wanted = 1.0 if relation.kind == RIGHT_OF else -1.0
+            if relation.subject == part_id:
+                sign = wanted
+            elif relation.object == part_id:
+                sign = -wanted
+            else:
+                continue
+            return lateral if sign * lateral[0] > 0 else (-lateral[0], -lateral[1])
     mine = _part_nets(request, part_id)
     theirs = _part_nets(request, owner) if owner else {}
     own = sorted(set(mine.values()) - set(theirs.values()))

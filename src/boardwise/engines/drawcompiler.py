@@ -2590,6 +2590,10 @@ def _topology_request(ctx: _Context) -> placement.PlacementInput:
     )
     return placement.PlacementInput(
         parts=tuple(parts), nets=nets, relations=relations,
+        # D1: the chain is stated so the seed can **fold** at an order kind
+        # between two chain nodes. Only the topology round passes it, so every
+        # page the ladder already draws keeps the one-line seed byte for byte.
+        chain=frozenset(ctx.chain),
         flag_seats=_flag_seats(ctx),
         progress=ctx.progress, lateral=ctx.lateral(),
         side_preferences={

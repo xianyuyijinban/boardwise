@@ -417,6 +417,14 @@ def test_098_scene08_refusal_is_byte_identical_to_the_recorded_baseline():
     换成了闸自己量出的那对。几何一个字节没动（515A 的零移动闸：80 张 svg/json
     全部 byte-identical）。旧字节留在
     ``098_scene08_narrow_refused.pre515a.txt``，三版可对拍。
+
+    **D1 重钉**：``4a78e930…`` → ``1e7a8583…``，差异**只有一行、仍是拒因文本**：
+    ``topology-search:`` 行从「the relation left-of(C2, U1) is not honoured …」换成
+    「the smallest legal layout … is at least 379 x 220 canvas units …，the stated
+    region is 300 x 200」——D1 的折返 seed 让拓扑轮在这张小页上**过了关系闸**，
+    拒绝理由因此退回到页面装不下（该场景本就不产出图，几何无物可动）。旧字节留在
+    ``098_scene08_narrow_refused.pre_d1.txt``，四版可对拍。同批 088/088b/053b
+    预览测试 152 passed，053b/056/115 除本条外全绿。
     """
     baseline = (
         ROOT / "outputs" / "114" / "previews" / "098"
