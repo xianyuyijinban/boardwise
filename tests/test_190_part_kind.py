@@ -608,7 +608,8 @@ def test_the_output_side_carries_a_threshold_now_instead_of_a_downgrade():
 
     190 reached for the right distinction and answered with a severity step
     because the threshold was the same 200 mil everywhere. 191D gives the output
-    side a number of its own (500 mil, ``DECAP_TIER_MIL``), so the step is gone:
+    side a number of its own (800 mil since 岳 2026-10-19, ``DECAP_TIER_MIL``), so
+    the step is gone:
     a 360 mil gap on this IC's ``VOUT`` rail is now **inside its tier** and the
     rule says nothing at all, while the same gap on a ``VCC`` pin is over the
     200 mil consumer line. The four tiers have their own anchors in
@@ -616,15 +617,15 @@ def test_the_output_side_carries_a_threshold_now_instead_of_a_downgrade():
     text is not produced any more.
     """
     assert DecapDistance().check(_decap_ctx("VOUT", cap_x=400.0)) == [], (
-        "360 mil is inside the 稳压器输出档 500 mil line — 190's INFO row was a "
+        "360 mil is inside the 稳压器输出档 800 mil line — 190's INFO row was a "
         "stand-in for a threshold, and the threshold is here"
     )
     # Over the output tier's own line it is a WARN now, like every other tier.
-    (row,) = DecapDistance().check(_decap_ctx("VOUT", cap_x=600.0))
+    (row,) = DecapDistance().check(_decap_ctx("VOUT", cap_x=900.0))
     assert row.severity == "WARN"
-    assert "稳压器输出档 500 mil，实测 560.0 mil" in row.message
+    assert "稳压器输出档 800 mil，实测 860.0 mil" in row.message
     assert "降一级为 INFO" not in row.message
-    assert row.target.measurement["value"] == 560.0
+    assert row.target.measurement["value"] == 860.0
 
 
 def test_a_vin_side_and_an_undeclared_side_keep_the_warn():

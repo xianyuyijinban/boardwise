@@ -323,16 +323,17 @@ def test_the_pcb_rules_measure_the_kicad_board():
     rows = _by_rule(findings)
     (spacing,) = rows["pcb-component-spacing"]
     assert spacing.severity == "WARN" and "C2 and R3 are 5.9 mil apart" in spacing.message
-    # C2's row on U1's own **VOUT** rail is a WARN again since 191D (岳
-    # 2026-10-17): 190 had dropped it one step to INFO because the threshold was
-    # the same 200 mil on every rail, and 191D gave that rail a threshold of its
-    # own — 567.2 mil is over the 稳压器输出档 line of 500, so severity is one
-    # rule again. The measurement and the rail attribution are unchanged;
-    # `pcb-decap-distance` is still the only rule whose severity moved here.
+    # C2's row on U1's own **VOUT** rail: 191D gave that rail a threshold of its
+    # own, and 岳 2026-10-19 widened it (500 -> 800) because 「稳压器输出可以偏松
+    # 一点」. 567.2 mil is now **inside** that tier, so the row is silent — a
+    # severity that moved because the number moved, not because the reading did.
+    # The measurement and the rail attribution are unchanged, and the tier is
+    # still named when a VOUT row *is* over its line (`test_190_part_kind`).
     decap = [f for f in rows["pcb-decap-distance"] if "C2" in f.message]
-    assert [f.severity for f in decap] == ["WARN"]
-    assert "VOUT" in decap[0].message and "567.2 mil" in decap[0].message
-    assert "稳压器输出档 500 mil，实测 567.2 mil" in decap[0].message
+    assert decap == [], (
+        "567.2 mil is inside 稳压器输出档 800 mil since 517: "
+        f"{[f.message for f in decap]}"
+    )
     assert not any(f.severity == "ERROR" for f in rows.get("pcb-footprint-consistency", [])), (
         "the KiCad library nickname no longer reads as a package family"
     )

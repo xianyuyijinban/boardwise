@@ -190,7 +190,13 @@ DECAP_TIER_UNDECLARED = "侧别读不出档"
 DECAP_TIER_MIL: dict[str, float] = {
     DECAP_TIER_CONSUMER: DECAP_DISTANCE_MIL,
     DECAP_TIER_REGULATOR_IN: 300.0,
-    DECAP_TIER_REGULATOR_OUT: 500.0,
+    # 岳 2026-10-19：「稳压器输出的去耦距离可以偏松一点，重点是输入侧是否有
+    # 去耦滤波。」 The output side moved 500 → 800 for that reason, and the input
+    # side gained a severity instead of a number (see `_no_candidate_severity`):
+    # the input capacitor is what the regulator's own loop stands on, so "this
+    # rail is some regulator's input and the board put no capacitor on it" is a
+    # defect the layout can state without a datasheet, not a question to look up.
+    DECAP_TIER_REGULATOR_OUT: 800.0,
     DECAP_TIER_UNDECLARED: DECAP_DISTANCE_MIL,
 }
 
@@ -915,6 +921,9 @@ class DecapDistance(PcbRule):
                 return [
                     Finding(
                         rule_id=self.id,
+                        # INFO even on the regulator-input tier: bulk is still a
+                        # capacitor, and "the pool is all bulk" is a statement
+                        # about its size, not about the rail having no filtering.
                         severity="INFO",
                         level=self.level,
                         message=(
@@ -940,7 +949,17 @@ class DecapDistance(PcbRule):
             return [
                 Finding(
                     rule_id=self.id,
-                    severity="INFO",
+                    # A regulator-input rail with **no bridging capacitor at all**
+                    # is the one case this rule may raise: see
+                    # `_no_candidate_severity`. Every other emptiness stays INFO —
+                    # including "four capacitors, all between the HF ceiling and
+                    # the bulk floor", which is a statement about the classifier
+                    # (measured on 毕设FOC's +5V: C23 22uF bulk, three 2.2uF in the
+                    # band, C30 with no value) and must not be reported as a rail
+                    # with no filtering.
+                    severity=(
+                        _no_candidate_severity(tier) if not candidates else "INFO"
+                    ),
                     level=self.level,
                     message=(
                         f"{designator} sits on the supply net {net!r}, and no "
@@ -948,7 +967,14 @@ class DecapDistance(PcbRule):
                         f"ground was found on the net — whether one is required "
                         f"is the datasheet's required_caps question "
                         f"(decap-required-caps); this row says only that the "
-                        f"layout has none to place；{attribution.short}"
+                        f"layout has none to place"
+                        + (
+                            "；this is a **regulator input** rail, where the "
+                            "input capacitor is what the regulator's loop stands "
+                            "on (岳 2026-10-19)"
+                            if _no_candidate_severity(tier) == "WARN" else ""
+                        )
+                        + f"；{attribution.short}"
                     ),
                     evidence=[
                         f"{designator} @ {net} (no high-frequency capacitor)",
@@ -1128,6 +1154,32 @@ class DecapRailTier:
     def limit(self) -> float:
         """This tier's threshold, in mils, out of :data:`DECAP_TIER_MIL`."""
         return DECAP_TIER_MIL[self.name]
+
+
+def _no_candidate_severity(tier: DecapRailTier | None) -> str:
+    """How loud 「这条网上一个去耦电容都没有」 is, by rail tier (岳 2026-10-19).
+
+    The rule's default is INFO, and its docstring gives the reason: *whether a
+    rail needs a capacitor* is the datasheet's ``required_caps`` question
+    (``decap-required-caps``), and a layout rule that invented the requirement
+    would be claiming a fact it does not have. The union of that reasoning is
+    **not** the same on every tier, though, and the check already knows the tier
+    before it looks:
+
+    * a rail that is **some regulator's input** with no grounded capacitor on it
+      is not a question to look up. The input capacitor is what the regulator's
+      loop stands on — without it the switching current runs through whatever
+      supplies the rail, and every datasheet in the family asks for it. 岳 put
+      the emphasis here himself (「重点是输入侧是否有去耦滤波」), so this tier's
+      empty pool is a **WARN**.
+    * on every other tier the silence stays INFO. The output side in particular:
+      岳 ruled its distance may be loose, which is not a claim that a missing
+      output capacitor is fine — it is a claim that *where* it sits is the
+      datasheet's business more than the layout's.
+    """
+    if tier is not None and tier.name == DECAP_TIER_REGULATOR_IN:
+        return "WARN"
+    return "INFO"
 
 
 def _tier_of_name(text: str) -> str | None:

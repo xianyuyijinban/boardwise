@@ -146,7 +146,7 @@ def _ctx_of(pin_name: str, *, cap_x: float) -> PcbReviewContext:
 
 
 def test_the_tier_table_is_the_four_numbers_the_ruling_names():
-    """200 / 300 / 500 / 200 mil, and the base two are the constant 126b pinned.
+    """200 / 300 / 800 / 200 mil, and the base two are the constant 126b pinned.
 
     The exercise is that the number a finding prints and the number it compares
     against are **one value**: both come out of :data:`DECAP_TIER_MIL`, and the
@@ -161,7 +161,7 @@ def test_the_tier_table_is_the_four_numbers_the_ruling_names():
     assert DECAP_TIER_MIL == {
         DECAP_TIER_CONSUMER: 200.0,
         DECAP_TIER_REGULATOR_IN: 300.0,
-        DECAP_TIER_REGULATOR_OUT: 500.0,
+        DECAP_TIER_REGULATOR_OUT: 800.0,
         DECAP_TIER_UNDECLARED: 200.0,
     }
     assert DECAP_TIER_MIL[DECAP_TIER_CONSUMER] == DECAP_DISTANCE_MIL
@@ -215,7 +215,7 @@ def test_the_pin_table_splits_the_consumer_names_from_the_regulator_input():
     [
         ("VCC", "消耗端供电脚档", 200.0),
         ("VIN", "稳压器输入档", 300.0),
-        ("VOUT", "稳压器输出档", 500.0),
+        ("VOUT", "稳压器输出档", 800.0),
         ("1", "侧别读不出档", 200.0),
     ],
 )
@@ -279,8 +279,8 @@ def test_the_tier_is_read_from_this_parts_own_pins_on_that_net():
     assert _decap_rail_tier(component, "nowhere").name == DECAP_TIER_UNDECLARED
 
     output = _decap_rail_tier(component, "3V3")
-    assert output.limit == 500.0
-    assert "pin 2 ('VOUT')" in output.why and "500" in output.why
+    assert output.limit == 800.0
+    assert "pin 2 ('VOUT')" in output.why and "800" in output.why
     undeclared = _decap_rail_tier(component, "FB1")
     assert undeclared.limit == DECAP_DISTANCE_MIL
     assert "no pin of U1" in undeclared.why
@@ -384,3 +384,101 @@ def test_the_foc_pack_quotes_the_consumer_tier_figure():
         assert tier is not None, pin_name
     assert _tier_pin("VM") == DECAP_TIER_CONSUMER
     assert _tier_pin("DVDD") == DECAP_TIER_CONSUMER
+
+
+# ---------------------------------------------------------------------------
+# 6. 岳 2026-10-19: 输入侧「有没有滤波」是 WARN, 其余档仍是 INFO
+# ---------------------------------------------------------------------------
+
+
+def _no_capacitor(pin_name: str) -> list:
+    """One IC alone on the page: its rail has no bridging capacitor at all."""
+    ic = _comp(
+        "U1",
+        pins=[("1", pin_name, RAIL), ("2", "OUT", "SIG"), ("3", "GND", "GND")],
+    )
+    model = _model([ic])
+    board = BoardGeometry(
+        source="synthetic",
+        name="SYNTH",
+        components=[_place("U1", 0.0, 0.0)],
+        pads=[
+            _pad("U1", "1", x=0.0, y=0.0, net=RAIL),
+            _pad("U1", "2", x=0.0, y=20.0, net="SIG"),
+            _pad("U1", "3", x=0.0, y=40.0, net="GND"),
+        ],
+    )
+    return DecapDistance().check(_ctx(board, model))
+
+
+def test_a_regulator_input_rail_with_no_capacitor_at_all_is_a_warn():
+    """岳 2026-10-19「重点是输入侧是否有去耦滤波」.
+
+    The rule's default for an empty pool is INFO because *whether a rail needs a
+    capacitor* is the datasheet's question. A rail that is some **regulator's
+    input** is the exception: the input capacitor is what the regulator's loop
+    stands on, so "this board put nothing on it" is a layout defect the rule can
+    state without a datasheet. This is the only emptiness that is raised.
+    """
+    (row,) = _no_capacitor("VIN")
+    assert row.severity == "WARN", row.message
+    assert "regulator input" in row.message
+    assert row.target.component_ref == "U1"
+    assert row.target.net_refs == [RAIL]
+
+
+def test_a_consumer_rail_with_no_capacitor_stays_info():
+    """The same emptiness on a rail the part *eats* is still a question to look up.
+
+    ``VDD`` is the 消耗端供电脚 tier (200 mil), not the regulator-input one, and
+    raising it would be this rule inventing a requirement the datasheet owns.
+    """
+    (row,) = _no_capacitor("VDD")
+    assert row.severity == "INFO", row.message
+    assert "regulator input" not in row.message
+
+
+def test_a_pool_that_is_all_bulk_or_unclassified_stays_info_even_on_the_input_tier():
+    """毕设FOC's ``+5V`` — four capacitors, none of them in either pool.
+
+    ``C23`` is 22 uF (bulk), three 2.2 uF sit between the 1 uF HF ceiling and the
+    10 uF bulk floor, and ``C30`` states no value. That is a statement about the
+    classifier, not about the rail having no filtering, so it must not be raised
+    to WARN — measured 2026-10-19 while landing the input-tier rule.
+    """
+    ic = _comp(
+        "U1",
+        pins=[("1", "VIN", RAIL), ("2", "OUT", "SIG"), ("3", "GND", "GND")],
+    )
+    caps = [
+        _comp("C1", value="22uF", pins=[("1", "1", RAIL), ("2", "2", BRIDGE)]),
+        _comp("C2", value="2.2uF", pins=[("1", "1", RAIL), ("2", "2", BRIDGE)]),
+        _comp("C3", value="", pins=[("1", "1", RAIL), ("2", "2", BRIDGE)]),
+    ]
+    model = _model([ic, *caps])
+    board = BoardGeometry(
+        source="synthetic",
+        name="SYNTH",
+        components=[
+            _place("U1", 0.0, 0.0),
+            _place("C1", 400.0, 0.0),
+            _place("C2", 500.0, 0.0),
+            _place("C3", 600.0, 0.0),
+        ],
+        pads=[
+            _pad("U1", "1", x=0.0, y=0.0, net=RAIL),
+            _pad("U1", "2", x=0.0, y=20.0, net="SIG"),
+            _pad("U1", "3", x=0.0, y=40.0, net="GND"),
+            _pad("C1", "1", x=400.0, y=0.0, net=RAIL),
+            _pad("C1", "2", x=400.0, y=20.0, net=BRIDGE),
+            _pad("C2", "1", x=500.0, y=0.0, net=RAIL),
+            _pad("C2", "2", x=500.0, y=20.0, net=BRIDGE),
+            _pad("C3", "1", x=600.0, y=0.0, net=RAIL),
+            _pad("C3", "2", x=600.0, y=20.0, net=BRIDGE),
+        ],
+    )
+    rows = DecapDistance().check(_ctx(board, model))
+    assert rows, "the (IC, net) pair still produces a row"
+    assert all(row.severity == "INFO" for row in rows), [
+        (row.severity, row.message) for row in rows
+    ]
