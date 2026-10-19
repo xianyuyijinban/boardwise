@@ -4,6 +4,45 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-10-19] 525：外部算法推演的六轮实验收口 —— 算法不是瓶颈，两处真缺陷
+
+岳把 `docs/drawing-algorithm-brief.md` 给外部算法专家（GPT）推演，对方给出「层次化构造 + CP-SAT 约束求解 +
+布线可行性反馈 + 字典序优化」，并建议最小实验是**只替换 topology 轮的布局求解器**。六轮实验在
+`.tmp_cpsat`（worktree，detached `16ba3f0`，独立 `.venv_exp` 装 ortools —— 发布 venv 零依赖未被碰）全部跑完：
+
+| 轮 | 做法 | 读数 |
+|---|---|---|
+| E1/E2/E3 | CP-SAT 替换布局求解器（纯可行 / 加直连走廊 / 失败网回灌） | 33/33 关系全中、零重叠、同晶格，**0.20–0.51 s 全 OPTIMAL**；19 个解 **0 布通** |
+| T1 压缩 | 关系不许破的前提下压紧（面积/宽高比/主环带） | 面积 −68%、3:1、occupied 60%，13 次 compile **0 布通**，失败从 corridor **前移**到 readability |
+| T2 探针 | 人类坐标 vs CP-SAT 解，逐网独立 BFS 可达性 | 人类坐标 **7 条义务网全是真线**、1 候选；CP-SAT 解 **21 个 pin 尖埋在邻居的 value 行里**；预测一致率 93.3% |
+| T3 分层 | 主环→次环→外围，层内带优化目标 | **0.094 s** 出首解，19 件压到 314×105（occupied 60.3%）；14 个布局 **0 布通** |
+| T4 文字回填 | 真实文字盒 + pin 净空进 CP-SAT | 跨器件 bury **4/8/3/3 → 0/0/0/0**（2×2 正交：决定性的是 pin 净空，不是 texts 进重叠约束）；**仍 0 布通** |
+| T5 缺陷验证 | 追那条 `netlist-partition-mismatch` | 定位到 `_elbow_route` 拐点漏检；修后 partition **1 → 0** |
+
+**结论：算法不是瓶颈。**「缺高质量布局候选」被证伪 —— CP-SAT 0.2 s 给出 33 条关系全满足的布局，
+19 个都布不通。GPT 的两阶段判断对了一半：布局确实能解，但"好布局"也不够。**CP-SAT 不进产品**
+（买不到候选，且 ortools 撞零依赖底线）；探针（5 s 内给布局打分，把人类坐标 286 分 / 全部 CP-SAT 解 ≥318 分
+严格分开）值得留作体检工具。
+
+**两处真缺陷（本批修）**：
+
+1. **`_elbow_route` 拐点漏检**（`drawcompiler.py:6758`）：拐点是画出来的顶点，落在 `router.blocked` 点名的
+   引脚上就是连接。两道闸都看不见它 —— `_span_free` 走 `_strictly_on_segment`（开头就 `point == start or
+   point == end → False`，端点不在被检区间），`_vertex_clear` 只问异网导线、不问引脚。实测同一布局
+   `pins[C5.2]+pins[R15.2]+pins[T1.1]+pins[T1.2]` 被并成一个节点；补一行 `if _key(_rounded(corner)) in
+   blocked: continue` 后 partition 消失、HVDC 主干改道绕开 T1.2。
+2. **布局模型缺 pin/文字行净空**：`placement.part_box` 是「body + every pin tip」，**不含 texts**，而文字锚点
+   是宿主实测、不随位姿转（147）。于是器件盒互不相交、pin 尖互不重合，邻居的 `'17.8k 1% TH'` 照样盖住
+   pin 尖 —— 那个尖是 router 的墙节点（`_blocked_points`），线头永远落不下去。新增
+   `placement._pin_text_term`（`W_PIN_TEXT=8`、`PIN_TEXT_EDGE=0.5`，**仅 topology 轮开**，与 `pin_clearance`
+   同规矩）。权重标定有实测依据：20 时搜索用 `right-of(C10,U5)` 的 2.5 单位换 burial；8 时关系优先。
+
+**读数**：`pin-text **1.5**（3 个尖在行边，关系锁死推不动）/ 33 条关系全过 / compile **14.3 s**`（此前 10.7 s）。
+新增回归 7 条（`tests/test_525_pin_text_row.py`），变异验证 2/2 均红（行高 10→11、埋深恒 0）。
+
+**未解决（下一步）**：拓扑轮的阻塞前移到**直连走廊**（`FB_SENSE` / `SW` / `SEC_12V` 轮换），仍 0 candidate；
+`restarts=8` 也过不去（47 s，换一条网）。走廊需要新的一批（201D 文本行代价 + 网名行占位的雏形）。
+
 ## [2026-10-18] v0.5.17：v0.5.16 挖洞补做，修掉 521/522 的核心绕过
 
 **v0.5.16 是在没做挖洞闸的情况下发的**（岳当场指出）。补做 5 缝只读 swarm（寻址/下载/缓存/审计 · 521 六道闸 · 档位装载 · 规则分派 · 报告与既有测试），

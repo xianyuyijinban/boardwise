@@ -35,6 +35,14 @@
   （11 → 39 个名字，0/15 → 0/15）。证据 `outputs/520/evidence.md`。
 - **审查线 · 其他**：L2c 搜索兜底（工具侧已就绪，harness 侧未接）、`facts_verified` 三档。
 - **绘图线（搁置）**：`net 'SW'` 直连走廊、区域概念（核心/外置件的判据需岳定）。
+- **绘图线 · 525（工作树，等提交）**：外部算法推演的六轮实验已收口 —— **算法不是瓶颈**。
+  两处**真缺陷**已修：① `_elbow_route` 拐点漏检（拐点是两条腿的端点，`_span_free` 用
+  `_strictly_on_segment` 不含端点、`_vertex_clear` 只问异网导线 → 拐点落在 blocked 引脚上会静默并点，
+  实测 `netlist-partition-mismatch` 1→0）；② 布局模型缺 **pin/文字行净空**（`part_box` 不含 texts，
+  21/21 被埋 pin 尖都在邻居 value 行里 → 该 pin 是 router 的墙节点，线头永远落不下去）。
+  新增 `placement.pin-text`（`W_PIN_TEXT=8`、`PIN_TEXT_EDGE=0.5`，仅 topology 轮开）：
+  读数 **pin-text 1.5（3 个尖在行边）/ 33 条关系全过 / compile 14.3 s**。
+  修完后拓扑轮的阻塞**前移**到直连走廊（`FB_SENSE`/`SW` 轮换），仍 0 candidate —— 走廊是下一批。
 - **存量打磨**：岳跑测试用例 → 反馈 → 修复，循环。
 
 ## 待岳拍板（不排期就不动）

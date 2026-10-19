@@ -2632,6 +2632,12 @@ def _topology_request(ctx: _Context) -> placement.PlacementInput:
             # `_place_chain_and_shelf` honours and `readability._check_locks`
             # measures (a lock differs by a hair is a lock ignored).
             locked_origin=(lock.x, lock.y) if lock is not None else None,
+            # The value row's width is the host's own string, so the search has
+            # to be handed the same string the compiler will print. Nothing else
+            # reads it — a part with no value states no row, and the term is off
+            # unless the request turns it on.
+            value=(ctx.circuit.part(part_id).value
+                   if ctx.circuit.part(part_id) is not None else ""),
         ))
     nets = tuple(
         placement.PlacementNet(
@@ -2665,6 +2671,13 @@ def _topology_request(ctx: _Context) -> placement.PlacementInput:
         # request states it, so the ladder's pages keep their cost list byte for
         # byte — the zero-move gate (`tools/116_no_move.py`) measures exactly that.
         pin_clearance=True,
+        # 525: the same round whose answer had **21 of 21** buried pin tips inside
+        # another part's value row (2026-10-19) — the term that was missing, and
+        # the one that explains why every layout of that board refused its
+        # obligations however compact it was. Off for the ladder, like its
+        # neighbour above: the zero-move gate measures that the ladder's pages
+        # keep their answer.
+        pin_text=True,
         progress=ctx.progress, lateral=ctx.lateral(),
         side_preferences={
             role: (ctx.presentation.side_for(role) or fallback)
@@ -6754,6 +6767,13 @@ def _elbow_route(
             straight = [start, end]
             if _span_free(router, start, end, blocked):
                 return straight
+            continue
+        # The corner itself is a drawn vertex, and a vertex on a foreign pin /
+        # label is a connection the netlist would then show. Neither leg's
+        # `_span_free` can see it: that test is `_strictly_on_segment`, which
+        # excludes both ends by construction, and the corner is an end of *both*
+        # legs. `_vertex_clear` asks about foreign wires, not blocked points.
+        if _key(_rounded(corner)) in blocked:
             continue
         if not _span_free(router, start, corner, blocked):
             continue

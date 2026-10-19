@@ -66,6 +66,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from ..core.geometry import transform_point
 from ..core.symbolprofile import Box, SymbolPose, SymbolProfile, pose_box
+from ..core.textmetrics import render_width
 
 #: What a caller writes into a report that names the placement it used.
 PLACEMENT_NAME = "boardwise-placement/1"
@@ -187,6 +188,62 @@ PIN_CLEARANCE_GRID = 2.0
 #: one fault the plan cannot draw past.
 W_PIN_CLEARANCE = 40.0
 
+#: What it costs for a pin tip to sit **inside another part's text row**, per
+#: unit of burial depth.
+#:
+#: The second obstacle the term list could not see, and it is the one that
+#: mattered most. A part's designator and value are drawn at anchors its
+#: **symbol** declares, and the host does not turn those rows with the pose
+#: (`drawcompiler._declared_rows`, 147's measurement; the offsets are read off
+#: the part's origin in the page frame). `placement.part_box` is
+#: "drawn body + every pin tip" — it carries no texts — so two parts can keep
+#: every body box apart, keep every relation, and still have a neighbour's value
+#: row land exactly on a pin tip. That tip is then a wall for the router
+#: (`_blocked_points`), and the net that owns it can never be drawn: measured
+#: 2026-10-19 on the flyback, **21 of 21** buried tips were inside another
+#: part's value row, and every one of them belonged to a net whose direct-wire
+#: obligation was then refused.
+#:
+#: Depth, not a flat penalty: the search needs a gradient to push a tip out of a
+#: 40–85 unit wide row, and a flat cost gives it the same reading at the middle
+#: of the row as at its edge.
+#:
+#: The row's height is :data:`TEXT_ROW_HEIGHT`, which **must** equal
+#: `drawcompiler.TEXT_ROW_HEIGHT` (10.0) — a test pins the two together
+#: (`test_525_pin_text_row.test_the_two_text_row_heights_agree`), because a box
+#: that is taller than the drawn row prices a collision no reader can see.
+#:
+#: **Below** :data:`W_RELATION` on purpose. The relations are the grammar's
+#: promises and the term list's own doctrine is that compactness "must never
+#: outbid a relation"; a burial is a *downstream* obstruction (the router cannot
+#: land on the tip) while a missed relation is the drawing saying the wrong thing
+#: about the circuit. Measured 2026-10-19 on the flyback: at 20.0 the search
+#: cleared every burial but traded `right-of(C10, U5)` away by 2.5 units (one
+#: half-lattice) to do it — 25 units of relation bought with a term worth 20 per
+#: unit of depth. At 8.0 a 10-unit burial costs less than one relation missed by
+#: 10 units, so the relation is repaired first and the burial is cleared out of
+#: what remains.
+W_PIN_TEXT = 8.0
+
+#: The height of one symbol text row. Same number as
+#: `drawcompiler.TEXT_ROW_HEIGHT`; see :data:`W_PIN_TEXT`.
+TEXT_ROW_HEIGHT = 10.0
+
+#: What a pin tip **on** a row's edge counts as, in units of burial depth (see
+#: :func:`_burial_depth`). The router's wall test includes the far edge, so an
+#: edge tip cannot receive a wire end; a bare depth of 0 would read as "free" and
+#: leave the search no gradient at all. Half a lattice step: an edge tip prices
+#: below one a unit inside the row, and far below a missed relation.
+#:
+#: Small because it has to be, not because the edge is harmless. Measured
+#: 2026-10-19 on the flyback: at 0.5 the search leaves 3 tips on edges
+#: (`pin-text` 1.5 of a 33-relation-keeping answer); at 2.0 it leaves 4
+#: (`pin-text` 8.0) — the relations hold both times, so the tips are pinned by
+#: the grammar, not by the weight. What the term buys at this value is honest
+#: **bookkeeping**: an answer that keeps tips off edges reads 0, and one that
+#: does not says so in its cost list instead of looking clean.
+PIN_TEXT_EDGE = 0.5
+
 #: The sides a net class prefers, when the caller states nothing (053 sec.2's
 #: presentation defaults).
 DEFAULT_SIDE_PREFERENCES: Mapping[str, str] = {
@@ -283,6 +340,11 @@ class PlacementPart:
     #: may not quietly ignore, broken by the solver that never read it. Set
     #: together with ``locked``; ``None`` poses the part free.
     locked_origin: tuple[float, float] | None = None
+    #: The part's value string (``"17.8k 1% TH"``), used **only** to size its
+    #: value row for :func:`_pin_text_term`. Empty means the caller did not
+    #: state one, and that row is then not measured — the same reading
+    #: `drawcompiler._declared_rows` makes (a row with no text has no box).
+    value: str = ""
 
     def __post_init__(self) -> None:
         if not self.part_id:
@@ -392,6 +454,18 @@ class PlacementInput:
     #: ends to one net is a real (if silly) circuit, and nothing is joined that was
     #: not already joined.
     pin_clearance: bool = False
+    #: Price a pin tip sitting inside **another part's** text row
+    #: (:func:`_pin_text_term`). Off by default for the same reason
+    #: ``pin_clearance`` is: only the topology round states it, so every page the
+    #: ladder already draws keeps its cost list — and its answer — byte for byte
+    #: (`tools/116_no_move.py` measures exactly that).
+    #:
+    #: A part's **own** row may cover its own tip and is not priced: a symbol's
+    #: anchors and its pins are the library's geometry, not a placement decision.
+    #: Measured 2026-10-19: C5, C10, D1 and D3 each declare one legal pose, and
+    #: their own value rows already cover their own tips — pricing that is
+    #: infeasible on the request's own terms (`experiments/textfit/self_burial.txt`).
+    pin_text: bool = False
     progress: tuple[float, float] = (1.0, 0.0)
     lateral: tuple[float, float] = (0.0, 1.0)
     side_preferences: Mapping[str, str] = field(
@@ -1114,6 +1188,12 @@ def evaluate(request: PlacementInput, state: _State) -> list[CostTerm]:
     if request.pin_clearance:
         out.append(_pin_clearance_term(request, pins))
 
+    # 4e. the same tip test, against **text rows** instead of tips (see
+    #     W_PIN_TEXT). A neighbour's designator/value row is drawn where its
+    #     symbol says, so a tip inside one is a tip the router cannot land on.
+    if request.pin_text:
+        out.append(_pin_text_term(request, state, pins))
+
     # 5. the three hard ones.
     out.append(_page_term(request, boxes))
     out.append(_keepout_term(request, boxes))
@@ -1359,6 +1439,138 @@ def _pin_clearance_term(
     )
 
 
+def text_rows(
+    request: PlacementInput, part_id: str, origin: tuple[float, float]
+) -> list[tuple[str, str, Box]]:
+    """``(kind, text, box)`` for every row this part's **symbol** declares.
+
+    The same reading `drawcompiler._declared_rows` makes, and deliberately so:
+    one model of where the host paints, in the module that has to move parts away
+    from those rows. The anchor is an offset from the part's origin in the
+    **page frame** — the host does not turn a row with the pose (147's
+    measurement, `outputs/147/20_text_row_pose.txt`) — and the row is
+    :data:`TEXT_ROW_HEIGHT` tall and as wide as the host's own ruler says
+    (:func:`boardwise.core.textmetrics.render_width`).
+
+    A symbol that declares no anchors returns nothing, and every profile written
+    before 146 does: a library without measurements compiles exactly as it did.
+    """
+    part = request.part(part_id)
+    out: list[tuple[str, str, Box]] = []
+    for declared in part.profile.texts:
+        if declared.x is None or declared.y is None:
+            continue
+        if declared.kind == "reference":
+            text = part_id
+        elif declared.kind == "value":
+            text = part.value
+        else:
+            continue
+        if not text:
+            continue
+        anchor = (origin[0] + declared.x, origin[1] + declared.y)
+        width = render_width(text)
+        out.append((
+            declared.kind,
+            text,
+            (anchor[0], anchor[1], anchor[0] + width, anchor[1] + TEXT_ROW_HEIGHT),
+        ))
+    return out
+
+
+def _burial_depth(point: tuple[float, float], box: Box) -> float:
+    """How deep inside ``box`` the point sits; ``0`` when it is outside.
+
+    The **least** distance to the four edges: a tip in the row's middle is buried
+    by half the row's short side. That gradient is what the search needs (see
+    :data:`W_PIN_TEXT`); a flat cost reads the same at every depth.
+
+    A tip **on an edge** counts, at :data:`PIN_TEXT_EDGE`. The router's
+    ``_wall`` is `box0 - 1e-6 < x < box2 + 1e-6` — the far edge included — so a
+    tip exactly on a row's edge is a wall node there and cannot receive a wire
+    end, even though the depth is zero. Measured 2026-10-19: `C5.1` sits on its
+    own row's lower edge, and the edge case is what `experiments/textfit/
+    self_burial.txt` reports for four symbols. Without the bump the term would
+    read 0 for a tip the router refuses, and the search would have no gradient
+    to move it (a bare `depth` is 0 at the edge, so the cost would be 0 and the
+    move free to ignore).
+    """
+    depth = min(
+        point[0] - box[0], box[2] - point[0],
+        point[1] - box[1], box[3] - point[1],
+    )
+    if depth < 0.0:
+        return 0.0
+    return depth + PIN_TEXT_EDGE
+
+
+def _pin_text_term(
+    request: PlacementInput,
+    state: _State,
+    pins: Mapping[str, Mapping[str, tuple[float, float]]],
+) -> CostTerm:
+    """How deep the pin tips are buried in **another part's** text rows — priced.
+
+    The measured root of "no layout routes". `part_box` is "drawn body + every
+    pin tip", so the term list above sees no texts at all and two parts can keep
+    every body apart, keep all 33 relations, and still have a neighbour's value
+    row cover a pin tip. A tip the router's `_blocked_points` calls a wall can
+    never receive a wire end, so the net that owns it is refused however the
+    parts are arranged (measured 2026-10-19: **21 of 21** buried tips in another
+    part's value row, every one on an obligated net).
+
+    A part's **own** row is not priced: its anchors and its pins are the
+    library's geometry, rotation and mirror conserve the relation between them,
+    and four of the flyback's symbols (C5, C10, D1, D3) declare one legal pose
+    each and already cover their own tips — pricing that is infeasible on the
+    request's own terms.
+    """
+    rows: dict[str, list[tuple[str, str, Box]]] = {}
+    for part in request.parts:
+        origin = state.origins.get(part.part_id)
+        if origin is None:
+            rows[part.part_id] = []
+            continue
+        rows[part.part_id] = text_rows(request, part.part_id, origin)
+    if not any(rows.values()):
+        return CostTerm(
+            "pin-text", 0.0,
+            "no part's symbol declares a text row, so there is nothing for a pin "
+            "tip to be buried in (the pre-146 library)",
+        )
+    total = 0.0
+    worst = ("", 0.0)
+    for owner in sorted(pins):
+        for pin in sorted(pins[owner]):
+            point = pins[owner][pin]
+            for other in sorted(rows):
+                if other == owner:
+                    # A part's own row may cover its own tip: the anchors and the
+                    # pins are the library's geometry, and four symbols of the
+                    # flyback declare one pose each with their own row over their
+                    # own tip (see the docstring above).
+                    continue
+                for kind, text, box in rows[other]:
+                    depth = _burial_depth(point, box)
+                    if depth <= 0.0:
+                        continue
+                    total += depth
+                    if depth > worst[1]:
+                        worst = (
+                            f"{owner}.{pin} {_point_text(point)} sits {depth:g} units "
+                            f"inside {other}'s {kind} row {text!r}",
+                            depth,
+                        )
+    return CostTerm(
+        "pin-text", total,
+        "how deep the pin tips sit inside another part's text row — a tip the "
+        "router's walls name can never receive a wire end, so the net that owns "
+        "it is refused however the parts are arranged "
+        + (f"— the worst is {worst[0]}" if worst[0]
+           else "— every tip is clear of every other part's rows"),
+    )
+
+
 def _point_text(point: tuple[float, float]) -> str:
     return f"({point[0]:g}, {point[1]:g})"
 
@@ -1391,6 +1603,8 @@ def _energy(terms: Iterable[CostTerm]) -> float:
             total += item.value * W_FLAG_ROOM
         elif item.name == "pin-clearance":
             total += item.value * W_PIN_CLEARANCE
+        elif item.name == "pin-text":
+            total += item.value * W_PIN_TEXT
     return total
 
 
