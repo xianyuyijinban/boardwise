@@ -1,0 +1,16 @@
+{
+  "intentVersion": 1,
+  "requirements": {
+    "rails": [
+      {"net": "HV", "voltage": "311V", "provenance": "user_stated"},
+      {"net": "U", "voltage": "311V", "provenance": "user_stated"},
+      {"net": "V", "voltage": "311V", "provenance": "user_stated"},
+      {"net": "W", "voltage": "311V", "provenance": "user_stated"},
+      {"net": "ACL", "voltage": "311V", "provenance": "user_stated"}
+    ],
+    "signals": [],
+    "buses": []
+  },
+  "blocks": [],
+  "decisions": []
+}
