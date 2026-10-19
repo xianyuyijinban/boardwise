@@ -589,6 +589,125 @@ def shelf_declaration(entry: object | None) -> str:
 _shelf_declaration = shelf_declaration
 
 
+def declared_category(entry: object | None, *, allow_machine: bool) -> str | None:
+    """The category a rule may read from ``entry``, or ``None`` when it may not.
+
+    **The tier gate, one reader at a time (527D3).** :func:`shelf_declaration` and
+    ``rules.facts._category_state`` are the two existing chokes on this read, and
+    each answers the question its own callers ask (「does the shelf declare a
+    *kind*?」, 「is this an IC, a non-IC, or cannot-tell?」). The fourteen direct
+    ``entry.category`` readers the 527D sweep measured were answers to a third
+    question — 「this rule's subject set is named by which category word」 — and
+    a gate re-implemented fourteen times is not a gate (192B ③'s own finding,
+    one layer down). This is the one read they all call, with the per-rule half
+    spelled as the same ``allow_machine`` keyword
+    ``rules.facts._category_state`` already takes.
+
+    The four answers, one per trust shape (522's tier discipline, no new tier
+    and no new vocabulary):
+
+    * ``category_trust == "verified"`` (or the field absent — every entry
+      written before 527D) → the category, whatever ``allow_machine`` says. A
+      human signed it, and no rule asks a signature to be stronger than a
+      signature.
+    * ``category_trust == "machine_verified"`` and ``allow_machine=True`` → the
+      category. The caller has already ruled (in its own task book / the table
+      in ``docs/parts.md``) that its output is a **number** — the rule turns the
+      class into a distance, a capacitance, a voltage — and 522's line lets the
+      machine tier drive a number.
+    * ``category_trust == "machine_verified"`` and ``allow_machine=False`` →
+      ``None``. The output is a **verdict** (「this is the MCU the reset rule
+      speaks to」), and a machine-granted class is exactly the conclusion 522
+      refuses to let drive one.
+    * ``category_trust == "candidate"`` → ``None`` **unconditionally** — the
+      sweep's H5: a draft is weaker than the evidence-checked tier, so it must
+      not slip through the ``allow_machine=True`` door the checked one had to
+      knock on (the same reading ``_category_state`` was fixed to make).
+
+    ``None`` is **not** "the shelf is silent" — that is ``None`` for a reason,
+    and a rule that folds it into its "no entry / no category" skip path has
+    rebuilt the hole this function exists to close: a real MCU whose class is
+    merely unsigned would fall out of the MCU rules silently. The caller
+    distinguishes the three states (accepted / gated / absent) with its own
+    read of ``category_trust`` — this function answers 「may I read it」, the
+    caller answers 「what do I say when I may not」.
+
+    ``facts_trust`` is deliberately **not** asked here, and neither is
+    ``category_provenance`` (527D2's citation record): the class's own tier is
+    the whole question — an entry with hand-signed parameters and a
+    machine-granted class is signed *about this field* exactly as far as
+    ``category_trust`` says, and the provenance is the evidence the tier talks
+    about, not a second tier to ask.
+    """
+    if entry is None:
+        return None
+    category = str(getattr(entry, "category", "") or "").strip()
+    if not category:
+        return None
+    tier = getattr(entry, "category_trust", "verified")
+    if tier == "candidate":
+        return None
+    if tier == "verified":
+        return category
+    if tier == "machine_verified":
+        return category if allow_machine else None
+    return None
+
+
+#: 527D3: the three answers a rule's 「is this part one of my subjects?」 question
+#: can get. Not three tiers — three *outcomes*, because the caller's next act is
+#: different for each and the bug this batch exists to close is the collapse of
+#: the last two into one ``None``.
+CATEGORY_ACCEPTED = "accepted"
+CATEGORY_GATED = "gated"
+CATEGORY_ABSENT = "absent"
+
+
+def category_verdict(
+    entry: object | None, categories: object, *, allow_machine: bool
+) -> str:
+    """Which of three states :func:`declared_category`'s ``None`` is hiding (527D3).
+
+    :func:`declared_category` answers 「may I read this entry's class」, and it
+    answers ``None`` for two very different reasons: the shelf **names a class
+    this rule may not act on** (a machine-granted class for a conclusion rule, or
+    a draft at any tier), and the shelf **names no class at all**. A rule that
+    tests ``declared_category(...) is None`` — or, worse, that folds the read
+    into its existing 「no entry / no category → skip」 path — has rebuilt the hole
+    this batch closes: a real MCU whose class merely nobody signed falls out of
+    the MCU rules with exactly the silence a mounting screw gets.
+
+    So the caller asks this instead, and gets one of:
+
+    * :data:`CATEGORY_ACCEPTED` — the shelf calls this part one of
+      ``categories`` at a tier this caller may read. Run the rule.
+    * :data:`CATEGORY_GATED` — the shelf calls it one of ``categories``, but at a
+      tier this caller may not read. The part **is** the rule's subject as far as
+      the shelf is concerned, so the rule owes it a row (UNKNOWN, or a finding
+      carrying :func:`boardwise.rules.facts.category_absent_reason`'s sentence) —
+      never the silence of a part that is not its subject at all.
+    * :data:`CATEGORY_ABSENT` — it is not one of ``categories`` (or the shelf says
+      nothing about it). Skip, as always: not this rule's object.
+
+    ``categories`` is the rule's own subject set (``MCU_CATEGORIES``,
+    ``REGULATOR_CATEGORIES``…), so the membership test is the same one the rule
+    used to write inline; the tier is the only thing that moved.
+
+    A draft (``candidate``) class is :data:`CATEGORY_GATED` at every tier, which
+    is the H5 isomorphism stated where it can be seen: it is a class the shelf
+    states and no reader may act on, so it owes the same disclosure a
+    machine-granted class owes rather than the silence of an unclassified part.
+    """
+    if entry is None:
+        return CATEGORY_ABSENT
+    category = str(getattr(entry, "category", "") or "").strip()
+    if not category or category not in categories:
+        return CATEGORY_ABSENT
+    if declared_category(entry, allow_machine=allow_machine) is not None:
+        return CATEGORY_ACCEPTED
+    return CATEGORY_GATED
+
+
 def classify_part(
     component: object | None = None,
     facts: PartDeclarations | None = None,
@@ -807,7 +926,12 @@ __all__ = [
     "THERMISTOR_WORDS",
     "TRANSFORMER_WORDS",
     "TRANSISTOR_WORDS",
+    "CATEGORY_ACCEPTED",
+    "CATEGORY_ABSENT",
+    "CATEGORY_GATED",
+    "category_verdict",
     "classify_part",
+    "declared_category",
     "declarations_of",
     "kind_of_category",
     "shelf_declaration",

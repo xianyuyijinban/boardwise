@@ -67,7 +67,16 @@ from dataclasses import dataclass, field
 from ..base import Finding, FindingTarget
 from ...core.measure import component_distance
 from ...core.model import is_ground_net
-from ...core.parts import category_of, resolve_component_facts
+from ...core.parts import (
+    FACTS_TRUST_VERIFIED,
+    category_of,
+    resolve_component_facts,
+)
+from ...core.partkind import (
+    CATEGORY_ABSENT,
+    CATEGORY_GATED,
+    category_verdict,
+)
 from ..decap import looks_like_capacitor
 from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
@@ -185,6 +194,11 @@ class McuReset:
 
     designator: str = ""
     category: str = ""
+    #: 527D3: which tier signed ``category``. Carried so the gate row can quote the
+    #: shelf's own tier in :func:`boardwise.rules.facts.category_absent_reason`'s
+    #: wording (a draft and a machine-granted class get different sentences and
+    #: different next acts) instead of guessing one from the other.
+    category_trust: str = FACTS_TRUST_VERIFIED
     board_model: object = None
     reset_pins: tuple[_NamedPin, ...] = ()
     boot_pins: tuple[_NamedPin, ...] = ()
@@ -247,7 +261,9 @@ def _bucket(model: object, designator: str, net: str, library) -> str:
     return PART_OTHER
 
 
-def _read_mcus(model: object, library) -> list[McuReset]:
+def _read_mcus(
+    model: object, library, *, allow_machine: bool = False
+) -> tuple[list[McuReset], list[McuReset]]:
     """Every ``ic.mcu`` part, with its reset and boot pins read.
 
     The same identity chain the other three MCU rules use
@@ -255,25 +271,67 @@ def _read_mcus(model: object, library) -> list[McuReset]:
     C-number → device name), so all four agree on which parts are
     microcontrollers and the gate cannot call a part judged that these rules
     never saw (187B, task 186-H1).
+
+    The category is read through
+    :func:`boardwise.core.partkind.category_verdict` (527D3) at the tier the
+    caller states. The answer comes back as **two lists**, and the difference
+    is the load-bearing half of that read:
+
+    * ``readings`` — parts the shelf calls an MCU at a tier this rule may act
+      on (a human-signed class, or — with ``allow_machine=True`` — a
+      machine-granted one);
+    * ``gated`` — parts the shelf *also* calls an MCU, but at a tier the rule
+      may not act on (a machine-granted class for a conclusion rule, or a
+      draft). These are returned rather than dropped: a real MCU whose class
+      nobody signed must not fall out of the MCU rules silently, which is
+      exactly the shape 「机器档的 MCU」 and 「根本不是 MCU」 would collapse into
+      if the read were folded into the filter above. The caller emits a
+      免责 row for each — the sentence is
+      :func:`boardwise.rules.facts.category_absent_reason`'s, not a second
+      wording — and the row is the one thing that keeps the gate honest.
     """
     readings: list[McuReset] = []
+    gated: list[McuReset] = []
     components = getattr(model, "components", {}) or {}
     for designator in sorted(components):
         component = components[designator]
         entry, _matched = resolve_component_facts(library, component)
-        category = (entry.category or "") if entry is not None else ""
-        if category not in MCU_CATEGORIES:
+        verdict = category_verdict(
+            entry, MCU_CATEGORIES, allow_machine=allow_machine
+        )
+        if verdict == CATEGORY_ABSENT:
+            # Not an MCU, or the shelf says nothing about it: not this rule's
+            # object, and silence is the honest answer.
+            continue
+        if verdict == CATEGORY_GATED:
+            # The shelf says MCU at a tier this rule may not hear. Returned
+            # rather than dropped, so the caller can say so.
+            gated.append(
+                McuReset(
+                    designator=str(designator),
+                    category=str(getattr(entry, "category", "") or ""),
+                    category_trust=str(
+                        getattr(entry, "category_trust", FACTS_TRUST_VERIFIED)
+                    ),
+                    board_model=model,
+                    reset_pins=tuple(reset_pins_of(component)),
+                    boot_pins=tuple(boot0_pins_of(component)),
+                )
+            )
             continue
         readings.append(
             McuReset(
                 designator=str(designator),
-                category=category,
+                category=str(getattr(entry, "category", "") or ""),
+                category_trust=str(
+                    getattr(entry, "category_trust", FACTS_TRUST_VERIFIED)
+                ),
                 board_model=model,
                 reset_pins=tuple(reset_pins_of(component)),
                 boot_pins=tuple(boot0_pins_of(component)),
             )
         )
-    return readings
+    return readings, gated
 
 
 class McuResetBoot(PcbRule):
@@ -308,12 +366,19 @@ class McuResetBoot(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         """The pass itself, with the shelf handed in rather than read here.
 
         ``library=None`` degrades to an empty shelf on the same contract 131b,
         131c, 131d and the supply half of 131e honour.
+
+        ``allow_machine`` (527D3) is this rule's own tier question, stated by
+        the caller rather than hidden: the rule's rows are **measurements of
+        what the netlist puts on a named MCU's pins** — no threshold, no
+        verdict — so a machine-granted class may name the subject and the
+        default is the conservative one (a gated class produces the 免责 row,
+        not the rows).
         """
         model = ctx.pcb_model
         board = ctx.board
@@ -323,7 +388,10 @@ class McuResetBoot(PcbRule):
         # the rows describe members with (never for the pins or the nets).
         schematic = schematic_board_of(ctx)
         findings: list[Finding] = []
-        for mcu in _read_mcus(model, library):
+        readings, gated = _read_mcus(
+            model, library, allow_machine=allow_machine
+        )
+        for mcu in readings:
             for pin in mcu.reset_pins:
                 findings.append(
                     self._one_reset(mcu, board, pin, library, schematic)
@@ -332,7 +400,28 @@ class McuResetBoot(PcbRule):
                 findings.append(
                     self._one_boot(mcu, board, pin, library, schematic)
                 )
+        for mcu in gated:
+            findings.append(self._tier_gate_row(mcu))
         return findings
+
+    def _tier_gate_row(self, mcu: McuReset) -> Finding:
+        """The 免责 row for an MCU the shelf names but this tier may not hear.
+
+        One call into :func:`boardwise.rules.facts.category_gate_finding`, which
+        owns the sentence (「分类是机器核验的、本规则要人签字」) for every reader
+        in this batch — a second sentence about the same unsigned class is how
+        two rules start disagreeing about one review.
+        """
+        from boardwise.rules.facts import category_gate_finding
+
+        return category_gate_finding(
+            rule_id=self.id,
+            level=self.level,
+            designator=mcu.designator,
+            category=mcu.category,
+            category_trust=mcu.category_trust,
+            subject="它的复位/启动网",
+        )
 
     # -- rows -------------------------------------------------------------
 

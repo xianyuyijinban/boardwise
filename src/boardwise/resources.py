@@ -119,7 +119,16 @@ def connector_bundle() -> Path:
 
 
 def connector_extension_json() -> Path:
-    """The connector manifest (``connector/extension.json``) — the version source."""
+    """The connector manifest (``connector/extension.json``) — the uuid, and the editor's copy.
+
+    **Not the version source** (528A-b): the version a bundle *announces* is
+    ``connector/package.json``'s, because that is what `build.mjs` inlines as
+    ``__BOARDWISE_VERSION__`` (this file only supplies ``__BOARDWISE_UUID__``).
+    ``cli._connector_manifest_version`` reads it from the package.json beside the
+    bundle, and falls back to this file for a frozen exe, whose ``--add-data``
+    list carries this one and not that one. The two must keep the same version —
+    a test pins them together.
+    """
     return resource_root().joinpath(*_EXTENSION_PARTS)
 
 

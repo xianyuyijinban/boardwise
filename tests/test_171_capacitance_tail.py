@@ -272,8 +272,13 @@ def test_params_can_now_classify_and_compare_a_tailed_field():
     contract (``0.1Ω`` / ``100mΩ``'s sibling for capacitance), and ``330uF 400V``
     is exactly the shape a person writes there.
     """
-    assert (
-        _kind_of(Component(uid="c1", designator="C1", value="100nF 50V"), None)
-        == "capacitor"
+    kind, gated = _kind_of(
+        Component(uid="c1", designator="C1", value="100nF 50V"), None
     )
+    assert kind == "capacitor"
+    # 527D3 fix: the reader answers a 2-tuple now — the kind, and the sentence to
+    # print when the shelf named one this tier may not read. There is no shelf
+    # here at all, so the second half is empty: 「nobody named it」 and 「named but
+    # unsigned」 are different answers, and this is the first one.
+    assert gated == ""
     assert _stated_quantity("330uF 400V", "capacitor") == pytest.approx(330e-6)

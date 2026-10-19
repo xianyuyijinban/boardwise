@@ -143,7 +143,9 @@ def crystal_designators(
     board: BoardGeometry,
     library,
     schematic: object | None = None,
-) -> list[str]:
+    *,
+    allow_machine: bool = False,
+) -> tuple[list[str], list[object]]:
     """Every crystal the board places, found the way 131d found it.
 
     The crystal set is **not** re-derived here: 131d's
@@ -166,11 +168,22 @@ def crystal_designators(
     ``schematic`` is this PCB document's own schematic page (164b), handed
     straight to the sieve so 131d and 131f recognise the same set from the same
     two declarations.
+
+    527D3 returns **two lists**, the shape 131d's ``_mcu_oscillators`` now has:
+    the crystal designators, and the **gated** MCU readings whose oscillator nets
+    were therefore not walked. The second list is not decoration — 131d's sieve
+    is read through the tier gate, so a machine-granted ``ic.mcu`` class leaves
+    this function with fewer crystals than it has, and a caller that silently
+    ignored the second list would report a clean keepout for a crystal nobody
+    looked at. The rule writes each one a 免责 row.
     """
     found: list[str] = []
     nets = getattr(model, "nets", {}) or {}
     components = getattr(model, "components", {}) or {}
-    for osc in _mcu_oscillators(model, library, schematic):
+    readings, gated = _mcu_oscillators(
+        model, library, schematic, allow_machine=allow_machine
+    )
+    for osc in readings:
         for net in sorted(osc.pins_by_net):
             net_obj = nets.get(net)
             for owner, _pin in (getattr(net_obj, "pins", None) or []):
@@ -184,7 +197,7 @@ def crystal_designators(
                 if board.component(designator) is None:
                     continue  # named by the netlist, not carried by this document
                 found.append(designator)
-    return sorted(found)
+    return sorted(found), list(gated)
 
 
 def _spelled(item) -> str:
@@ -246,7 +259,7 @@ class McuCrystalKeepout(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         """The pass itself, with the shelf handed in rather than read here.
 
@@ -255,6 +268,11 @@ class McuCrystalKeepout(PcbRule):
         (:func:`~boardwise.rules.pcb.crystal.is_crystal_member` reads the part's
         own words), and a shelfless board has no ``ic.mcu`` part at all, so a
         shelfless run is silent rather than wrong.
+
+        ``allow_machine`` (527D3) is stated with the same default the MCU rules
+        state it: the sieve this rule reads (131d's ``_mcu_oscillators``) comes
+        back with its gated readings, and each of those gets a 免责 row rather
+        than leaving a crystal un-measured in silence.
         """
         board = ctx.board
         model = ctx.pcb_model
@@ -269,7 +287,10 @@ class McuCrystalKeepout(PcbRule):
         if not layers:
             return []
         findings: list[Finding] = []
-        for crystal in crystal_designators(model, board, library, schematic):
+        crystals, gated = crystal_designators(
+            model, board, library, schematic, allow_machine=allow_machine
+        )
+        for crystal in crystals:
             region = crystal_region(board, crystal)
             if region is None:
                 continue
@@ -325,7 +346,29 @@ class McuCrystalKeepout(PcbRule):
                         board, crystal, region, layer_id, identity, own_nets
                     )
                 )
+        for osc in gated:
+            findings.append(self._tier_gate_row(osc))
         return findings
+
+    def _tier_gate_row(self, osc) -> Finding:
+        """The 免责 row for an MCU the shelf names but this tier may not hear.
+
+        527D3: 131d's sieve came back with this MCU in its ``gated`` list, so
+        the oscillator nets were never walked and any crystal on them is
+        un-measured. Saying so is the whole difference between 「净空干净」 and
+        「没量」 — the row is ``INFO`` and asserts nothing about the copper. The
+        sentence is :func:`boardwise.rules.facts.category_gate_finding`'s.
+        """
+        from ..facts import category_gate_finding
+
+        return category_gate_finding(
+            rule_id=self.id,
+            level=self.level,
+            designator=osc.designator,
+            category=osc.category,
+            category_trust=osc.category_trust,
+            subject="这下面的铜",
+        )
 
     def _layer_row(
         self,

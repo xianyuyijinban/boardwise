@@ -655,6 +655,21 @@ def _supply_nets(model: object) -> set[str]:
     here would have been a second, quieter version of the same handling — and
     the wrong direction to fail in, since an unreadable shelf would have cost
     the ``+5V``-style nets too.
+
+    527D3 fix: an **UNKNOWN**-state guess is a supply net too. That state is
+    written by exactly one thing in :func:`infer_net_domains` — the collection
+    of nets a *gated* class would have spoken for (a regulator whose class no
+    human signed, or a draft) — so reading only ``KNOWN`` let a rail leave this
+    rule's range **silently**: ``pcb-decap-distance`` never even asked the
+    distance question (``check`` filters on this set), and no row said why. That
+    is a loss of coverage no reader can see, and it is the one thing
+    :func:`infer_net_domains` writes the note for.
+
+    Reading the state rather than the note is deliberate: the guess's ``detail``
+    is the sentence a *rule* prints about one part, and this function's question
+    is only 「does anything at all brand this net a rail」. Every other consumer
+    of a domain reads ``volts`` and is unaffected — an UNKNOWN guess has none,
+    so nothing downstream can take this net for a 3.3 V rail.
     """
     from ..facts import read_default_library  # noqa: PLC0415 — read at call time
 
@@ -672,6 +687,8 @@ def _supply_nets(model: object) -> set[str]:
             board_model, library, allow_machine=True
         ).items():
             if guess.state == "KNOWN" and guess.volts is not None:
+                names.add(name)
+            elif guess.state == "UNKNOWN":
                 names.add(name)
     return names
 

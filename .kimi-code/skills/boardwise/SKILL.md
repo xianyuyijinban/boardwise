@@ -68,7 +68,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
   不上——用 `bridge call --instance <windowKey>` 按实例 id 直达（两个 hint 同时给时 instance 优先，
   未命中报 `INSTANCE_STALE`（**实例可能已失效**：重启/重连后 id 会变，不是「调用成功没数据」）
   并列在线窗口的 `key` / 工程 / 页，就是 `bridge status` 那一行）；`bridge update-connector --instance <windowKey>`
-  可热更指定窗口（`--all` 更新全部在线窗口；多窗又不寻址则**拒绝并列窗口表**，见坑 22）。
+  可热更指定窗口（`--all` 更新全部在线窗口；多窗又不寻址则**拒绝并列窗口表**，见坑 22）；`--no-reload`：只写不激活，点一次扩展菜单生效（有未保存编辑时用它，见 docs/bridge.md §8）。
   **写≠激活**：宿主只在加载时评估扩展包一次，写完验收发现运行版本没变就走手动
   （卸载扩展→重导入 .eext→重启编辑器，165 实测+机理钉死）。
 

@@ -86,6 +86,7 @@ from ..core.designintent import (
     write_path,
 )
 from ..core.model import Component, DesignModel
+from ..core.partkind import CATEGORY_ABSENT, CATEGORY_GATED, category_verdict
 from ..core.parts import (
     FACTS_TRUST_CANDIDATE,
     FACTS_TRUST_MACHINE,
@@ -101,10 +102,17 @@ from ..core.values import (
 )
 from .base import Finding, Outcome
 from .decap import looks_like_capacitor
-from .facts import FactsRule
+from .facts import FactsRule, category_absent_reason
 from .unproven import unproven_nets, unproven_outcome
 
 LEVEL = "L2-facts"
+
+#: 527D3: the shelf word this rule's subject set is named by, kept beside the
+#: constant rather than inline at the call site so both readers here ask
+#: :func:`boardwise.core.partkind.category_verdict` about one set. Narrower than
+#: the PCB rules' ``REGULATOR_CATEGORIES`` on purpose: the rail ratings speak about
+#: **linear** regulators (the shelf fact they judge is ``ldo.*``).
+_LDO_CATEGORIES: frozenset[str] = frozenset({"ic.ldo"})
 
 #: The shelf's own names for a part's rated voltage, in reading order. The
 #: catalog is a **named-field** store — it writes ``"Voltage Rating": "50V"``
@@ -579,7 +587,54 @@ class LdoDissipation(FactsRule):
         rows: list[tuple[Outcome, str | None]] = []
         for comp in self.ics(model):
             entry = self.entry_for(comp)
-            if entry is None or entry.category != "ic.ldo" or not entry.facts:
+            # 527D3: the class through the shared reader at **this rule's** tier.
+            # `P = (Vin - Vout) x I` is a number, so `self._allow_machine` is True
+            # (522's list) and a machine-granted `ic.ldo` class may name the
+            # subject. `category_verdict`'s third answer is the one this batch is
+            # about: a class the tier refuses — a `candidate` draft, here — is
+            # **gated**, not absent, and gets an UNKNOWN row below instead of the
+            # silence a non-LDO gets. The old `entry.category != "ic.ldo"` read
+            # folded the two together and let a draft drive nothing without a word.
+            verdict = category_verdict(
+                entry, _LDO_CATEGORIES, allow_machine=self._allow_machine
+            )
+            if entry is None or verdict == CATEGORY_ABSENT:
+                continue
+            if verdict == CATEGORY_GATED:
+                # 527D3 fix: the sentence is asked at the **same** tier the gate
+                # was. `REQUIRES_HUMAN_VERIFIED = False` here (`P = (Vin - Vout)
+                # x I` is a number, the rule's own docstring says so), so
+                # `allow_machine=self._allow_machine`; asking `False` picked
+                # `_category_absent_reason`'s **facts** branch for an entry whose
+                # facts a human had signed and whose *class* was the draft, and
+                # the row sent the reader to re-sign the wrong field.
+                reason = category_absent_reason(
+                    entry, allow_machine=self._allow_machine
+                )
+                rows.append((
+                    Outcome(
+                        rule_id=self.id,
+                        state="UNKNOWN",
+                        subject=comp.designator,
+                        message=(
+                            f"{comp.designator}: 耗散估算没有算 —— 货架把它分类为 "
+                            f"{entry.category!r}{reason}"
+                        ),
+                        evidence=[
+                            f"{comp.designator} shelf category "
+                            f"{entry.category!r}（档位 "
+                            f"{getattr(entry, 'category_trust', 'verified')}，"
+                            "本规则不读它）",
+                        ],
+                        missing_fact=(
+                            f"{comp.designator} 的货架分类的档位：分类存在但没人签字，"
+                            "本规则不据它判"
+                        ),
+                    ),
+                    "INFO",
+                ))
+                continue
+            if not entry.facts:
                 continue
             # 522: this rule reads `entry.facts` **directly** (the rail ratings
             # never went through `_category_state`), so it states the tier

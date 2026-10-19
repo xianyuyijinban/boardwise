@@ -1055,7 +1055,7 @@ def test_a_window_hint_is_optional_and_changes_nothing_when_absent(fake_daemon, 
 
 def test_the_cli_gathers_the_three_payloads_and_goes_green(fake_daemon, capsys, tmp_path, monkeypatch):
     # The connector version is read from the repo, not written as a literal:
-    # `_cmd_doctor` compares what the editor runs against `connector/extension.json`
+    # `_cmd_doctor` compares what the editor runs against `connector/package.json`
     # (that is the check), so a hardcoded fixture version turns this green case
     # red on every release — the 0.4.5 → 0.4.6 bump did exactly that.
     daemon = fake_daemon(_FakeDaemon(
@@ -1098,7 +1098,7 @@ def test_a_daemon_that_answers_without_a_connector_still_reports_every_line(fake
     # Nothing beyond ping is attempted when there is no connector to ask — and
     # the lines that follow say "未验证" rather than inventing a verdict.
     assert daemon.calls == ["ping"]
-    # Required reading: from the repo, `connector/extension.json` exists, so the
+    # Required reading: from the repo, `connector/package.json` exists, so the
     # connector-version comparison is one of the five failing lines rather than a
     # skip. The four green lines are the daemon (it answered), the daemon version
     # (this CLI and the stub agree) and the two skill lines (the autouse fixture

@@ -37,6 +37,14 @@
  * Ordering guarantee: the handler resolves *before* the reload is scheduled,
  * and the transport sends the response frame synchronously on resolution, so
  * the daemon always learns the outcome before the page goes away.
+ *
+ * `params.reload: false` (528A, `boardwise bridge update-connector
+ * --no-reload`) is the one opt-out: the record is written and the page is left
+ * alone, so a caller with unsaved editor state can stage a build without losing
+ * it. Nothing runs until EasyEDA re-evaluates the extension — opening the
+ * boardwise menu once does that (measured 2026-10-17, R4 experiment ④) — and
+ * the reply says so by carrying `reloadInMs: 0`. Anything else — including an
+ * absent field — keeps the original write-then-reload behaviour unchanged.
  */
 
 import { ActionError } from './protocol';
@@ -66,8 +74,15 @@ export type SelfUpdateDeps = {
  * properties in the editor's realm — unlike the injected `eda`, which is why
  * `globalThis` is safe here while `globalThis.eda` is not. Resolving per call
  * keeps tests able to substitute fakes without a module seam.
+ *
+ * `needsReload` is the caller's reading of `params.reload` and it is there for
+ * one reason (528A): `location.reload()` is only *used* when a reload is
+ * actually going to be scheduled, so a `reload: false` request must not be
+ * refused for a realm that lacks it — that would reject "please do not touch my
+ * page" because the page cannot be touched. The other three globals are needed
+ * either way: the write is the same write.
  */
-function ambientDeps(): SelfUpdateDeps {
+function ambientDeps(needsReload: boolean): SelfUpdateDeps {
   const g = globalThis as Record<string, unknown>;
   if (typeof g.indexedDB !== 'object' || g.indexedDB === null) {
     throw new ActionError(
@@ -82,7 +97,7 @@ function ambientDeps(): SelfUpdateDeps {
     );
   }
   const location = g.location as { reload?: unknown } | undefined;
-  if (!location || typeof location.reload !== 'function') {
+  if (needsReload && (!location || typeof location.reload !== 'function')) {
     throw new ActionError(
       'NOT_IMPLEMENTED',
       'this realm has no location.reload() — without it the new bundle would be written but never run',
@@ -96,7 +111,9 @@ function ambientDeps(): SelfUpdateDeps {
   }
   return {
     indexedDB: g.indexedDB as IDBFactory,
-    location: location as { reload(): void },
+    // Only ever called when `needsReload`, which is the case that just proved
+    // it exists; the cast is what keeps that proof and the type in one place.
+    location: (location ?? {}) as { reload(): void },
     File: g.File as SelfUpdateDeps['File'],
     setTimeout: (fn, ms) => (g.setTimeout as SelfUpdateDeps['setTimeout'])(fn, ms),
   };
@@ -191,8 +208,13 @@ export async function sysSelfUpdate(
   }
 
   // Resolved after validation on purpose: a malformed call is BAD_REQUEST on
-  // every host, even one whose realm has no IndexedDB at all.
-  const host = deps ?? ambientDeps();
+  // every host, even one whose realm has no IndexedDB at all. `params.reload`
+  // is read the same way it is read below — exact identity, not truthiness —
+  // because that is the value `needsReload` has to describe: `reload: false`
+  // is the only spelling that skips the reload, and therefore the only one that
+  // may skip the `location.reload` requirement (`ambientDeps`, 528A).
+  const reload = params.reload !== false;
+  const host = deps ?? ambientDeps(reload);
 
   // Find the extensions database by enumerating, never by guessing the team
   // uuid. Zero matches means the schema changed (or no user data exists yet);
@@ -281,7 +303,18 @@ export async function sysSelfUpdate(
     // The response frame is sent the moment this handler resolves; the reload
     // is scheduled behind a delay so the answer always reaches the daemon
     // before the page (and this socket) goes away.
-    host.setTimeout(() => host.location.reload(), RELOAD_DELAY_MS);
+    //
+    // `reload: false` (528A) is the one case that schedules nothing: the write
+    // is the whole request, and the reply's `reloadInMs: 0` is how the caller
+    // learns not to wait for a page that is not coming back. Exact identity,
+    // not truthiness — a caller that sends `reload: "false"` is asking for
+    // something this action does not define, and the safe reading of an
+    // unrecognised value is the documented behaviour (reload), not silence.
+    // `reload` is computed above, before `ambientDeps`: a host with no
+    // `location.reload` can still take a write that will not need it.
+    if (reload) {
+      host.setTimeout(() => host.location.reload(), RELOAD_DELAY_MS);
+    }
 
     return {
       ok: true,
@@ -289,7 +322,7 @@ export async function sysSelfUpdate(
       newVersion: version,
       bytes: bytes.length,
       database,
-      reloadInMs: RELOAD_DELAY_MS,
+      reloadInMs: reload ? RELOAD_DELAY_MS : 0,
     };
   } finally {
     db.close();

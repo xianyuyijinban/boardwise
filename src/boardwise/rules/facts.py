@@ -34,7 +34,12 @@ import re
 from dataclasses import dataclass, field
 
 from ..core.model import Component, DesignModel, Net
-from ..core.partkind import KIND_IC, classify_part, shelf_declaration
+from ..core.partkind import (
+    KIND_IC,
+    classify_part,
+    declared_category,
+    shelf_declaration,
+)
 from ..core.parts import (
     FACTS_TRUST_CANDIDATE,
     FACTS_TRUST_MACHINE,
@@ -231,21 +236,20 @@ def _category_state(entry: PartEntry, *, allow_machine: bool) -> str:
     # "anything not `verified` and not `allow_machine`" left `candidate` more
     # permissive than `machine_verified` for the calculation rules — a tier
     # nobody had checked opening a door the evidence-checked one had to knock on.
-    category_trust = getattr(entry, "category_trust", FACTS_TRUST_VERIFIED)
-    if category_trust == FACTS_TRUST_CANDIDATE:
-        return _CATEGORY_UNKNOWN
-    if (
-        not allow_machine
-        and (entry.category or "")
-        and category_trust != FACTS_TRUST_VERIFIED
-    ):
+    # 527D3: the same three answers now come from the one shared reader
+    # (`core.partkind.declared_category`), so this gate and the fourteen direct
+    # readers it used to disagree with answer one question one way. The gate
+    # itself is unchanged — a human-signed class reads as before, a
+    # machine-granted class drives the number rules only, a candidate class
+    # drives nothing — and UNKNOWN still carries the work order
+    # (`_category_absent_reason`), which is what keeps "gated" from reading as
+    # "not my subject".
+    if declared_category(entry, allow_machine=allow_machine) is None:
         return _CATEGORY_UNKNOWN
     category = entry.category or ""
     if category.startswith("ic"):
         return _IC
-    if category:
-        return _NON_IC
-    return _CATEGORY_UNKNOWN
+    return _NON_IC
 
 
 #: What a closed gate adds to a rule's message (task 039 §WI-4). "No facts" and
@@ -1665,9 +1669,14 @@ class LdoDropout(FactsRule):
                 ))
                 continue
             ldo = (entry.facts or {}).get("ldo") or {}
-            if entry.category != "ic.ldo":
+            if declared_category(
+                entry, allow_machine=self._allow_machine
+            ) != "ic.ldo":
                 # An IC that is not an LDO (U1 is ic.usb-uart): the rule
-                # speaks to LDOs only, and the category is explicit.
+                # speaks to LDOs only, and the category is explicit. Read
+                # through the shared reader (527D3), not the field — the gate
+                # above has already routed the gated tiers to UNKNOWN, so this
+                # comparison only ever sees an accepted class.
                 rows.append((
                     Outcome(
                         rule_id=self.id,
@@ -2134,4 +2143,71 @@ __all__ = [
     "RD_TOLERANCE",
     "SupplyOnKnownDomain",
     "UsbCcPulldown",
+    "category_absent_reason",
+    "category_gate_finding",
 ]
+
+
+#: 527D3: the private reason under one public spelling, for the PCB readers —
+#: the same sentences, written once. The private name stays for this module's
+#: own call sites.
+category_absent_reason = _category_absent_reason
+
+
+def category_gate_finding(
+    *,
+    rule_id: str,
+    level: str,
+    designator: str,
+    category: str,
+    category_trust: str,
+    subject: str,
+) -> Finding:
+    """The row a rule owes a part the shelf names at a tier it may not read (527D3).
+
+    **This is the one thing that keeps the tier gate from closing a hole.** A
+    rule whose subject set is named by a category word has three possible
+    answers, and :func:`boardwise.core.partkind.category_verdict` gives them:
+    accepted (run the rule), absent (not this rule's object — silence), gated
+    (the shelf *does* call it this rule's subject, and this rule may not act on
+    that class). The third must produce a row, because the alternative is that
+    「机器档的 MCU」 and 「根本不是 MCU」 both come back as nothing — a real MCU
+    whose class nobody signed falling silently out of the MCU rules, which is
+    strictly worse than the raw ``entry.category`` read this batch replaced.
+
+    The sentence is :func:`_category_absent_reason`'s, asked of an entry built
+    from the three facts the caller has (the class word, its tier, the
+    designator). Building it here rather than in each rule is the whole point:
+    a machine-granted class and a draft get *different* work orders (「read the
+    evidence and sign」 vs 「read the draft」), the distinction lives in that one
+    function, and a second copy of it in a rule body is how two rules start
+    disagreeing about one unsigned class.
+
+    ``INFO``: the row asserts nothing about the board. It names the review that
+    is owed, and ``subject`` is what the rule would have measured (「它的复位/启动
+    网」), so a reader can see what is missing rather than only that something is.
+    """
+    reason = _category_absent_reason(
+        # The entry carries only the classification half: the fabricated
+        # `facts_trust` is the default (`verified`), so the sentence is chosen by
+        # the *category's* tier — which is the field this row is about.
+        PartEntry(
+            key=f"gate.{designator}",
+            category=category,
+            category_trust=category_trust,
+        ),
+        allow_machine=False,
+    )
+    return Finding(
+        rule_id=rule_id,
+        severity="INFO",
+        level=level,
+        message=(
+            f"{designator}: 货架把它分类为 {category!r} —— {reason}，"
+            f"所以{subject}没有量 —— 该审的是分类的档位，不是它"
+        ),
+        evidence=[
+            f"{designator} shelf category {category!r}"
+            f"（档位 {category_trust}，本规则不读它）",
+        ],
+    )

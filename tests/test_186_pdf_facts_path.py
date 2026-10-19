@@ -495,19 +495,19 @@ def test_the_rules_lookup_walks_the_same_chain_as_the_gate():
         return DesignModel(components={designator: component}, nets={})
 
     mcu = _board("U3", "ACME-MCU-1")
-    assert len(_supply_readings(mcu, shelf)) == 1, "pcb-mcu-supply-groups 没看见它"
-    assert len(_reset_readings(mcu, shelf)) == 1, "pcb-mcu-reset-boot 没看见它"
+    assert len(_supply_readings(mcu, shelf)[0]) == 1, "pcb-mcu-supply-groups 没看见它"
+    assert len(_reset_readings(mcu, shelf)[0]) == 1, "pcb-mcu-reset-boot 没看见它"
     ldo = _board("U5", "ACME-LDO-1")
-    assert len(_regulator_readings(ldo, shelf)) == 1, "pcb-regulator-cap-distance 没看见它"
+    assert len(_regulator_readings(ldo, shelf)[0]) == 1, "pcb-regulator-cap-distance 没看见它"
     resistor = _board("U7", "ACME-RES-1")
     assert _looks_like_resistor("U7", "", resistor, shelf)[0] is True, "R1b 没看见它"
 
     # …and the same four say nothing about a near miss, exactly as the gate does:
     # the widened chain is still an **exact** chain, not a looser one.
     fuzzy = _board("U9", "acme-mcu-1")
-    assert _supply_readings(fuzzy, shelf) == []
-    assert _reset_readings(fuzzy, shelf) == []
-    assert _regulator_readings(fuzzy, shelf) == []
+    assert _supply_readings(fuzzy, shelf)[0] == []
+    assert _reset_readings(fuzzy, shelf)[0] == []
+    assert _regulator_readings(fuzzy, shelf)[0] == []
     assert _looks_like_resistor("U9", "", fuzzy, shelf)[0] is False
 
 

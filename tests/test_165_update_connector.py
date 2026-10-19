@@ -125,7 +125,24 @@ class _GatedClient:
 
 @pytest.fixture
 def gated(monkeypatch, tmp_path):
+    """Offline `--all` harness. The 528A-a version gate is stubbed here, on purpose.
+
+    The command refuses an explicit ``--version`` that differs from
+    ``connector/package.json`` (:func:`boardwise.cli._explicit_version_refusal` —
+    that file is what `build.mjs` bakes into the bundle, 528A-b) because a
+    connector announces the string baked into its bundle, not the
+    record's label. This file is about the dangerous-tier token and the guidance
+    for a write the editor never re-evaluated, and it speaks with a fixed label
+    (``0.4.29``) whatever the repo's manifest says. The guard's own tests — the
+    real manifest, zero-write assertions, both addressing modes — are in
+    ``tests/test_528a_no_reload.py``.
+    """
     import boardwise.bridge.client as client_module
+    import boardwise.cli as cli_module
+
+    monkeypatch.setattr(
+        cli_module, "_explicit_version_refusal", lambda version, manifest: None
+    )
 
     for name, value in (
         ("opened", None), ("calls", []), ("routes", []), ("forwarded", []),

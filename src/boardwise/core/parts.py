@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 #: Written into the library file so a stale one fails loudly rather than being
 #: read with today's rules.
@@ -768,6 +769,24 @@ class PartEntry:
     #: calculation rules (``allow_machine=True``) and no conclusion rule, which is
     #: exactly what :func:`boardwise.rules.facts._category_state` now enforces.
     category_trust: str = FACTS_TRUST_VERIFIED
+    #: 527D2: **the evidence behind a machine-verified class**, or ``None`` when
+    #: the class was signed by hand. ``{"source": <http(s)|file:>, "page": <int>,
+    #: "quote": <str>}`` — exactly the three flags `parts classify` ran through
+    #: 521's gate, kept on the entry so the shelf itself can answer "where did
+    #: this class come from" after the terminal that printed them is gone (the
+    #: same per-claim provenance rule 521 gives every fact).
+    #:
+    #: A separate field rather than a line in ``provenance``/``notes`` because
+    #: those describe the *entry* (where it was harvested from, what a curator
+    #: said about it) and a reader must be able to tell "evidence for the
+    #: classification" from "evidence for a parameter"; and a separate field
+    #: rather than a ``facts``-side record because the class is **one** claim
+    #: with one citation, not a vocabulary of record kinds. ``None`` is the
+    #: human tier's shape — 039/522's spelling again: an absent thing is not
+    #: written, so the 109 entries written before this field existed round-trip
+    #: byte-identically, and a re-sign by hand takes a previous machine run's
+    #: evidence back off (`parts classify` owns that move).
+    category_provenance: dict[str, Any] | None = None
     #: Datasheet facts (task 011b §2.3), or None when nothing has been
     #: recorded. Every recorded fact carries its own page-cited provenance;
     #: the loader refuses a fact that cannot say where it came from.
@@ -1016,6 +1035,8 @@ _ENTRY_KEYS = (
     "facts_trust",
     # 527D: who signed the **category** (absent = `verified`).
     "category_trust",
+    # 527D2: the evidence behind a machine-verified class (absent = hand-signed).
+    "category_provenance",
     "provenance", "notes",
 )
 _PROVENANCE_KEYS = ("kind", "source", "designators", "note")
@@ -1329,6 +1350,42 @@ def _require_nonempty(value: Any, where: str) -> str:
     return text
 
 
+#: Why a citation's ``source`` is not an address — the machine-readable form of
+#: :func:`citation_source_defect`'s answer, so the loader (English) and
+#: `parts classify` (Chinese) can say the same thing in their own words instead
+#: of each holding a copy of the rule.
+CITATION_SOURCE_SCHEME = "scheme"
+CITATION_SOURCE_HOST = "host"
+CITATION_SOURCE_PATH = "path"
+
+
+def citation_source_defect(source: str) -> str:
+    """``""`` when ``source`` names a document, else what it is missing.
+
+    522/524's 保密口径 is that a citation's source is an ``http(s)`` URL or a
+    ``file:`` path, and the prefix test that spells it is **not enough on its
+    own** (527D2, measured): ``http://``, ``https://`` and ``file:`` all pass it
+    while naming no document at all. `parts classify --from http://` was
+    accepted (the ``http(s)`` leg reads the cache by the **entry's** identity and
+    never looked at this string) and the shelf then held a `machine_verified`
+    conclusion whose citation was the two-word string ``"http://"``.
+
+    So the scheme is unwrapped one level: an ``http(s)`` source must carry a
+    **host**, and a ``file:`` source must carry a **non-empty path**. A bare
+    ``file:`` is the empty path, and ``Path("")`` is the current directory — an
+    address that resolves to whatever the caller's cwd happens to be is not a
+    citation. The return value is one of :data:`CITATION_SOURCE_SCHEME`,
+    :data:`CITATION_SOURCE_HOST`, :data:`CITATION_SOURCE_PATH`, or ``""``.
+    """
+    lowered = source.lower()
+    if lowered.startswith("file:"):
+        target = source.split(":", 1)[1].strip()
+        return "" if target.strip("/\\") else CITATION_SOURCE_PATH
+    if lowered.startswith(("http://", "https://")):
+        return "" if urlsplit(source).netloc else CITATION_SOURCE_HOST
+    return CITATION_SOURCE_SCHEME
+
+
 def _facts_trust_of(raw: dict[str, Any], where: str) -> str:
     """The tier one file entry declares, reconciling 039's boolean (522 §2.2).
 
@@ -1479,6 +1536,64 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
     facts = raw.get("facts")
     if facts is not None:
         facts = _facts_from_json(facts, f"{where}.facts")
+    # 527D2: the evidence behind the machine-verified class, when the file says
+    # there is one. Same ruling as 522 applied to `facts_trust`, shape aside:
+    # a key that is present is **authoritative** — `raw.get` cannot tell
+    # `{"category_provenance": null}` from `{}`, and a file that wrote a null
+    # would read as "hand-signed" here while meaning "the evidence was lost",
+    # so null is an error rather than a default. So is anything that is not the
+    # exact three-field shape the writer emits: `source` must cite a URL or a
+    # `file:` path (522/524's 保密口径, the same rule `_fact_provenance` applies
+    # to a fact's own citation) — and an **address**, not just a scheme
+    # (:func:`citation_source_defect`: `http(s)` needs a host, `file:` a path),
+    # `page` must be a positive integer (a quote
+    # without the page it cites is not a citation), and `quote` must be a
+    # non-empty string. A typo in any of them is a trust claim nobody made.
+    category_provenance: dict[str, Any] | None = None
+    if "category_provenance" in raw:
+        cited = raw["category_provenance"]
+        spot = f"{where}.category_provenance"
+        if not isinstance(cited, dict):
+            raise PartError(f"{spot}: expected an object, got {type(cited).__name__}")
+        _check_keys(cited, ("source", "page", "quote"), spot)
+        missing = [key for key in ("source", "page", "quote") if key not in cited]
+        if missing:
+            raise PartError(
+                f"{spot}: missing {', '.join(missing)} — the evidence is all "
+                "three fields or none (the same rule `parts classify` enforces "
+                "on its flags)"
+            )
+        source = _as_str(cited.get("source"), f"{spot}.source")
+        if not source:
+            raise PartError(f"{spot}.source: must be a non-empty string")
+        defect = citation_source_defect(source)
+        if defect == CITATION_SOURCE_SCHEME:
+            raise PartError(
+                f"{spot}.source: {source!r} is neither a http(s) URL nor a "
+                "'file:' path (the same 保密口径 `parts classify` applies to "
+                "--from: a bare path is not a citation)"
+            )
+        if defect == CITATION_SOURCE_HOST:
+            raise PartError(
+                f"{spot}.source: {source!r} is a scheme with no host, so it "
+                "names no document — an http(s) citation needs an address "
+                "(527D2: `--from http://` used to land here)"
+            )
+        if defect == CITATION_SOURCE_PATH:
+            raise PartError(
+                f"{spot}.source: {source!r} has no path after 'file:', so it "
+                "points at nothing (an empty path is the working directory, "
+                "which is not a citation — 527D2)"
+            )
+        page = cited.get("page")
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            raise PartError(
+                f"{spot}.page: expected a positive integer, got {page!r}"
+            )
+        quote = _as_str(cited.get("quote"), f"{spot}.quote")
+        if not quote:
+            raise PartError(f"{spot}.quote: must be a non-empty string")
+        category_provenance = {"source": source, "page": page, "quote": quote}
     # No move happens here: `PartEntry.__post_init__` owns the invariant
     # "facts_verified is false ⟹ facts reads None", so the loader, a test and any
     # future writer all get it from the one place.
@@ -1499,6 +1614,7 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
         basic=_as_opt_bool(raw.get("basic"), f"{where}.basic"),
         category=category,
         category_trust=category_trust,
+        category_provenance=category_provenance,
         facts=facts,
         facts_trust=facts_trust,
         provenance=PartProvenance(
@@ -1528,7 +1644,9 @@ def entry_to_json(entry: PartEntry) -> dict[str, Any]:
     ``machine_verified`` — a tier a machine granted, which a reader has to see
     before trusting the number — is always spelled out. ``category_trust`` (527D)
     obeys the identical rule beside ``category``: absent means a human signed the
-    class. A closed gate writes the entry's ``candidate_facts`` under ``facts`` so
+    class, and its **evidence** (527D2's ``category_provenance``) is likewise
+    written only when there is any — a hand-signed class keeps its exact old
+    bytes. A closed gate writes the entry's ``candidate_facts`` under ``facts`` so
     the claim is reviewable in the diff; ``candidate_facts`` itself is derived,
     never serialised.
     """
@@ -1562,6 +1680,18 @@ def entry_to_json(entry: PartEntry) -> dict[str, Any]:
     # old bytes and only the machine tier is spelled out.
     if entry.category_trust != FACTS_TRUST_VERIFIED:
         body["category_trust"] = entry.category_trust
+    # 527D2: the machine-verified class's evidence, when there is one — written
+    # verbatim (the same three fields the `--json` report carries) so the shelf
+    # can answer "where did this class come from" after the terminal is gone.
+    # Absent (the human tier's shape) writes nothing, for the same ruling one
+    # line up: a key on the 109 entries that predate the field would be a claim
+    # nobody made, and would rewrite every line of the shelf.
+    if entry.category_provenance is not None:
+        body["category_provenance"] = {
+            "source": entry.category_provenance["source"],
+            "page": entry.category_provenance["page"],
+            "quote": entry.category_provenance["quote"],
+        }
     # The authored facts go to the file either way: a candidate's claim has to be
     # reviewable in the diff, which is where the verification happens. `verified`
     # is **not** written, so the pre-039 entries stay byte-identical.

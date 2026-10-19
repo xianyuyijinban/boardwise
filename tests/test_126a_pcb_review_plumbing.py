@@ -1246,11 +1246,31 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # verdict 不涂绿）；`core/parts.py`、`core/power_domains.py`、
     # `core/partkind.py`、`engines/checkup.py` 的改动不在本配方里。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    # 527D 的挖洞修复（主代理重钉，第二十九批之二）：H5 给 `_category_state` 加了
-    # candidate 分类的无条件闸、L1 把 `_category_absent_reason` 的分支顺序对齐，
-    # 两处都在 `rules/facts.py` 一个直接文件里 ⇒ 两个摘要一起动
-    # （4eb1135e/d8cc0aa7 -> 4733469e/78b346aa）。
-    assert old_digest == "4733469e"
+    # 527D 的挖洞修复（第二十九批之二）：H5 给 `_category_state` 加了 candidate
+    # 分类的无条件闸、L1 把 `_category_absent_reason` 的分支顺序对齐，两处都在
+    # `rules/facts.py` 一个直接文件里 ⇒ 当时的两个钉值是 4733469e/78b346aa。
+    # 527D3 落在同一棵树上，把这两个值又各自推了一格（见下）。
+    # **527D3 moved BOTH** — direct 4733469e -> b05d3384，recursive 78b346aa ->
+    # 674e07e1（第三十批 527D3，H3 的收口：`entry.category` 的十四个直读点改走
+    # `core.partkind.declared_category` + `category_verdict`）。本批落在
+    # `rules/` **十五个文件**：六个**直接**文件 —— `facts.py`（`_category_state`
+    # 改为走共享入口，并新增 `category_gate_finding`：机器档/草稿分类的那一行免责
+    # 文案与形状写一次）、`decap.py`、`params.py`、`paramspec.py`、
+    # `archclosure.py`、`railratings.py`；九个 `pcb/` 下的 —— `crystal.py`、
+    # `crystalkeepout.py`、`fbplacement.py`、`foc.py`、`focground.py`、
+    # `focthermal.py`、`mcureset.py`、`mcusupply.py`、`regulator.py`。
+    # 三个读点在 `core/`（`partkind.py` 的新入口、`architecture.py` 的四个读点与
+    # `gated_classifications` 披露行、`power_domains.py` 的推断），按本配方
+    # 的定义**不进摘要** —— 与 131c/131d/131f 记过的同一条限制一致。
+    # **判决语义**：人签档的产物逐字节不变（无夹具条目带机器档分类，见
+    # `tests/test_527d3_declared_category.py` 的端到端两条）；机器档/草稿档从
+    # 「静默跳过」变成「出免责行或 UNKNOWN」。两个值都在**只含 527D3 的 `rules/`
+    # 树上**直接量得（命令同上方 171 条）；同一工作树另有 `cli.py`、
+    # `engines/router.py`、`connector/`、`bridge/protocol.py` 等未提交改动，均不在
+    # 本配方内。**本段的两个数就是 527D3 落地时那两条断言里的值，一字不差**（红队
+    # S7：本段粗体曾写成 e3540c5a/297f629d，与同一段的断言不同，账本里同一件事出现
+    # 三组数、后来者无从判断哪组权威；错的是散文，不是断言）。后来的批次若又动了
+    # `rules/`，按本文件惯例在末尾另起一段记新值，**不动本段**。
     # eb48cb9b -> 5c878604（517：191D 的稳压器输出档 500 -> 800 与「输入档一个
     # 电容都没有 -> WARN」，外加 A1 的同层测量 `net_clearance(same_layer_only)`）。
     # 三处都在 `rules/pcb/` 与 `core/measure.py` 里，所以两个摘要一起动。
@@ -1267,7 +1287,26 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 改动无关（`core/designintent.py`、`tasks/088b-…` 不在本配方里）。
     # **判决语义**的钉在 `tests/test_527_parts_classify.py`（词表闸、两个档位、
     # 引文闸、机器档只喂计算、旧条目逐字不变）。
-    assert recursive == "78b346aa", (
+    # **527D3 fix moved BOTH** — direct b05d3384 -> acb185c4，recursive
+    # 674e07e1 -> 94153a7f（第三十批 527D3 的挖洞修复：红队 S1/S2/S5 的共同根因
+    # 「草稿档的类在数字类读点被折成 ABSENT，连一句免责都不出」）。落点又是
+    # `rules/` 的**七个文件**：直接文件 `decap.py`（`cap_candidates_on` /
+    # `same_net_capacitors_on` 保留「货架说它是电容、档位不采信」的件，
+    # 标 unreadable 而不是剔除 —— DECAP-1 走 UNKNOWN，不再出假 WARN）、
+    # `params.py`（`_kind_of` 改三态 + 免责行）、`paramspec.py`
+    # （`independent_rail_price` 的第三槽、`TvsStandoffRail` 的双门都不接纳时出
+    # UNKNOWN）、`archclosure.py`（gated 成员记下继续走，结论不再依赖网表顺序）、
+    # `railratings.py`（免责句的 `allow_machine` 跟判闸同一个值），
+    # 以及 `pcb/` 下的 `distance.py`（`_supply_nets` 收 UNKNOWN 态的 guess ——
+    # 轨不再悄悄退出 `pcb-decap-distance` 的射程）与 `foc.py`
+    # （`power_mosfets_of` 的 gated 只收 `found` 没接纳的件，同一份报告不再既量了
+    # 环路又说环路没量）。两个值都在本工作树上直接量得（命令同上方 171 条）；
+    # 同一工作树另有 `cli.py`、`engines/router.py`、`connector/`、
+    # `bridge/protocol.py` 等未提交改动，均不在本配方内。
+    # **判决语义**：人签档/机器档的产物逐字节不变（无夹具条目带这两档），
+    # 草稿档从「假 WARN / 一行没有」变成「UNKNOWN 或带免责的行」。
+    assert old_digest == "acb185c4"
+    assert recursive == "94153a7f", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

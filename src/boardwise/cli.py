@@ -311,9 +311,12 @@ def _version_text() -> str:
     """Two lines: this CLI, then the connector bundle it carries (028 §二.3).
 
     Both versions are *read*, never guessed. The CLI's comes from the package,
-    the bundle's from the ``extension.json`` beside the bundle — the same
-    manifest ``update-connector`` takes the pushed version from, so "what
-    ``--version`` says" and "what a hot update would install" cannot disagree.
+    the bundle's from the manifest beside the bundle. That manifest is
+    ``extension.json`` — the one the editor loads, and the one whose version
+    ``tests/test_528a_no_reload.py`` pins equal to ``connector/package.json``,
+    the file `build.mjs` actually bakes the announced version from (528A-b). The
+    two cannot drift while that test is green, which is why this display can keep
+    reading the file it has always read.
 
     A missing or unreadable manifest prints ``unknown`` **with the path it looked
     at**. A friend's bug report containing a path is worth more than a blank
@@ -813,7 +816,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     update.add_argument(
         "--version", default=None, metavar="X.Y.Z",
-        help="Version string to store (default: read from connector/extension.json).",
+        help=(
+            "Version string to store in the record (default: read from "
+            "connector/package.json). It is a **label**, not the version a "
+            "connector announces: what a connector announces is the string baked "
+            "into its bundle at build time (`build.mjs` inlines package.json's "
+            "version), so a value that differs from connector/package.json is "
+            "refused (exit 2, nothing written) — the read-back could never verify "
+            "it. Blank (or an empty `\"$VAR\"`) counts as not given. To tell two "
+            "builds apart, bump connector/package.json **and** connector/"
+            "extension.json, rebuild, and point `--bundle` at that build."
+        ),
     )
     update.add_argument(
         "--yes", action="store_true",
@@ -844,9 +857,31 @@ def build_parser() -> argparse.ArgumentParser:
             "per storage record and each window is reloaded and verified on its "
             "own line. Windows of one editor profile share an IndexedDB record, "
             "so the record changes once however many windows write into it, and "
-            "every window still reloads (the reload cannot be separated from the "
-            "write). Every window's unsaved state is lost — including windows "
-            "you did not name."
+            "every window still reloads (the write and the reload are one action; "
+            "`--no-reload` is the frame-level opt-out from the reload half); with "
+            "`--no-reload` **each online window needs its own menu click** — the "
+            "host re-evaluates an extension per window, so writing the shared "
+            "record does not wake the windows you did not click in (R4 measured). "
+            "Every window's unsaved state is lost — including windows you did not "
+            "name."
+        ),
+    )
+    update.add_argument(
+        "--no-reload", action="store_true",
+        help=(
+            "Write the bundle into the editor's extension storage and stop there: "
+            "**no reload is dispatched**, so nothing is activated and no unsaved "
+            "editor state is lost. The stored build takes over when EasyEDA next "
+            "re-evaluates the extension — click the boardwise menu once per window "
+            "(528A). Exit 0 means 'written', and explicitly not 'running'; there is "
+            "no window-table read-back to wait for. **The running build must be "
+            "528A or later for this to hold**: a build older than 528A does not "
+            "know `reload: false` and reloads the page anyway — the command detects "
+            "that from the reply's `reloadInMs` and says so (its exit code stays 0, "
+            "the write did land). The first `--no-reload` against an old editor is "
+            "therefore not reload-free: update once by the default route first. "
+            "Without this flag the write still schedules the reload, exactly as it "
+            "did before."
         ),
     )
     bridge.add_argument(
@@ -2285,7 +2320,10 @@ def build_parser() -> argparse.ArgumentParser:
             "unlocks the calculation rules and no connectivity / safety rule. "
             "With no evidence at all the class is written as the **human** tier "
             "(`verified`, the default — no key in the file) and the output says "
-            "so. Only the entry's `category` and `category_trust` move: every "
+            "so. Only the entry's class keys move: `category`, `category_trust`, "
+            "and — with evidence — `category_provenance` (527D2), which keeps "
+            "the three flags on the shelf so the citation survives the terminal "
+            "(a re-sign without evidence takes it back off): every "
             "other byte of the shelf is preserved, the file is backed up to a "
             ".tmp sibling and re-parsed with the real validator. Exit 0 written "
             "/ 2 a word outside the table, an entry the shelf does not have (this "
@@ -14198,6 +14236,9 @@ def _entry_dump(entry: object) -> dict:
     different answers about the same bytes, so the dump keeps both rather than
     letting a reader assume either.
     """
+    from .core.parts import FACTS_TRUST_MACHINE
+
+    category_trust = str(getattr(entry, "category_trust", "") or "")
     return {
         "key": entry.key,
         "mpn": entry.mpn,
@@ -14214,6 +14255,21 @@ def _entry_dump(entry: object) -> dict:
         "categoryTrust": str(
             getattr(entry, "category_trust", "") or ""
         ),
+        # 527D2: the class's own citation, when the shelf holds one — verbatim
+        # (the same shape `parts classify --json` reports), so a reviewer can
+        # re-check the conclusion without digging in the shelf file. Absent on a
+        # hand-signed class, which is the human tier's whole shape.
+        #
+        # Reported **unconditionally**, because it is raw data: a hand-edited
+        # shelf (or a sidecar's `curated.fields`) can pair a citation with a human
+        # signature, and the loader deliberately still loads that rather than
+        # refusing the whole shelf over one entry. `categoryProvenanceExpected`
+        # is the one bit a script needs to read the pair correctly — `null` here
+        # means "the evidence is missing" only when this is true.
+        "categoryProvenance": (
+            dict(getattr(entry, "category_provenance", None) or {}) or None
+        ),
+        "categoryProvenanceExpected": category_trust == FACTS_TRUST_MACHINE,
         "params": dict(sorted(entry.params.items())),
         "datasheetUrl": entry.datasheetUrl,
         "datasheetPdfUrl": entry.datasheetPdfUrl,
@@ -14346,6 +14402,39 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
         # No class but a signature on it: nothing reads this combination, and
         # printing the tier without the class would look like a classification.
         print(f"  category trust: {category_trust}（但没有 category，未分类）")
+    # 527D2: the machine-verified class's own citation, read back off the shelf.
+    # `category_trust` says *who* granted the class; this says *where the quote
+    # lives* — the pair a reviewer needs to re-check the conclusion, which is
+    # what the evidence was kept for (521's rule that a claim without its source
+    # cannot be traced).
+    #
+    # Printed for a **machine-signed** class only. The citation is that tier's
+    # evidence, so on any other tier it decides nothing; the loader keeps
+    # accepting the pairing (a whole shelf must not fail over one entry, and
+    # 0.5.18 shipped a `parts classify` that wrote the tier without the
+    # evidence), and this block is where the two directions are told apart
+    # rather than left for a reader to infer.
+    category_evidence = getattr(entry, "category_provenance", None)
+    if entry.category and category_trust == FACTS_TRUST_MACHINE:
+        if category_evidence:
+            print(
+                "  category provenance: "
+                f"{category_evidence['source']} 第 {category_evidence['page']} 页"
+            )
+            print(f"    quote: {category_evidence['quote']}")
+        else:
+            # Reachable from a shelf written before 527D2 (0.5.18's `parts
+            # classify` set the tier, not the evidence) and from a sidecar that
+            # set `category_trust` alone. Silence here would read as "checked,
+            # nothing to cite".
+            print("  category provenance: 未记录出处（该条目在 527D2 之前写入）")
+    elif entry.category and category_evidence:
+        # A hand-signed class carrying a citation: the loader loads it, the
+        # reader must not read it as a check.
+        print(
+            "  category provenance: 这条分类是人签的，落盘的引文不参与判定"
+            "（引文是机器档的证据；档位看上面的 category trust）"
+        )
     print(f"  params: {len(entry.params)} field(s)")
     print(f"  datasheet: {entry.datasheetUrl or '-'}")
     print(f"  datasheet pdf: {entry.datasheetPdfUrl or '-'}")
@@ -16297,8 +16386,10 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
 
     The same JSON-document write `parts fetch` performs, for the same reasons: a
     library-wide re-serialisation reorders every other entry's keys, so only the
-    touched entries' bytes move, the file is backed up first, and the result is
-    re-parsed with the real validator before the write is called done.
+    touched entries' **contents** move (the document's own formatting is
+    normalised, see :func:`_cmd_parts_classify`), the file is backed up first,
+    and the result is re-parsed with the real validator before the write is
+    called done.
 
     Two refusals, both inherited from the existing discipline:
 
@@ -16401,6 +16492,14 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
                 existing.category_trust
                 if existing is not None
                 else FACTS_TRUST_VERIFIED
+            ),
+            # 527D2: the machine-verified class's evidence rides with the tier
+            # it belongs to — a rebuild that inherited `category_trust` but
+            # dropped `category_provenance` would keep the "machine granted
+            # this" claim while erasing the citation that lets anyone re-check
+            # it (the H1 shape, one field over).
+            category_provenance=(
+                existing.category_provenance if existing is not None else None
             ),
             manufacturer=existing.manufacturer if existing is not None else "",
             deviceUuid=existing.deviceUuid if existing is not None else "",
@@ -16528,7 +16627,19 @@ def _classify_evidence(args: argparse.Namespace) -> tuple[dict | None, str]:
     the tool read a file the caller never named as a datasheet), and the quote's
     floor is 521's own constants (`QUOTE_MIN_CHARS` / `QUOTE_MIN_TOKENS`) rather
     than a second number chosen here.
+
+    527D2: "re-used" is also why the scheme test is now
+    :func:`boardwise.core.parts.citation_source_defect` rather than a prefix
+    comparison typed here. The prefix test passed `http://` and `file:` — a
+    scheme and no document — and this is the command that turns `--from` into a
+    **shelf** citation, so it was the door the fake one walked through.
     """
+    from boardwise.core.parts import (
+        CITATION_SOURCE_HOST,
+        CITATION_SOURCE_PATH,
+        CITATION_SOURCE_SCHEME,
+        citation_source_defect,
+    )
     from boardwise.engines import hunt
 
     source = str(getattr(args, "source", "") or "").strip()
@@ -16543,10 +16654,22 @@ def _classify_evidence(args: argparse.Namespace) -> tuple[dict | None, str]:
             '`--from <URL|file:路径> --page <N> --quote "…"`；'
             "只给一半的话，这条分类是按机器档还是人工档记账就必须靠猜——本命令不猜"
         )
-    if not source.lower().startswith(("http://", "https://", "file:")):
+    defect = citation_source_defect(source)
+    if defect == CITATION_SOURCE_SCHEME:
         return None, (
             f"--from 只收 http(s) URL 或 file: 路径（522/524 的保密口径），"
             f"拿到 {source[:80]!r}：本地文件要写成 `file:<路径>`，裸路径不收"
+        )
+    if defect == CITATION_SOURCE_HOST:
+        return None, (
+            f"--from 的 http(s) 里没有主机名：{source[:80]!r} 是一个协议名、"
+            "不是一份文档——落货架的引文要能回指到一份打开得了的资料，"
+            "写不出地址就别给 `--from`（无引文按人工签署记账）"
+        )
+    if defect == CITATION_SOURCE_PATH:
+        return None, (
+            f"--from 的 file: 后面没有路径：{source[:80]!r}——空路径指向的是"
+            "当前目录，不是一份引文（本地 dump 写成 `file:<路径>`）"
         )
     needle = hunt.fold_whitespace(quote)
     if len(needle) < hunt.QUOTE_MIN_CHARS or len(needle.split()) < hunt.QUOTE_MIN_TOKENS:
@@ -16560,8 +16683,12 @@ def _classify_evidence(args: argparse.Namespace) -> tuple[dict | None, str]:
 
 def _classify_pages(
     evidence: dict, entry: object, cache_root: str | None
-) -> tuple[list[str] | None, str]:
-    """``(pages, error)`` — the document a classification's quote is checked on.
+) -> tuple[list[str] | None, str, str]:
+    """``(pages, checked_source, error)`` — the document a quote is checked on.
+
+    ``checked_source`` is **which document was actually read** — the third answer
+    the output needs (527D2): "the quote is verbatim" is a claim about *a
+    document*, and a reader who is not told which one cannot re-check anything.
 
     Two routes, both **offline**:
 
@@ -16569,12 +16696,24 @@ def _classify_pages(
       `parts fetch` / `parts hunt` leave one (`<<<page N>>>` markers); a `.pdf`
       goes through the same pypdf helper those commands use. A text file with no
       markers is **one page**, which is the honest reading of an excerpt somebody
-      pasted into a file.
+      pasted into a file. ``checked_source`` is that path.
     * ``http(s):`` — the dump stage one already cached for **this entry**
       (`<cache>/<C码>/<C码>.pages.json`, exactly what `--apply-facts` reads). The
       command never dials out: 521's point is that a reading is checked against a
       document on disk, and a classification fetched over the wire would be a
       second, unaudited channel hidden under a flag whose other half is a citation.
+
+    527D2 closes the hole this route had (measured): the ``http(s)`` leg read the
+    cache by the entry's **identity** and never looked at ``evidence["source"]``,
+    so the string a caller typed landed on the shelf as the citation of a quote
+    that was checked against something else entirely — ``--from
+    https://totally-unrelated.example/x.pdf`` was accepted and written beside a
+    `machine_verified` conclusion. The URL is therefore **matched against the
+    cache's own record** (``<cache>/<key>/<key>.meta.json``, written by
+    `parts fetch`/`hunt` when the bytes arrived) and a mismatch is refused, as is
+    a cache entry with no recorded url: "which document is this" is answered from
+    the cache or not at all, and a citation the tool cannot corroborate is the one
+    thing this command must never write.
     """
     from boardwise.engines import hunt
 
@@ -16589,37 +16728,54 @@ def _classify_pages(
             target = target.lstrip("/")
         path = Path(target)
         if not path.is_file():
-            return None, f"读不了 {path}（file: 后面指向的不是一个文件）"
+            return None, "", f"读不了 {path}（file: 后面指向的不是一个文件）"
         if path.suffix.lower() == ".pdf":
             try:
                 marked, _how = _pdf_text(path)
             except ValueError as exc:
-                return None, f"提取不了 {path} 的文本：{exc}"
+                return None, "", f"提取不了 {path} 的文本：{exc}"
         else:
             try:
                 marked = path.read_text(encoding="utf-8")
             except (OSError, ValueError) as exc:
-                return None, f"读不了 {path}：{exc}"
-        return (hunt.extract_pages(marked) or [marked]), ""
+                return None, "", f"读不了 {path}：{exc}"
+        return (hunt.extract_pages(marked) or [marked]), str(path), ""
 
     from boardwise.core.config import boardwise_home
 
     identity = {"lcsc": str(entry.lcsc or ""), "mpn": str(entry.mpn or "")}
     if not (identity["lcsc"] or identity["mpn"]):
-        return None, (
+        return None, "", (
             "这条货架条目既没有 C 码也没有 MPN，缓存里点不到它的资料——"
             "要么给 `--from file:<本地 dump>`，要么先给条目补上身份"
         )
     root = cache_root or str(boardwise_home() / "datasheets")
-    pages = hunt.read_document(hunt.Cache(root), identity)
+    cache = hunt.Cache(root)
+    pages = hunt.read_document(cache, identity)
     if pages is None:
-        return None, (
+        return None, "", (
             f"{root} 里没有 {identity['lcsc'] or identity['mpn']} 的页 dump"
             "（<cache>/<C码>/<C码>.pages.json）—— 先跑 `boardwise parts fetch "
             f"{identity['lcsc'] or identity['mpn']}` / `parts hunt` 把资料取回来，"
             "或把 --from 改成 `file:` 指向已有的 dump。本命令不外呼"
         )
-    return pages, ""
+    # From here the cache has a document; the citation has to name **that** one.
+    cached_url = str(cache.read_meta(identity).get("url") or "").strip()
+    if not cached_url:
+        return None, "", (
+            f"缓存里没有 {identity['lcsc'] or identity['mpn']} 的来源记录"
+            f"（{cache.meta_path(identity)}）—— 没有它就无法确认你给的 --from "
+            "是不是引文被核对的那份文档。先重跑 `parts fetch` 把那份取回来"
+            "（它写 meta），或改用 `--from file:<本地 dump>` 自己对上"
+        )
+    if cached_url != source:
+        return None, "", (
+            f"--from 给的 {source[:120]!r} 不是缓存里那份文档（缓存记的是 "
+            f"{cached_url[:120]!r}）。引文是在**缓存里那份**上逐字核对的，"
+            "所以落货架的 source 必须是它——要核别的地址，先用 `parts fetch` "
+            "把那份取进缓存，或改用 `--from file:<本地 dump>`。本命令不外呼"
+        )
+    return pages, cached_url, ""
 
 
 def _cmd_parts_classify(args: argparse.Namespace) -> int:
@@ -16639,10 +16795,23 @@ def _cmd_parts_classify(args: argparse.Namespace) -> int:
     key in the file) — and the output says which of the two happened rather than
     letting a reader assume the stronger one.
 
-    Only two keys of one entry move: `category` and `category_trust`. The write is
-    the JSON-document edit `parts add` already makes (backup to a `.tmp` sibling,
-    re-parse with the real validator, roll back on refusal), which is what keeps
-    every other byte of the shelf — and of every other entry — exactly where it was.
+    Only the class's own keys of one entry move: `category`, `category_trust`,
+    and — with evidence — `category_provenance` (527D2), which lands the three
+    flags verbatim on the shelf so the citation survives the terminal and the
+    `--json` report (a re-sign without evidence takes all three back off). The
+    write is the JSON-document edit `parts add` already makes (backup to a
+    `.tmp` sibling, re-parse with the real validator, roll back on refusal),
+    which is what keeps every other **field** of that entry, and every other
+    entry's contents, exactly where they were.
+
+    Its *formatting* is not preserved (527D2's documentation pass, measured):
+    the document is re-serialised the way this toolchain writes JSON
+    (`indent=2`, `ensure_ascii=False`, one trailing newline, the platform's line
+    endings), so a shelf a person or another tool indented differently comes back
+    normalised — 4559 of 4561 lines of the real shelf differ after one run when it
+    is pre-formatted `indent=4, ensure_ascii=True`, with no value lost. The diff
+    is the whole file on such a pass, which is the one thing worth knowing before
+    calling this write minimal.
     """
     import json
     import shutil
@@ -16710,8 +16879,9 @@ def _cmd_parts_classify(args: argparse.Namespace) -> int:
         print(f"boardwise parts classify: {error}", file=sys.stderr)
         return 2
     tier = FACTS_TRUST_MACHINE if evidence else FACTS_TRUST_VERIFIED
+    checked_source = ""
     if evidence is not None:
-        pages, error = _classify_pages(
+        pages, checked_source, error = _classify_pages(
             evidence, entry, getattr(args, "cache", None)
         )
         if error:
@@ -16721,7 +16891,7 @@ def _cmd_parts_classify(args: argparse.Namespace) -> int:
         if not 1 <= page <= len(pages):
             print(
                 f"boardwise parts classify: --page {page} 不在 1..{len(pages)} 里"
-                f"（{evidence['source']} 一共 {len(pages)} 页）",
+                f"（{checked_source} 一共 {len(pages)} 页）",
                 file=sys.stderr,
             )
             return 2
@@ -16736,7 +16906,7 @@ def _cmd_parts_classify(args: argparse.Namespace) -> int:
 
     # The JSON-document edit, at the entry's own dict: mutating this object keeps
     # the order of its keys and touches nothing else in the file, which is what
-    # makes "only `category` and `category_trust` moved" a fact rather than a hope.
+    # makes "only the class's own keys moved" a fact rather than a hope.
     index = next(
         (
             position
@@ -16759,10 +16929,22 @@ def _cmd_parts_classify(args: argparse.Namespace) -> int:
         # No key at all is how the file spells a human signature (039/522): the
         # value `verified` is never written, and removing it is also what takes a
         # previous machine signature back — the downgrade an engineer performs by
-        # re-running the command without evidence.
+        # re-running the command without evidence. 527D2: the downgrade also
+        # takes the old machine run's evidence back off — a class a human just
+        # signed must not keep citing a quote nobody re-checked.
         body.pop("category_trust", None)
+        body.pop("category_provenance", None)
     else:
         body["category_trust"] = tier
+        # 527D2: the evidence lands on the shelf itself, verbatim — the same
+        # three fields the `--json` report carries. The terminal and the report
+        # are ephemeral; the citation's job is to survive them (521's rule: a
+        # fact without its source cannot be traced, and a conclusion is a fact).
+        body["category_provenance"] = {
+            "source": evidence["source"],
+            "page": int(evidence["page"]),
+            "quote": evidence["quote"],
+        }
 
     prospective, error = _prospective_shelf(raw, library_path)
     if prospective is None:
@@ -16785,6 +16967,12 @@ def _cmd_parts_classify(args: argparse.Namespace) -> int:
                 "categoryTrust": tier,
                 "categoryTrustBefore": entry.category_trust,
                 "evidence": evidence,
+                # 527D2: which document the quote was actually checked on — the
+                # cache's url record for `http(s)`, the opened path for `file:`.
+                # Equal to `evidence.source` on the `http(s)` leg by
+                # construction (the command now refuses a mismatch), stated
+                # rather than assumed.
+                "checkedSource": checked_source,
                 "entriesOnShelf": len(prospective.parts),
             },
             args.json_path,
@@ -16809,13 +16997,19 @@ def _cmd_parts_classify(args: argparse.Namespace) -> int:
     )
     if evidence is not None:
         print(
-            f"  evidence: {evidence['source']} 第 {evidence['page']} 页，引文逐字对上"
-            "（521 的闸）→ 机器核验档"
+            f"  evidence: {evidence['source']} 第 {evidence['page']} 页，"
+            "引文在**这份文档**上逐字对上（521 的闸）→ 机器核验档"
         )
+        # 527D2: "逐字对上" is a claim about *a document*, so the document is
+        # named rather than implied — for the `http(s)` leg this is the cache's
+        # own url record (the string `--from` had to match), for `file:` it is
+        # the path that was actually opened.
+        print(f"  checked document: {checked_source}")
         print(
             "  gate: 分类是**结论**（522 口径）——机器档只喂计算类规则"
             "（载流/降额/间距），连接/安规/隔离类规则仍要人签字"
         )
+        print("  证据已落货架（category_provenance）——出处可从 parts show 读回")
     else:
         print(f"  {CLASSIFY_NO_QUOTE_NOTE}（category_trust = verified，文件里不写键）")
     if was_machine and tier == FACTS_TRUST_VERIFIED:
@@ -17539,6 +17733,105 @@ UPDATE_VERIFY_BUDGET_S = 30.0
 #: any margin is a guess (025 batch 2's false FAILED was exactly that guess).
 UPDATE_RELOAD_MARGIN_S = 0.5
 
+#: ``--no-reload`` (528A): what the run states, and what the reader does next.
+#:
+#: The write's own reply says the bytes were stored; it never says they run.
+#: With the reload on (the default) the window table settles that question and
+#: ``verified`` is the word for exit 0. With ``--no-reload`` there is no such
+#: reading — nobody is going to reload, so every poll would report the state as
+#: unknown (exit 3) when it is in fact *known and deliberately unactivated*.
+#: Exit 0 here therefore means "written" and says so, and the second line names
+#: the one action that turns the stored bytes into running code: EasyEDA
+#: re-evaluates an extension bundle when the boardwise menu is opened, which is
+#: what 528A's R4 experiment measured (write the record, click the menu once,
+#: new build live — no editor reload, no unsaved state lost).
+NO_RELOAD_WRITTEN = (
+    "  written, NOT activated: {version} is now stored in {database}, but no "
+    "reload was dispatched — the editor keeps running the build it already "
+    "evaluated (exit 0 means written, not running; nothing was read back)"
+)
+NO_RELOAD_ACTIVATION = (
+    "  激活方式：在编辑器里点一次 boardwise 扩展菜单即生效 —— 不需要重载编辑器，"
+    "未保存的编辑不会丢（宿主在菜单点击时重新求值扩展包）"
+)
+#: The ``--all`` half of :data:`NO_RELOAD_ACTIVATION`. Re-evaluation is
+#: **per window**: 528A's R4 experiment ④ measured that writing the shared
+#: storage record leaves a window that was not clicked on the same instance id,
+#: the same old version, ``evaluations`` unchanged — so N windows need N clicks.
+NO_RELOAD_ALL_ACTIVATION = (
+    "  激活方式：**每个在线窗口各自点一次 boardwise 扩展菜单**（或让它重载）—— "
+    "宿主是逐窗重求值扩展包的，点过的那一窗才换 instance、才跑新代码；"
+    "写共享记录不会把没点过的窗口叫醒（R4 实验④实测：未点窗的 instance id、"
+    "版本、evaluations 三项不变）。都不需要重载编辑器，未保存的编辑不会丢"
+)
+
+#: The reply a **pre-528A** running build gives a `--no-reload` write.
+#:
+#: `reload: false` is a field the connector only learned to honour in 528A; an
+#: older build ignores it, schedules `location.reload()` anyway and answers
+#: ``reloadInMs: 500``. The write itself did land (so the exit code stays 0 —
+#: "written", not a failure), but everything the write-only mode promises about
+#: the *page* is false for that run, and unsaved editor state may already be
+#: gone. Saying "no reload was dispatched" here is the one thing that must not
+#: happen: it tells the reader their editor was left alone when it was not.
+NO_RELOAD_IGNORED_WRITTEN = (
+    "  written, but the RUNNING connector reloaded the editor anyway: {version} "
+    "is now stored in {database}, and the build that executed this write is older "
+    "than 528A — it does not know `reload: false`, scheduled its own "
+    "location.reload() ~{reload_ms:.0f} ms after answering (its reply's own "
+    "reloadInMs; a 528A build answers 0), and that page has already gone away"
+)
+#: The ``--all`` shape of :data:`NO_RELOAD_IGNORED_WRITTEN`: the windows that
+#: reloaded are named, one line per reloaded window (the reason above applies to
+#: whichever windows run the old build — the others may be genuinely dormant).
+NO_RELOAD_IGNORED_ALL_WRITTEN = (
+    "  written, but the RUNNING connector in {count} 个窗口 reloaded the editor "
+    "anyway: {windows} —— 这些窗口的运行 build 早于 528A，不认 `reload: false`，"
+    "在写入返回后 ~{reload_ms:.0f} ms 自己派发了 location.reload()"
+    "（各自回复里的 reloadInMs，非 0 就是它；528A 的 build 回 0），页面已经走了"
+)
+NO_RELOAD_IGNORED_ACTIVATION = (
+    "  运行中的 build 早于 528A，它仍然 reload 了 —— 这一次不是「免 reload」的写入："
+    "上述窗口里未保存的编辑可能已经丢失（写入本身成功，所以 exit code 仍是 0；"
+    "exit 0 是「写成功」，不是「没动过页面」）。\n"
+    "  先用一次默认更新把运行中的 build 换掉（`boardwise bridge update-connector --yes`，"
+    "这一条会 reload 一次，请先存好），落地新 build 之后 `--no-reload` 才真的免 reload"
+    "（`--all` 里没有 reload 的那些窗口仍要各自点一次 boardwise 扩展菜单才会跑新代码）"
+)
+
+
+def _reload_was_dispatched(reply: object) -> bool:
+    """Did the connector that answered this write schedule a reload? (528A)
+
+    The reply's ``reloadInMs`` is the *only* honest answer available on the
+    ``--no-reload`` path — there is no window table to read, and the field is
+    the connector's own account of what it did with ``reload: false``. Zero (or
+    absent, which is every pre-528A reply shape that never had the field) means
+    nothing was scheduled; anything else means the running build ignored the
+    field and the page is going away. A non-numeric value is treated as
+    "scheduled" rather than swallowed: the safe reading of "I cannot tell" is the
+    one that warns about lost unsaved state.
+    """
+    value = reply.get("reloadInMs") if isinstance(reply, dict) else None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return value is not None
+
+
+def _reload_in_ms(reply: object) -> float:
+    """The reply's ``reloadInMs`` as a number, for the warning's wording.
+
+    Display only: a value the connector sent that is not a number reads as
+    ``0.0`` here, and :func:`_reload_was_dispatched` is what decides whether the
+    warning is printed at all (it treats the same value as "scheduled").
+    """
+    value = reply.get("reloadInMs") if isinstance(reply, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return 0.0
+
 
 def _connector_artifacts() -> tuple[Path, Path]:
     """``(bundle, extension.json)`` paths of the connector build this install ships.
@@ -17566,6 +17859,128 @@ def _connector_artifacts() -> tuple[Path, Path]:
         )
 
 
+def _connector_version_source(extension_json: Path) -> Path:
+    """The manifest whose ``version`` the shipped bundle reports: ``connector/package.json``.
+
+    ``build.mjs`` inlines ``__BOARDWISE_VERSION__`` from **package.json**
+    (``connector/build.mjs`` reads ``pkg.version``; ``extension.json`` only
+    supplies ``__BOARDWISE_UUID__``), and the two consumers of that constant —
+    ``connector/src/version.ts`` and ``connector/tests/source-guard.test.mjs`` —
+    say the same. Reading ``extension.json`` here was 528A-a's wrong premise: the
+    file a caller may edit for the uuid is not the one the artifact names itself
+    with, so a drift between the two would refuse the only honest label and write
+    a record no bundle can ever announce.
+
+    Derived from the extension.json path rather than resolved through
+    :mod:`boardwise.resources` on purpose: the frozen exe's ``--add-data`` list
+    carries ``connector/extension.json`` but not ``connector/package.json``, so a
+    path the resource layer does not know about is the one that keeps working
+    from a checkout *and* reports "absent" instead of guessing on an older exe
+    (see :func:`_connector_manifest_version`, which falls back).
+    """
+    return extension_json.parent / "package.json"
+
+
+def _connector_manifest_version(extension_json: Path) -> str | None:
+    """The version string the shipped bundle reports about itself.
+
+    The write and the read-back look at two different things, and 528A-a is the
+    bug that comes from confusing them:
+
+    * ``sys.self_update`` stores ``config.version`` in the editor's IndexedDB —
+      it is a **label in the record**, and ``--version`` sets it;
+    * what a connector *reports* (``hello``, ``sys.probe``, the window table) is
+      the string ``build.mjs`` inlined into the bundle at build time, from
+      **``connector/package.json``** (``__BOARDWISE_VERSION__``; extension.json
+      only carries the uuid — see :func:`_connector_version_source`).
+
+    They agree only because the default write takes the label from the manifest
+    that the shipped bundle was built from. Returns ``None`` when neither
+    manifest can be read — the caller must not guess a version in that case.
+
+    The fallback to ``extension.json`` exists for the frozen exe, which ships
+    only that file: the guard must not deny every ``--version`` on a friend's
+    artifact. It cannot silently disagree at release time, because
+    ``tests/test_528a_no_reload.py`` pins the two manifests equal.
+    """
+    import json
+
+    for path in (_connector_version_source(extension_json), extension_json):
+        try:
+            version = json.loads(path.read_text(encoding="utf-8"))["version"]
+        except (OSError, ValueError, KeyError):
+            continue
+        if version:
+            return str(version)
+    return None
+
+
+def _explicit_version_refusal(version: str | None, extension_json: Path) -> str | None:
+    """Refuse an explicit ``--version`` no bundle from this manifest could report (528A-a).
+
+    Field report (2026-10-19, `test` window): `update-connector --version
+    0.5.18-nrl --yes` wrote ``0.5.18-nrl`` into the record and reloaded onto a
+    bundle whose embedded string is ``0.5.18`` — so the read-back compared
+    ``0.5.18`` (announced) against ``0.5.18-nrl`` (stored), declared FAILED, and
+    printed the uninstall-and-reinstall route for an update that had in fact
+    worked. The verdict could **never** have been anything but FAILED: the
+    question the read-back asks ("does a reconnected window announce what was
+    stored?") has no possible yes when the label and the bundle disagree.
+
+    So the refusal happens before anything is written, and the message has to
+    teach the distinction instead of leaving the reader with a rule they cannot
+    infer. Returns ``None`` when there is nothing to refuse: no explicit
+    ``--version`` (the manifest decides, as it always did), or one that matches
+    the manifest exactly. The compared string is the one
+    :func:`_connector_manifest_version` reads — ``connector/package.json``,
+    which is what the bundle announces, not ``extension.json`` (528A-a's premise
+    fix).
+
+    ``--bundle`` does not enter the decision on purpose. A bundle from outside
+    the repo carries an embedded version this process cannot read, and inventing
+    one would be the guess this whole guard exists to avoid; such callers are
+    told to drop ``--version`` or align it.
+    """
+    explicit = (version or "").strip()
+    if not explicit:
+        # Not given (or empty): the default path, where `_update_connector_payload`
+        # reads the version from the manifest itself. Unchanged.
+        return None
+    package_json = _connector_version_source(extension_json)
+    manifest = _connector_manifest_version(extension_json)
+    if manifest is not None and explicit == manifest:
+        return None
+    if manifest is None:
+        # Unreadable manifest: nothing to compare against, and a version the
+        # bundle may not report is exactly the write this guard exists to stop.
+        return (
+            f"boardwise bridge update-connector: --version {explicit} 给不出比对对象 —— "
+            f"读不到 {package_json} 的版本号，无法确认这个串是不是 bundle 会自报的版本；"
+            "拒绝写入（什么都没写）：\n"
+            "  ① --version 只写存储记录里的 version 字段；connector 上报的版本是 build 时"
+            "内联进 bundle 的常量（来自 connector/package.json，见 connector/build.mjs）。\n"
+            "  ② 拿不到 package.json 就没法确认两者一致，而一旦不一致，验收判据"
+            "「回连的窗口是否报刚存进去的版本」永远不可能满足 —— 与宿主是否重新求值无关。\n"
+            "  ③ 省掉 --version（让它从 package.json 取）或修好那份 manifest 再重跑；"
+            "--bundle 指向仓库外的包时本进程读不到它的内嵌版本，同样请省掉 --version"
+        )
+    return (
+        f"boardwise bridge update-connector: --version {explicit} 与 "
+        f"{package_json} 的版本 {manifest!r} 不一致 —— "
+        "拒绝写入（什么都没写）：\n"
+        "  ① --version 只写存储记录里的 version 字段；connector 上报的版本是 build 时"
+        "内联进 bundle 的常量（来自 connector/package.json，见 connector/build.mjs）。\n"
+        "  ② 两者不一致时，验收判据「回连的窗口是否报刚存进去的版本」永远不可能满足 —— "
+        "这跟宿主有没有重新求值无关，是版本串本来就对不上；照写下去只会得到一次"
+        "必然 FAILED 的更新，还可能把你赶去做一次没必要的卸载重装。\n"
+        "  ③ 真要区分两份 build，请把 connector/package.json 与 connector/extension.json "
+        "的版本号一起改掉后重新 build 一份 bundle，用 --bundle 指它；"
+        "或省掉 --version 让它从 package.json 取。\n"
+        "  （--bundle 指向的是仓库外的包时，本进程读不到它的内嵌版本，请把 --version "
+        "一并省掉或与 package.json 对齐。）"
+    )
+
+
 def _update_connector_payload(
     bundle_path: Path, extension_json: Path, version: str | None
 ) -> tuple[dict[str, str], int]:
@@ -17573,7 +17988,9 @@ def _update_connector_payload(
 
     Pure file work, separated from the wire so the encoding and the defaults
     are unit-testable without a daemon. Raises :class:`ValueError` on anything
-    unreadable — the caller renders it as exit 2.
+    unreadable — the caller renders it as exit 2. The default version is
+    :func:`_connector_manifest_version`'s — the string the bundle announces,
+    read from ``connector/package.json``.
     """
     try:
         bundle = bundle_path.read_bytes()
@@ -17582,15 +17999,13 @@ def _update_connector_payload(
     if not bundle:
         raise ValueError(f"bundle {bundle_path} is empty — run `npm run build` in connector/")
     if version is None:
-        import json
-
-        try:
-            manifest = json.loads(extension_json.read_text(encoding="utf-8"))
-            version = manifest["version"]
-        except (OSError, ValueError, KeyError) as exc:
+        default = _connector_manifest_version(extension_json)
+        if default is None:
             raise ValueError(
-                f"cannot read the version from {extension_json} ({exc}); pass --version"
-            ) from exc
+                f"cannot read the version from {_connector_version_source(extension_json)} "
+                f"(or {extension_json}); pass --version"
+            )
+        version = default
     import base64
 
     return {"bundleB64": base64.b64encode(bundle).decode("ascii"), "version": version}, len(bundle)
@@ -17650,17 +18065,67 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
     ``--no-verify`` restores the old behaviour (print "ok", return 0) for
     callers that would rather poll themselves.
 
-    The read-back is the window table either way, deliberately: the updated
-    window reconnects under a new instance id, so it cannot be addressed by the
-    old name, and a routed ``sys.probe`` in a multi-window session could be
-    answered by *any* window — the table is the only read that keeps the facts
-    per window.
+    ``--no-reload`` (528A) is the other end of the same trade: it writes the
+    record and **does not dispatch the reload at all**. `sys.self_update` is one
+    action that writes *and* schedules ``location.reload()``, so the frame is the
+    only place the reload can be dropped: ``--no-reload`` sends ``reload: false``
+    and the connector schedules nothing when that field is exactly ``false``.
+    Nothing is activated by this run; the editor re-evaluates an extension bundle
+    when the user opens the boardwise menu once, and *that* click is what makes
+    the stored bytes run. **Once per window** (528A-c): re-evaluation is
+    per-window — R4 experiment ④ measured that a window nobody clicked on keeps
+    the same instance id, the same old version and the same ``evaluations``
+    count after the shared record is written — so ``--all --no-reload`` needs one
+    click per online window, and the message for that mode says so.
+
+    **The promise is about the *running* build's cooperation** (528A-b): the
+    frame can only ask. A build older than 528A does not know ``reload: false``,
+    ignores it, schedules its own ``location.reload()`` and answers
+    ``reloadInMs: 500``. The field is the only witness on this path, so the
+    ``--no-reload`` report reads it and, when it is non-zero, says plainly that
+    the page went away and that unsaved edits may be lost — instead of the
+    "no reload was dispatched" line, which would then be false. The exit code
+    stays 0: the write itself really did land.
+
+    Two consequences follow, and both are why this mode is worth having:
+
+    * **no window-table read-back** — the whole point of the wait is "did the
+      page come back on the stored build", and nobody is coming back. Polling
+      would only turn a *known* state ("written, not running") into exit 3's
+      "unknown", so the command prints the write and returns.
+    * **no confirmation gate** — the [y/N] prompt exists because the reload
+      discards unsaved editor state. Nothing is reloaded *by this run*, and
+      asking would be theatre: consent is the act of passing the flag.
+      ``--yes`` may still be given and is not an error. The daemon's
+      ``confirm: true`` token **is** still sent — that is the dangerous-tier
+      gate's own field (the gate knows nothing about which half of the action a
+      caller wants), not a question to the person at the keyboard. A pre-528A
+      running build can still reload the page (above); that risk is stated in
+      the output, in `--help` and in docs/bridge.md §8 rather than turned back
+      into a prompt, because which build is on the other end is unknowable until
+      the frame has been sent.
+
+    Its exit codes are the write's, never a verdict's: **0** the record was
+    written (the line says "written, NOT activated" and never `verified`), **1**
+    the daemon or the connector refused the write (the reason is printed; a
+    ``DISCONNECTED`` transport says the outcome is *unknown* rather than
+    refused — the frame may have landed), **2** bad input, no daemon, or the
+    addressing refusal (several windows online with neither ``--instance`` nor
+    ``--all``).
+
+    Where there is a read-back it is the window table either way, deliberately:
+    the updated window reconnects under a new instance id, so it cannot be
+    addressed by the old name, and a routed ``sys.probe`` in a multi-window
+    session could be answered by *any* window — the table is the only read that
+    keeps the facts per window. (``--no-reload`` has none, for the reason above.)
     """
     import asyncio
 
-    BridgeClient, BridgeError, port, token = _open_cli(args)
     instance = (args.instance or "").strip()
     update_all = bool(getattr(args, "all", False))
+    # 528A: write-only mode. Read through `getattr` like `all` above: callers
+    # that build the Namespace by hand (tests, older scripts) predate the flag.
+    no_reload = bool(getattr(args, "no_reload", False))
     if instance and update_all:
         # Two answers to one question: `--instance` names a window, `--all` names
         # every window. Picking one of them silently would be exactly the guess
@@ -17672,7 +18137,38 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # **One token for the version, and it is stripped here** (528A-b). Before
+    # this, the guard compared `(version or "").strip()` while the frame carried
+    # the *raw* `args.version`: `--version " 0.5.18"` passed the gate and then
+    # wrote a label no bundle can announce, so the read-back could only report
+    # FAILED (and recommend a reinstall) for a write that had succeeded. A
+    # caller assembling the string in a shell — `--version "$VER"`, which on
+    # Windows carries the `\r` of a file read — hits exactly that.
+    #
+    # Blank means *not given* (528A-c): `--version ""` used to reach the
+    # connector raw and come back `BAD_REQUEST`/exit 1, neither the documented
+    # exit 2 for bad input nor the manifest default the code comment claimed.
+    # Stripped to nothing, it takes the default path; everything downstream —
+    # the gate, the payload, the read-back's `expected` — reads `params["version"]`,
+    # i.e. this same value.
+    if isinstance(args.version, str):
+        args.version = args.version.strip() or None
+
     default_bundle, extension_json = _connector_artifacts()
+    # 528A-a: before the bundle is even read, and long before any write — an
+    # explicit `--version` that no bundle from this manifest can report would
+    # only produce a record the read-back can never verify (see
+    # `_explicit_version_refusal`). Both addressing modes pass through here.
+    #
+    # It also stands **before `_open_cli`** (who reads the token and may start a
+    # daemon): the guard only reads local files, so a refused command should not
+    # leave a daemon running or mint `~/.boardwise/token` for a write it never
+    # sent — "nothing was written" has to be true of the machine, not just of
+    # the editor's storage.
+    refusal = _explicit_version_refusal(args.version, extension_json)
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return 2
     bundle_path = Path(args.bundle) if args.bundle else default_bundle
     try:
         params, byte_count = _update_connector_payload(
@@ -17698,6 +18194,17 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
         )
         return 2
 
+    # The daemon connection (and the token) is opened only once every local
+    # decision has been made: the version gate, the addressing refusal and the
+    # frame-size check all run above it, so a command that is going to be refused
+    # cannot start a daemon on its way to being refused.
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+    # The transport's own error codes live in the protocol module; this command
+    # only needs the one name it branches on (`DISCONNECTED`), so it imports it
+    # here rather than at module scope — same reason `_bridge_modules` exists:
+    # an offline `boardwise review` must not need websockets to be importable.
+    from .bridge.protocol import ErrorCodes
+
     print(
         f"boardwise bridge update-connector: {bundle_path} "
         f"({byte_count} bytes, {len(params['bundleB64'])} as base64) "
@@ -17707,8 +18214,21 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
         # of the log wants, and after the reload the window can no longer be asked.
         + (f" -> window {instance}" if instance else "")
         + (" -> all online windows" if update_all else "")
+        + (" -> 只写存储、不派发 reload" if no_reload else "")
     )
-    if not args.yes:
+    # `--no-reload` writes without reloading, so the [y/N] gate has nothing to
+    # protect: the prompt exists because the reload discards unsaved editor
+    # state (see the docstring). `--yes` is still accepted — a caller that
+    # always passes it should not have to special-case this mode.
+    #
+    # The confirmation stays skipped even though a *pre-528A* running build
+    # ignores `reload: false` and reloads anyway (see `_reload_was_dispatched`,
+    # and the warning that path prints): before the frame is sent there is no
+    # way to know which build is on the other end, and a prompt that appeared on
+    # every call to a mode whose whole point is "no prompt needed" would be the
+    # theatre this flag exists to remove. The risk is stated instead — here, in
+    # `--help`, and in docs/bridge.md §8.
+    if not args.yes and not no_reload:
         if not sys.stdin.isatty():
             print(
                 "boardwise bridge update-connector: confirmation needed and "
@@ -17763,12 +18283,16 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
                 windows=windows_before,
                 before=online_before,
                 args=args,
+                no_reload=no_reload,
             )
         if not instance and windows_before is not None and len(windows_before) > 1:
             # Before the write, on purpose: xianyuyijinban's 坑 1 was the daemon refusing
             # *after* an unhinted call had already been sent, which reads as a
             # failure of the update rather than as the question it actually is.
-            print(_multi_window_update_refusal(windows_before), file=sys.stderr)
+            print(
+                _multi_window_update_refusal(windows_before, no_reload=no_reload),
+                file=sys.stderr,
+            )
             return 2
         try:
             # `--instance` routes the hot update itself; without it the call is
@@ -17777,13 +18301,33 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
             # only reached after the interactive [y/N] above or an explicit
             # --yes, so the consent the daemon asks for has already been given
             # (2026-10-06: sys.self_update was risk=write and passed that gate
-            # with no consent at all).
+            # with no consent at all). In `--no-reload` the token is still sent
+            # but no prompt precedes it: the gate is the daemon's field, and
+            # nothing here reloads a page or drops unsaved state (docstring).
             data = await client.call(
                 "sys.self_update",
-                {**params, "confirm": True},
+                {**params, "confirm": True, **({"reload": False} if no_reload else {})},
                 **({"target_instance": instance} if instance else {}),
             )
         except BridgeError as exc:
+            # `DISCONNECTED` is the transport's own code for "the daemon went
+            # away while the action was in flight" (client.py normalises every
+            # dead-socket exception into it), and it is *not* a refusal: the
+            # frame may have reached the editor and the bytes may be in the
+            # record. Calling that "failed" the same way as a refused write
+            # asserts something nobody measured — and the reader who believes it
+            # would re-run an update they may not need.
+            if exc.code == ErrorCodes.DISCONNECTED:
+                print(
+                    f"boardwise bridge update-connector: 连接在写入途中断了 "
+                    f"[{exc.code}] {exc.message} —— **不确定**这次写入有没有落地"
+                    "（请求可能已经送到编辑器，也可能没有）。重连后用 "
+                    "`boardwise bridge update-connector --no-reload` 或 "
+                    "`boardwise bridge status` 核对运行中的版本，再决定要不要重跑；"
+                    "本次不报「写入被拒」",
+                    file=sys.stderr,
+                )
+                return 1
             print(
                 f"boardwise bridge update-connector failed [{exc.code}] {exc.message}",
                 file=sys.stderr,
@@ -17795,6 +18339,36 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
             f"  ok: {data.get('oldVersion')} -> {data.get('newVersion')} "
             f"({data.get('bytes')} bytes written to {data.get('database')})"
         )
+        if no_reload:
+            # 528A: the write is the whole outcome. Stated as such — "written,
+            # not activated" — because exit 0 here is *not* 020's `verified`:
+            # nothing was read back, nobody reloaded, so the running build is
+            # still the old one until the editor re-evaluates the extension.
+            #
+            # **Unless the build that took the write is older than 528A.** The
+            # reply's `reloadInMs` is the connector's own account of what it did
+            # with the field, and a non-zero value means it ignored `reload:
+            # false` and reloaded the page — so neither "no reload was
+            # dispatched" nor "unsaved edits are safe" may be printed (528A-b).
+            # The exit code stays 0: the record really was written.
+            if _reload_was_dispatched(data):
+                print(
+                    NO_RELOAD_IGNORED_WRITTEN.format(
+                        version=data.get("newVersion") or params["version"],
+                        database=data.get("database") or "(unreported storage)",
+                        reload_ms=_reload_in_ms(data),
+                    )
+                )
+                print(NO_RELOAD_IGNORED_ACTIVATION)
+                return 0
+            print(
+                NO_RELOAD_WRITTEN.format(
+                    version=data.get("newVersion") or params["version"],
+                    database=data.get("database") or "(unreported storage)",
+                )
+            )
+            print(NO_RELOAD_ACTIVATION)
+            return 0
         if args.no_verify:
             print(
                 "  the editor page is reloading now; the new build should "
@@ -17840,13 +18414,24 @@ def _cmd_bridge_update_connector(args: argparse.Namespace) -> int:
             # The only way to reach this branch: a connection that was **not**
             # online before the write announced a different build. The old socket
             # being still there is no longer evidence of anything but "not yet"
-            # (025 batch 2's false FAILED), so this is a real reload onto the
-            # wrong build, and the reader is told which window it was aimed at.
+            # (025 batch 2's false FAILED), so the page really did come back on
+            # something, and the reader is told which window it was aimed at.
+            #
+            # "a different build" is deliberately *not* asserted (528A-a): the
+            # string announced is the one baked into the *bundle*, and the string
+            # stored is the record's label. When those two differ for the same
+            # bytes — a `--bundle` built with another `__BOARDWISE_VERSION__` —
+            # the announcement is honest and this verdict is about the strings,
+            # not about a stale build. Naming both strings is what lets the
+            # reader tell the two apart, and `_write_without_activation_hint`
+            # right below opens with exactly that triage.
             print(
                 f"boardwise bridge update-connector: FAILED — the write stored "
                 f"{expected} but a connector that (re)connected after the write "
-                f"announces {running}: the page came back on a build other than "
-                f"the one just stored"
+                f"announces {running}: either the page came back on a different "
+                f"build, or the stored build reports a version string other than "
+                f"the one written (the record's label is not what a bundle "
+                f"announces — see below)"
                 + (f" (the write was aimed at window {instance})" if instance else "")
                 + f". {detail}；`boardwise bridge status` names every online "
                 "window's version",
@@ -17904,6 +18489,7 @@ async def _update_all_windows(
     windows: list[dict] | None,
     before: frozenset[str] | None,
     args,
+    no_reload: bool = False,
 ) -> int:
     """``--all``: every online window, one write and one verdict each (030 §二.1).
 
@@ -17919,8 +18505,18 @@ async def _update_all_windows(
 
     Order: writes first (so every page is reloading while the first verdicts are
     polled), then one poll per interval for all targets at once.
+
+    ``no_reload`` (528A) keeps the same addressing and the same per-window
+    writes, and drops the reload half of every frame: one line per window, each
+    saying written-not-activated, and no poll at all — see
+    :func:`_cmd_bridge_update_connector`'s docstring for why the wait would only
+    manufacture an exit 3. Exit 0 when every window's record was written.
     """
     expected = str(params["version"])
+    # The one transport code this function branches on; imported here for the same
+    # reason `_cmd_bridge_update_connector` does it (no websockets at module scope).
+    from .bridge.protocol import ErrorCodes
+
     if windows is None:
         print(
             "boardwise bridge update-connector: --all 需要 daemon 的窗口表来判断"
@@ -17953,10 +18549,12 @@ async def _update_all_windows(
             # interactive [y/N] or an explicit `--yes`, so nothing is being
             # confirmed on the user's behalf here.
             data = await client.call(
-                "sys.self_update", {**params, "confirm": True}, target_instance=key
+                "sys.self_update",
+                {**params, "confirm": True, **({"reload": False} if no_reload else {})},
+                target_instance=key,
             )
         except BridgeError as exc:
-            writes.append({"window": key, "error": f"[{exc.code}] {exc.message}"})
+            writes.append({"window": key, "error": f"[{exc.code}] {exc.message}", "code": exc.code})
             continue
         writes.append({"window": key, **(data if isinstance(data, dict) else {})})
     print("  bundle 写入（按存储记录去重）：")
@@ -17969,19 +18567,76 @@ async def _update_all_windows(
             + (
                 f"（{', '.join(group['changed'])}）；等值重写 {len(group['rewrites'])} 次"
                 f"（{', '.join(group['rewrites'])} —— 同记录已是该版本，"
-                "reload 只能由本动作触发，所以字节再写一遍、内容不变）"
+                + (
+                    "本次不派发 reload，字节再写一遍、内容不变）"
+                    if no_reload
+                    else "reload 只能由本动作触发，所以字节再写一遍、内容不变）"
+                )
                 if group["rewrites"]
                 else ""
             )
         )
     for write in writes:
         if write.get("error"):
-            print(f"    {write['window']}: 写入失败 {write['error']}")
+            if write.get("code") == ErrorCodes.DISCONNECTED:
+                # Same distinction as the single-window path: a dead transport
+                # is not a refusal, so "写入失败" would assert something nobody
+                # measured — the frame may have reached the editor.
+                print(
+                    f"    {write['window']}: 连接在写入途中断了 {write['error']} —— "
+                    "**不确定**这次写入有没有落地（可能已送到编辑器，也可能没有）；"
+                    "重连后用 `--no-reload` 或 `boardwise bridge status` 逐窗核对"
+                )
+            else:
+                print(f"    {write['window']}: 写入失败 {write['error']}")
             continue
+        note = ""
+        if no_reload:
+            # Per window, from that window's own reply: a pre-528A build in one
+            # window reloads even though its neighbour may not (`reload: false`
+            # is honoured by the build that executes the write, one window at a
+            # time).
+            note = (
+                "，已写入，但运行中的 build 早于 528A、仍然 reload 了"
+                if _reload_was_dispatched(write)
+                else "，已写入未激活"
+            )
         print(
             f"    {write['window']}: {write.get('oldVersion')} -> {write.get('newVersion')} "
-            f"({write.get('bytes')} bytes)"
+            f"({write.get('bytes')} bytes)" + note
         )
+    if no_reload:
+        # 528A: same addressing, same per-window writes, no reload half and no
+        # window-table wait — one line per window above, the state stated once.
+        #
+        # ...and the state is *not* always "written, NOT activated" (528A-b): a
+        # window running a pre-528A build ignored `reload: false` and reloaded
+        # itself, and it says so in its own `reloadInMs`. When any window did,
+        # the whole closing paragraph is replaced — never mixed with the
+        # "no reload was dispatched" claim, which is the one sentence a reader
+        # would act on (and the one that would be false).
+        reloaded = [
+            write
+            for write in writes
+            if not write.get("error") and _reload_was_dispatched(write)
+        ]
+        if reloaded:
+            print(
+                NO_RELOAD_IGNORED_ALL_WRITTEN.format(
+                    count=len(reloaded),
+                    windows="、".join(write["window"] for write in reloaded),
+                    reload_ms=max(_reload_in_ms(write) for write in reloaded),
+                )
+            )
+            print(NO_RELOAD_IGNORED_ACTIVATION)
+        else:
+            print(
+                f"  written, NOT activated: {len(keys) - len(failed)} 个窗口的存储记录已写入"
+                f"（{len(failed)} 个被拒），没有派发 reload，也没有读窗口表验收。"
+                "运行中的 connector 仍是旧代码（exit 0 是「写成功」，不是「在跑」）"
+            )
+            print(NO_RELOAD_ALL_ACTIVATION)
+        return 1 if failed else 0
     if args.no_verify:
         print(
             "  the editor pages are reloading now; the new build should reconnect "
@@ -18025,6 +18680,19 @@ async def _update_all_windows(
             unknown += 1
             print(f"    {key}: unknown — {detail}", file=sys.stderr)
     if failed:
+        # A dead transport is counted with the refusals (the window has no
+        # verdict and the run cannot be called a success), but it is not called
+        # one: "被拒" would assert the editor declined the write, when the only
+        # measured fact is that nobody knows whether it landed (see the
+        # single-window path's DISCONNECTED branch).
+        if any(write.get("code") == ErrorCodes.DISCONNECTED for write in failed):
+            print(
+                f"boardwise bridge update-connector: {len(failed)} 个窗口的写入没有确认"
+                "落地（含连接中断、**不确定**是否落地的那种）—— 整体算失败"
+                "（其余窗口的结果见上）；重连后用 `boardwise bridge status` 逐窗核对",
+                file=sys.stderr,
+            )
+            return 1
         print(
             f"boardwise bridge update-connector: {len(failed)} 个窗口的写入被拒 —— "
             "整体算失败（其余窗口的结果见上）",
@@ -18034,7 +18702,9 @@ async def _update_all_windows(
     if mismatch:
         print(
             f"boardwise bridge update-connector: FAILED — {mismatch} 个窗口 reload 回来"
-            f"报的不是刚存进去的 {expected}；{verified} 个 verified，{unknown} 个 unknown",
+            f"报的不是刚存进去的 {expected}（可能是另一份 build，也可能是你推的 bundle "
+            f"内嵌版本串与写进记录的版本串本来就不同 —— 见下）；{verified} 个 verified，"
+            f"{unknown} 个 unknown",
             file=sys.stderr,
         )
         print(_write_without_activation_hint(), file=sys.stderr)
@@ -18170,7 +18840,7 @@ def _window_table_lines(windows: list[dict]) -> list[str]:
     return [f"  {_window_label(window)}" for window in windows]
 
 
-def _multi_window_update_refusal(windows: list[dict]) -> str:
+def _multi_window_update_refusal(windows: list[dict], *, no_reload: bool = False) -> str:
     """The refusal for "several windows are online and you named none" (030 §二.1).
 
     The same story `MULTI_WINDOW_FIX` tells `doctor` (issue #6): refusing to guess
@@ -18179,6 +18849,17 @@ def _multi_window_update_refusal(windows: list[dict]) -> str:
     message carries both, plus the table to choose from: after the reload the
     window answers to a new instance id, so the ids have to be in the message
     *before* anything is written.
+
+    ``no_reload`` (528A) only swaps the cost sentence: under `--no-reload` the
+    `--all` route still writes every online window, and the unsaved-state
+    warning would be a lie — nothing reloads, so nothing is lost. The default
+    text is unchanged.
+
+    The one caveat that sentence carries (528A-b): "nothing reloads" holds for a
+    running build **528A or later**. Nothing has been sent at this point, so no
+    page can have been reloaded by this run — but a window still running an older
+    build would ignore `reload: false` and reload when the retry actually writes,
+    so the sentence says so instead of promising the page is safe.
     """
     lines = [
         f"boardwise bridge update-connector: {len(windows)} 个编辑器窗口在线，"
@@ -18189,7 +18870,13 @@ def _multi_window_update_refusal(windows: list[dict]) -> str:
         "两种做法：`boardwise bridge update-connector --instance <窗口 id>` 只更新一个窗口"
         "（id 见上表，更新后该窗口会换新 id，旧 id 作废）；"
         "或 `boardwise bridge update-connector --all` 更新全部在线窗口"
-        "（每一窗都会 reload，未保存的编辑会丢）。什么都没写。"
+        + (
+            "（本次带 --no-reload：每一窗只写记录，不 reload，未保存的编辑不丢 —— "
+            "前提是那一窗跑的 build 是 528A 或更新的：更旧的 build 不认 `reload: false`，"
+            "届时仍会 reload）。什么都没写。"
+            if no_reload
+            else "（每一窗都会 reload，未保存的编辑会丢）。什么都没写。"
+        )
     )
     return "\n".join(lines)
 
@@ -18216,11 +18903,31 @@ def _write_without_activation_hint(*, lead: str = "  ") -> str:
     ``protocol.ACTIONS`` has no uninstall / re-import / restart action (checked
     2026-10-12), so this step stays manual — and saying which steps they are beats
     a second `update-connector` that would fail exactly the same way.
+
+    **The triage comes first (528A-a).** The reinstall route is only the answer
+    when the stored version string and the announced one are the *same* string —
+    i.e. when the record really points at the running build and the editor simply
+    never re-evaluated it. A 2026-10-19 field run had the other shape: the write
+    stored ``0.5.18-nrl`` for a bundle whose embedded string is ``0.5.18``, the
+    read-back compared the two, called it FAILED, and sent the reader to
+    uninstall an extension that was running the new code perfectly. So the
+    sentence now says which condition makes it true, and what to check first —
+    mistaking cause ① for cause ② costs an uninstall, a re-import and a lost
+    pairing for nothing. (The pre-write guard,
+    :func:`_explicit_version_refusal`, stops the explicit ``--version`` form of
+    this at the source; what is left here is a ``--bundle`` built with a
+    different version, where no process on this side can read the bundle.)
     """
     return (
         lead + "bundle 已经写进编辑器存储，但编辑器没有重新评估它 —— "
         "「写入成功」≠「新代码在跑」：立创 EDA 只在加载时评估扩展包一次，"
-        "reload 换不掉已经运行的那份代码。要生效只能手动走一遍："
+        "reload 换不掉已经运行的那份代码。"
+        "先分诊、别急着卸载：下面这条结论只在「写进存储的版本串 == 运行中的 connector "
+        "上报的版本串」时成立 —— 若你推的 bundle 内嵌版本与写入的版本串不是同一个串"
+        "（手搓的 probe bundle，或 old build 把 --version 写成了另一个串），"
+        "两个串本来就不一样，那是那份代码在自报家门，不是没生效，"
+        "此时卸载重装什么也换不来，只会白丢一次配对状态。"
+        "确认是同一个版本串、reload 后窗口仍报旧版本，才走手动："
         "在立创 EDA 里卸载该扩展 → 重新导入 .eext → 重启编辑器；"
         "重启后再用 `boardwise bridge status`（或 About… 的版本行）核对版本号。"
         "bridge 的动作表里没有「卸载 / 重新导入扩展」这类动作，这一步自动化不了，"
@@ -25759,7 +26466,8 @@ class DoctorProbe:
     #: read its own SKILL.md — "not gathered" and "no harness installed" are
     #: different answers, and the empty tuple means the former.
     skill_statuses: tuple = ()
-    #: The in-repo connector version (`connector/extension.json`), '' when absent.
+    #: The in-repo connector version (`connector/package.json`, the string the
+    #: bundle announces — 528A-b), '' when neither manifest is readable.
     local_connector_version: str = ""
     ping: dict | None = None
     ping_error: str = ""
@@ -26208,7 +26916,8 @@ def run_doctor(p: DoctorProbe) -> list[DoctorCheck]:
                 label="运行中的 connector 版本与仓库一致",
                 ok=True,
                 skipped=True,
-                detail="跳过比对：本机没有 connector/extension.json（不是仓库里的运行方式）",
+                detail="跳过比对：本机读不到 connector/package.json 的版本号（退回 "
+                "connector/extension.json 也没有）—— 不是仓库里的运行方式，本项不作结论",
             )
         )
     elif not p.connector_version:
@@ -26629,19 +27338,24 @@ def _cmd_install_skill(args: argparse.Namespace) -> int:
 
 
 def _repo_connector_version() -> str:
-    """The version in the in-repo ``connector/extension.json``, or ``''``.
+    """The version the in-repo connector build reports about itself, or ``''``.
+
+    That is ``connector/package.json``'s version — the string `build.mjs` bakes
+    into the bundle (`_connector_manifest_version`), which is the one a
+    connector *announces* and therefore the only one that can be compared
+    against what the editor is running. ``extension.json`` used to be read here
+    (528A-a's wrong premise): it carries the uuid, and its version only matters
+    because it is pinned equal to package.json's.
 
     Read rather than imported: the comparison that matters is "what the editor
     is running" against "what this checkout would install", and a missing
     checkout is a legitimate installation (a wheel), not an error.
     """
-    import json
-
     try:
         _bundle, manifest = _connector_artifacts()
-        return str(json.loads(manifest.read_text(encoding="utf-8")).get("version") or "")
     except (OSError, ValueError, AttributeError):
         return ""
+    return _connector_manifest_version(manifest) or ""
 
 
 def _guided_step(check: DoctorCheck, step: int) -> str:

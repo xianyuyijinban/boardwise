@@ -139,7 +139,7 @@ def test_the_filter_is_the_fb_pin_role_and_nothing_looser():
     library = load_parts(default_library_path())
     # 1.0.0: exactly one FB divider, and the rejected group is named.
     model, _geometry = cli._load_model(FOC_100, view="pcb")
-    dividers = fb_dividers(model, library)
+    dividers = fb_dividers(model, library)[0]
     assert [(d.ic, d.upper, d.lower) for d in dividers] == [("U11", "R14", "R21")]
     # The group the mechanical criteria alone would have admitted, and why not.
     assert ("R26", "R35") not in [(d.upper, d.lower) for d in dividers]
@@ -159,14 +159,14 @@ def test_the_filter_is_the_fb_pin_role_and_nothing_looser():
     # entries and the TPS560430 is not one of them), so nothing is claimed for
     # this board — a stated consequence of 131b's category discipline, not a
     # gap in the sieve.
-    assert fb_dividers(dcdc_model, library) == []
+    assert fb_dividers(dcdc_model, library)[0] == []
     assert "TPS560430X3FDBVR" not in {
         entry.mpn for entry in library.parts if entry.category in REGULATOR_CATEGORIES
     }
 
     # ROBOT: an LDO with no FB pin at all is silence, not a row.
     robot, _geometry = cli._load_model(ROBOT, view="pcb")
-    assert fb_dividers(robot, library) == []
+    assert fb_dividers(robot, library)[0] == []
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ def test_the_runner_hands_each_document_its_own_netlist():
     # Only the 105-component document carries a regulator the shelf knows.
     with_regulators = [
         m for m in loaded
-        if {r.designator for r in _regulator_readings(m, load_parts(default_library_path()))}
+        if {r.designator for r in _regulator_readings(m, load_parts(default_library_path()))[0]}
     ]
     assert len(with_regulators) == 1
     assert len(with_regulators[0].components) == 105
@@ -623,7 +623,7 @@ def test_robot_names_no_feedback_divider():
     )
     assert findings == []
     model, _geometry = cli._load_model(ROBOT, view="pcb")
-    assert {r.designator for r in _regulator_readings(model)} == {"U8"}
+    assert {r.designator for r in _regulator_readings(model)[0]} == {"U8"}
     assert pin_role("") is None
     assert all(
         "pcb-regulator-fb-placement" in b["checksRun"] for b in section["boards"]
@@ -633,7 +633,7 @@ def test_robot_names_no_feedback_divider():
 def test_llc_names_no_regulator_either():
     """llc's shelf has no ``ic.ldo`` / ``ic.buck`` entry, so the rule is silent."""
     model, _geometry = cli._load_model(LLC, view="pcb")
-    assert _regulator_readings(model) == []
+    assert _regulator_readings(model)[0] == []
     schematic, _geometry = cli._load_model(LLC, view="schematic")
     findings, section = run_pcb_review(
         LLC, model=schematic, rules=[RegulatorFbPlacement()]
@@ -692,7 +692,7 @@ def test_an_en_threshold_divider_on_a_real_regulator_is_not_a_feedback_one():
                 )
     model.nets = nets
 
-    dividers = fb_dividers(model, _shelf())
+    dividers = fb_dividers(model, _shelf())[0]
     assert [(d.ic, d.upper, d.lower, d.tap_net) for d in dividers] == [
         ("U1", "R3", "R4", "FB_TAP"),
     ], "the EN threshold divider must not be reported as a feedback one"

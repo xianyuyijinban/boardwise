@@ -4,6 +4,104 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-10-19] 四条缝的只读红队：21 洞，20 修，其中 3 条比改动前更糟
+
+**这一轮的价值不在「修了多少」，在「差点发出去什么」**。六批功能落地后各派一个独立只读红队（不让它们看彼此的结论），
+挖出 21 条，修 20 条，1 条只进 release notes。修复共 **14 组变异**验证，全部按预期变红后逐字节还原。
+
+| 缝 | 洞 | 最重的一条（都是实测复现的） |
+|---|---|---|
+| 528A bridge | 5 + 3 附带 | 旧 connector 在场时 `--no-reload` **静默 reload**，而 CLI 无条件打印「不派发 reload / 未保存的编辑不会丢」并因此跳过 `[y/N]` —— 500 ms 后页面照样 reload，用户眼睛丢了且不会去怀疑。触发条件正是 `docs/bridge.md` 自己写的「第一次用 `--no-reload`」的常态 |
+| 527D2 证据落盘 | 6 | `category_provenance.source` **从来不是**「引文被核对的那份文档」：`_classify_pages` 的 http 分支只按条目身份读缓存、完全不碰 `evidence["source"]`，所以编一个 URL 就能落盘成权威出处，而输出还印着「引文逐字对上」。这正好砸掉 527D2 存在的唯一理由 |
+| 527D3 分档闸 | 9 | 草稿档电容把 DECAP-1 从 UNKNOWN 翻成**假 WARN**（`VIOLATION "no grounded capacitor found"`）。HEAD 是接受草稿档的，所以这是**比改动前更糟**的退化，不是"变严" |
+| 201F 启发式 | 1 + 3 记账 | memo key 漏了 `blocked`/`reserved`/`reserved_exempt`，墙**变少**时旧场会高估（构造复现 `h(start)=19.0 > 真最优 17.6`）。但实测整个 117 闸门 **111 次 route / 0 次命中** ⇒ 直接删掉 memo |
+
+**三条「比改动前更糟」的**（527D3 的 S1/S2/S3）都是同一个根因：`declared_category` 返回 `None` 把
+「档位不够」和「不是本规则的对象」塌成一个答案。修复引入 `category_verdict` 三态后，结论类出免责行，
+**数字类读点也不能消失** —— 草稿档电容留在库存里标 `unreadable`、草稿档 LDO 的轨仍进 supply 集合、
+`gated` 只收未被 `found` 接纳的件（否则报告会「既量了环路又说环路没量」）。
+
+**我裁错了一条**：527D3 的 S7 我以为是纯文档修复，但修 `rules/` **本身会再次移动指纹**
+（`b05d3384→acb185c4`、`674e07e1→94153a7f`）。子代理按该文件惯例**追加新段落**并钉新值，
+让 527D3 那段保持历史准确 —— 比按我说的改更对。
+
+**一条协调失误**：两个修复同时动 `cli.py`，其中一个的**变异**会临时破坏语法，导致另一个跑测试时
+9 failed + 8 collection errors（全是别人的 `import` 失败）。以后同一文件上的变异验证要串行。
+
+**最终读数**：pytest **6621 passed / 25 skipped / 0 failed**（7:28）；connector **536 passed** + tsc；
+dsh **50 passed / 1 skipped** + typecheck + build；83 预览逐字节相同。
+
+## [2026-10-19] 527D3 + 201G：分类读点的三态闸，与 0 候选的三层真因
+
+**两条都推翻了一个「已经知道」的结论**：一条是发版夜收窄过的承诺（机器档分类还能驱动结论规则），
+一条是我自己前一天读代码读出来的判断（`same-column(Q1,R5)` 无解）。
+
+- **527D3 分类读点的分档感知**：入口 `partkind.declared_category(entry, allow_machine=…)` 四态 +
+  **`partkind.category_verdict(...)` 三态（ACCEPTED / GATED / ABSENT）**。后者才是解决问题的那一半：
+  `None` 会把「档位不够」和「不是本规则的对象」塌成同一个答案，于是一件**真 MCU、只是分类没人签字**
+  会被规则静默跳过——比改之前更糟。17 个读点逐条判「数字 vs 结论」，机器档 + 结论类一律出
+  **带免责的 finding 或 UNKNOWN 行**；唯一例外是 `core/architecture.py` 走**每板一句披露行**
+  （那条 walk 产的是骨架不是 per-part finding，模块里写明了）。`declared_category` 旧四态未改。
+  夹具对拍（`ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2`）：**人签档全流程逐字节相同**
+  （`blocklib/parts.json` 里 `category_trust` 出现 **0 次** ⇒ 闸在夹具路径上是可证的 no-op），
+  机器档路径 20 条新增全是披露/UNKNOWN；变异 2/2；指纹重钉 `b05d3384`/`674e07e1`。证据 `outputs/527d3/evidence.md`。
+- **201G 反激 0 候选的三层真因**（`outputs/201g/evidence.md`）：
+  - **我前一天的读法只对一半**。`same-column(Q1,R5)` 确实被 `here_fixed and there_fixed → continue` 跳过，
+    但它**有解**——只把 R5 换成 accepted 集合里的 `rotation=90/270`，违反清单就清零，加宽的 18 档里根本没有它。
+    卡住它的是 `_variants` 只走 pose 0/1，加宽档走一个**全局** `pose_index`，一换会把 T1/D3 一起换掉。
+  - **真正让 24 档全灭的是 `right-of(D3, T1)`**：两端都是 chain，`right-of` 不在 `_PIN_KINDS` → 按 origin 量，
+    而 chain 把 5 个成员放在同一根轴（实测 x 全 0）⇒ 在这条构造求解器里结构性无解。
+  - **「24 档死因是同一条关系」是读数假象**：`_place_chain_and_shelf` 只 `return conflict[0]`，
+    标签函数只取那条第一冲突再按字典序挑。note 里那句统计是编出来的。
+  - **删关系救不回来**：删 `same-column` → 仍 0 候选；删 `right-of(D3,T1)` → 仍 0 候选；
+    **两条一起删 → 0 候选 / 7 拒**（关系全过，进闸后被 readability 拒 10 条）。
+  - **旗标席位（B）是「布局太挤」不是「求解器保守」**：`D3.1` 在 (90,150)，D3 自己器体在
+    (82.5,161.5,98.5,175.5)，脚**正上方 11.5 单位** ⇒ 任何 `length > 11.5` 的向上档 lead 必然穿自己器体；
+    唯一不穿的 `length=10` 档，glyph+名字行盒高 20.5 > 净空 11.5。向下每档都在 (90,145) 穿 `LED_K` 线。
+    pin 正上方连续可用 2 格，正下方 0 格。
+  - **修完 B 不会立刻出候选**：旁路强制解掉席位后，同一拓扑档立刻被 readability 拒 **27 条**，
+    其中 24~25 条与那面旗无关。我逐条看过，**零电气错误，全是「文字 vs 几何」**：
+    16 `text-overlap`（值文本压器体/压线）+ 7 `text-on-wire`（网名行被别的网穿 10~37 单位）
+    + 1 `wire-through-body`。⇒ 绘图线的真正大山是**文字行可移动性**，201D 试了又撤的那块。
+
+## [2026-10-19] 528A + 527D2：`--no-reload` 与「分类的证据落货架」（v0.5.19 工作树）
+
+**两条都是「工具说了它没做的事」**：一条是 CLI 承诺「只写不 reload」而 connector 那边写与 reload 是同一个动作，
+一条是 `classify` 收了三条证据却一个字没落盘。
+
+- **528A `bridge update-connector --no-reload`**：只写扩展存储、不派发 reload，exit 0，提示「点一次扩展菜单生效」。
+  改动必需跨到 connector 侧（`sys.self_update` 的 `reload:false`）——不然 CLI 的承诺在真机上是空头支票。
+  `--all`/`--instance` 逐窗一行、不轮询；`--yes` 可省（不丢未保存状态 ⇒ 无确认对象）；默认路径帧 **逐字不变**（不带
+  `reload` 键）。测试 20 条 + 变异 5 组；connector 534 passed + tsc 干净。**真机已验**（`test` 窗，`outputs/528a/evidence.md`）：
+  `--no-reload` 前后 instance id 都是 `inst-124815447-jjcl4qpr`，证明真没 reload；同时也反证了新 build 在跑
+  （旧 build 不认 `reload:false`，缺省 reload 必执行）。
+- **528A-a（真机自己炸出来的洞）**：`--version` 只写存储记录的 version 字段，而 connector 上报的是 **bundle 内嵌版本**
+  （build 时从 `extension.json` 内联）。两者不一致时验收判据「回连的窗是否报刚存的版本」**永远不可能满足** →
+  把一次成功的热更报成 FAILED，还劝人「卸载扩展 → 重新导入 → 重启编辑器」。实测那次新代码已经在跑，卸载重装纯属白干
+  （还会丢配对状态）。修法：显式 `--version` ≠ `extension.json` 时**直接 exit 2、零写入**；FAILED 文案改成分诊
+  （先排版本串不一致，再谈宿主没重新求值）。4 条测试 + 变异 2/2。
+- **527D2 `category_provenance`**：`parts classify --from/--page/--quote` 的三件套现在落到货架，形状
+  `{"source","page","quote"}`，与 `category_trust` 并排。独立字段而非复用 `provenance`/`notes`——那是**条目**的来历，
+  不是**分类结论**的出处，混在一起正是 522 想分开的两回事。人工档不写该键、降档时连证据一起摘；`entry_from_json`
+  对 `null`/非法形状报错（522 对 `facts_trust` 的同一条规矩）；109 条旧条目 round-trip 逐字节不变。
+  「只改两个键」这条约束改述为「只改分类自己的那三个键」，配套测试同步。6 条新测试 + 变异 2/2，相邻子集 287 passed。
+
+## [2026-10-19] 201E：A\* 贵的真因是启发式太弱，而整页 0 候选与它无关
+
+一次反激整页编译 **23.2 s**（`ok=False candidates=0 rejected=25 failures=1`），A\* 占 14.2 s。最贵三次
+`LED_K` 9.34 s / 74881 expanded、`COMP` 2.39 s / 14815、`SEC_GND` 2.25 s / 14602，**三次都第一次调用就
+`found=True`**，`rej_wall` 只占 1.3% —— 不是障碍多，也不是失败重试。
+
+真因：`h` 是**纯曼哈顿**，看不见 `CROSS_COST`（120），也看不见器体逼出来的绕行。铁证是 `expanded ≈ C*²`
+（展开的正好是半径 `C*` 的 L1 球：`COMP` 14815/122.2² = **0.99**）。受控实验 `CROSS_COST 120→1.0`：
+14.11 s → 0.67 s（21×），`LED_K` 展开 74881 → 343。Tie-break 无用；走廊裁剪 K=60 只省 17% 且有切掉最优解的风险。
+
+**更要紧的一条**：25 档里 24 档死在**关系约束** `same-column(Q1,R5)` / `near(R15,R3)`，剩下一档死在
+`SEC_12V` 旗标在 `D3.1 (90,150)` 无处可挂；`readability.check` **一次都没被调用**。读代码确认
+`same-column(Q1,R5)` 两端都是 chain 部件，relax 的 `fixed` 集合同时含它们 → 直接 `continue`，
+被归为 "pose-solvable" 而 pose 已穷尽。所以**绘图线的下一个靶子不是「文字行可移动性」，是 201G 那两个真因**。
+证据 `outputs/201e/evidence.md`；任务书 `tasks/201g_flyback_zero_candidate.md`。
+
 ## [2026-10-19] 527：0.6.0 之前必须收口的四件尾巴（v0.5.18 内测）
 
 **这一批不是新功能，是把「会带着错结论进正式版」的东西清掉**。清点写在 `tasks/527_pre060_loose_ends.md`：

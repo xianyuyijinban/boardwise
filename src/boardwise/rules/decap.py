@@ -41,6 +41,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from ..core.model import Component, DesignModel, is_ground_net
+from ..core.partkind import CATEGORY_GATED, category_verdict, declared_category
 from ..core.power_domains import domain_of, infer_net_domains
 from .base import Finding, FindingTarget, Outcome
 from .facts import (
@@ -74,6 +75,10 @@ def _capacitance_farads(comp: Component, library) -> float | None:
 
 
 _CAP_DESIGNATOR = re.compile(r"^C\d")
+
+#: 527D3 fix: the class whose tier gate :func:`_gated_capacitor` has to see
+#: through. One word, and it is the shelf's own (``docs/parts.md``'s table).
+_CAPACITOR_CATEGORIES = frozenset({"capacitor"})
 
 #: A footprint that is **only** a chip package size: `0603`, `C0603`, `C_0805`.
 #: This is the shape a capacitor carries when nobody ever filled its value in
@@ -167,7 +172,14 @@ def looks_like_capacitor(
             )
         )
     entry, _matched = resolve_facts(library, mpn=mpn, lcsc=lcsc, name=name)
-    if entry is not None and entry.category == "capacitor":
+    # 527D3: through the shared reader, at the **number** tier. Every consumer
+    # of this predicate turns "is a capacitor" into a capacitance (the decap
+    # rules, the FB-node pool, the regulator pools) or counts the part as
+    # inventory — the 522 line lets the machine tier drive that. A gated or
+    # draft class reads as no declaration and the value/designator routes
+    # below still answer, the same degradation the shelfless branch above
+    # takes.
+    if declared_category(entry, allow_machine=True) == "capacitor":
         return True
     # The conjunction: a C-prefixed designator (positional evidence) *and* a
     # decodable MPN code -- neither signal alone. This is what lets an
@@ -312,6 +324,13 @@ def cap_candidates_on(model: DesignModel, net_name: str, library=None) -> list[C
     terminals sit on the same net is not a bridge (039 批①b measured the second
     case on a real board). The *value* question is left to
     :func:`decide_required_cap` so that the same comparison serves both callers.
+
+    **A class the tier gate refuses is still inventory** (527D3 fix): a part the
+    shelf calls a capacitor at a tier this rule may not read
+    (:func:`_gated_capacitor`) stays in the pool with no readable value rather
+    than being dropped for having no declaration. Dropping it turned this net's
+    honest UNKNOWN (「a capacitor is present, its value cannot be established」)
+    into the false WARN 「no grounded capacitor found on net X」.
     """
     net = model.nets.get(net_name)
     if net is None:
@@ -321,7 +340,9 @@ def cap_candidates_on(model: DesignModel, net_name: str, library=None) -> list[C
         other = model.components.get(designator)
         if other is None:
             continue
-        if not _looks_like_capacitor(other, library):
+        if not _looks_like_capacitor(other, library) and not _gated_capacitor(
+            other, library
+        ):
             continue
         if not _bridges_to_ground(other, net_name):
             continue
@@ -351,6 +372,12 @@ def same_net_capacitors_on(
 
     Only capacitors that already look like capacitors reach this list; an
     unreadable part is C34's case (a candidate, not a phantom).
+
+    527D3 fix: 「already looks like one」 includes a class the tier gate refuses
+    (:func:`_gated_capacitor`) — a capacitor the shelf named without a signature.
+    Leaving it out here would make the row 「no grounded capacitor found on net
+    X」 the answer for a part that **is** on the net with both terminals there,
+    when what the reader needs to see is that it bridges nothing.
     """
     net = model.nets.get(net_name)
     if net is None:
@@ -364,7 +391,9 @@ def same_net_capacitors_on(
         seen.add(other.designator)
         if len(other.pins) < 2:
             continue
-        if not _looks_like_capacitor(other, library):
+        if not _looks_like_capacitor(other, library) and not _gated_capacitor(
+            other, library
+        ):
             continue
         connected = {pin.net for pin in other.pins if pin.net is not None}
         if connected == {net_name}:
@@ -389,6 +418,45 @@ def _looks_like_capacitor(comp: Component, library) -> bool:
         library,
         footprint=comp.footprint or "",
         name=str(comp.props.get("device_name") or ""),
+    )
+
+
+def _gated_capacitor(comp: Component, library) -> bool:
+    """The shelf calls this part a capacitor at a tier this rule may not read.
+
+    527D3 fix, and the reason it is a *separate* question from
+    :func:`_looks_like_capacitor`: route 2 of the predicate is a **class**, and
+    the tier gate refuses a draft's class (H5) — so the part reads as 「no
+    declaration」 and only routes 1 and 3 remain. That is the right reading of the
+    class and the wrong behaviour for this rule's inventory. A ``candidate``-tier
+    capacitor whose value is not on the board (route 1 fails) and whose designator
+    is not C-shaped or carries no decodable code (route 3 fails) fell out of
+    :func:`cap_candidates_on` entirely, the pool came back empty, and
+    :func:`decide_required_cap` answered ``missing`` — 「no grounded capacitor
+    found on net X」 — about a net that has one. A false statement about the
+    board, carrying a :class:`~boardwise.rules.base.FindingTarget` into apply,
+    and exactly the degradation 527D3 forbids.
+
+    So the pool keeps these parts and marks them **unreadable** instead of
+    dropping them: the part is inventory (the UNKNOWN row names it), and the
+    value — which the class was never going to supply anyway — is what is
+    missing. The class itself still drives nothing: this function only asks
+    whether the shelf *named* one, and :func:`candidate_farads` re-asks
+    :func:`looks_like_capacitor` before it will decode an MPN.
+    """
+    if library is None:
+        return False
+    from ..core.parts import resolve_facts
+
+    entry, _matched = resolve_facts(
+        library,
+        mpn=comp.mpn or "",
+        lcsc=comp.lcsc_part or "",
+        name=str(comp.props.get("device_name") or ""),
+    )
+    return (
+        category_verdict(entry, _CAPACITOR_CATEGORIES, allow_machine=True)
+        == CATEGORY_GATED
     )
 
 

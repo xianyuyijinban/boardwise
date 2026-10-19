@@ -96,7 +96,15 @@ from dataclasses import dataclass
 from ..base import Finding, FindingTarget
 from ...core.geometry import BoardGeometry
 from ...core.measure import component_distance
-from ...core.parts import resolve_component_facts
+from ...core.partkind import (
+    CATEGORY_ABSENT,
+    CATEGORY_GATED,
+    category_verdict,
+)
+from ...core.parts import (
+    FACTS_TRUST_VERIFIED,
+    resolve_component_facts,
+)
 from ...core.pinrole import pin_role
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on
@@ -185,6 +193,10 @@ class RegulatorReading:
     board_model: object = None
     #: The shelf category that made it a regulator — quoted in every finding.
     category: str = ""
+    #: 527D3: which tier signed ``category``, carried so the 免责 row can quote
+    #: the shelf's own tier in
+    #: :func:`boardwise.rules.facts.category_absent_reason`'s wording.
+    category_trust: str = FACTS_TRUST_VERIFIED
     #: ``{side: [nets]}`` — the pins whose name declared that side, grouped by
     #: the net each sits on.
     nets_by_side: dict[str, list[str]] = None
@@ -272,7 +284,9 @@ def _pool_reason(
 
 
 
-def _regulator_readings(model: object, library=None) -> list[RegulatorReading]:
+def _regulator_readings(
+    model: object, library=None, *, allow_machine: bool = False
+) -> tuple[list[RegulatorReading], list[RegulatorReading]]:
     """Every ``ic.ldo`` / ``ic.buck`` part, per board, with its pin roles read.
 
     The shelf is read once through :func:`boardwise.core.parts.load_parts` /
@@ -288,6 +302,16 @@ def _regulator_readings(model: object, library=None) -> list[RegulatorReading]:
     **name**. A ground pin, an enable pin and an unconnected ``NC`` all resolve
     to a role that is neither ``IN`` nor ``OUT``, which is the correct answer:
     only the two supply pins carry a capacitor-pool question.
+
+    527D3 reads the class through
+    :func:`boardwise.core.partkind.category_verdict` and hands back **two
+    lists** — ``readings`` (the shelf calls it a regulator at a tier this rule
+    may act on) and ``gated`` (it calls it a regulator at a tier this rule may
+    not: a machine-granted class for a conclusion rule, or a draft). Three rules
+    read this function (``pcb-regulator-cap-distance``, and 131c's
+    ``pcb-regulator-fb-placement`` twice), and all three owe each gated part a
+    免责 row rather than the silence a non-regulator gets — a real regulator
+    whose class nobody signed must not drop out of the regulator rules.
     """
     if library is None:
         try:
@@ -295,13 +319,16 @@ def _regulator_readings(model: object, library=None) -> list[RegulatorReading]:
         except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
             library = None
     readings: list[RegulatorReading] = []
+    gated: list[RegulatorReading] = []
     for _title, board_model in _board_models(model):
         components = getattr(board_model, "components", {}) or {}
         for designator in sorted(components):
             component = components[designator]
             entry, _matched = resolve_component_facts(library, component)
-            category = (entry.category or "") if entry is not None else ""
-            if category not in REGULATOR_CATEGORIES:
+            verdict = category_verdict(
+                entry, REGULATOR_CATEGORIES, allow_machine=allow_machine
+            )
+            if verdict == CATEGORY_ABSENT:
                 continue
             nets_by_side: dict[str, list[str]] = {
                 SIDE_INPUT: [],
@@ -321,17 +348,19 @@ def _regulator_readings(model: object, library=None) -> list[RegulatorReading]:
                 net = str(getattr(pin, "net", "") or "")
                 if net and net not in nets_by_side[side]:
                     nets_by_side[side].append(net)
-            readings.append(
-                RegulatorReading(
-                    designator=str(designator),
-                    component=component,
-                    board_model=board_model,
-                    category=category,
-                    nets_by_side=nets_by_side,
-                    unclassified_pin_names=tuple(unclassified),
-                )
+            reading = RegulatorReading(
+                designator=str(designator),
+                component=component,
+                board_model=board_model,
+                category=str(getattr(entry, "category", "") or ""),
+                category_trust=str(
+                    getattr(entry, "category_trust", FACTS_TRUST_VERIFIED)
+                ),
+                nets_by_side=nets_by_side,
+                unclassified_pin_names=tuple(unclassified),
             )
-    return readings
+            (gated if verdict == CATEGORY_GATED else readings).append(reading)
+    return readings, gated
 
 
 class RegulatorCapDistance(PcbRule):
@@ -368,7 +397,7 @@ class RegulatorCapDistance(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         """The pass itself, with the shelf handed in rather than read here.
 
@@ -378,6 +407,13 @@ class RegulatorCapDistance(PcbRule):
         inject a two-entry library without monkeypatching the project's own
         :func:`boardwise.rules.facts.read_default_library` (which
         :func:`~boardwise.rules.pcb.distance._supply_nets` shares).
+
+        ``allow_machine`` (527D3) is this rule's tier question, stated by the
+        caller with the conservative default
+        :func:`~boardwise.rules.pcb.mcureset.McuResetBoot.check_with_library`
+        uses: the rows are measurements, but 「this part is a regulator」 is an
+        identity. A class the tier refuses comes back in the reader's ``gated``
+        list and gets a 免责 row here.
         """
         board = ctx.board
         model = ctx.pcb_model
@@ -390,7 +426,10 @@ class RegulatorCapDistance(PcbRule):
         # says it is reading a fallback.
         schematic = schematic_board_of(ctx)
         findings: list[Finding] = []
-        for reading in _regulator_readings(model, library):
+        readings, gated = _regulator_readings(
+            model, library, allow_machine=allow_machine
+        )
+        for reading in readings:
             if board.component(reading.designator) is None:
                 continue  # no geometry on this PCB document: nothing to measure
             for side in (SIDE_INPUT, SIDE_OUTPUT):
@@ -405,7 +444,27 @@ class RegulatorCapDistance(PcbRule):
                                 reading, board, side, net, pool, library, schematic
                             )
                         )
+        for reading in gated:
+            findings.append(self._tier_gate_row(reading))
         return findings
+
+    def _tier_gate_row(self, reading: RegulatorReading) -> Finding:
+        """The 免责 row for a regulator the shelf names but this tier may not hear.
+
+        One call into :func:`boardwise.rules.facts.category_gate_finding`, which
+        owns the sentence — 131c and this rule read the same helper, so the two
+        regulator rules keep saying one sentence about one unsigned class.
+        """
+        from ..facts import category_gate_finding
+
+        return category_gate_finding(
+            rule_id=self.id,
+            level=self.level,
+            designator=reading.designator,
+            category=reading.category,
+            category_trust=reading.category_trust,
+            subject="它的输入/输出电容",
+        )
 
     # -- rows -------------------------------------------------------------
 

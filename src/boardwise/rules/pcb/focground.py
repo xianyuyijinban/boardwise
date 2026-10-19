@@ -139,7 +139,11 @@ from ...core.measure import (
 )
 from ...core.model import GROUND_NET_PREFIXES, is_ground_net
 from ...core.values import parse_resistance_ohms
-from ..facts import read_default_library
+from ..facts import (
+    category_absent_reason,
+    category_gate_finding,
+    read_default_library,
+)
 from .base import PcbReviewContext, PcbRule
 from .distance import _mil, _measurement
 from .foc import (
@@ -707,7 +711,9 @@ class TieReading:
         return self.ohms == ZERO_OHMS and self.ohms is not None
 
 
-def _looks_like_resistor(designator: str, value: str, model: object, library) -> tuple[bool, str]:
+def _looks_like_resistor(
+    designator: str, value: str, model: object, library
+) -> tuple[bool, str, str]:
     """Is this part a resistor, and which door said so.
 
     Two doors, exactly as 133b's :func:`~boardwise.rules.pcb.foc.power_mosfets_of`
@@ -725,14 +731,31 @@ def _looks_like_resistor(designator: str, value: str, model: object, library) ->
     :class:`~boardwise.core.parts.PartLibrary`; the shared call does that job, and
     it also walks the **device-name** step, so a board whose parts carry no MPN is
     judged from the same identity the gate used (task 186-H1).
+
+    527D3 adds a **third** return value, ``gated``, and it is why this function's
+    shelf door reads through :func:`boardwise.core.partkind.declared_category`
+    (at ``allow_machine=False`` — 「this is a 0 Ω resistor」 is an identity this
+    rule builds a tie reading on) while the designator door keeps its own,
+    independent answer. ``gated`` is non-empty exactly when the shelf **does**
+    call the part a resistor at a tier this rule may not read: the designator
+    door still decides, and the caller carries the sentence into the row so a
+    part the shelf classified — nobody signed — is never filed as 「the shelf
+    says nothing」. Empty for every other part, so a curated entry's row keeps
+    its exact old bytes.
     """
     from ...core.parts import resolve_component_facts
+    from ...core.partkind import declared_category
 
     component = (getattr(model, "components", {}) or {}).get(designator)
     category = ""
+    gated = ""
     if component is not None:
         entry, _matched = resolve_component_facts(library, component)
-        category = (entry.category or "") if entry is not None else ""
+        if entry is not None:
+            category = declared_category(entry, allow_machine=False) or ""
+            raw = str(getattr(entry, "category", "") or "")
+            if not category and raw.lower() in RESISTOR_CATEGORIES:
+                gated = category_absent_reason(entry, allow_machine=False)
     by_designator = bool(RESISTOR_DESIGNATOR.match(designator))
     by_category = category.lower() in RESISTOR_CATEGORIES
     doors = []
@@ -740,7 +763,9 @@ def _looks_like_resistor(designator: str, value: str, model: object, library) ->
         doors.append("its designator is an R transistor")
     if by_category:
         doors.append(f"the shelf classifies it {category!r}")
-    return (by_designator or by_category), " and ".join(doors) or "(neither door)"
+    return (by_designator or by_category), (
+        " and ".join(doors) or "(neither door)"
+    ), gated
 
 
 #: The 0 Ω spellings :func:`boardwise.core.values.parse_resistance_ohms`
@@ -961,7 +986,9 @@ def all_zero_ohm_parts_of(
         value, ohms = draw.value, draw.ohms
         if ohms is None or ohms != ZERO_OHMS:
             continue
-        looks, basis = _looks_like_resistor(str(designator), value, model, library)
+        looks, basis, gated = _looks_like_resistor(
+            str(designator), value, model, library
+        )
         pins = sorted(
             getattr(component, "pins", ()) or (),
             key=lambda p: str(getattr(p, "number", "") or ""),
@@ -979,7 +1006,14 @@ def all_zero_ohm_parts_of(
                 net_a=str(getattr(pin_a, "net", "") or "") if pin_a else "",
                 pin_b=str(getattr(pin_b, "number", "") or "") if pin_b else "",
                 net_b=str(getattr(pin_b, "net", "") or "") if pin_b else "",
-                basis=basis if looks else f"its value {value!r} parses to 0 Ω",
+                # 527D3: when the shelf names a resistor at a tier this rule may
+                # not read and the designator door does not admit the part, the
+                # row carries the tier sentence instead of 「parses to 0 Ω」 —
+                # the difference between 「the shelf says nothing」 and 「the
+                # shelf said something nobody signed」.
+                basis=basis
+                if looks
+                else (gated or f"its value {value!r} parses to 0 Ω"),
                 schematic_value=draw.schematic_value,
                 pcb_value=draw.pcb_value,
                 value_basis=draw.basis,
@@ -1035,9 +1069,21 @@ def bridging_parts_of(
             continue  # both pins in one domain: not a cross-domain bridge
         draw = _value_ohms(component, _placed_on(schematic, designator))
         value, ohms = draw.value, draw.ohms
-        looks, basis = _looks_like_resistor(str(designator), value, model, library)
+        looks, basis, gated = _looks_like_resistor(
+            str(designator), value, model, library
+        )
         if looks:
             reading = f"recognised as a resistor because {basis}"
+        elif gated:
+            # 527D3: the shelf names a resistor at a tier this rule may not
+            # read, and the designator door does not admit the part. The tier
+            # sentence replaces 「states no readable resistance」, which would
+            # be true of the *reading* and false about the shelf.
+            reading = (
+                f"the shelf classifies it a resistor at a tier this rule may "
+                f"not read{gated}, and its designator is not an R transistor, "
+                "so the designator door is not available either"
+            )
         elif ohms is not None:
             reading = (
                 f"its stated value {value!r} parses to {ohms:g} Ω through "
@@ -2035,7 +2081,7 @@ class FocReturnPath(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         """The pass, with the shelf handed in (131b/131d's contract).
 
@@ -2050,6 +2096,13 @@ class FocReturnPath(PcbRule):
         :func:`~boardwise.rules.pcb.foc.schematic_page_of` resolves is handed to
         :meth:`_power_parts`, so 「a bulk electrolytic」 means the same pool here as
         in R20 and R1b rather than the PCB document's stale copies.
+
+        ``allow_machine`` (527D3) reaches the two class-doored readers; a motor
+        driver or a FET the shelf names at a tier this rule may not read comes
+        back in their ``gated`` lists and gets a 免责 row. The 未识别清单 itself
+        is built from the **accepted** pool, so a class nobody signed neither
+        puts a net on the power stage nor — 527D3's whole point — disappears
+        without a word.
         """
         board = ctx.board
         model = ctx.pcb_model
@@ -2061,17 +2114,30 @@ class FocReturnPath(PcbRule):
             for name in board.net_names()
             if is_power_net(name) and board.tracks_for_net(name)
         ]
+        unrecognised, gated = self._unrecognised(
+            board, model, library, schematic, allow_machine=allow_machine
+        )
         if not recognised:
-            unrecognised = self._unrecognised(board, model, library, schematic)
-            if not unrecognised:
-                return []
-            return [self._unrecognised_row(board, unrecognised)]
-        findings = [
-            self._one_net(board, net) for net in sorted(recognised)
-        ]
-        unrecognised = self._unrecognised(board, model, library, schematic)
-        if unrecognised:
-            findings.append(self._unrecognised_row(board, unrecognised))
+            findings = (
+                [self._unrecognised_row(board, unrecognised)]
+                if unrecognised
+                else []
+            )
+        else:
+            findings = [self._one_net(board, net) for net in sorted(recognised)]
+            if unrecognised:
+                findings.append(self._unrecognised_row(board, unrecognised))
+        for designator, category, trust in gated:
+            findings.append(
+                category_gate_finding(
+                    rule_id=self.id,
+                    level=self.level,
+                    designator=designator,
+                    category=category,
+                    category_trust=trust,
+                    subject="它在未识别清单里的那份归属",
+                )
+            )
         return findings
 
     def _power_parts(
@@ -2080,7 +2146,9 @@ class FocReturnPath(PcbRule):
         model: object,
         library,
         schematic: object | None = None,
-    ) -> set[str]:
+        *,
+        allow_machine: bool = False,
+    ) -> tuple[set[str], list[tuple[str, str, str]]]:
         """Every designator that identifies a **power-stage part** on this board.
 
         Three doors, each already used by 133b: a shelf ``ic.motor-driver``
@@ -2097,12 +2165,19 @@ class FocReturnPath(PcbRule):
         drawing does not state.
         """
         parts: set[str] = set()
-        for designator, _component, _category in _motor_drivers(model, library):
+        gated: list[tuple[str, str, str]] = []
+        drivers, gated_drivers = _motor_drivers(
+            model, library, allow_machine=allow_machine
+        )
+        gated.extend(gated_drivers)
+        for designator, _component, _category in drivers:
             if board.component(designator) is not None:
                 parts.add(designator)
-        for designator, _category, _basis in power_mosfets_of(
-            board, model, library, schematic
-        ):
+        fets, gated_fets = power_mosfets_of(
+            board, model, library, schematic, allow_machine=allow_machine
+        )
+        gated.extend(gated_fets)
+        for designator, _category, _basis in fets:
             if board.component(designator) is not None:
                 parts.add(designator)
         for designator, _value, _farads in bulk_capacitors_of(
@@ -2110,7 +2185,7 @@ class FocReturnPath(PcbRule):
         ):
             if board.component(designator) is not None:
                 parts.add(designator)
-        return parts
+        return parts, gated
 
     def _unrecognised(
         self,
@@ -2118,18 +2193,24 @@ class FocReturnPath(PcbRule):
         model: object,
         library,
         schematic: object | None = None,
-    ) -> list[tuple[str, list[str]]]:
+        *,
+        allow_machine: bool = False,
+    ) -> tuple[list[tuple[str, list[str]]], list[tuple[str, str, str]]]:
         """``[(net, power-stage designators on it)]`` for names the sieve misses.
 
         Sorted by net so a report is diffable between runs, and each entry names
         **which** power-stage parts put the net on the power stage — so a reader
-        can judge the claim rather than take it on trust.
+        can judge the claim rather than take it on trust. The second list is the
+        527D3 half: the shelf-named power-stage parts whose class this tier may
+        not read, carried out so the caller can say so.
         """
         if model is None:
-            return []
-        parts = self._power_parts(board, model, library, schematic)
+            return [], []
+        parts, gated = self._power_parts(
+            board, model, library, schematic, allow_machine=allow_machine
+        )
         if not parts:
-            return []
+            return [], gated
         rows: list[tuple[str, list[str]]] = []
         for net in board.net_names():
             if is_power_net(net) or not board.tracks_for_net(net):
@@ -2145,7 +2226,7 @@ class FocReturnPath(PcbRule):
             on_net = sorted(parts & set(board.net(net).components))
             if on_net:
                 rows.append((net, on_net))
-        return rows
+        return rows, gated
 
     def _unrecognised_row(
         self, board: BoardGeometry, unrecognised: list[tuple[str, list[str]]]

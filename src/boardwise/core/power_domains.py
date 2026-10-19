@@ -33,13 +33,19 @@ import re
 from dataclasses import dataclass
 
 from .model import DesignModel
+from .partkind import CATEGORY_ABSENT, CATEGORY_GATED, category_verdict
 from .parts import (
     FACTS_TRUST_MACHINE,
+    FACTS_TRUST_MEANING,
+    FACTS_TRUST_VERIFIED,
     PartEntry,
     PartLibrary,
     machine_trust_note,
     resolve_component_facts,
 )
+
+#: 527D3: the shelf word that makes a part a speaker here, in one place.
+_LDO_CATEGORIES: frozenset[str] = frozenset({"ic.ldo"})
 
 #: Domain states. KNOWN and CONFLICT/UNKNOWN mirror the harness's honesty
 #: split: KNOWN asserts, the other two explain why they cannot.
@@ -308,10 +314,49 @@ def infer_net_domains(
         if hit is not None:
             candidates.setdefault(name, []).append(hit)
 
+    #: 527D3: nets a **gated** class would have spoken for — the shelf calls the
+    #: part an LDO and this tier may not read that class. Collected rather than
+    #: dropped: a machine-granted (or draft) class must not let a rail lose its
+    #: only declared source without a word, which is exactly the shape the raw
+    #: `entry.category` read left behind. See the loop after the candidates.
+    gated_notes: dict[str, str] = {}
+
     entries = _facts_entry(model, library)
     for comp in model.components.values():
         entry = entries.get(comp.designator)
-        if entry is None or entry.category != "ic.ldo":
+        verdict = category_verdict(
+            entry, _LDO_CATEGORIES, allow_machine=allow_machine
+        )
+        if verdict == CATEGORY_ABSENT:
+            continue
+        if verdict == CATEGORY_GATED:
+            # 527D3: the shelf names an LDO here and this tier may not read it —
+            # a machine-granted class for a conclusion caller, or a draft at any
+            # tier. The part does **not** name the rail (522's line), and the net
+            # gets an UNKNOWN guess below so the caller's `why_not` says which
+            # review is owed instead of 「no source names this voltage」.
+            #
+            # The sentence is `machine_trust_note`'s (core's own, and the one
+            # every machine-tier finding already carries); a draft has no such
+            # note — `machine_trust_note` is empty for it — so that case names the
+            # tier through `FACTS_TRUST_MEANING`, the shelf's own vocabulary,
+            # rather than growing a third sentence about the same gate.
+            tier = str(getattr(entry, "category_trust", FACTS_TRUST_VERIFIED))
+            note = machine_trust_note(entry) or (
+                f"分类档位 {tier}：{FACTS_TRUST_MEANING.get(tier, tier)}"
+            )
+            out_pin = ldo_output_pin(entry)
+            pin = (
+                next((p for p in comp.pins if p.number == out_pin), None)
+                if out_pin
+                else None
+            )
+            if pin is not None and pin.net:
+                gated_notes.setdefault(
+                    pin.net,
+                    f"{comp.designator} 的货架分类 {entry.category!r} 未采信"
+                    f"（{note}），所以它**没有**为这条网声明电压",
+                )
             continue
         if entry.facts_trust == FACTS_TRUST_MACHINE and not allow_machine:
             # 522: this entry's facts are in `facts` (the calculation rules read
@@ -365,6 +410,18 @@ def infer_net_domains(
                 detail="; ".join(f"{v} V per {s}" for v, s in found)
                 + " — the sources disagree, so no voltage is asserted",
             )
+    # 527D3: the third state. A net a gated class would have spoken for gets a
+    # guess of its own when nothing else speaks for it — an **UNKNOWN** whose
+    # `detail` is the tier sentence, which `domain_of` hands back as the caller's
+    # `why_not`. Without it the answer would be the same 「no source names the
+    # voltage of net X」 a net nobody mentions gets, and a rail that lost its only
+    # declared source to the tier gate would say nothing about why.
+    for net, note in gated_notes.items():
+        held = guesses.get(net)
+        if held is None:
+            guesses[net] = DomainGuess(net=net, state=UNKNOWN, detail=note)
+        elif note not in held.detail:
+            held.detail = f"{held.detail}; {note}" if held.detail else note
     return guesses
 
 
@@ -377,6 +434,13 @@ def domain_of(
     ``(None, "", reason)`` where the reason is a ready-made missing_fact:
     an absent entry is "no source names this net's voltage", a CONFLICT
     quotes both sides. ``None``/empty net names are unknown too.
+
+    527D3: an **UNKNOWN**-state guess (the one :func:`infer_net_domains` now
+    writes when the only class that would have spoken for a net was gated at this
+    tier) returns its own ``detail`` — the tier sentence — rather than the
+    CONFLICT wording below. Before that change no such guess existed, so the
+    branch is new behaviour for a state that was previously unreachable rather
+    than a re-wording of an existing one.
     """
     if not net:
         return None, "", "the pin has no net"
@@ -385,6 +449,10 @@ def domain_of(
         return None, "", f"no source names the voltage of net {net!r}"
     if guess.is_known:
         return guess.volts, guess.source, ""
+    if guess.state == UNKNOWN:
+        return None, "", guess.detail or (
+            f"no source names the voltage of net {net!r}"
+        )
     return None, "", (
         f"net {net!r} has conflicting voltage sources: {guess.detail}"
     )

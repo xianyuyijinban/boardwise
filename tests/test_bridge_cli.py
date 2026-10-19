@@ -557,9 +557,27 @@ class _RecordingClient:
 
 @pytest.fixture
 def update_env(monkeypatch, tmp_path):
-    """Isolated BOARDWISE_HOME (the command opens a CLI token) + a recording client."""
+    """Isolated BOARDWISE_HOME (the command opens a CLI token) + a recording client.
+
+    **The 528A-a version gate is stubbed here, on purpose.** The command refuses
+    an explicit ``--version`` that differs from ``connector/package.json``
+    (:func:`boardwise.cli._explicit_version_refusal`) because a connector
+    announces the string baked into its bundle, never the record's label — so a
+    mismatched label could never verify. This file's subject is the write and
+    the window-table read-back, and it speaks with fixed labels (``0.4.3``,
+    ``0.4.11``, ``1.0.0``) whatever the repo's manifest currently says; the
+    guard is therefore taken out of the way here. It is covered end to end,
+    against the real manifest, in ``tests/test_528a_no_reload.py`` — including
+    the zero-write assertions and both addressing modes — so deleting it turns
+    that file red.
+    """
     monkeypatch.setenv("BOARDWISE_HOME", str(tmp_path))
     import boardwise.bridge.client as client_module
+    import boardwise.cli as cli_module
+
+    monkeypatch.setattr(
+        cli_module, "_explicit_version_refusal", lambda version, manifest: None
+    )
 
     _RecordingClient.opened = None
     _RecordingClient.calls = []

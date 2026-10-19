@@ -316,7 +316,9 @@
 | 201B | 拓扑感知模块落位+位姿联合搜索 | 已落 | `856fb0a`+`7ce7a5d`；tasks/201b_placement.md；outputs/201b/ |
 | 201C | 布线协商三步 | **搁置**（踢出 v0.5.15） | tasks/201c_routing.md；`.tmp_201c_hold/`；outputs/201c/evidence.md §13 |
 | 201D | 落位搜索计价「别人的文本行」 | **部分落**（`pin-text` 随 525 落；`text_overlap` 526 试了又撤，见 roadmap §4） | tasks/201d_text_row_cost.md |
-| 201E | A* 布线效率（68s/21 次调用） | 规划 | （任务书未写，见 outputs/201c/evidence.md §7） |
+| 201E | A* 布线效率 | **已落**（2026-10-19 实测） | outputs/201e/evidence.md；真因：`h` 纯曼哈顿、看不见 `CROSS_COST`，`expanded≈C*²`；23.2 s / 10 次调用（201C 的 68 s / 21 次**不复现**） |
+| 201F | A* 可采纳下界（反向 Dijkstra 计价场） | **已完成**（工作树，待发） | outputs/201f/evidence.md；A\* 14.2 s→2.05 s（6.9×）、整页 23.0 s→11.05 s、83 预览逐字节相同；`LED_K`/`COMP` 的 expanded 判据**未达标**（原因见 evidence §4） |
+| 201G | 反激整页 0 候选的两个真因（**诊断单**） | 任务书已写，待派 | tasks/201g_flyback_zero_candidate.md；疑点 A＝`same-column(Q1,R5)` 全档不成立、B＝`SEC_12V` 旗标在 `D3.1` 无处可挂 |
 
 ## 500+
 
@@ -335,7 +337,7 @@
 | 523 | `category` 的授予路径：`--apply-facts` 只写 facts 不写分类，机器核验的件仍判不了（报告已如实点出两条待办） | 已落（527D，v0.5.18）：`parts classify` + `category_trust`，两道闸都问分类自己的档位 | 522 真板三读数的已知边界；tasks/527_pre060_loose_ends.md §527D |
 | 527 | **v0.6.0 之前必须收口的尾巴**（527A `IntentSource` 转发三小节 / 527B connector 页型守卫 `/` 信封文档 / 527C 189A2 分类裁定 / 527D = 523 / 527E 文档收口） | 已落（v0.5.18 内测） | tasks/527_pre060_loose_ends.md |
 | 527D2 | `parts classify` 的证据**不落货架**（`machine_verified` 的分类事后无法追溯出处，与 521 口径不一致）；冻结态下内置架条目改不了的提示也没有 | 规划 | tasks/527_pre060_loose_ends.md §527D「已知边界」 |
-| 527D3 | **`entry.category` 的直读点**（`rules/pcb/mcureset`/`mcusupply`/`crystal`/`regulator`/`fbplacement`/`foc`/`focground`、`rules/params`/`paramspec`/`decap`/`archclosure`/`railratings`、`core/architecture`/`power_domains`）绕过 `shelf_declaration`，机器档分类仍能驱动结论规则 → 要一个分档感知的 `declared_category(entry, allow_machine=…)` 并逐条判定规则属于「数字」还是「结论」 | 规划（发版夜的裁决：先收窄承诺，不动设计） | tasks/527_pre060_loose_ends.md §527D 挖洞表 H3 |
+| 527D3 | **`entry.category` 的直读点**（`rules/pcb/mcureset`/`mcusupply`/`crystal`/`regulator`/`fbplacement`/`foc`/`focground`、`rules/params`/`paramspec`/`decap`/`archclosure`/`railratings`、`core/architecture`/`power_domains`）绕过 `shelf_declaration`，机器档分类仍能驱动结论规则 | **已落**（2026-10-19，工作树待发） | `partkind.declared_category` + `partkind.category_verdict`（ACCEPTED/GATED/ABSENT）+ `facts.category_gate_finding`；17 个读点逐条判档；证据 `outputs/527d3/evidence.md`；指纹 `b05d3384` / `674e07e1` |
 | 528 | **0.6.0 门槛重写 + 四条裁决落地**（R4-C `update-connector --no-reload`；191D 数值不动；绘图线做硬门槛；527D2/D3 升为 0.6.0 阻塞项） | 在途 | tasks/528_060_gate.md |
 | 529 | 191D 的**分类空白带**（`HF ≤ 1µF` 与 `bulk ≥ 10µF` 之间的 2.2µF/4.7µF 落 unknown → 假 WARN；补档后撤销 191D 的「输入侧无候选才 WARN」收窄） | 规划（非阻塞） | tasks/528_060_gate.md §4 |
 | 528A | `bridge update-connector --no-reload`：写记录不 reload，点一次扩展菜单生效（R4 实验④的产物） | 在途 | tasks/528_060_gate.md §1 |

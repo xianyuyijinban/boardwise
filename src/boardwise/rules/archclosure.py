@@ -1418,7 +1418,40 @@ class ArchSenseBiasClosure(FactsRule):
         # arithmetic about a node that is not held by resistors at all.
         driving = _opamp_output(model, self, net)
         if driving is not None:
-            reference, pin_name, because = driving
+            reference, pin_name, because, gated = driving
+            if gated:
+                # 527D3: the shelf calls this part an op-amp at a tier this rule
+                # may not read. Reporting 「no amplifier here」 would be the silent
+                # drop the tier gate exists to prevent, and reporting 「an
+                # amplifier whose output is unreadable」 would name the wrong
+                # missing fact — the review owed is on the *class*, not on the
+                # symbol's pin names.
+                return (
+                    Outcome(
+                        rule_id=self.id,
+                        state="UNKNOWN",
+                        subject=net,
+                        message=(
+                            f"{net}：网上有 {reference}，货架把它分类为 op-amp{gated}"
+                            " —— 所以本规则**没有**据它判闭合：分类是机器核验的、"
+                            "本规则要人签字，把 category_trust 改成 verified 就是那次"
+                            "签字。签字之前这一行是 UNKNOWN，不是「闭合成立」，也不是"
+                            "「网上没有运放」。" + where
+                        ),
+                        evidence=[
+                            *evidence,
+                            f"{reference} 的货架分类未人工确认（档位不足，本规则不据它"
+                            "判闭合）",
+                        ],
+                        missing_fact=(
+                            f"{reference} 的货架分类（ic.opamp）的档位：机器核验不等于"
+                            "人签字 —— 把该条目的 category_trust 改成 verified，或人工"
+                            "确认这条分类"
+                        ),
+                    ),
+                    MEASUREMENT_GRADE,
+                    target,
+                )
             if because:
                 return (
                     Outcome(
@@ -1808,8 +1841,8 @@ class ArchSenseBiasClosure(FactsRule):
 
 def _opamp_output(
     model: DesignModel, rule: FactsRule, net: str
-) -> tuple[str, str, str] | None:
-    """``(designator, pin name, why it is the output)`` for an amplifier on ``net``.
+) -> tuple[str, str, str, str] | None:
+    """``(designator, pin name, why it is the output, gated)`` for an op-amp on ``net``.
 
     ``None`` when no amplifier is on the net, and an **empty** ``why`` when one is
     but its output pin cannot be read (the caller reports UNKNOWN then, naming the
@@ -1825,13 +1858,58 @@ def _opamp_output(
 
     The walk is :func:`_read_members`, so "the amplifier on this net" is the same
     part whichever order the netlist listed it in (issue #57 finding 6).
+
+    527D3 adds the **fourth** slot and the tier gate behind it. The class is read
+    through :func:`boardwise.core.partkind.category_verdict` at this rule's tier
+    (``REQUIRES_HUMAN_VERIFIED`` is True — 「an amplifier drives this net」 is a
+    conclusion about the drawing), so an ``ic.opamp`` entry whose class nobody
+    signed comes back with ``gated`` set to
+    :func:`boardwise.rules.facts.category_absent_reason`'s sentence and an empty
+    ``why``, and the caller then reports UNKNOWN naming the review that is owed.
+    Folding the two into one answer is the hole this batch closes — a real op-amp
+    would silently drop out of the closure judgement.
+
+    **A gated member does not settle the net; it is remembered and the walk
+    continues** (527D3 fix). A net can carry more than one amplifier, and only
+    one of them needs a signature this rule may read. Returning on the first
+    gated member made the verdict depend on the netlist's member order — issue
+    #57 finding 6's discipline, one answer removed — because the same net came
+    back UNKNOWN when the unsigned part was listed first and OK when it was
+    listed second. :func:`_read_members` fixes the *order*; this makes the
+    *answer* independent of it: a readable amplifier anywhere on the net wins,
+    and the gated sentence is what is left when the whole walk finds none.
     """
+    from ..core.partkind import CATEGORY_ABSENT, CATEGORY_GATED, category_verdict
+    from .facts import category_absent_reason
+
+    opamp_categories = frozenset({"ic.opamp"})
+    allow_machine = not rule.REQUIRES_HUMAN_VERIFIED
+    # 527D3 fix: the sentence is asked at **the same tier the gate was**, so an
+    # UNKNOWN row's work order names the field that actually blocked it (a
+    # conclusion rule reading a machine-granted class is owed 「sign the class」,
+    # not a second copy of the facts sentence 522 already writes).
+    gated_hit: tuple[str, str, str, str] | None = None
+
     for designator, pin in _read_members(model, net):
         comp = model.components.get(designator)
         entry = rule.entry_for(comp) if comp is not None else None
-        if entry is None or entry.category != "ic.opamp":
+        verdict = category_verdict(
+            entry,
+            opamp_categories,
+            allow_machine=allow_machine,
+        )
+        if verdict == CATEGORY_ABSENT:
             continue
         name = _pin_name(comp, pin)
+        if verdict == CATEGORY_GATED:
+            if gated_hit is None:
+                gated_hit = (
+                    designator,
+                    name,
+                    "",
+                    category_absent_reason(entry, allow_machine=allow_machine),
+                )
+            continue
         declared = (entry.facts or {}).get("output_pins")
         if isinstance(declared, (list, tuple)) and str(pin) in {
             str(item) for item in declared
@@ -1839,8 +1917,8 @@ def _opamp_output(
             return designator, name, (
                 f"货架条目 {entry.mpn or entry.lcsc or designator} 的 "
                 f"facts.output_pins 点名了引脚 {pin}"
-            )
+            ), ""
         if _is_output_name(name):
-            return designator, name, f"引脚名 {name!r}"
-        return designator, name, ""
-    return None
+            return designator, name, f"引脚名 {name!r}", ""
+        return designator, name, "", ""
+    return gated_hit

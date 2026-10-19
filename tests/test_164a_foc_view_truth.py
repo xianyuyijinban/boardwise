@@ -487,7 +487,7 @@ def test_power_loop_area_pool_is_the_same_pool_the_page_says():
     """
     board, model = _pcb_view(LLC)
     page = _schematic_page(LLC)
-    rows = FocPowerLoopArea()._loops(board, model, _shelf(), page)
+    rows = FocPowerLoopArea()._loops(board, model, _shelf(), page)[0]
     assert len(rows) == 4, [r.bulk for r in rows]
     assert {r.bulk for r in rows} == {"C3"}, [r.bulk for r in rows]
     for reading in rows:
@@ -505,8 +505,8 @@ def test_power_mosfets_of_reads_the_bulk_pool_through_the_page():
     """
     board, model = _pcb_view(FOC_100)
     page = _page({"C115": "10uF", "C116": "10uF"})
-    with_copy = {des for des, _c, _b in power_mosfets_of(board, model, EMPTY_SHELF)}
-    with_page = {des for des, _c, _b in power_mosfets_of(board, model, EMPTY_SHELF, page)}
+    with_copy = {des for des, _c, _b in power_mosfets_of(board, model, EMPTY_SHELF)[0]}
+    with_page = {des for des, _c, _b in power_mosfets_of(board, model, EMPTY_SHELF, page)[0]}
     assert with_copy == {"Q1", "Q3", "Q7"}, with_copy
     assert with_page == set(), (
         "the page demotes C115/C116 below the bulk floor, so no bus net is left "
@@ -605,10 +605,10 @@ def test_the_bisce_foc_100_leg_pool_loses_exactly_its_three_zero_ohm_parts():
     assert all(str(page.components[d].value) == "0R" for d in ("R31", "R48", "R49"))
 
     copy_dividers = {
-        (d.ic, d.upper, d.lower) for d in fb_dividers(model, shelf)
+        (d.ic, d.upper, d.lower) for d in fb_dividers(model, shelf)[0]
     }
     page_dividers = {
-        (d.ic, d.upper, d.lower) for d in fb_dividers(model, shelf, page)
+        (d.ic, d.upper, d.lower) for d in fb_dividers(model, shelf, page)[0]
     }
     assert copy_dividers == page_dividers == {("U11", "R14", "R21")}, (
         copy_dividers, page_dividers

@@ -158,9 +158,9 @@ def test_a_name_only_part_is_seen_by_all_four_rules():
             nets={},
         )
 
-    assert len(_supply_readings(board("U3", "ACME-MCU-1"), shelf)) == 1
-    assert len(_reset_readings(board("U3", "ACME-MCU-1"), shelf)) == 1
-    assert len(_regulator_readings(board("U5", "ACME-LDO-1"), shelf)) == 1
+    assert len(_supply_readings(board("U3", "ACME-MCU-1"), shelf)[0]) == 1
+    assert len(_reset_readings(board("U3", "ACME-MCU-1"), shelf)[0]) == 1
+    assert len(_regulator_readings(board("U5", "ACME-LDO-1"), shelf)[0]) == 1
     assert _looks_like_resistor("U7", "", board("U7", "ACME-RES-1"), shelf)[0] is True
     # A None shelf is still "no shelf", not a crash (focground's own contract).
     assert _looks_like_resistor("R1", "0R", DesignModel(components={}, nets={}), None)[0] is True

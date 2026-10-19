@@ -120,7 +120,12 @@ from dataclasses import dataclass, field
 from ..base import Finding, FindingTarget
 from ...core.geometry import BoardGeometry
 from ...core.measure import pad_edge_distance
-from ...core.parts import resolve_component_facts
+from ...core.partkind import (
+    CATEGORY_ABSENT,
+    CATEGORY_GATED,
+    category_verdict,
+)
+from ...core.parts import FACTS_TRUST_VERIFIED, resolve_component_facts
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on, same_net_capacitors_on
 from ..facts import read_default_library
@@ -326,6 +331,8 @@ class McuOscillator:
     #: The MCU designator and the shelf category that made it an MCU.
     designator: str = ""
     category: str = ""
+    #: 527D3: which tier signed ``category`` — the disclosure row quotes it.
+    category_trust: str = FACTS_TRUST_VERIFIED
     #: The board's own model (a multi-board project has one per board), which
     #: is also the model the capacitor candidates must be asked about.
     board_model: object = None
@@ -347,8 +354,12 @@ class McuOscillator:
 
 
 def _mcu_oscillators(
-    model: object, library, schematic: object | None = None
-) -> list[McuOscillator]:
+    model: object,
+    library,
+    schematic: object | None = None,
+    *,
+    allow_machine: bool = False,
+) -> tuple[list[McuOscillator], list[McuOscillator]]:
     """Every ``ic.mcu`` part, per board, with its oscillator pins read.
 
     The shelf is read once through :func:`boardwise.core.parts.load_parts` /
@@ -360,14 +371,27 @@ def _mcu_oscillators(
     reading so every downstream row — the crystal's identity, the load
     capacitors' declared values, the series-equivalent CL — is read in the same
     view without each row having to resolve the board link again.
+
+    527D3 reads the class through
+    :func:`boardwise.core.partkind.category_verdict` and returns **two lists**,
+    the shape its three sibling MCU readers return for the same question:
+    ``readings`` (the shelf calls it an MCU at a tier this rule may act on) and
+    ``gated`` (it calls it an MCU at a tier this rule may not — a machine-granted
+    class for a conclusion rule, or a draft). The gated parts come back rather
+    than being dropped so a real MCU whose class nobody signed cannot fall out of
+    the MCU rules silently; the caller writes each one a 免责 row in
+    :func:`boardwise.rules.facts.category_absent_reason`'s wording.
     """
     readings: list[McuOscillator] = []
+    gated: list[McuOscillator] = []
     components = getattr(model, "components", {}) or {}
     for designator in sorted(components):
         component = components[designator]
         entry, _matched = resolve_component_facts(library, component)
-        category = (entry.category or "") if entry is not None else ""
-        if category not in MCU_CATEGORIES:
+        verdict = category_verdict(
+            entry, MCU_CATEGORIES, allow_machine=allow_machine
+        )
+        if verdict == CATEGORY_ABSENT:
             continue
         pins_by_net: dict[str, list[tuple[str, str]]] = {}
         unused: list[str] = []
@@ -380,17 +404,19 @@ def _mcu_oscillators(
             pins_by_net.setdefault(net, []).append(
                 (str(getattr(pin, "number", "") or ""), name)
             )
-        readings.append(
-            McuOscillator(
-                designator=str(designator),
-                category=category,
-                board_model=model,
-                schematic=schematic,
-                pins_by_net=pins_by_net,
-                unused_pin_names=tuple(unused),
-            )
+        reading = McuOscillator(
+            designator=str(designator),
+            category=str(getattr(entry, "category", "") or ""),
+            category_trust=str(
+                getattr(entry, "category_trust", FACTS_TRUST_VERIFIED)
+            ),
+            board_model=model,
+            schematic=schematic,
+            pins_by_net=pins_by_net,
+            unused_pin_names=tuple(unused),
         )
-    return readings
+        (gated if verdict == CATEGORY_GATED else readings).append(reading)
+    return readings, gated
 
 
 class McuCrystalPlacement(PcbRule):
@@ -431,7 +457,7 @@ class McuCrystalPlacement(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         """The pass itself, with the shelf handed in rather than read here.
 
@@ -442,6 +468,12 @@ class McuCrystalPlacement(PcbRule):
         A shelfless crystal is still recognised
         (:func:`is_crystal_member` reads the part's own words), and a shelfless
         crystal has no 规格 CL, which the row then says.
+
+        ``allow_machine`` (527D3) is this rule's tier question, stated by the
+        caller with the same default the other three MCU rules state it: the rows
+        are measurements, but 「this part is the MCU this rule speaks to」 is an
+        identity the shelf has to have signed. A class the tier refuses comes
+        back from the reader in its own list and gets a 免责 row here.
         """
         board = ctx.board
         model = ctx.pcb_model
@@ -452,7 +484,10 @@ class McuCrystalPlacement(PcbRule):
         # series-equivalent CL derived from them — never for the nets.
         schematic = schematic_board_of(ctx)
         findings: list[Finding] = []
-        for osc in _mcu_oscillators(model, library, schematic):
+        readings, gated = _mcu_oscillators(
+            model, library, schematic, allow_machine=allow_machine
+        )
+        for osc in readings:
             if board.component(osc.designator) is None:
                 continue  # no geometry on this PCB document: nothing to measure
             if osc.unused_pin_names:
@@ -464,7 +499,27 @@ class McuCrystalPlacement(PcbRule):
                 findings.extend(self._crystal_to_mcu(osc, board, crystal))
             for net in sorted(osc.pins_by_net):
                 findings.extend(self._one_net(osc, board, net, library))
+        for osc in gated:
+            findings.append(self._tier_gate_row(osc))
         return findings
+
+    def _tier_gate_row(self, osc: McuOscillator) -> Finding:
+        """The 免责 row for an MCU the shelf names but this tier may not hear.
+
+        One call into :func:`boardwise.rules.facts.category_gate_finding`, which
+        owns the sentence for every reader in this batch, so the four MCU rules
+        cannot drift into four sentences about one unsigned class.
+        """
+        from boardwise.rules.facts import category_gate_finding
+
+        return category_gate_finding(
+            rule_id=self.id,
+            level=self.level,
+            designator=osc.designator,
+            category=osc.category,
+            category_trust=osc.category_trust,
+            subject="它的晶振网络",
+        )
 
     # -- rows -------------------------------------------------------------
 

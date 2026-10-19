@@ -130,10 +130,16 @@ from ...core.measure import (
     track_width_stats,
     vias_in_region,
 )
-from ...core.parts import resolve_component_facts
+from ...core.partkind import (
+    CATEGORY_ABSENT,
+    CATEGORY_GATED,
+    category_verdict,
+    declared_category,
+)
+from ...core.parts import FACTS_TRUST_VERIFIED, resolve_component_facts
 from ...core.values import parse_capacitance_farads
 from ..decap import cap_candidates_on
-from ..facts import read_default_library
+from ..facts import category_gate_finding, read_default_library
 from .base import PcbReviewContext, PcbRule
 from .distance import _mil, _measurement
 
@@ -311,21 +317,42 @@ def gate_nets_of(board: BoardGeometry) -> list[str]:
     ]
 
 
-def _category_of(component: object, library) -> str:
-    """The shelf category of one part, or ``""`` when the shelf says nothing.
+def _category_of(
+    component: object, library, *, allow_machine: bool = False
+) -> tuple[str, str]:
+    """The shelf category of one part, as ``(category, gated)``.
 
     Read through :func:`boardwise.core.parts.resolve_component_facts` (the
     identity chain: MPN, then C-number, then device name — each exact, #202's
     lesson) so the category quoted in a row is the one the shelf states
     rather than one inferred from a prefix.
+
+    ``category`` is the class **this tier may read** — empty when the shelf says
+    nothing and empty when it says something this tier may not hear.
+    ``gated`` is the shelf's own word in that second case and ``""`` otherwise,
+    and it is a second return value rather than a fold into ``""`` precisely
+    because the two cases must not collapse (527D3): a caller that treated them
+    alike would give a part whose class nobody signed the silence of a part the
+    shelf has never heard of. Callers use
+    :func:`boardwise.core.partkind.category_verdict`'s three answers; this
+    helper is the one shelf lookup they share.
     """
     if component is None:
-        return ""
+        return "", ""
     entry, _matched = resolve_component_facts(library, component)
-    return (entry.category or "") if entry is not None else ""
+    if entry is None:
+        return "", ""
+    category = str(getattr(entry, "category", "") or "")
+    if declared_category(entry, allow_machine=allow_machine) is not None:
+        return category, ""
+    if not category:
+        return "", ""
+    return "", category
 
 
-def _motor_drivers(model: object, library) -> list[tuple[str, object, str]]:
+def _motor_drivers(
+    model: object, library, *, allow_machine: bool = False
+) -> tuple[list[tuple[str, object, str]], list[tuple[str, str, str]]]:
     """Every ``ic.motor-driver`` part of this board's netlist view, sorted.
 
     ``(designator, component, category)`` per driver. Parts the PCB document does
@@ -333,14 +360,39 @@ def _motor_drivers(model: object, library) -> list[tuple[str, object, str]]:
     :meth:`BoardGeometry.component` and skips them, which is the shape 131d
     established (a designator the netlist names but this document does not carry
     has no geometry to measure).
+
+    527D3 returns **two lists**, the shape the MCU and regulator readers return
+    for their own 「is this part my subject」 question: ``found`` (the shelf calls
+    it a motor driver at a tier this caller may read) and ``gated`` as
+    ``(designator, category, category_trust)`` for the ones it calls a motor
+    driver at a tier this caller may not. Three rules read this pool (R16's
+    ``pcb-foc-decap-proximity``, ``pcb-tie-net-single-point`` and
+    ``pcb-foc-thermal``), and each owes every gated part a 免责 row — a real
+    motor driver whose class nobody signed must not drop out of the three rules
+    that speak to it.
     """
     found: list[tuple[str, object, str]] = []
+    gated: list[tuple[str, str, str]] = []
     for designator in sorted(getattr(model, "components", {}) or {}):
         component = (getattr(model, "components", {}) or {})[designator]
-        category = _category_of(component, library)
-        if category in MOTOR_DRIVER_CATEGORIES:
-            found.append((str(designator), component, category))
-    return found
+        entry, _matched = resolve_component_facts(library, component)
+        verdict = category_verdict(
+            entry, MOTOR_DRIVER_CATEGORIES, allow_machine=allow_machine
+        )
+        if verdict == CATEGORY_ABSENT:
+            continue
+        category = str(getattr(entry, "category", "") or "")
+        if verdict == CATEGORY_GATED:
+            gated.append(
+                (
+                    str(designator),
+                    category,
+                    str(getattr(entry, "category_trust", FACTS_TRUST_VERIFIED)),
+                )
+            )
+            continue
+        found.append((str(designator), component, category))
+    return found, gated
 
 
 # ---------------------------------------------------------------------------
@@ -557,7 +609,9 @@ def power_mosfets_of(
     model: object,
     library=None,
     schematic: object | None = None,
-) -> list[tuple[str, str, str]]:
+    *,
+    allow_machine: bool = False,
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]]]:
     """Every power MOSFET on this board, as ``(designator, category, basis)``.
 
     Two independent ways in, and a part must pass at least one:
@@ -588,6 +642,24 @@ def power_mosfets_of(
     bus-net half of the ``Q``-door reads the **same pool** R20 ranks against
     (:func:`_value_farads_for`'s 口径): a FET the rule admits through a bulk net,
     and the capacitor the rule pairs it with, must be the same two parts.
+
+    527D3 returns **two lists**: the pool, and the parts the shelf calls a
+    ``fet`` at a tier this caller may not read — as
+    ``(designator, category, category_trust)``. The shelf door is a class, and a
+    class the tier refuses must not read as 「the shelf classifies nothing at
+    all」: the second door below stays available (it is designator plus net
+    evidence, not a class), and the caller writes the gated ones a 免责 row so
+    the difference is visible in the report.
+
+    **The second list holds only parts the first one did not take** (527D3 fix).
+    The two doors are independent, so a part the class door refused can still
+    come in through the ``Q``-plus-bus door, and then it is in *both*. The 免责
+    row each caller writes asserts a **missing measurement** (「所以它的……环路没有
+    量」), so a part that is in both makes one report say 「measured」 and 「not
+    measured」 about the same designator — worse than the pre-527D3 read, where
+    the machine-tier class simply drove the shelf door and the two sentences
+    agreed. Disclosure is for the parts this reading could **not** measure;
+    a part it did measure has nothing to disclaim.
     """
     bulk_designators = {
         des
@@ -599,18 +671,39 @@ def power_mosfets_of(
         if bulk_designators & set(board.net(net).components)
     }
     found: list[tuple[str, str, str]] = []
+    refused: list[tuple[str, str, str]] = []
     for designator in sorted(getattr(model, "components", {}) or {}):
         component = (getattr(model, "components", {}) or {})[designator]
-        category = _category_of(component, library)
+        category, refused_category = _category_of(
+            component, library, allow_machine=allow_machine
+        )
         nets = sorted(
             n for n in bus_nets if designator in set(board.net(n).components)
         )
+        if refused_category == "fet":
+            entry, _matched = resolve_component_facts(library, component)
+            refused.append(
+                (
+                    str(designator),
+                    refused_category,
+                    str(getattr(entry, "category_trust", FACTS_TRUST_VERIFIED)),
+                )
+            )
         if category == "fet":
             found.append(
                 (str(designator), category, f"the shelf classifies it {category!r}")
             )
             continue
         if POWER_FET_DESIGNATOR.match(str(designator)) and nets:
+            # The shelf's own word about this part, honestly: the accepted class,
+            # or — 527D3 — the class this tier may not read (never 「nothing at
+            # all」, which would be a false statement about a shelf that did
+            # classify it), or the truth that the shelf says nothing.
+            shelf_word = category or (
+                f"{refused_category!r}（档位不够，本规则不采信）"
+                if refused_category
+                else "(nothing at all)"
+            )
             found.append(
                 (
                     str(designator),
@@ -619,11 +712,16 @@ def power_mosfets_of(
                     f"{', '.join(repr(n) for n in nets)}, which a bulk "
                     f"capacitor ({', '.join(sorted(bulk_designators))}) also "
                     "sits on — the shelf classifies it "
-                    f"{category or '(nothing at all)'}, so the bus connection "
+                    f"{shelf_word}, so the bus connection "
                     "is what makes it a power FET",
                 )
             )
-    return found
+    # 527D3 fix: a part the ``Q``-plus-bus door took is not owed a 免责 row — the
+    # row asserts its measurement is missing, and it is not. Order-stable: the
+    # surviving rows keep the designator order they were collected in.
+    measured = {designator for designator, _category, _basis in found}
+    gated = [row for row in refused if row[0] not in measured]
+    return found, gated
 
 
 # ---------------------------------------------------------------------------
@@ -762,7 +860,7 @@ class FocDecapProximity(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         """The pass itself, with the shelf handed in rather than read here.
 
@@ -779,6 +877,10 @@ class FocDecapProximity(PcbRule):
         was measured in (131c's lesson: the schematic calls a wire ``NET11`` where
         the board calls it ``$1N66612``, and reading nets off the wrong view
         attributes a real measurement to a net that does not exist on the board).
+
+        ``allow_machine`` (527D3) is this rule's tier question with the
+        conservative default the other readers state; the gated drivers come back
+        from :func:`_motor_drivers` and get a 免责 row each.
         """
         board = ctx.board
         model = ctx.pcb_model
@@ -786,12 +888,26 @@ class FocDecapProximity(PcbRule):
             return []
         schematic = schematic_page_of(ctx)
         findings: list[Finding] = []
-        for designator, component, category in _motor_drivers(model, library):
+        drivers, gated = _motor_drivers(
+            model, library, allow_machine=allow_machine
+        )
+        for designator, component, category in drivers:
             if board.component(designator) is None:
                 continue  # named by the netlist, not placed on this PCB document
             findings.extend(
                 self._one_driver(
                     board, model, designator, category, library, schematic
+                )
+            )
+        for designator, category, trust in gated:
+            findings.append(
+                category_gate_finding(
+                    rule_id=self.id,
+                    level=self.level,
+                    designator=designator,
+                    category=category,
+                    category_trust=trust,
+                    subject="它的旁路电容",
                 )
             )
         return findings
@@ -1642,23 +1758,41 @@ class FocPowerLoopArea(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         """The pass, with the shelf handed in (same contract as 131b/131d).
 
-        The page is resolved once here (:func:`schematic_page_of`) and threaded
-        into both pools, so the bulk capacitor this rule pairs with a FET and the
-        bus net that admitted the FET are one reading rather than two.
+        **The schematic page is resolved once here** (:func:`schematic_page_of`)
+        and threaded into both pools, so the bulk capacitor this rule pairs with a
+        FET and the bus net that admitted the FET are one reading rather than two.
+
+        ``allow_machine`` (527D3) reaches :func:`power_mosfets_of`; the FETs the
+        shelf calls ``fet`` at a tier this caller may not read come back in its
+        ``gated`` list and get a 免责 row each.
         """
         board = ctx.board
         model = ctx.pcb_model
         if board is None or model is None:
             return []
         schematic = schematic_page_of(ctx)
-        readings = self._loops(board, model, library, schematic)
-        if not readings:
-            return []
-        return [self._one_loop(board, model, library, reading) for reading in readings]
+        readings, gated = self._loops(
+            board, model, library, schematic, allow_machine=allow_machine
+        )
+        findings = [
+            self._one_loop(board, model, library, reading) for reading in readings
+        ]
+        for designator, category, trust in gated:
+            findings.append(
+                category_gate_finding(
+                    rule_id=self.id,
+                    level=self.level,
+                    designator=designator,
+                    category=category,
+                    category_trust=trust,
+                    subject="它的（体电容，功率管）环路",
+                )
+            )
+        return findings
 
     def _loops(
         self,
@@ -1666,10 +1800,14 @@ class FocPowerLoopArea(PcbRule):
         model: object,
         library,
         schematic: object | None = None,
-    ) -> list[LoopReading]:
+        *,
+        allow_machine: bool = False,
+    ) -> tuple[list[LoopReading], list[tuple[str, str, str]]]:
         """Every closable (bulk capacitor, power FET) loop on this board."""
         bulks = bulk_capacitors_of(model, library, schematic)
-        fets = power_mosfets_of(board, model, library, schematic)
+        fets, gated = power_mosfets_of(
+            board, model, library, schematic, allow_machine=allow_machine
+        )
         readings: list[LoopReading] = []
         for mos, category, basis in fets:
             mos_pads = board.pads_for_component(mos)
@@ -1749,7 +1887,7 @@ class FocPowerLoopArea(PcbRule):
                     distance=gap,
                 )
             )
-        return readings
+        return readings, gated
 
     def _one_loop(
         self, board: BoardGeometry, model: object, library, reading: LoopReading

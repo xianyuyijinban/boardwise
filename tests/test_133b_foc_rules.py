@@ -776,7 +776,7 @@ def test_the_power_fet_test_admits_both_doors_and_names_which_one():
 
     foc_board, foc_model = board_for(FOC_100), model_for(FOC_100)
     fets = {
-        des: basis for des, _cat, basis in power_mosfets_of(foc_board, foc_model, library)
+        des: basis for des, _cat, basis in power_mosfets_of(foc_board, foc_model, library)[0]
     }
     # The pool is **bus-net filtered**: a power FET qualifies only if it sits on
     # a net a bulk capacitor also sits on. On 1.0.0 that admits the high-side
@@ -794,7 +794,7 @@ def test_the_power_fet_test_admits_both_doors_and_names_which_one():
 
     pill_board, pill_model = board_for(PILLBOX), model_for(PILLBOX)
     pill_fets = {
-        des: basis for des, _cat, basis in power_mosfets_of(pill_board, pill_model, library)
+        des: basis for des, _cat, basis in power_mosfets_of(pill_board, pill_model, library)[0]
     }
     # 药箱's U2 IS shelf-classified, so it comes through the other door — but it
     # is a signal FET and closes no bulk loop, so R20 is still silent there.

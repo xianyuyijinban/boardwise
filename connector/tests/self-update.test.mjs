@@ -146,7 +146,7 @@ function healthyRecords() {
  * afterwards. `setTimeout` intercepts only the reload timer (500 ms) and
  * delegates everything else — the harness's own `waitFor` depends on it.
  */
-function withPageGlobals(t, { dbNames = [DB_NAME], db } = {}) {
+function withPageGlobals(t, { dbNames = [DB_NAME], db, reloadable = true } = {}) {
   const page = { reloads: 0, timers: [], opened: null };
   const realSetTimeout = globalThis.setTimeout;
   globalThis.indexedDB = {
@@ -156,11 +156,15 @@ function withPageGlobals(t, { dbNames = [DB_NAME], db } = {}) {
       return idbRequest(db);
     },
   };
-  globalThis.location = {
-    reload() {
-      page.reloads += 1;
-    },
-  };
+  // `reloadable: false` is a realm with no `location.reload` at all — the shape
+  // a `reload: false` request must survive (528A) and a default request must not.
+  globalThis.location = reloadable
+    ? {
+        reload() {
+          page.reloads += 1;
+        },
+      }
+    : {};
   globalThis.setTimeout = (fn, ms) => {
     if (ms === 500) {
       page.timers.push(fn);
@@ -238,6 +242,126 @@ test('sys.self_update rewrites both records, preserves the grant, reloads last',
   // returns only after it arrived) precedes ANY reload.
   assert.equal(page.reloads, 0, 'reload fired before the response was sent');
   assert.equal(page.timers.length, 1, 'the reload is scheduled exactly once');
+  page.timers[0]();
+  assert.equal(page.reloads, 1);
+});
+
+test('reload:false writes both records and schedules no reload (528A)', async (t) => {
+  // `boardwise bridge update-connector --no-reload`: same write, no page
+  // reload — the caller has unsaved state. The reply's `reloadInMs: 0` is how
+  // the CLI knows not to wait for a page that is not coming back.
+  const puts = [];
+  const db = fakeDb({
+    stores: ['extensionsObjectStorage', 'extensionsIndex'],
+    records: healthyRecords(),
+    puts,
+  });
+  const page = withPageGlobals(t, { db });
+  const h = host();
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'sys.self_update', {
+    bundleB64: BUNDLE_B64,
+    version: NEW_VERSION,
+    reload: false,
+  });
+
+  assert.equal(frame.ok, true, JSON.stringify(frame.error));
+  assert.equal(frame.data.ok, true);
+  assert.equal(frame.data.newVersion, NEW_VERSION);
+  assert.equal(frame.data.reloadInMs, 0);
+
+  // The record is the same write as the default path's.
+  assert.equal(puts.length, 2);
+  assert.equal(puts[0].store, 'extensionsObjectStorage');
+  assert.equal(puts[0].value.source.size, BUNDLE_BYTES.length);
+  assert.equal(puts[1].value.config.version, NEW_VERSION);
+  assert.equal(puts[1].value.isAllowExternalInteractions, true);
+  assert.equal(db.closed, true, 'the database handle is released');
+
+  assert.equal(page.timers.length, 0, 'no reload may be scheduled');
+  assert.equal(page.reloads, 0, 'the page must not be reloaded');
+});
+
+test('reload:false does not require location.reload to exist (528A)', async (t) => {
+  // The write and the reload are one action, but they are not one prerequisite:
+  // a realm whose `location.reload` is missing used to make `ambientDeps` throw
+  // NOT_IMPLEMENTED for *every* call, including the `reload: false` one whose
+  // whole point is "do not touch my page". The requirement follows the
+  // decision, so this call must reach the write.
+  const puts = [];
+  const db = fakeDb({
+    stores: ['extensionsObjectStorage', 'extensionsIndex'],
+    records: healthyRecords(),
+    puts,
+  });
+  const page = withPageGlobals(t, { db, reloadable: false });
+  const h = host();
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'sys.self_update', {
+    bundleB64: BUNDLE_B64,
+    version: NEW_VERSION,
+    reload: false,
+  });
+
+  assert.equal(frame.ok, true, JSON.stringify(frame.error));
+  assert.equal(frame.data.reloadInMs, 0);
+  assert.equal(puts.length, 2, 'the same two records are written');
+  assert.equal(puts[1].value.config.version, NEW_VERSION);
+  assert.equal(page.timers.length, 0);
+  assert.equal(page.reloads, 0);
+});
+
+test('a plain write still refuses a realm with no location.reload', async (t) => {
+  // The other half of the rule above: without `reload: false` the page is going
+  // to be reloaded, so the missing global is a real refusal (writing the bundle
+  // and not running it would be worse than saying no).
+  const db = fakeDb({
+    stores: ['extensionsObjectStorage', 'extensionsIndex'],
+    records: healthyRecords(),
+    puts: [],
+  });
+  withPageGlobals(t, { db, reloadable: false });
+  const h = host();
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'sys.self_update', {
+    bundleB64: BUNDLE_B64,
+    version: NEW_VERSION,
+  });
+
+  assert.equal(frame.ok, false);
+  assert.equal(frame.error.code, 'NOT_IMPLEMENTED');
+  assert.match(frame.error.message, /location\.reload/);
+});
+
+test('only the exact value false skips the reload', async (t) => {
+  // A truthy-looking spelling this action does not define must fall back to
+  // the documented behaviour (reload), not to silence: `reload: "false"` is a
+  // caller bug, and quietly not reloading would hide it behind "written".
+  const puts = [];
+  const db = fakeDb({
+    stores: ['extensionsObjectStorage', 'extensionsIndex'],
+    records: healthyRecords(),
+    puts,
+  });
+  const page = withPageGlobals(t, { db });
+  const h = host();
+  withEda(t, h);
+  await connector.activate();
+
+  const frame = await call(h, 'sys.self_update', {
+    bundleB64: BUNDLE_B64,
+    version: NEW_VERSION,
+    reload: 'false',
+  });
+
+  assert.equal(frame.data.reloadInMs, 500);
+  assert.equal(page.timers.length, 1);
   page.timers[0]();
   assert.equal(page.reloads, 1);
 });

@@ -564,7 +564,7 @@ def test_the_three_regulators_of_bishe_foc_1_0_0_are_the_ones_examined():
     would file a finding against a part with no such pin.
     """
     model, _geometry = cli._load_model(FOC_100, view="pcb")
-    readings = {r.designator: r for r in _regulator_readings(model)}
+    readings = {r.designator: r for r in _regulator_readings(model)[0]}
     assert set(readings) == {"U5", "U6", "U11"}
     assert readings["U11"].category == "ic.buck"
     assert readings["U5"].category == "ic.ldo"
@@ -793,7 +793,7 @@ def test_the_three_document_export_now_reaches_its_pcb1_regulators():
     which is what ``checksRun`` records.
     """
     pcb_model, _geometry = cli._load_model(FOC_110, view="pcb")
-    assert _regulator_readings(pcb_model) == [], (
+    assert _regulator_readings(pcb_model)[0] == [], (
         "the first-document model still places no regulator; the fix is that the "
         "runner no longer asks it for the whole review"
     )
@@ -809,7 +809,7 @@ def test_the_three_document_export_now_reaches_its_pcb1_regulators():
     # views agree on *which parts*, which is why the earlier silence was a
     # scope gap and not a disagreement.
     schematic, _geometry = cli._load_model(FOC_110, view="schematic")
-    assert {r.designator for r in _regulator_readings(schematic)} == {"U7", "U11", "U13"}
+    assert {r.designator for r in _regulator_readings(schematic)[0]} == {"U7", "U11", "U13"}
 
 
 def test_llc_names_no_regulator_either():
@@ -820,7 +820,7 @@ def test_llc_names_no_regulator_either():
     correctly are only told apart by a test that demands nothing.
     """
     pcb_model, _geometry = cli._load_model(LLC, view="pcb")
-    assert _regulator_readings(pcb_model) == []
+    assert _regulator_readings(pcb_model)[0] == []
     findings, _section = run_pcb_review(
         LLC, model=build_project_model(LLC), rules=[RegulatorCapDistance()]
     )

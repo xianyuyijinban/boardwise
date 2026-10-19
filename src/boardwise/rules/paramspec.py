@@ -51,6 +51,13 @@ from __future__ import annotations
 
 from ..core.designintent import INTENT_MISSING, IntentSource, write_path
 from ..core.model import Component, DesignModel, is_ground_net
+from ..core.partkind import (
+    CATEGORY_ABSENT,
+    CATEGORY_ACCEPTED,
+    CATEGORY_GATED,
+    category_verdict,
+    declared_category,
+)
 from ..core.parts import PartEntry, designator_category, resolve_component_facts
 from ..core.power_domains import (
     domain_of,
@@ -62,12 +69,20 @@ from ..core.power_domains import (
 )
 from ..core.values import parse_voltage_volts
 from .base import Finding, Outcome
-from .facts import FactsRule
+from .facts import FactsRule, category_absent_reason
 from ..core.parts import FACTS_TRUST_CANDIDATE
 from .railratings import rail_voltage
 from .unproven import unproven_nets, unproven_outcome
 
 LEVEL = "L2-facts"
+
+#: 527D3 fix: the class words this module's two rules judge their subject by, so
+#: the tier gate can be asked with :func:`category_verdict` and the three
+#: answers kept apart. One word each, and they are the shelf's own
+#: (``docs/parts.md``'s table) — ``blocklib/parts.json``'s ``diode.smcj28ca``
+#: entries carry exactly these.
+_LDO_CATEGORIES = frozenset({"ic.ldo"})
+_DIODE_CATEGORIES = frozenset({"diode"})
 
 
 # --------------------------------------------------------------------------
@@ -180,8 +195,9 @@ def _identity(comp: Component, entry: PartEntry | None) -> str:
 
 def independent_rail_price(
     model: DesignModel, library, net: str | None, *, subject: str
-) -> tuple[float | None, str]:
-    """A rail's voltage from **another** part's shelf spec — ``(volts, source)``.
+) -> tuple[float | None, str, str]:
+    """A rail's voltage from **another** part's shelf spec — ``(volts, source,
+    gated)``.
 
     :func:`boardwise.core.power_domains.infer_net_domains` prices an LDO's
     output rail from the part's **MPN suffix** or a curated
@@ -206,22 +222,46 @@ def independent_rail_price(
     reader refuses rather than resolves — picking one of two regulators' claims
     about the same net is the architecture's question, and
     ``arch-rail-voltage-clash`` is where that is owned.
+
+    **The third slot is 527D3's fix.** A neighbour whose class the tier gate
+    refuses (a draft, or a machine-granted class for a conclusion caller) used to
+    leave through the same ``continue`` as a part that is not a regulator at all,
+    so the caller could not tell 「nobody states this rail」 from 「the one part
+    that states it has an unsigned class」 — two different work orders, and only
+    one of them is answered by writing a contract. The note says which entry and
+    which review is owed. It is returned **instead of** a voltage: the class is
+    not read (that is the whole gate), and the value the entry carries may not be
+    used as a number.
     """
     if not net or library is None:
-        return None, ""
+        return None, "", ""
     found: dict[float, list[str]] = {}
+    gated_notes: list[str] = []
     for designator in sorted(model.components):
         if designator == subject:
             continue
         comp = model.components[designator]
         entry, _matched = resolve_component_facts(library, comp)
-        if entry is None or entry.category != "ic.ldo":
+        # 527D3: through the shared reader, at the **caller's** tier — both
+        # callers of this helper are number rules (`sel-tvs-standoff-rail`,
+        # `sel-ldo-fixed-output`, 522's list), so they pass
+        # ``allow_machine=True`` and a machine-granted LDO class still prices
+        # the rail. The keyword exists so the next caller has to rule.
+        verdict = category_verdict(entry, _LDO_CATEGORIES, allow_machine=True)
+        if verdict == CATEGORY_ABSENT:
             continue
         out_pin = ldo_output_pin(entry)
         if not out_pin:
             continue
         on_net = [p for p in comp.pins if p.net == net]
         if not any(p.number == out_pin for p in on_net):
+            continue
+        if verdict == CATEGORY_GATED:
+            gated_notes.append(
+                f"{designator} 的货架分类 {entry.category!r} 未采信"
+                f"（{category_absent_reason(entry, allow_machine=True)}），"
+                f"所以它没有为这条轨 {net!r} 声明电压"
+            )
             continue
         key, raw = _named(_params_of(entry), _LDO_OUTPUT_KEYS)
         volts = _read_volts(raw)
@@ -231,12 +271,17 @@ def independent_rail_price(
             f"{designator} 的 {key} = {raw!r}（货架条目 {entry.key}）"
         )
     if len(found) != 1:
-        # No neighbour speaks, or two of them disagree — see the docstring.
-        return None, ""
+        # No neighbour speaks, or two of them disagree — see the docstring. The
+        # gated notes travel either way: they are about parts that were skipped,
+        # not about the vote, so a neighbour that did speak does not silence the
+        # disclosure of the one that could not.
+        return None, "", "；".join(gated_notes)
     volts, sources = next(iter(found.items()))
-    return volts, (
+    return (
+        volts,
         "货架上另一颗稳压器对该轨输出脚自己声明的输出电压："
-        + "；".join(sources)
+        + "；".join(sources),
+        "；".join(gated_notes),
     )
 
 
@@ -296,7 +341,7 @@ def sel_rail_voltage(
     # (see `independent_rail_price`). A neighbour's declaration is independent
     # evidence about the subject, so it is asked first and settles the question
     # even when the subject votes on the same net.
-    neighbour, neighbour_source = independent_rail_price(
+    neighbour, neighbour_source, neighbour_gated = independent_rail_price(
         model, library, net, subject=subject
     )
     if neighbour is not None:
@@ -317,6 +362,11 @@ def sel_rail_voltage(
             )
         return volts, source, ""
     missing = why or f"no source names the voltage of net {net!r}"
+    if neighbour_gated:
+        # 527D3 fix: the tier sentence, so the row says which review is owed
+        # rather than only 「nobody states this voltage」 — the caller cannot see
+        # the skipped neighbour any other way.
+        missing = f"{missing}；{neighbour_gated}"
     if intent is not None:
         missing = (
             f"{missing}；{INTENT_MISSING}: 合同也没声明 "
@@ -432,10 +482,56 @@ class TvsStandoffRail(FactsRule):
             # one row per unlisted diode on every board would drown the real
             # ones. `path-ldo-dropout` skips the same way.
             return None
-        is_diode = (
-            entry.category == "diode" or designator_category(ref) == "diode"
+        diode_verdict = category_verdict(
+            # 527D3: the shelf half through the shared reader at this rule's
+            # own tier (`REQUIRES_HUMAN_VERIFIED` is False — the verdict is
+            # `Vrwm >= rail`, a number), the designator half unchanged. A
+            # machine-granted `diode` class names the subject; a gated or
+            # draft class falls through to the designator door, which still
+            # answers — the narrower reading, not a silent drop.
+            entry,
+            _DIODE_CATEGORIES,
+            allow_machine=True,
         )
-        if not is_diode:
+        by_designator = designator_category(ref) == "diode"
+        if diode_verdict != CATEGORY_ACCEPTED and not by_designator:
+            if diode_verdict == CATEGORY_GATED:
+                # 527D3 fix: the part used to leave here through the same
+                # ``return None`` a non-diode gets, so 「货架说它是二极管、
+                # 档位不够」 and 「这条规则不管它」 were the same silence. Neither
+                # door took it, so no stand-off comparison was made — and the
+                # rule can say so without reading the class it may not read.
+                return (
+                    Outcome(
+                        rule_id=self.id,
+                        state="UNKNOWN",
+                        subject=ref,
+                        message=(
+                            f"{ref}: 货架把它分类为 "
+                            f"{str(getattr(entry, 'category', '') or '')!r} —— "
+                            f"{category_absent_reason(entry, allow_machine=True)}"
+                            "，而它的位号又不是 D 类的二极管位号，所以两条门都没"
+                            "接纳它 —— 它的关断电压对拍没有判。该审的是分类的档位，"
+                            "不是它"
+                        ),
+                        evidence=evidence
+                        + [
+                            f"{ref} shelf category "
+                            f"{str(getattr(entry, 'category', '') or '')!r}"
+                            f"（档位 "
+                            f"{getattr(entry, 'category_trust', 'verified')}，"
+                            "本规则不读它）",
+                        ],
+                        missing_fact=(
+                            f"{ref} 的货架分类的档位"
+                            f"（{getattr(entry, 'category_trust', 'verified')}）："
+                            "分类存在但本规则不读它 —— 把 category_trust 改成 "
+                            "verified 就是那次签字，或人工确认这条分类；位号也不是"
+                            "二极管位号，所以没有第二条门"
+                        ),
+                    ),
+                    "INFO",
+                )
             return None
         params = _params_of(entry)
         type_key, type_raw = _named(params, _TVS_TYPE_KEYS)
@@ -758,13 +854,17 @@ class LdoFixedOutput(FactsRule):
         entry = self.entry_for(comp)
         if entry is None:
             return None
-        if entry.category != "ic.ldo":
+        if declared_category(entry, allow_machine=True) != "ic.ldo":
             # "Is this part an LDO at all" is `path-ldo-dropout`'s conclusion,
             # and it states it for every IC whose shelf entry cannot tell
             # (`_category_state`'s three-way answer) — `path-ldo-dissipation`
             # skips those the same way and says why in its own docstring. A
             # second copy of that row in this rule's wording is how two rules
-            # start disagreeing about the same gap.
+            # start disagreeing about the same gap. 527D3: through the shared
+            # reader at this rule's tier (`REQUIRES_HUMAN_VERIFIED` is False —
+            # the verdict is `declared == rail`, a number), so a
+            # machine-granted LDO class names the subject and a gated one
+            # falls to `path-ldo-dropout`'s row, which states it.
             return None
         params = _params_of(entry)
         type_key, type_raw = _named(params, _LDO_TYPE_KEYS)

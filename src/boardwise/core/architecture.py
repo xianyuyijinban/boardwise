@@ -59,6 +59,12 @@ import re
 from dataclasses import dataclass, field
 
 from .model import Component, DesignModel, is_ground_net
+from .partkind import (
+    CATEGORY_ACCEPTED,
+    CATEGORY_GATED,
+    category_verdict,
+    declared_category,
+)
 from .parts import PartLibrary, category_of, resolve_component_facts
 from .power_domains import (
     domain_of,
@@ -223,6 +229,17 @@ CONTROL_PATTERN = re.compile(
 #: Shelf categories that can legitimately be where a rail comes from. The list is
 #: a *candidate* list: nothing here decides that the part actually feeds the rail.
 _RAIL_SOURCE_CATEGORIES = frozenset({"ic.ldo", "ic.charger", "module"})
+
+#: 527D3: the one category :func:`controller_evidence` reads. A named constant
+#: rather than a literal so the reader and the disclosure below cannot drift apart
+#: about which class the walk is asking about.
+_CONTROLLER_CATEGORIES = frozenset({"ic.mcu"})
+
+#: 527D3: every category this module's walks read as a class. :func:`_rails`
+#: needs one of :data:`_RAIL_SOURCE_CATEGORIES` to name a rail's source and
+#: :func:`_ldo_output_note` needs ``ic.ldo``; :func:`controller_evidence` needs
+#: ``ic.mcu``. The union is what :func:`gated_classifications` discloses.
+_WATCHED_CATEGORIES = _RAIL_SOURCE_CATEGORIES | _CONTROLLER_CATEGORIES
 
 #: How many of a member's other nets to print per chain. A 64-pin MCU touches
 #: dozens; the point is to show the local shape, not to re-print the netlist.
@@ -592,9 +609,24 @@ def controller_evidence(component: Component, library: PartLibrary | None) -> st
     defect 090 §二 warns about). ``library=None`` (the caller has no shelf in
     hand) leaves only the symbol evidence, which is what this reading always
     did with no library.
+
+    527D3: the shelf half is a **class**, so it is read through
+    :func:`boardwise.core.partkind.category_verdict` at this walk's tier — a
+    conclusion tier (a controller anchors a chain), so ``allow_machine=False``. A
+    machine-granted ``ic.mcu`` is therefore **not** evidence here; the symbol's
+    own ``P<port><n>`` pins still are (they are facts about the drawing, not about
+    a class), and the third state — 「the shelf calls it an MCU and nobody signed
+    that」 — is reported once per board by
+    :func:`gated_classifications`, which :func:`_render_board` prints. Keeping the
+    disclosure at the board rather than at the four read points is deliberate:
+    this walk produces a skeleton, not per-part findings, and four copies of one
+    sentence about one part would be the noise the single line avoids.
     """
     entry = _entry_for(component, library)
-    if entry is not None and entry.category == "ic.mcu":
+    if (
+        category_verdict(entry, _CONTROLLER_CATEGORIES, allow_machine=False)
+        == CATEGORY_ACCEPTED
+    ):
         return f"货架 category=ic.mcu（{entry.key}）"
     ports = [pin.name for pin in component.pins if _PORT_PIN.match(pin.name or "")]
     if len(ports) >= PORT_PIN_THRESHOLD:
@@ -684,6 +716,14 @@ def _rails(board: DesignModel, library: PartLibrary | None) -> list[_Rail]:
     net whose pins are all returns is a reference too and is skipped here. Both
     exclusions exist because a rail the tool invents swallows the chain it should
     have listed (see :data:`_SUPPLY_PIN`).
+
+    527D3: both class reads here (the regulator output pin, and the source
+    candidate list) go through :func:`boardwise.core.partkind.declared_category`
+    at ``allow_machine=False`` — 「this part is a regulator feeding this rail」 is a
+    conclusion this skeleton is drawn from. A class the tier refuses is **not**
+    allowed to name a rail or a source candidate; the part still appears, once per
+    board, in :func:`gated_classifications`'s line, which is this walk's channel
+    for the third state.
     """
     guesses = infer_net_domains(board, library) if library is not None else {}
     ldo_outputs: set[str] = set()
@@ -691,7 +731,7 @@ def _rails(board: DesignModel, library: PartLibrary | None) -> list[_Rail]:
         for designator in sorted(board.components):
             component = board.components[designator]
             entry = _entry_for(component, library)
-            if entry is None or entry.category != "ic.ldo":
+            if declared_category(entry, allow_machine=False) != "ic.ldo":
                 continue
             output_pin = ldo_output_pin(entry)
             if not output_pin:
@@ -711,7 +751,7 @@ def _rails(board: DesignModel, library: PartLibrary | None) -> list[_Rail]:
             if component is None:
                 continue
             entry = _entry_for(component, library)
-            category = entry.category if entry is not None else ""
+            category = declared_category(entry, allow_machine=False) or ""
             bucket = category_of(component.footprint or "", designator)
             # Candidates are listed by what the part *is*, not by where its pins
             # sit: a regulator touches the rail it feeds and the rail it drains,
@@ -748,13 +788,19 @@ def _rails(board: DesignModel, library: PartLibrary | None) -> list[_Rail]:
 
 
 def _ldo_output_note(board: DesignModel, library: PartLibrary | None, net_name: str) -> str:
-    """Which shelf regulator's output pin sits on ``net_name`` (evidence text)."""
+    """Which shelf regulator's output pin sits on ``net_name`` (evidence text).
+
+    527D3: the class is read through
+    :func:`boardwise.core.partkind.declared_category` at ``allow_machine=False``,
+    the same read :func:`_rails` admits a rail's output pin through, so this
+    evidence line can never name a regulator the rail itself refused.
+    """
     if library is None:
         return "?"
     for designator in sorted(board.components):
         component = board.components[designator]
         entry = _entry_for(component, library)
-        if entry is None or entry.category != "ic.ldo":
+        if declared_category(entry, allow_machine=False) != "ic.ldo":
             continue
         output_pin = ldo_output_pin(entry)
         if not output_pin:
@@ -767,6 +813,40 @@ def _ldo_output_note(board: DesignModel, library: PartLibrary | None, net_name: 
 
 def _ground_nets(board: DesignModel) -> list[str]:
     return sorted(name for name in board.nets if is_ground_net(name))
+
+
+def gated_classifications(
+    board: DesignModel, library: PartLibrary | None
+) -> list[tuple[str, str]]:
+    """``[(designator, category)]`` the shelf names at a tier this walk may not read.
+
+    527D3's third state, once per board. This module reads a class as a
+    *conclusion* at four places — ``ic.mcu`` (a controller, i.e. a chain anchor)
+    and :data:`_RAIL_SOURCE_CATEGORIES` (where a rail comes from) — and at
+    ``allow_machine=False`` a machine-granted class is invisible to all four. The
+    four read points cannot each say so: this walk produces a skeleton, not
+    per-part findings, and the honest place for 「the shelf classified this part
+    and nobody signed it」 is one line in the board's own account.
+
+    Without that line the tier gate would be strictly worse than the raw
+    ``entry.category`` read it replaced: at HEAD a machine-granted ``ic.mcu``
+    **was** a controller, so a reader saw the part somewhere. With it, the part is
+    still kept out of the decisions (522's ruling) *and* visible as the review it
+    owes.
+    """
+    gated: list[tuple[str, str]] = []
+    if library is None:
+        return gated
+    for designator in sorted(board.components):
+        component = board.components[designator]
+        entry = _entry_for(component, library)
+        if (
+            category_verdict(entry, _WATCHED_CATEGORIES, allow_machine=False)
+            != CATEGORY_GATED
+        ):
+            continue
+        gated.append((designator, str(getattr(entry, "category", "") or "")))
+    return gated
 
 
 def _chains_and_rails(
@@ -897,6 +977,21 @@ def _render_board(
         lines.append(
             "控制器候选：**无**（本板没有货架标为 `ic.mcu`、也没有 ≥4 个端口命名引脚的器件）——"
             "链级走查以别处的控制器为准，跨板链在这里只能留 " + TODO
+        )
+    # 527D3: the third state of this walk's four class reads, once per board. A
+    # class the tier refuses keeps the part out of every decision above (522's
+    # ruling: a machine-granted class drives no conclusion) — this line is what
+    # keeps it from also disappearing from the account.
+    gated = gated_classifications(board, library)
+    if gated:
+        lines.append(
+            "**分类档位不足（本走查不据此认定，要人签字）**："
+            + "；".join(
+                f"`{designator}` 货架分类 {category!r} —— 分类存在但没人签字"
+                for designator, category in gated
+            )
+            + "。这些器件**没有**参与上面的控制器候选、电源树源候选与链锚点判定；"
+            "把对应条目的 `category_trust` 改成 `verified` 就是那次签字。"
         )
     lines.append("")
 
@@ -1044,6 +1139,16 @@ def _render_board(
         "controlChains": len(control),
         "buses": len(buses),
         "unclassifiedNets": len(unclassified),
+        # 527D3 fix (红队 S9 之二): the third state, on the contract side too. The
+        # markdown line above is prose, and 053 §2.2's whole point is that a
+        # consumer of this section never parses prose — the slot join key and the
+        # counts are what a machine `arch` run reads. Additive and opt-out by
+        # construction (`[]` when nothing is gated), so the section's existing
+        # keys and every existing consumer are untouched.
+        "gatedClassifications": [
+            {"designator": designator, "category": category}
+            for designator, category in gated
+        ],
     })
     section_chains["rails"].extend(
         {

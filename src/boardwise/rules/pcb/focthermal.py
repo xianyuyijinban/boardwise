@@ -149,7 +149,7 @@ from ...core.measure import (
     via_layers,
     vias_on_pad,
 )
-from ..facts import read_default_library
+from ..facts import category_gate_finding, read_default_library
 from .base import PcbReviewContext, PcbRule
 from .distance import _measurement
 from .foc import _motor_drivers
@@ -368,17 +368,45 @@ def _via_layers_reading(board: BoardGeometry, via: ViaGeometry) -> str:
 
 
 def _motors_on(
-    board: BoardGeometry, model: object, library
-) -> list[tuple[str, object, str]]:
+    board: BoardGeometry, model: object, library, *, allow_machine: bool = False
+) -> tuple[list[tuple[str, object, str]], list[tuple[str, str, str]]]:
     """Motor drivers **this PCB document places**, as 133b's ``_one_driver`` does.
 
     A driver the netlist names but this document does not carry is dropped here
     rather than reported with no geometry: it is not this board's copper.
+
+    527D3 carries 133b's ``gated`` list through unchanged (and does **not** filter
+    it by placement — a driver this document does not carry still owes the review
+    row, because the class is what is unsigned, not the geometry). Each of the
+    three rules reading this pool writes those rows.
+    """
+    found, gated = _motor_drivers(model, library, allow_machine=allow_machine)
+    placed = [
+        (designator, component, category)
+        for designator, component, category in found
+        if board.component(designator) is not None
+    ]
+    return placed, gated
+
+
+def _gate_rows(rule: PcbRule, gated: list[tuple[str, str, str]]) -> list[Finding]:
+    """The 免责 rows for motor drivers the shelf names but this tier may not read.
+
+    527D3: the three thermal rules read 133b's motor-driver pool, so all three
+    owe the same sentence about the same unsigned class. One call into
+    :func:`boardwise.rules.facts.category_gate_finding` — which owns the wording
+    — rather than three copies of it.
     """
     return [
-        (designator, component, category)
-        for designator, component, category in _motor_drivers(model, library)
-        if board.component(designator) is not None
+        category_gate_finding(
+            rule_id=rule.id,
+            level=rule.level,
+            designator=designator,
+            category=category,
+            category_trust=trust,
+            subject="它的热焊盘",
+        )
+        for designator, category, trust in gated
     ]
 
 
@@ -513,14 +541,15 @@ class FocThermalViaStyle(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         board = ctx.board
         model = ctx.pcb_model
         if board is None or model is None:
             return []
         findings: list[Finding] = []
-        for designator, _component, category in _motors_on(board, model, library):
+        motors, gated = _motors_on(board, model, library, allow_machine=allow_machine)
+        for designator, _component, category in motors:
             thermal = thermal_pad_of(board, designator)
             if thermal is None:
                 placed = sum(1 for p in board.pads if p.component == designator)
@@ -530,6 +559,7 @@ class FocThermalViaStyle(PcbRule):
                     findings.append(_unknown_pad(board, designator, category, placed))
                 continue
             findings.append(self._one_pad(board, thermal, category))
+        findings.extend(_gate_rows(self, gated))
         return findings
 
     def _one_pad(
@@ -673,18 +703,20 @@ class FocThermalViaArray(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         board = ctx.board
         model = ctx.pcb_model
         if board is None or model is None:
             return []
         findings: list[Finding] = []
-        for designator, _component, category in _motors_on(board, model, library):
+        motors, gated = _motors_on(board, model, library, allow_machine=allow_machine)
+        for designator, _component, category in motors:
             thermal = thermal_pad_of(board, designator)
             if thermal is None:
                 continue  # R7 carries the UNKNOWN row; this rule has no pad to read
             findings.append(self._one_pad(board, thermal, category))
+        findings.extend(_gate_rows(self, gated))
         return findings
 
     def _one_pad(
@@ -1027,18 +1059,20 @@ class FocThermalExitPath(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         board = ctx.board
         model = ctx.pcb_model
         if board is None or model is None:
             return []
         findings: list[Finding] = []
-        for designator, _component, category in _motors_on(board, model, library):
+        motors, gated = _motors_on(board, model, library, allow_machine=allow_machine)
+        for designator, _component, category in motors:
             thermal = thermal_pad_of(board, designator)
             if thermal is None:
                 continue  # R7 carries the UNKNOWN row; there is no pad to trace
             findings.append(self._one_pad(board, thermal, category))
+        findings.extend(_gate_rows(self, gated))
         return findings
 
     def _one_pad(

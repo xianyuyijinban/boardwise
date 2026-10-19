@@ -290,9 +290,11 @@ ACTIONS: tuple[Action, ...] = (
             "fires. Only `config.version` and `fileSize` are touched in the "
             "index record — the external-interaction grant is preserved. Every "
             "step validates; any failure is an explicit error (fall back to a "
-            "manual reinstall), never a silent degrade."
+            "manual reinstall), never a silent degrade. `reload: false` (528A) "
+            "writes the same records and schedules no reload: the stored build "
+            "stays dormant until the editor re-evaluates the extension."
         ),
-        params=("bundleB64", "version", "confirm"),
+        params=("bundleB64", "version", "confirm", "reload"),
         returns="{ok, oldVersion, newVersion, bytes, database, reloadInMs}",
         params_schema=(
             "bundleB64: the new dist/index.js, base64-encoded (required); "
@@ -300,7 +302,11 @@ ACTIONS: tuple[Action, ...] = (
             "confirm: must be `true` — the daemon's dangerous-tier gate refuses "
             "anything else, because this replaces running code and reloads the "
             "editor (2026-10-06: it was risk=write and slipped the create gate "
-            "wide open while a blank pcb.doc.new was refused)"
+            "wide open while a blank pcb.doc.new was refused); "
+            "reload: optional, default `true` — only the exact value `false` "
+            "writes without reloading, and the reply then carries "
+            "`reloadInMs: 0` so a caller can tell the two apart (528A; "
+            "`boardwise bridge update-connector --no-reload`)"
         ),
         risk="dangerous",
     ),

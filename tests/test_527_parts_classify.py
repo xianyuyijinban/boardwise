@@ -10,7 +10,9 @@ whose `category` is empty, whatever else is on it — so the only route was edit
 Two things are therefore under test, and they are the same ruling seen twice:
 
 * the **command** — one word from the shelf's own table, three evidence flags
-  taken as a set, and exactly two keys of exactly one entry moving;
+  taken as a set, and exactly the class's own keys of exactly one entry moving
+  (`category`, `category_trust`, and — since 527D2 — the machine tier's
+  `category_provenance` citation);
 * the **reach** of what it writes — a category is a *conclusion* ("this is an
   LDO"), so 522's dividing line applies: `category_trust: machine_verified`
   unlocks the calculation rules and no conclusion rule, while an entry with no
@@ -65,6 +67,9 @@ DUMP = (
     "LM5164 is a 100 V step-down buck converter.\n"
 )
 QUOTE = "LM5164 is a 100 V step-down buck converter."
+#: 527D2: the url `parts fetch`/`hunt` record in the cache's `.meta.json` when the
+#: bytes arrive. The `http(s)` leg of `--from` is now matched against it.
+CACHED_URL = "https://www.ti.com/cn/lit/gpn/lm5164"
 
 
 # --------------------------------------------------------------------------
@@ -92,11 +97,15 @@ def page_dump(tmp_path: Path, text: str = DUMP) -> Path:
     return path
 
 
-def write_cache(root: Path, *, lcsc: str = TARGET_LCSC, pages: list[str]) -> Path:
-    """A stage-one cache entry: `<root>/<C码>/<C码>.{pages.json,txt,pdf}`.
+def write_cache(
+    root: Path, *, lcsc: str = TARGET_LCSC, pages: list[str], url: str | None = CACHED_URL
+) -> Path:
+    """A stage-one cache entry: `<root>/<C码>/<C码>.{pages.json,txt,pdf,meta.json}`.
 
     The shape 521's own tests build, because this is the same file `--apply-facts`
-    reads and the "`http(s)` --from" leg is exactly that read.
+    reads and the "`http(s)` --from" leg is exactly that read. 527D2 adds the
+    `.meta.json` (what `parts fetch` writes when the bytes arrive) and makes it
+    optional, so the "cache has a dump but no url record" case can be built too.
     """
     directory = root / lcsc
     directory.mkdir(parents=True, exist_ok=True)
@@ -108,6 +117,14 @@ def write_cache(root: Path, *, lcsc: str = TARGET_LCSC, pages: list[str]) -> Pat
         encoding="utf-8",
     )
     (directory / f"{lcsc}.pdf").write_bytes(b"%PDF-1.4 stub")
+    if url is not None:
+        (directory / f"{lcsc}.meta.json").write_text(
+            json.dumps(
+                {"url": url, "channel": "detail-api", "bytes": 123},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
     return root
 
 
@@ -211,7 +228,10 @@ def test_evidence_writes_the_machine_tier_and_moves_only_the_two_keys(
         for name in set(before_target) | set(after_target)
         if before_target.get(name) != after_target.get(name)
     }
-    assert changed == {"category", "category_trust"}
+    # 527D2: the class's own keys are `category`, `category_trust` **and** the
+    # evidence the machine run writes (`category_provenance`) — the citation
+    # belongs to the class, so it moves with it; nothing else does.
+    assert changed == {"category", "category_trust", "category_provenance"}
     assert "机器核验档" in out
 
 
@@ -335,7 +355,9 @@ def test_half_the_evidence_is_refused_rather_than_guessed(tmp_path, capsys, argv
 
 def test_an_http_source_reads_the_dump_stage_one_cached(tmp_path, capsys):
     """The `http(s)` leg is `--apply-facts`'s own read — the cache under
-    `<cache>/<C码>/`, never a socket."""
+    `<cache>/<C码>/`, never a socket. 527D2: `--from` must be the url the cache
+    recorded for that entry, which is what makes the citation name the document
+    the quote was actually checked on."""
     shelf = shelf_without_category(tmp_path)
     cache = write_cache(
         tmp_path / "cache",
@@ -346,7 +368,7 @@ def test_an_http_source_reads_the_dump_stage_one_cached(tmp_path, capsys):
     )
     code = cli.main([
         "parts", "classify", TARGET_MPN, "ic.buck",
-        "--from", "https://www.ti.com/cn/lit/gpn/lm5164",
+        "--from", CACHED_URL,
         "--page", "2", "--quote", QUOTE,
         "--cache", str(cache), "--library", str(shelf),
     ])
@@ -379,7 +401,7 @@ def test_an_http_source_with_no_cached_dump_is_refused(tmp_path, capsys):
     before = shelf.read_bytes()
     code = cli.main([
         "parts", "classify", TARGET_MPN, "ic.buck",
-        "--from", "https://www.ti.com/cn/lit/gpn/lm5164",
+        "--from", CACHED_URL,
         "--page", "2", "--quote", QUOTE,
         "--cache", str(tmp_path / "empty"), "--library", str(shelf),
     ])
@@ -580,7 +602,7 @@ def test_shelf_declaration_asks_the_category_its_own_tier():
     assert shelf_declaration(legacy) == "ic.ldo"
 
 
-def test_the_hunt_rebuild_inherits_every_trust_field():
+def test_the_hunt_rebuild_inherits_every_field():
     """527D's sweep, H1: a rebuild that forgets a field **resets** it.
 
     `_hunt_write_shelf` does not mutate the shelf entry — it constructs a new
@@ -593,26 +615,146 @@ def test_the_hunt_rebuild_inherits_every_trust_field():
     signature**, the one direction the whole tier exists to prevent.
 
     Pinned structurally rather than by one fixture, because the next field added
-    to `PartEntry` has the same trap: read the rebuild's source from disk and
-    require a `<field>=` for every trust field the dataclass declares.
+    to `PartEntry` has the same trap: read the rebuild's own `PartEntry(...)`
+    call and require a keyword for every field the dataclass declares. Read
+    through the **AST**, not the source text: a comment that happens to spell a
+    field name is not an inheritance, and the first cut's text search could not
+    tell the difference.
+
+    527D2 measured the hole in the first cut of this test: the filter was
+    `field.name.endswith("_trust")`, so `category_provenance` — the field this
+    batch added, and the one whose loss resurrects exactly the same
+    "machine granted it, evidence erased" shape one field over — was **not
+    covered**. Deleting the three inheritance lines from the rebuild left both
+    test files at 36 passed. The judgement is therefore the whole dataclass, and
+    the exemptions are named one by one rather than implied by a name pattern.
     """
+    import ast
     import dataclasses
     import inspect
 
     from boardwise import cli
 
-    source = inspect.getsource(cli._hunt_write_shelf)
-    trust_fields = [
-        field.name
-        for field in dataclasses.fields(PartEntry)
-        if field.name.endswith("_trust")
+    tree = ast.parse(inspect.getsource(cli._hunt_write_shelf))
+    builds = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "PartEntry"
     ]
-    assert trust_fields, "the shelf has trust fields; otherwise this test is vacuous"
-    for name in trust_fields:
-        assert f"{name}=" in source, (
-            f"`_hunt_write_shelf` rebuilds the entry without inheriting {name!r} — "
-            "the rebuilt entry would silently take the default tier"
+    assert len(builds) == 1, (
+        "expected exactly one `PartEntry(...)` construction in the rebuild, found "
+        f"{len(builds)} — this test judges that call"
+    )
+    passed = {keyword.arg for keyword in builds[0].keywords}
+    #: Fields the rebuild does **not** pass, with the reason each is exempt:
+    #:
+    #: * `candidate_facts` — **derived**, not stored: `PartEntry.__post_init__`
+    #:   computes it from `facts` (the gate-shut view), so it cannot be lost by
+    #:   the rebuild and must not be passed in (the constructor would be saying
+    #:   two things about the same claim).
+    #:
+    #: A field added to `PartEntry` later lands here by default — this dict is
+    #: the whole exemption list, so forgetting to inherit a new field is red.
+    derived = {
+        "candidate_facts": "__post_init__ derives it from `facts`",
+    }
+    fields = [field.name for field in dataclasses.fields(PartEntry)]
+    assert "candidate_facts" in fields, (
+        "the exemption list is stale — `candidate_facts` is no longer a field, "
+        "so the whitelist is hiding something"
+    )
+    for name in fields:
+        if name in derived:
+            continue
+        assert name in passed, (
+            f"`_hunt_write_shelf` rebuilds the entry without inheriting {name!r} "
+            "— the rebuilt entry would silently take the default "
+            f"(527D2: this is how `category_trust` was reset once and how "
+            "`category_provenance` would be erased). Exempt it in `derived` "
+            "with the reason, or inherit it."
         )
+    # The exemption list itself must not grow into a hole: every entry has a
+    # non-empty reason, names a real field, and is a field the call really does
+    # not pass (an exemption for something that is passed hides nothing, but it
+    # does mean the list has drifted).
+    assert all(
+        reason.strip() and name in fields and name not in passed
+        for name, reason in derived.items()
+    ), f"the exemption list is stale: {derived} vs passed {sorted(passed)}"
+
+
+def test_the_hunt_rebuild_keeps_a_machine_classs_citation(tmp_path):
+    """The structural test's behavioural half (527D2): the rebuild really does
+    put the citation back on the entry it rewrites.
+
+    A `category_provenance=` keyword in the source is not the same claim as "the
+    citation survives the rebuild" — the field could be read from the wrong
+    place, or dropped by `entry_to_json` afterwards. So an entry that carries a
+    machine-granted class **and** its citation goes through a real
+    `_hunt_write_shelf` run, beside a fresh facts claim for the same identity —
+    which is exactly what `parts hunt --apply-facts` does to a part a previous
+    `parts classify --from … --quote …` had already classified.
+    """
+    proven = {"source": "https://www.ti.com/cn/lit/gpn/lm5164", "page": 2, "quote": QUOTE}
+    shelf = tmp_path / "parts.json"
+    shelf.write_text(
+        json.dumps(
+            {
+                "kind": "boardwise-part-library",
+                "version": 2,
+                "sources": [],
+                "notes": [],
+                "parts": [
+                    {
+                        "key": "ic.lm5164ddar",
+                        "mpn": "LM5164DDAR",
+                        "lcsc": TARGET_LCSC,
+                        # A `verified` entry must be resolvable (039), which is
+                        # what the shelf holds until the rebuild lands facts on it.
+                        "deviceUuid": "aef6a3b388cc4d0fac09a8cb1dea8191",
+                        "libraryUuid": "0819f05c4eef4c71ace90d822a990e87",
+                        "category": "ic.buck",
+                        "category_trust": FACTS_TRUST_MACHINE,
+                        "category_provenance": dict(proven),
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class Outcome:
+        # The five attributes `_hunt_write_shelf` reads off a claim outcome
+        # (`engines.hunt.claim_outcome`'s shape, without running an extractor).
+        identity = {"lcsc": TARGET_LCSC, "mpn": "LM5164DDAR"}
+        outcome = "facts-read"
+        facts = {
+            "supply_pins": [
+                {"name": "VIN", "pins": ["1"], "provenance": "file:C477928.txt, p.2"},
+            ]
+        }
+        url = "https://www.ti.com/cn/lit/gpn/lm5164"
+        read_by_someone = True
+        designator = "U1"
+
+    said = cli._hunt_write_shelf(str(shelf), [Outcome()])
+    assert "更新 1 条" in said, said
+    entry = load_parts(shelf).get("ic.lm5164ddar")
+    assert entry.category == "ic.buck"
+    assert entry.category_trust == FACTS_TRUST_MACHINE, (
+        "the rebuild downgraded a machine-granted class to a human signature"
+    )
+    assert entry.category_provenance == proven, (
+        "the rebuild kept the machine-granted class but erased the citation that "
+        "lets anyone re-check it"
+    )
+    # …and it survived as far as the written document, not only the object.
+    raw = json.loads(shelf.read_text(encoding="utf-8"))
+    written = next(item for item in raw["parts"] if item["key"] == "ic.lm5164ddar")
+    assert written["category_provenance"] == proven
 
 
 def test_a_machine_category_finding_says_so():

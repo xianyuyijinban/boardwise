@@ -52,9 +52,15 @@ from ..core.designintent import (
     write_path,
 )
 from ..core.model import Component, DesignModel, is_ground_net
+from ..core.partkind import (
+    CATEGORY_ACCEPTED,
+    CATEGORY_GATED,
+    category_verdict,
+    declared_category,
+)
 from ..core.power_domains import domain_of, infer_net_domains
 from .base import Finding, FindingTarget, Outcome
-from .facts import FactsRule
+from .facts import FactsRule, category_absent_reason
 from .unproven import unproven_nets, unproven_outcome
 from .values import (
     decode_eia_3digit,
@@ -64,6 +70,11 @@ from .values import (
 )
 
 LEVEL = "L2-facts"
+
+#: 527D3 fix: the class words :func:`_kind_of` builds its subject set from, so
+#: :func:`category_verdict` can be asked with the same membership test that used
+#: to be written inline. Two words, and they are the shelf's own.
+_KIND_CATEGORIES = frozenset({"resistor", "capacitor"})
 
 #: The oracle's window for an indicator LED's series resistance, in ohms,
 #: **inclusive**. Ruling of 2026-09-19: in the 3V3 domain the series resistance
@@ -274,20 +285,49 @@ def parse_resistance_ohms(value: str) -> float | None:
     return _parse(value)
 
 
-def _kind_of(comp: Component, entry) -> str | None:
-    """``"resistor"`` / ``"capacitor"`` / None -- shelf category first, then
-    the value's unit. The unit inference is what lets the golden board's U3
+def _kind_of(
+    comp: Component, entry, *, allow_machine: bool = False
+) -> tuple[str | None, str]:
+    """``("resistor" | "capacitor" | None, gated_reason)`` — shelf category first,
+    then the value's unit. The unit inference is what lets the golden board's U3
     (a v1-era shelf entry with no category) be judged at all: its value
-    ``1kΩ`` names a resistance."""
-    category = (entry.category if entry is not None else "") or ""
-    if category in ("resistor", "capacitor"):
-        return category
+    ``1kΩ`` names a resistance.
+
+    The shelf half reads through
+    :func:`boardwise.core.partkind.category_verdict` (527D3), not the field: the
+    machine tier may name the kind only for a caller whose verdict is a
+    **number** (the 522 line), and a ``candidate`` class drives nothing at any
+    tier. Default ``False`` — conservative; the only caller that passes
+    ``True`` is a rule whose ``REQUIRES_HUMAN_VERIFIED`` is False (522's own
+    list in ``docs/parts.md``). A gated class reads as no declaration and the
+    unit still answers — the same 「narrower reading, not an exception」
+    contract the shelfless path below has always had.
+
+    **The second half is 527D3's fix, and it is not decoration.** ``None`` used
+    to mean two things at once: 「nothing names this part's kind」 (a mounting
+    screw) and 「the shelf names it and this tier may not read the name」 (a
+    resistor whose class is a draft). ``ValueMpnMatch`` skipped both with the
+    same ``continue``, so an unsignable class made a real part vanish from the
+    rule that compares its value against its MPN — the silent drop
+    ``category_verdict``'s docstring forbids. The caller now gets the reason and
+    writes the part its UNKNOWN row.
+    """
+    verdict = category_verdict(
+        entry, _KIND_CATEGORIES, allow_machine=allow_machine
+    )
+    if verdict == CATEGORY_ACCEPTED:
+        return declared_category(entry, allow_machine=allow_machine), ""
+    gated = (
+        category_absent_reason(entry, allow_machine=allow_machine)
+        if verdict == CATEGORY_GATED
+        else ""
+    )
     value = comp.value or ""
     if parse_resistance_ohms(value) is not None:
-        return "resistor"
+        return "resistor", gated
     if parse_capacitance_farads(value) is not None:
-        return "capacitor"
-    return None
+        return "capacitor", gated
+    return None, gated
 
 
 #: Engineering prefixes for :func:`_human_value`, largest scale first. The two
@@ -458,8 +498,47 @@ class ValueMpnMatch(FactsRule):
         rows: list[tuple] = []
         for comp in model.components.values():
             entry = self.entry_for(comp)
-            kind = _kind_of(comp, entry)
+            kind, kind_gated = _kind_of(
+                comp, entry, allow_machine=self._allow_machine
+            )
             if kind is None:
+                # 527D3 fix: `None` used to be the only answer here, so a part
+                # whose *shelf class* named it a resistor or a capacitor at a
+                # tier this run may not read left the rule with the same
+                # ``continue`` a mounting screw gets. The class is not read —
+                # that is the gate — but the part still gets its UNKNOWN row
+                # naming the review that would let the rule judge it.
+                if kind_gated:
+                    category_word = str(getattr(entry, "category", "") or "")
+                    category_tier = getattr(
+                        entry, "category_trust", "verified"
+                    )
+                    rows.append((
+                        Outcome(
+                            rule_id=self.id,
+                            state="UNKNOWN",
+                            subject=comp.designator,
+                            message=(
+                                f"{comp.designator}: 货架把它分类为 "
+                                f"{category_word!r} —— {kind_gated}，而板上的值 "
+                                f"{comp.value!r} 也不说它是电阻还是电容，所以这条"
+                                "MPN 对拍没有判 —— 该审的是分类的档位，不是它"
+                            ),
+                            evidence=[
+                                f"{comp.designator} value {comp.value!r}",
+                                f"{comp.designator} shelf category "
+                                f"{category_word!r}（档位 {category_tier}，"
+                                "本规则不读它）",
+                            ],
+                            missing_fact=(
+                                f"{comp.designator} 的货架分类的档位"
+                                f"（{category_tier}）：分类存在但本规则不读它 —— "
+                                "把 category_trust 改成 verified 就是那次签字，或"
+                                "人工确认这条分类；板上值也没有单位可读"
+                            ),
+                        ),
+                        None,
+                    ))
                 continue  # neither resistor nor capacitor by any evidence
             # 043: a resistor MPN may state its value in the trade's **mid-letter**
             # notation (`4K7` = 4.7 kΩ), which is not an EIA code at all — and the
@@ -769,7 +848,14 @@ class LedCurrent(FactsRule):
         leds = []
         for comp in model.components.values():
             entry = self.entry_for(comp)
-            if entry is not None and entry.category == "led":
+            # 527D3: through the shared reader, with this rule's tier answer.
+            # A machine-granted `led` class may pick the subject (the verdict
+            # is a number against the oracle's window); a `candidate` class
+            # may not, and the footprint word below still answers for the part
+            # — the narrower reading, never a silent drop.
+            if declared_category(
+                entry, allow_machine=self._allow_machine
+            ) == "led":
                 leds.append(comp)
                 continue
             if "LED" in (comp.footprint or "").upper():

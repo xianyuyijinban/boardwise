@@ -75,6 +75,15 @@ TURN_COST = 0.6
 #: shows) — a detour of ~325 units, which is exactly the trade 岳 asked for.
 CROSS_COST = 120.0
 
+#: How big a lattice :meth:`_Router._cost_field` will build before giving up and
+#: leaving the Manhattan bound in place. The field is a Dijkstra over the page's
+#: lattice points, so it is linear in area; a page far bigger than any grammar
+#: this repo ships (the flyback's is ~23k points) would spend more building the
+#: bound than the search it is meant to save. Expressed in lattice points per
+#: grid cell so the comparison is unit-free: the check is
+#: ``span_x * span_y > _FIELD_LATTICE_LIMIT * grid * grid``.
+_FIELD_LATTICE_LIMIT = 2_000_000
+
 
 def _rounded(point: tuple[float, float]) -> tuple[float, float]:
     """Trim float noise from a rotation (``cos(90°)`` is 6.1e-17, not 0)."""
@@ -257,6 +266,16 @@ class _Router:
         #: sibling of its own family its `SIBLING_LEAD_CLEARANCE`. Not a wall: the
         #: flag is placed on the crowded rung anyway when nothing roomier fits.
         self.flag_leads: dict[tuple[float, float], tuple[str, str]] = {}
+        #: 201F: no field memo. One was written and then removed after the 201F red
+        #: team measured **0 hits in 111 calls across the whole preview gate** (and
+        #: 0 in the flyback, ch340 and power-entry pages too): ``drawcompiler`` calls
+        #: ``route`` with a fresh goal set almost every time, and ``_wall`` depends on
+        #: ``blocked`` / ``reserved`` / ``reserved_exempt`` / ``boxes``, none of which
+        #: the key would have covered. So the memo paid nothing and carried a real
+        #: hazard — an entry built when a wall still existed would be handed to a
+        #: search whose wall is gone, and a stale field can *over*estimate, which is
+        #: the one direction that breaks A\*'s guarantee. Rebuilding is 0.15 s per
+        #: call on a 19.3k-node lattice; that is the honest price.
 
     # ------------------------------------------------------------ geometry
 
@@ -375,10 +394,49 @@ class _Router:
             return [self.point(start_node)]
         nearest = _nearest(goal_nodes)
 
+        # 201F: a *stronger* admissible heuristic than the plain Manhattan line.
+        #
+        # The Manhattan distance assumes an empty page: no body to walk around and
+        # no foreign wire to pay for. On a crowded page that bound sits an order of
+        # magnitude under the true optimum, and A* then expands every state whose f
+        # is below the answer — the L1 ball of radius C*, measured at 74,881 states
+        # for one flyback net (`outputs/201e/evidence.md`). The controlled
+        # experiment says where the cost actually hides: dropping ``CROSS_COST``
+        # from 120 to 1.0 cut that net's search **21×** (74881 → 343 expansions),
+        # so the page's price is crossings and the detours taken to dodge them —
+        # not the part extents a first attempt modelled (that field measured
+        # 19422 values and moved the expansion count by *zero*, because a box
+        # wall almost never fires on this page: ``rej: wall=86`` of ~300k probes).
+        #
+        # :meth:`_cost_field` is a reverse Dijkstra from the goals over the same
+        # lattice, priced with the components the real search charges and one it
+        # charges but this bound ignores:
+        #
+        # * **1.0 a step** — what the search pays per lattice step;
+        # * **:data:`CROSS_COST` when a step enters a lattice point that lies
+        #   inside a foreign wire** — the same surcharge, on the same points, that
+        #   the search applies when it steps into ``crossing_at_node``;
+        # * **walled** — ``_wall``'s own set (blocked points, non-exempt
+        #   reservations, box interiors), so the field never routes through
+        #   something the search cannot occupy;
+        # * **ignored** — ``TURN_COST``, and the two collinearity rules that forbid
+        #   running along, or turning on, a foreign wire.
+        #
+        # Every ignored term is non-negative and every skipped rule only *removes*
+        # paths, so the field's answer is ≤ the true cost of the cheapest legal
+        # path from that node. That is admissibility: A* still returns a path of
+        # the same optimal cost, and the 117 zero-move gate (83 previews
+        # byte-identical) is the check that no tied optimum got swapped. When the
+        # field cannot be built (no goal reachable, lattice too large) the old
+        # Manhattan bound stays in place, byte-for-byte.
+        field = self._cost_field(goal_nodes)
+
         def estimate(node: tuple[int, int]) -> float:
-            return float(
-                abs(node[0] - nearest[0]) + abs(node[1] - nearest[1])
-            )
+            if field is not None:
+                got = field.get(node)
+                if got is not None:
+                    return got
+            return float(abs(node[0] - nearest[0]) + abs(node[1] - nearest[1]))
 
         # Per-**call** memo of the two geometry answers the inner loop asks for
         # at every node. It is per call on purpose: ``self.edges`` is rebuilt and
@@ -446,6 +504,98 @@ class _Router:
                 heappush(frontier, (
                     total + estimate(other), counter, other, direction, total))
         return None
+
+    # ------------------------------------------------- heuristic support (201F)
+
+    def _cost_field(
+        self, goal_nodes: set[tuple[int, int]]
+    ) -> dict[tuple[int, int], float] | None:
+        """Cheapest cost from each node to `goal_nodes`, ignoring turns.
+
+        A reverse Dijkstra over the same lattice :meth:`_a_star` searches. Popping
+        `current`, every walkable neighbour `prev` is relaxed with the cost of the
+        step ``prev → current`` as the *forward* search would charge it: 1.0, plus
+        :data:`CROSS_COST` when `current` lies strictly inside a foreign wire —
+        the same surcharge, on the same points, as ``crossing_at_node``.
+
+        **Why it is admissible.** The real search charges per step exactly those
+        two terms. It also charges :data:`TURN_COST` on a direction change and
+        forbids running along, or turning on, a foreign wire; both omissions only
+        remove cost or remove paths, so for every node this field is ≤ the true
+        cheapest legal cost to a goal. Walls are :meth:`_wall`'s own set, so a
+        point the search cannot occupy never carries a value and is never routed
+        through. Nodes the field cannot reach are absent and the caller falls back
+        to the Manhattan line — the old bound, still admissible.
+
+        **Why the crossing term is the whole point.** Measured on the flyback page
+        (`outputs/201e/evidence.md`): a field over ``boxes`` alone (the first
+        attempt) moved the expansion count by *zero* — boxes almost never wall
+        this page (`rej: wall=86` of ~300k probes) — while dropping ``CROSS_COST``
+        to 1.0 cut one net's search 21×. The price the search pays is crossings
+        and the detours taken to dodge them, so that is what the bound must model.
+
+        Returns ``None`` when the build would not pay for itself: no goal is
+        walkable, or the lattice exceeds :data:`_FIELD_LATTICE_LIMIT`.
+        """
+        if not goal_nodes:
+            return None
+        span_x = self.bounds[2] - self.bounds[0] + self.grid
+        span_y = self.bounds[3] - self.bounds[1] + self.grid
+        if span_x * span_y > _FIELD_LATTICE_LIMIT * self.grid * self.grid:
+            return None
+
+        # The lattice points that lie *strictly* inside a foreign wire, computed
+        # once: this is what ``_crossing`` answers, and asking it per pop would
+        # cost ``|edges|`` segment tests per node.
+        foreign: set[tuple[int, int]] = set()
+        for start, end in self.edges:
+            a, b = self.node(start), self.node(end)
+            if a[0] == b[0]:
+                run = [(a[0], y) for y in range(min(a[1], b[1]), max(a[1], b[1]) + 1)]
+            elif a[1] == b[1]:
+                run = [(x, a[1]) for x in range(min(a[0], b[0]), max(a[0], b[0]) + 1)]
+            else:
+                continue  # not an orthogonal run; it can never hold a lattice point
+            for node in run:
+                if _strictly_on_segment(self.point(node), start, end):
+                    foreign.add(node)
+
+        field: dict[tuple[int, int], float] = {}
+        heap: list[tuple[float, tuple[int, int]]] = []
+        # ``_wall`` walks 60 boxes per call; the Dijkstra asks it up to four times
+        # per node. One memo per field build (``blocked``/``reserved``/``boxes``
+        # cannot change during a build — they are what the cache key pins) turns
+        # ~770k calls into ~19k.
+        walled: dict[tuple[int, int], bool] = {}
+
+        def is_wall(node: tuple[int, int]) -> bool:
+            got = walled.get(node)
+            if got is None:
+                got = self._wall(node)
+                walled[node] = got
+            return got
+
+        for node in goal_nodes:
+            if self._in_bounds(node) and not is_wall(node):
+                field[node] = 0.0
+                heappush(heap, (0.0, node))
+        if not field:
+            return None
+        steps = ((1, 0), (-1, 0), (0, 1), (0, -1))
+        while heap:
+            cost, node = heappop(heap)
+            if cost > field[node] + 1e-9:
+                continue  # superseded while this entry sat in the heap
+            enter = CROSS_COST if node in foreign else 0.0
+            for dx, dy in steps:
+                prev = (node[0] + dx, node[1] + dy)
+                if not self._in_bounds(prev) or is_wall(prev):
+                    continue
+                total = cost + 1.0 + enter
+                if total < field.get(prev, math.inf) - 1e-9:
+                    field[prev] = total
+                    heappush(heap, (total, prev))
+        return field
 
     def _unwind(
         self,

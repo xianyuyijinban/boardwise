@@ -105,7 +105,7 @@
 |---|---|---|---|
 | H1 | **高** | `parts hunt --apply-facts` 的 `_hunt_write_shelf` **逐字段手抄**重建条目，漏了 `category_trust` → 机器档分类**静默升格成人工签署**（522/527D 要防的唯一方向）；触发路径正是文档主推的「先 classify 再补 facts」 | **已修**：继承该字段；并加**结构性**回归（从 `PartEntry` 的 dataclass 字段推导「每个 `*_trust` 都必须在重建里出现」），下一个字段再漏就会红 |
 | H2 | **高** | `machine_trust_note` 只读 `facts_trust` → 「facts 人签 + 分类机器授」的 finding **一个字的免责都没有**，522 的物理保证在这里没有对偶的一半 | **已修**：两个档位各出一句，并说清是哪一半未确认（参数 / 分类 / 两者） |
-| H3 | **高** | `entry.category` 的**直读点成片存在**（`rules/pcb/mcureset.py`、`mcusupply`、`crystal`、`regulator`、`fbplacement`、`foc`、`focground`、`rules/params.py`、`paramspec.py`、`decap.py`、`archclosure.py`、`railratings.py`、`core/architecture.py`、`core/power_domains.py`）→ 机器档分类仍能驱动结论规则 | **未修（527D3）**。修法不是逐个改规则，而是给这些读点一个**分档感知**的入口（`declared_category(entry, allow_machine=…)`），要先逐条判定每条规则属于「数字」还是「结论」——那是 190/192 锚上的设计改动，不在发版夜动手。**文档与 release notes 已把承诺收窄到实际生效的两道闸** |
+| H3 | **高** | `entry.category` 的**直读点成片存在**（`rules/pcb/mcureset.py`、`mcusupply`、`crystal`、`regulator`、`fbplacement`、`foc`、`focground`、`rules/params.py`、`paramspec.py`、`decap.py`、`archclosure.py`、`railratings.py`、`core/architecture.py`、`core/power_domains.py`）→ 机器档分类仍能驱动结论规则 | **已修（527D3，2026-10-19）**。入口是 `partkind.declared_category(entry, allow_machine=…)`（四态）+ `partkind.category_verdict(entry, categories, allow_machine=…)`（三态：ACCEPTED / GATED / ABSENT）——**后者是本批真正解决问题的那个**：`None` 把「档位不够」和「不是本规则的对象」塌成同一个答案，是最容易做坏的形态，三态把它拆开。17 个读点逐条判了「数字 vs 结论」，机器档 + 结论类一律出**带免责的 finding 或 UNKNOWN 行**，绝不静默跳过；唯一的例外是 `core/architecture.py` 走的是**每板一句披露行**（那条 walk 产的是骨架不是 per-part finding，模块里写明了）。`declared_category` 的旧四态没改。证据 `outputs/527d3/evidence.md`：人签档在 `ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2` 上全流程逐字节相同（`blocklib/parts.json` 里 `category_trust` 出现 **0 次** ⇒ 闸在夹具路径上是 no-op），机器档路径 20 条新增全是披露/UNKNOWN 行；变异 2/2；指纹重钉 direct `b05d3384` / recursive `674e07e1` |
 | H4 | 中 | `checkup.shelf_can_drive_rules` 不看 `category_trust` → 机器授分类的件被移出「未审」写进「已审」，同时规则对它回 UNKNOWN | **已修**（并加回归） |
 | H5 | 中 | `category_trust: candidate` 在 `allow_machine=True` 下被当已分类 —— 比 `machine_verified` **更宽**，与 `facts_trust` 三档不同构 | **已修**：candidate 无条件挡（与 facts 侧同构） |
 | L1 | 低 | `_category_absent_reason` 的分支顺序会发出**错的工单**（candidate facts + machine category 时叫人去签分类，签了也没用） | **已修**：顺序与 `_category_state` 逐步对齐，并加「candidate facts 时不发分类工单」的守卫 |
@@ -116,9 +116,11 @@
 
 **527D 的已知边界（写在这里，别当已解决）**
 
-1. **证据不落货架**：`--from/--page/--quote` 只出现在终端与 `--json`，`provenance`/`notes` 一字未写。
-   于是 `machine_verified` 这条分类**事后无法追溯出处**——与 521「每条 fact 自带出处」的口径不一致。
-   要补得动「只改两个键」这条约束（→ 527D2）。
+1. ~~**证据不落货架**~~ **已解决（527D2）**：`parts classify` 的机器档现在把
+   `--from/--page/--quote` 三项逐字写进条目的 `category_provenance`，`parts show` /
+   `parts show --json` 可读回；人工档与旧条目不写该键，字节行为不变。「只改两个键」
+   的约束已改述为「只动分类自己的键」（`category` / `category_trust` /
+   `category_provenance`），对应测试同步更新。
 2. `parts classify` 只写可写架：冻结态下只存在于内置架的条目会 exit 2「找不到」，没提示「它在内置架、改不了」。
 3. `--from http(s)` 核的是「该条目身份」的缓存 dump，**不校验 URL 与缓存记录的 URL 是否同一个**（文档已写明）。
 4. `SKILL.md` 加不进一行（320 行硬顶 + `docs/parts.md` 不在打包清单），所以 `parts classify` 目前只在

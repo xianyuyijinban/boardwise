@@ -294,8 +294,12 @@ def _fb_pin(component: object) -> tuple[str, str, str] | None:
 
 
 def fb_dividers(
-    model: object, library=None, schematic: object | None = None
-) -> list[FbDivider]:
+    model: object,
+    library=None,
+    schematic: object | None = None,
+    *,
+    allow_machine: bool = False,
+) -> tuple[list[FbDivider], list[object]]:
     """Every **feedback** divider in one board model, with the reading behind it.
 
     The four mechanical criteria are the ones
@@ -341,6 +345,14 @@ def fb_dividers(
     The **netlist** — pins, nets, the tap, the rail domain — is the PCB
     document's own throughout (131c), because it is the view the geometry is
     measured in.
+
+    527D3 returns **two lists**: the dividers, and the regulator readings whose
+    class this tier may not hear. The second is not decoration — the category
+    half of the filter above is read through the tier gate, so a machine-granted
+    ``ic.ldo`` class leaves this function with fewer dividers than there are, and
+    a caller that dropped the second list would report 「no divider reaches the
+    FB pin」 for a regulator whose class merely nobody signed. The rule writes
+    each one a 免责 row.
     """
     if library is None:
         try:
@@ -348,11 +360,20 @@ def fb_dividers(
         except Exception:  # noqa: BLE001 — a shelfless reading is a narrower one
             library = None
 
-    readings = {
-        r.designator: r
-        for _title, board_model in _board_models(model)
-        for r in _regulator_readings(board_model, library)
-    }
+    # 527D3: the reader answers in two lists (accepted / gated at this rule's
+    # tier), so a regulator whose class nobody signed cannot enter the divider
+    # walk as if it had been classified. ``gated`` is carried out to the caller
+    # rather than dropped here: this function is the rule's own front door, and
+    # a gated regulator is still a regulator as far as the shelf is concerned —
+    # the caller owes it a 免责 row.
+    readings = {}
+    gated: list[object] = []
+    for _title, board_model in _board_models(model):
+        accepted, refused = _regulator_readings(
+            board_model, library, allow_machine=allow_machine
+        )
+        readings.update({r.designator: r for r in accepted})
+        gated.extend(refused)
     fb_nets = {
         designator: _fb_pin(getattr(readings[designator], "component", None))
         for designator in readings
@@ -420,7 +441,7 @@ def fb_dividers(
                             output_basis=output_basis,
                         )
                     )
-    return dividers
+    return dividers, gated
 
 
 def _capacitors_on(model: object, net_name: str, library) -> list[CapCandidate]:
@@ -493,6 +514,16 @@ def _fb_ic_on_tap(
     ``PC4``) and ``R7``/``R9`` on the DCDC board (tap ``$1N10444``, into
     ``U9``'s ``EN``) are both rejected here, and the second one is the reason
     the role test is strict: its member **is** a regulator.
+
+    **527D3 and this filter.** ``readings`` is what
+    :func:`~boardwise.rules.pcb.regulator._regulator_readings` accepted at this
+    rule's tier, so the membership test below is now the *second* half of a
+    two-part read: the tier gate happened in the reader (a machine-granted class
+    for this rule is not in ``readings`` at all, it is in the reader's ``gated``
+    list and gets a 免责 row from the rule), and what is left here is 「is this
+    member a regulator category at all」. The three states therefore do not
+    collapse: accepted walks on, gated is disclosed one level up, and a member
+    the shelf does not call a regulator is the silence it always was.
     """
     net = nets.get(tap)
     if net is None:
@@ -654,7 +685,7 @@ class RegulatorFbPlacement(PcbRule):
         return self.check_with_library(ctx, read_default_library())
 
     def check_with_library(
-        self, ctx: PcbReviewContext, library=None
+        self, ctx: PcbReviewContext, library=None, *, allow_machine: bool = False
     ) -> list[Finding]:
         """The pass itself, with the shelf handed in rather than read here.
 
@@ -670,6 +701,10 @@ class RegulatorFbPlacement(PcbRule):
         same 口径 as the neighbouring regulator rules' values (F7). ``None`` — no
         project model, or a link that does not resolve — is ordinary: the pool then
         reads the PCB document's copies and every reading says it is a fallback.
+
+        ``allow_machine`` (527D3) reaches the regulator reader on both of this
+        rule's paths, with the conservative default the three regulator rules
+        share. Both come back with a ``gated`` list and both write it a 免责 row.
         """
         board = ctx.board
         model = ctx.pcb_model
@@ -682,7 +717,9 @@ class RegulatorFbPlacement(PcbRule):
                 library = None
         schematic = schematic_board_of(ctx)
 
-        dividers = fb_dividers(model, library, schematic)
+        dividers, gated = fb_dividers(
+            model, library, schematic, allow_machine=allow_machine
+        )
         claimed: dict[str, str] = {}
         findings: list[Finding] = []
         for divider in dividers:
@@ -690,8 +727,16 @@ class RegulatorFbPlacement(PcbRule):
                 continue  # this PCB document places no such regulator
             claimed[divider.ic] = divider.tap_net
             findings.extend(self._one_divider(divider, board, model, library))
+        gated_seen = {reading.designator for reading in gated}
         for _title, board_model in _board_models(model):
-            for reading in _regulator_readings(board_model, library):
+            accepted, refused = _regulator_readings(
+                board_model, library, allow_machine=allow_machine
+            )
+            for reading in refused:
+                if reading.designator not in gated_seen:
+                    gated_seen.add(reading.designator)
+                    gated.append(reading)
+            for reading in accepted:
                 if reading.designator in claimed:
                     continue
                 if board.component(reading.designator) is None:
@@ -700,7 +745,28 @@ class RegulatorFbPlacement(PcbRule):
                 if fb is None:
                     continue  # no pin named FB: not this rule's question
                 findings.append(self._no_divider(reading, fb))
+        for reading in gated:
+            findings.append(self._tier_gate_row(reading))
         return findings
+
+    def _tier_gate_row(self, reading) -> Finding:
+        """The 免责 row for a regulator the shelf names but this tier may not hear.
+
+        One call into :func:`boardwise.rules.facts.category_gate_finding`, so
+        ``pcb-regulator-cap-distance`` and this rule write the same sentence
+        about one unsigned class. ``INFO``: it asserts nothing about the
+        placement, it names the review that is owed.
+        """
+        from ..facts import category_gate_finding
+
+        return category_gate_finding(
+            rule_id=self.id,
+            level=self.level,
+            designator=reading.designator,
+            category=reading.category,
+            category_trust=reading.category_trust,
+            subject="它的反馈分压",
+        )
 
     # -- rows -------------------------------------------------------------
 

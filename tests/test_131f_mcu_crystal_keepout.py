@@ -599,8 +599,8 @@ def test_crystal_designators_agree_with_131d_on_all_three_boards():
     for path, expected in ((FOC_100, ["X1"]), (ROBOT, ["X2"]), (PILLBOX, ["X1"])):
         board = parse_epro2(path)
         model = _model_of(path)
-        assert crystal_designators(model, board, library) == expected
-        assert _mcu_oscillators(model, library), "the sieve found MCUs at all"
+        assert crystal_designators(model, board, library)[0] == expected
+        assert _mcu_oscillators(model, library)[0], "the sieve found MCUs at all"
 
 
 def _model_of(path: Path):
