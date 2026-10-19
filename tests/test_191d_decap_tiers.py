@@ -311,7 +311,7 @@ def test_one_capacitor_serving_two_ics_is_graded_one_pair_at_a_time():
     """131b's shape: the same ``+5V`` is U5's ``VIN`` and U11's ``VOUT``.
 
     One capacitor, two (IC, rail) pairs, two tiers — and a 360.0 mil gap that is
-    **over** U5's 300 mil input line and **inside** U11's 500 mil output line.
+    **over** U5's 300 mil input line and **inside** U11's 800 mil output line.
     So the answer is one WARN about U5 and silence about U11, which is only
     possible if the threshold is read per pair: a rule with one line would
     either file two rows or none.
@@ -353,7 +353,7 @@ def test_one_capacitor_serving_two_ics_is_graded_one_pair_at_a_time():
     rows = DecapDistance().check(_ctx(board, model))
     (row,) = rows
     assert row.target.component_ref == "U5", (
-        "the row is U5's: on U11 the same 360 mil is inside its own 500 mil line"
+        "the row is U5's: on U11 the same 360 mil is inside its own 800 mil line"
     )
     assert row.severity == "WARN"
     assert row.target.measurement["value"] == 360.0
