@@ -317,11 +317,11 @@
 | 515B | 发版前挖洞修复（S3#1–7 + S4#1–5） | 已落（`337f742`） | outputs/515b/evidence.md |
 | 516 | 审查反馈（岳真机实测 A/B/C 级） | 已落（`6ef9ded`） | tasks/516_review_feedback.md |
 | 519 | 异网 pin 尖间距：布局把两个网的针尖叠在同一点（修短路，12 对 → 0） | 已落（`1453ac7`） | 本批证据在 PROGRESS |
-| 520 | L2a 批量寻址 `parts hunt`：C 号 → detail API → PDF → 提取 → candidate 落架 | 已落（本批，待提交） | docs/parts.md §Bulk addressing |
+| 520 | L2a 批量寻址 `parts hunt`：C 号 → detail API → PDF → 提取 → candidate 落架 | 已落（随 v0.5.16/v0.5.17） | docs/parts.md §Bulk addressing |
 | 551A | 分轮失败报告（`failures` 不再只保第一条） | 已落（`f56dced`） | outputs/algo_eval/（子代理 393） |
 | 551B | L0 榨干归档元数据：被动件参数三路交叉（元数据 / 板上值 / MPN 值码） | 已落（`c51e3e8`） | docs/roadmap.md §7 |
 | 551C | L2 datasheet 搜索：子代理并行（≤5 并发 / 每批 3–5 颗）、PDF 不进主上下文、三档可信度 | 第一段已落（520）；**三档可信度已落（522）** | docs/roadmap.md §7 |
-| 521 | 提取面：**不做「扩正则」**——AI 读 `.txt` 写 facts，工具当收件闸（六道校验，最硬一条是引文逐字） | 已落（本批，待提交） | tasks/521_ai_facts.md；docs/parts.md §Stage three |
+| 521 | 提取面：**不做「扩正则」**——AI 读 `.txt` 写 facts，工具当收件闸（六道校验，最硬一条是引文逐字） | 已落（随 v0.5.16/v0.5.17） | tasks/521_ai_facts.md；docs/parts.md §Stage three |
 | 522 | `facts_verified` 布尔 → `facts_trust` 三档（`candidate` / `machine_verified` / `verified`）；计算类规则吃机器核验，结论类仍要人工；finding 统一标注「未人工确认」；verdict 不涂绿 | 已落（`05b0302`；follow-up `f2bc7d2` 修层边界+重钉指纹） | tasks/522_facts_trust.md；tests/test_522_facts_trust.py；docs/parts.md §The gate |
 | 523 | `category` 的授予路径：`--apply-facts` 只写 facts 不写分类，机器核验的件仍判不了（报告已如实点出两条待办） | 规划 | 522 真板三读数的已知边界 |
 
