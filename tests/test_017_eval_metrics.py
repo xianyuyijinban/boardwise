@@ -731,6 +731,9 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # 190S/191B/191D merged moved both again — cd5e433e/a31a7c03 -> 9b1fcf61/6ad63b13
     # (see the 126a ledger entry of the same name).
     # 192B moved both again — 9b1fcf61/6ad63b13 -> fc23ac00/3de90bc4 (126a ledger).
+    # 517 moved both again — 5c878604 for the widened recipe (191D's output tier
+    # 500 -> 800 and the input tier's empty-pool WARN, plus A1's same-layer
+    # measurement in `core/measure.py`) (126a ledger).
     # 187A/187B/189A1's entries live in test_126a only (this note is the pointer).
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.

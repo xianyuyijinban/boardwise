@@ -1101,7 +1101,7 @@ def _overlapping(a: _Shape, b: _Shape) -> bool:
 
 
 def _best_pair(
-    shapes_a: list[_Shape], shapes_b: list[_Shape]
+    shapes_a: list[_Shape], shapes_b: list[_Shape], *, same_layer_only: bool = False
 ) -> tuple[float, _Shape, _Shape] | None:
     """The closest capsule pair across two lists, via bbox coarse reject.
 
@@ -1117,6 +1117,12 @@ def _best_pair(
     in both directions. The lower bound is what makes the second direction
     sound: against the raw vertex box, a pair whose *centrelines* are 15 mil
     apart could still touch at 0 and was pruned away.
+
+    ``same_layer_only`` (517, the 516-A1 follow-up) keeps only pairs whose two
+    shapes share a layer. Without it the answer is the **plan-view** minimum over
+    every shape pair, and on a two-layer board almost any pair of nets has one
+    such crossing somewhere — which is why a caller asking "how close are these
+    two conductors *where they can actually arc*" must ask with this flag set.
     """
     if not shapes_a or not shapes_b:
         return None
@@ -1124,6 +1130,8 @@ def _best_pair(
     best_pair: tuple[_Shape, _Shape] | None = None
     for sa in shapes_a:
         for sb in shapes_b:
+            if same_layer_only and not (sa.layers & sb.layers):
+                continue
             if sa.bbox is None or sb.bbox is None:
                 continue
             if _bbox_distance(sa.bbox, sb.bbox) >= best:
@@ -1187,7 +1195,7 @@ class ClearanceResult:
 
 
 def net_clearance(
-    board: BoardGeometry, net_a: str, net_b: str
+    board: BoardGeometry, net_a: str, net_b: str, *, same_layer_only: bool = False
 ) -> ClearanceResult | None:
     """Minimum spacing between two nets; ``None`` if either has no copper.
 
@@ -1196,6 +1204,14 @@ def net_clearance(
     there is no meaningful self-clearance — and so is a pair whose only
     relationship is an unmeasurable pour containment (see
     :class:`ClearanceResult`).
+
+    ``same_layer_only`` (517) restricts the measurement to shape pairs that share
+    a layer. The default is the plan-view minimum over every pair, which is the
+    right answer to "how close do these two nets come *in projection*" and the
+    wrong one to "how close are they where a spark could cross": on a two-layer
+    board the second question always has some zero-distance crossing somewhere,
+    and 516-A1's real-board miss (``HV``↔``GND`` silently at 66.94 mil against a
+    100 mil band) was exactly a plan-view 0.0 burying a same-layer gap.
     """
     geo_a = board.net(net_a)
     geo_b = board.net(net_b)
@@ -1203,7 +1219,7 @@ def net_clearance(
         return None
     shapes_a = _net_shapes(board, geo_a)
     shapes_b = _net_shapes(board, geo_b)
-    best = _best_pair(shapes_a, shapes_b)
+    best = _best_pair(shapes_a, shapes_b, same_layer_only=same_layer_only)
     if best is None:
         return None
     distance, sa, sb = best

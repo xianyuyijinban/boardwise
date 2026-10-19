@@ -1247,7 +1247,10 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `core/partkind.py`、`engines/checkup.py` 的改动不在本配方里。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
     assert old_digest == "46e1f698"
-    assert recursive == "eb48cb9b", (
+    # eb48cb9b -> 5c878604（517：191D 的稳压器输出档 500 -> 800 与「输入档一个
+    # 电容都没有 -> WARN」，外加 A1 的同层测量 `net_clearance(same_layer_only)`）。
+    # 三处都在 `rules/pcb/` 与 `core/measure.py` 里，所以两个摘要一起动。
+    assert recursive == "5c878604", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

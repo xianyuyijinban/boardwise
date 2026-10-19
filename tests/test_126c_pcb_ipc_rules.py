@@ -1368,19 +1368,39 @@ def test_robot_pcb1_the_rails_rule_prices_the_three_voltages_and_judges_no_cross
     missing thing is in the *measurement* and not in the design's facts (the same
     argument the pour-containment blind spot makes).
 
-    What survives is the UNKNOWN row: ``VCCA`` is named by the contract and no
-    source prices it (neither its name nor a supply pin states a voltage), so
-    one INFO names where a voltage may be written. **Three rails in, none judged,
-    one work order** — the voltage half of the contract is still incomplete and
-    this report says so.
+    **517: the same-layer minimum was under that projection, and it is judged.**
+    A projection 0.0 does not mean "there is no same-layer gap" — it means the
+    plan-view minimum is not one. Asking :func:`~boardwise.core.measure.
+    net_clearance` for ``same_layer_only`` on this board returns ``GND``↔``VCC``
+    at **3.5 mil** (``U1.31``'s pad against a track, both on layer 1) against
+    IPC-2221 B2's 4.0 mil band, which is a real finding 127b's reading had no way
+    to reach. ``+12V``↔``GND`` stays dropped: its closest copper shares no layer,
+    which is the pair 127b's argument was about.
+
+    What survives of the 127b claim is the UNKNOWN row: ``VCCA`` is named by the
+    contract and no source prices it (neither its name nor a supply pin states a
+    voltage), so one INFO names where a voltage may be written. **Three rails in,
+    one same-layer pair judged, one work order** — the voltage half of the
+    contract is still incomplete and this report says so.
     """
     findings, _section = robot_findings
     spacing = [f for f in findings if f.rule_id == "pcb-voltage-spacing"]
     warns = [f for f in spacing if f.severity == "WARN"]
     unknowns = [f for f in spacing if f.severity == "INFO"]
-    assert warns == [], (
-        "127b drops every cross-layer pair; both 126b rows were projections: "
-        f"{[f.message for f in warns]}"
+    assert not [
+        f for f in warns if "+12V" in (f.target.net_refs or [])
+    ], (
+        "127b still drops the +12V/GND pair: its closest copper shares no layer, "
+        f"and a projection must not be judged: {[f.message for f in warns]}"
+    )
+    assert len(warns) == 1, (
+        "517 exposes exactly one same-layer gap on this board — GND/VCC at "
+        f"3.5 mil. Got: {[f.message for f in warns]}"
+    )
+    same_layer = warns[0]
+    assert set(same_layer.target.net_refs) == {"GND", "VCC"}, same_layer.message
+    assert same_layer.target.measurement["value"] == pytest.approx(3.5), (
+        "the reading is the same-layer edge gap, not the 0.0 projection"
     )
     assert len(unknowns) == 1
     assert unknowns[0].target.net_refs == ["VCCA"], (

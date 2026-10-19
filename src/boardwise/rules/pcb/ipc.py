@@ -1187,7 +1187,21 @@ class VoltageSpacing(PcbRule):
         volts_b, where_b = priced[second]
         differential = abs(volts_a - volts_b)
         same_nominal = differential <= 1e-9
-        measured = net_clearance(board, first, second)
+        # 517 (the 516-A1 follow-up): judge the gap **where the two nets share a
+        # layer**, not the plan-view minimum. A two-layer board always has some
+        # crossing where two nets project onto each other at 0.0, and the
+        # cross-layer early return below then dropped the whole pair — so the
+        # same-layer gap was never looked at. On the real board that was four
+        # silent 311 V high-side pairs (``HV``↔``GND`` 66.94 mil, ``HV``↔``U``
+        # 62.99, ``HV``↔``V`` 62.99, ``HV``↔``W`` 37.89, all against 100).
+        measured = net_clearance(board, first, second, same_layer_only=True)
+        if measured is None:
+            # No same-layer pair at all: fall back to the projection so the
+            # cross-layer early return below keeps 127b's meaning (a pair whose
+            # closest copper is at least a prepreg apart is not judged).
+            projected = net_clearance(board, first, second)
+            if projected is not None and projected.shares_a_layer:
+                measured = projected
         if _same_potential(first, second, volts_a, volts_b, measured):
             # 516 A1 (岳 2026-10-17): 「同电位豁免只保留双地或几何重合」. Two nets
             # are **one node** — and spacing is not the question — in exactly two
@@ -1213,19 +1227,24 @@ class VoltageSpacing(PcbRule):
             # WARN that the old equality test swallowed. It is judged below.
             return None
         if measured is None:
-            # The documented pour blind spot: dropped, not reported. See the
-            # class docstring's third paragraph for why this is not an UNKNOWN.
-            return None
-        if not measured.shares_a_layer:
-            # **Cross-layer pair, dropped** (127b). The two nets' closest copper
-            # shares no layer, so the reported distance is a plan-view
-            # projection of shapes that are at least a prepreg apart — measured
-            # at 0.0 mil on 毕设FOC PCB1 for ``U6.10`` (``+24V``, bottom face)
-            # against a ``GND`` track on layer 1, on a board whose host DRC is
-            # clean. Judging it against a 4 mil IPC-2221 band measures the
-            # board's thickness, not its layout. It is dropped rather than
-            # reported as an UNKNOWN for the reason the pour case is: the
-            # missing thing is in the *measurement*, not in the design's facts.
+            # Two drops arrive here and both are 127b's:
+            #
+            # * the documented **pour blind spot** — see the class docstring's
+            #   third paragraph for why this is not an UNKNOWN;
+            # * a **cross-layer pair**: no shape pair of the two nets shares a
+            #   layer, so any distance between them is a plan-view projection of
+            #   shapes at least a prepreg apart — measured at 0.0 mil on 毕设FOC
+            #   PCB1 for ``U6.10`` (``+24V``, bottom face) against a ``GND`` track
+            #   on layer 1, on a board whose host DRC is clean. Judging that
+            #   against a 4 mil IPC-2221 band measures the board's thickness, not
+            #   its layout.
+            #
+            # 517 made the second case arrive here rather than at a
+            # ``shares_a_layer`` test below: the measurement is taken with
+            # ``same_layer_only``, so "no same-layer pair" is `None` and the
+            # fallback below only adopts a projection that *does* share a layer.
+            # The old post-hoc check is gone with it — it could never fire, and a
+            # condition that cannot fire is a reader's trap.
             return None
         # 516 A1: for a pair the contract prices at **one** potential the quantity
         # judged is the **swing bound**, not the nominal difference. What

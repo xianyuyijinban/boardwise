@@ -214,3 +214,91 @@ def test_different_voltage_copper_that_coincides_is_a_short_not_an_exemption():
     assert findings[0].severity == "WARN"
     assert "short" in findings[0].message
     assert "7 V apart" in findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# 517 (the 516-A1 follow-up): the same-layer gap is what gets judged
+# ---------------------------------------------------------------------------
+
+
+def _two_volts(*, cross_layer: float | None) -> PcbReviewContext:
+    """``HV`` and ``U`` 92 mil apart **on layer 1**, with an optional projection.
+
+    ``cross_layer`` puts a second ``U`` pad on the bottom face at the stated x, so
+    the two nets' plan-view distance becomes that offset while the same-layer gap
+    stays 92 mil. That is the shape 实板 A had on four pairs: a bottom-face
+    crossing at 0.0 buried a 62.99–66.94 mil same-layer gap.
+    """
+    pads = [
+        _pad("J1", "1", x=0.0, net="HV", layer_id=1),
+        _pad("J2", "1", x=132.0, net="U", layer_id=1),  # 92 mil edge to edge
+    ]
+    if cross_layer is not None:
+        pads.append(_pad("J3", "1", x=cross_layer, net="U", layer_id=2))
+    return _ctx(
+        _board(pads),
+        _model([("J1", ["HV"]), ("J2", ["U"]), ("J3", ["U"])]),
+        _contract(rails=[
+            IntentRail(net="HV", slots={"voltage": "311V"}),
+            IntentRail(net="U", slots={"voltage": "311V"}),
+        ]),
+    )
+
+
+def test_a_cross_layer_projection_does_not_hide_the_same_layer_gap():
+    """The 实板 A miss, in miniature: 92 mil on layer 1 against a 100 mil band.
+
+    Before 517 the measurement was the plan-view minimum, which the bottom-face
+    pad dragged to 0.0; ``shares_a_layer`` then described *that* pair, and the
+    whole net pair was dropped — the 92 mil gap was never looked at.
+    """
+    findings = VoltageSpacing().check(_two_volts(cross_layer=0.0))
+    assert len(findings) == 1, [f.message for f in findings]
+    finding = findings[0]
+    assert finding.severity == "WARN"
+    assert finding.target.net_refs == ["HV", "U"]
+    assert finding.target.measurement["value"] == 92.0, (
+        "the reading is the same-layer edge gap, not the 0.0 projection"
+    )
+
+
+def test_a_pair_whose_closest_copper_shares_no_layer_is_still_dropped():
+    """127b's meaning, untouched: a prepreg apart is not a layout gap.
+
+    The two nets are at **different** potentials on purpose — ``HV`` 311 V against
+    ``SIG`` 5 V — so the same-potential exemption cannot answer for this pair and
+    the drop is attributable to the cross-layer early return alone. (A 311 V/311 V
+    pair whose pads project onto each other is exempt as 「the same node」, which
+    is 516's rule, not this one.)
+    """
+    board = _board([
+        _pad("J1", "1", x=0.0, net="HV", layer_id=1),
+        _pad("J2", "1", x=0.0, net="SIG", layer_id=2),
+    ])
+    ctx = _ctx(
+        board,
+        _model([("J1", ["HV"]), ("J2", ["SIG"])]),
+        _contract(rails=[
+            IntentRail(net="HV", slots={"voltage": "311V"}),
+            IntentRail(net="SIG", slots={"voltage": "5V"}),
+        ]),
+    )
+    assert VoltageSpacing().check(ctx) == []
+
+
+def test_a_same_layer_gap_with_room_to_spare_stays_silent_even_with_a_crossing():
+    """The 3V3D↔HV shape: 254 mil on layer 1, and a projection at 0.0 beside it."""
+    board = _board([
+        _pad("J1", "1", x=0.0, net="HV", layer_id=1),
+        _pad("J2", "1", x=294.0, net="U", layer_id=1),  # 254 mil
+        _pad("J3", "1", x=0.0, net="U", layer_id=2),
+    ])
+    ctx = _ctx(
+        board,
+        _model([("J1", ["HV"]), ("J2", ["U"]), ("J3", ["U"])]),
+        _contract(rails=[
+            IntentRail(net="HV", slots={"voltage": "311V"}),
+            IntentRail(net="U", slots={"voltage": "311V"}),
+        ]),
+    )
+    assert VoltageSpacing().check(ctx) == []
