@@ -18,20 +18,23 @@
 
 ## §0 当前在做（截至 2026-10-19）
 
-- **主攻**：**527 收口批**（0.6.0 之前必须落地的尾巴，任务书 `tasks/527_pre060_loose_ends.md`，
-  目标是 v0.5.18 内测）：`527A` 已落工作树（`IntentSource` 转发三个需求小节 + 4 条回归），
-  `527B`（connector 页型守卫）/`527C`（189A2 分类）/`527D`（`parts classify`）在途，`527E` 文档收口。
-- **绘制线（搁置到 527 之后）**：`201A/201B` 已落，`201C` 踢出待复活，`201D` **部分落**
-  （525 的 `pin-text`；`text_overlap` 526 试了又撤，见 roadmap §4），`201E` 规划。
-  `525`/`526` 的两处真缺陷与一个证伪结论已落（`bbf85a4` / `898f4e4`）。
-- **在途**：`527B` / `527C` / `527D`（子代理）。
-- **工作树（已完成未提交）**：`527A`。
+- **刚发**：`v0.5.18`（内测，2026-10-19）—— **527 收口批**：0.6.0 之前必须落地的四件尾巴
+  （527A `IntentSource` 转发 / 527B connector 读回页型守卫 + 信封文档 / 527C 189A2 分类裁定 /
+  527D `parts classify` + `category_trust`）+ 527E 文档收口（189A1 结案不改、088b DRAFT 归档）。
+  任务书 `tasks/527_pre060_loose_ends.md`；三闸读数与产物 sha256 记在 `PROGRESS.md`
+  与 release notes（tag `v0.5.18`）。
+- **在途**：无。
+- **工作树（已完成未提交）**：无。
+- **下一批**：`v0.6.0`（正式）—— **四个阻塞项，缺一不发**（岳 2026-10-19 重定门槛，任务书
+  `tasks/528_060_gate.md`）：① `200A/200B/200C`（122 E 阶段 + 高速 A 档 1~3）；
+  ② **绘图线过锚**（反激 `draw compile` 出 `ok=True` + 岳亲眼看 SVG「一眼认出反激」+ roadmap §8 三条）；
+  ③ `527D3`（`entry.category` 14 处直读绕过闸）；④ `527D2`（`classify` 的证据落货架）。
+- **关键路径是绘图线**：顺序 `201E` A\* 效率 → router 进针方向 → 文字行可移动性 → 回锚验收。
+- **0.5.x 线剩下的**：只有 `v0.5.19` 那个槽位（R4 真热更阶段二），等岳裁「stub 立不立项」；
+  其余 0.5.x 版本均已发。
 - **搁置/踢出**：`201C`（150 落地页回归实锤，备份 `.tmp_201c_hold/`）；`121b`（10-06 暂停）；
-  `text_overlap` 代价项（526 撤回：只做一半的约束比不做更差）；`R4` 真热更阶段二（岳裁：stub 立不立项待定）。
-- **发版**：`v0.5.15` ✅ 已发（2026-10-17，正式版；515B + 516；201C 踢出）；
-  `v0.5.16` / `v0.5.17` ✅ 已发（2026-10-18，内测；520/521/522 + 挖洞补做）；
-  `v0.5.18`（内测）本批发布。
-- **v0.6.0（押后到 10 月底）**：`200A/200B/200C` + `041`；远景 `R5`。
+  `text_overlap` 代价项（526 撤回：只做一半的约束比不做更差）；`R4` 真热更阶段二（待岳裁）。
+- **发版**：`v0.5.15` 正式（10-17）· `v0.5.16` / `v0.5.17` / `v0.5.18` 内测（10-18 / 10-19）。
 
 ---
 
@@ -333,6 +336,9 @@
 | 527 | **v0.6.0 之前必须收口的尾巴**（527A `IntentSource` 转发三小节 / 527B connector 页型守卫 `/` 信封文档 / 527C 189A2 分类裁定 / 527D = 523 / 527E 文档收口） | 已落（v0.5.18 内测） | tasks/527_pre060_loose_ends.md |
 | 527D2 | `parts classify` 的证据**不落货架**（`machine_verified` 的分类事后无法追溯出处，与 521 口径不一致）；冻结态下内置架条目改不了的提示也没有 | 规划 | tasks/527_pre060_loose_ends.md §527D「已知边界」 |
 | 527D3 | **`entry.category` 的直读点**（`rules/pcb/mcureset`/`mcusupply`/`crystal`/`regulator`/`fbplacement`/`foc`/`focground`、`rules/params`/`paramspec`/`decap`/`archclosure`/`railratings`、`core/architecture`/`power_domains`）绕过 `shelf_declaration`，机器档分类仍能驱动结论规则 → 要一个分档感知的 `declared_category(entry, allow_machine=…)` 并逐条判定规则属于「数字」还是「结论」 | 规划（发版夜的裁决：先收窄承诺，不动设计） | tasks/527_pre060_loose_ends.md §527D 挖洞表 H3 |
+| 528 | **0.6.0 门槛重写 + 四条裁决落地**（R4-C `update-connector --no-reload`；191D 数值不动；绘图线做硬门槛；527D2/D3 升为 0.6.0 阻塞项） | 在途 | tasks/528_060_gate.md |
+| 529 | 191D 的**分类空白带**（`HF ≤ 1µF` 与 `bulk ≥ 10µF` 之间的 2.2µF/4.7µF 落 unknown → 假 WARN；补档后撤销 191D 的「输入侧无候选才 WARN」收窄） | 规划（非阻塞） | tasks/528_060_gate.md §4 |
+| 528A | `bridge update-connector --no-reload`：写记录不 reload，点一次扩展菜单生效（R4 实验④的产物） | 在途 | tasks/528_060_gate.md §1 |
 | V4 | **立创 EDA Pro 4.x 适配**（岳 2026-10-19 裁：**11 月起（0.6.x）做**）。四件事：① 在真 V4 上复跑 `doctor` + 一块板的 `checkup`，逐字段对拍 0.4.26 那次的结果包（当年结论：`.epro2` 归档与 V3 同格式、零适配；之后 0.5.x 六七个版本未在 V4 复测）；② 在线 connector-on-V4 探针重跑（当年 8/8 arity 一致、V4 是纯超集）；③ `.eprj3` 文件夹工程的真样本终验（yAxisDirection / NC 引脚 id / CANVAS 缺失，仍挂着）；④ `.eprj2` 导出引导在 V4 菜单里逐字核（V4 本地保存仍是 `.eprj2` SQLite 壳） | 规划（11 月开） | tasks/038-eprj3-tierA.md §V4.1.60 实测 |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）
