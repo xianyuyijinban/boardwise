@@ -4,6 +4,58 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-10-19] 526：走廊不是瓶颈，是 pin 被文字行埋 —— 布局第一次看见「文字占地」
+
+525 修完（`bbf85a4`）后拓扑轮仍 0 candidate、仍拒 `FB_SENSE`。两轮实验把方向彻底改写：
+
+**第一轮（探针筛选）自证无用。** 把逐网可达性探针接进退火的选择器（`corridor_select`），
+`candidates` 不变 —— 因为 3 个 restart 里 seed 201 那个**本来就 7 条义务网全通**，而且它同时是
+代价最小的那个，筛选前后选的是同一个答案。探针本身 0.2 s，开关不是死代码（换 seed 能造出真冲突），
+但在这个用例上零收益。
+
+**第二轮（reserved 审计）推翻了第一轮的读数。** 上一轮说「60 个 flag lead 预留节点把 `FB_SENSE` 关死」，
+那是**洪泛可达性**的读数。抓真实路由器重测：
+
+```
+腿：R7.2 (175,525) → U4.1 (240,475)
+goal_wall = true, goal_boxes = [61]
+                                     ← R8 的 value 行 "4.7k 1% 0603"
+                                       bbox (215.0, 475.0, 258.712, 485.0)
+```
+
+`U4.1` 这个尖正压在 `R8` 值行的**上沿**，`_Router._wall` 的 ±1e-6 外扩把它算严格内部。A\* 的起点可以
+是墙节点、**终点不行**，所以这条网从一开始就没救。**把 60 个预留道全清空，`goal_wall` 与 `goal_boxes`
+逐字不变** —— reserved 只决定洪泛图连不连通，从不决定能不能布线。
+
+**结论：真凶是 525 修的那一类，但 525 的定价太小。** `PIN_TEXT_EDGE=0.5` 让「尖压在行边上」只值
+8×0.5=4 分，推不动搜索。把 `PIN_TEXT_EDGE` 提到 5.0：`pin-text` 归零、33 条关系全过，但**每个电源旗都
+丢了席位**（069 sec.7 拒 `HVDC`：找不到合法位置挂旗），compile 43.9 s —— 搜索在拿不出地方放字的页面里
+硬推尖端。页面放大到 1600×1200 / 2340×1650 也没用。
+
+**试过「文字行参与占位」，结论是撤回。** 写了 `placement._text_overlap_term`（一个器件的行对另一个
+器件的 body 与行，按重叠面积计价，同一器件自己的行不配对）+ `TEXT_ROW_GAP`（先外扩再测，因为 router
+的墙含边界）。在 `presentation_nolocks` 上读数是漂亮的：
+
+| `TEXT_ROW_GAP` | pin-text | 关系 | 拓扑轮失败在 | compile |
+|---|---|---|---|---|
+| 不加（关） | 1.5 | 33/33 | 直连走廊 `FB_SENSE` | 14.3 s |
+| 5.0 | 0.0 | 31/33（丢 `right-of(C10,U5)`、`below(C10,U5)`） | 关系 `C10` | 21.2 s |
+| 2.0 | **1.0** | **33/33** | readability（6 条 `wire-on-pin-line`） | 17.0 s |
+
+**但 A/B 在另一个 presentation（`flyback_uc3845.presentation.json`，551A 那个整页）上把它否了**：
+关掉时拓扑轮拒 `net 'SEC_12V'`（走廊），打开后变成 **14 条 `text-overlap`** —— 退化了。
+
+原因是我的项**只看见器件的行**，而 readability 的 `text-overlap` 判据是「两个文字盒相交，**或**文字压在
+别的器件的绘制范围上 —— 电源符号的字形盒、导线自己的网名、导轨旗自己的名字都算文字」。器件被推开之后，
+它们的位置变了，flag 与网名撞了，而我的代价项对这些**一无所知**。
+
+**教训：只做一半的约束比不做更差。** 这个项要么等到 flag/label 的文本也能进布局模型时一起启用（那就
+要求 placement 先知道 flag 席位与 label 决策，都在 stage 3b），要么不做。代码与测试已撤回，只留这条读数。
+
+顺带挖到的下一个架构问题：5.0 那档丢 C10 的关系，是因为 `SMD-4-PC817` 的 value 锚在 `(-25,-25)`、
+宽 85.8 单位，正好占住 C10 该去的右下角。**人画图时会手动拖文字，我们的模型把文字位置当死数。**
+
+
 ## [2026-10-19] 525：外部算法推演的六轮实验收口 —— 算法不是瓶颈，两处真缺陷
 
 岳把 `docs/drawing-algorithm-brief.md` 给外部算法专家（GPT）推演，对方给出「层次化构造 + CP-SAT 约束求解 +

@@ -362,7 +362,8 @@
 | release v0.5.16 | 520 + 521 + 522（审查线资料获取三连）+ 绘图推演简报；内测 | 已发（tag `v0.5.16`，prerelease） | tasks/SCHEDULE.md；PROGRESS |
 | 524 | **v0.5.16 挖洞补做**（5 缝只读 swarm，12 条高严重级全修：引文闸子串/pin 未绑引文/两规则绕档位/审计无 dest/offline 假话/shelf 清身份/null 变 verified） | 已落（`8c87070`） | PROGRESS；6 条新回归 |
 | release v0.5.17 | v0.5.16 的洞修复；内测 | 已发（tag `v0.5.17`，prerelease）；v0.5.16 notes 已标「请用 0.5.17」 | tasks/SCHEDULE.md |
-| 525 | **新布局目标**：CP-SAT 六轮推演收口 + 两处真缺陷修复（`_elbow_route` 拐点漏检 → netlist 并点；布局里缺 pin/文字行净空 → 21 处 pin 尖被邻居 value 行埋葬）。新增 `placement.pin-text` 项（topology 轮开） | 工作树 | `experiments/`（`.tmp_cpsat`）；`tests/test_525_pin_text_row.py` |
+| 525 | **新布局目标**：CP-SAT 六轮推演收口 + 两处真缺陷修复（`_elbow_route` 拐点漏检 → netlist 并点；布局里缺 pin/文字行净空 → 21 处 pin 尖被邻居 value 行埋葬）。新增 `placement.pin-text` 项（topology 轮开） | 已落（`bbf85a4`） | `tests/test_525_pin_text_row.py`；PROGRESS |
+| 526 | **走廊不是瓶颈**：探针筛选零收益（restart 0 本来就 7/7 通且代价最小）；reserved 审计推翻上一条（清空 60 个预留道后 `goal_wall` 逐字不变）；真凶是 `U4.1` 压在 `R8` 值行上沿。**「文字行参与占位」试过又撤回**：`presentation_nolocks` 上 pin-text 1.5→1.0、走廊消失，但 A/B 在整页 presentation 上从「拒 `SEC_12V`」退化成 14 条 `text-overlap`（代价项只看见器件行，readability 还数电源旗/网名/旗名）——**只做一半的约束比不做更差** | 结论已记，代码撤回 | PROGRESS；`experiments/reserved/`（`.tmp_corridor`） |
 
 ## 待人工核对（不猜测，按原文保守入表）
 

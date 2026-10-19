@@ -35,14 +35,22 @@
   （11 → 39 个名字，0/15 → 0/15）。证据 `outputs/520/evidence.md`。
 - **审查线 · 其他**：L2c 搜索兜底（工具侧已就绪，harness 侧未接）、`facts_verified` 三档。
 - **绘图线（搁置）**：`net 'SW'` 直连走廊、区域概念（核心/外置件的判据需岳定）。
-- **绘图线 · 525（工作树，等提交）**：外部算法推演的六轮实验已收口 —— **算法不是瓶颈**。
+- **绘图线 · 525（已落 `bbf85a4`）**：外部算法推演的六轮实验已收口 —— **算法不是瓶颈**。
   两处**真缺陷**已修：① `_elbow_route` 拐点漏检（拐点是两条腿的端点，`_span_free` 用
   `_strictly_on_segment` 不含端点、`_vertex_clear` 只问异网导线 → 拐点落在 blocked 引脚上会静默并点，
   实测 `netlist-partition-mismatch` 1→0）；② 布局模型缺 **pin/文字行净空**（`part_box` 不含 texts，
   21/21 被埋 pin 尖都在邻居 value 行里 → 该 pin 是 router 的墙节点，线头永远落不下去）。
   新增 `placement.pin-text`（`W_PIN_TEXT=8`、`PIN_TEXT_EDGE=0.5`，仅 topology 轮开）：
   读数 **pin-text 1.5（3 个尖在行边）/ 33 条关系全过 / compile 14.3 s**。
-  修完后拓扑轮的阻塞**前移**到直连走廊（`FB_SENSE`/`SW` 轮换），仍 0 candidate —— 走廊是下一批。
+- **绘图线 · 526（只留结论，代码撤回）**：走廊不是瓶颈。探针筛选零收益（restart 0 本来就 7/7 通且
+  代价最小）；reserved 审计推翻「60 个预留道关死走廊」（清空后 `goal_wall` 逐字不变）；真凶是
+  `U4.1` 压在 `R8` 值行上沿、A\* 的终点不能是墙节点。
+  **「文字行参与占位」试过又撤了**：`presentation_nolocks` 上它把 pin-text 1.5→1.0、走廊问题消失
+  （拓扑轮改死在 6 条 `wire-on-pin-line`），但 A/B 在 `flyback_uc3845.presentation.json` 上从
+  「拒 `SEC_12V` 走廊」退化成 **14 条 `text-overlap`** —— readability 的判据还把电源旗字形、导线网名、
+  旗名算作文字，而代价项只看见器件行。**只做一半的约束比不做更差**，代码与测试已撤回。
+  **下一批的两件事**：① router 的进针方向（`wire-on-pin-line`）；② 文字行的可移动性
+  （`SMD-4-PC817` 的 value 锚 `(-25,-25)` 宽 85.8 占住 C10 的右下角；人画图时会拖文字，模型当成死数）。
 - **存量打磨**：岳跑测试用例 → 反馈 → 修复，循环。
 
 ## 待岳拍板（不排期就不动）
