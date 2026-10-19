@@ -173,10 +173,21 @@ export type TransportOptions = {
   onLog?: (message: string) => void;
   /**
    * The `data` of the daemon's answer to `hello` — `{role, protocol,
-   * serverTime, paired, fingerprint, minConnectorVersion}`. The fingerprint is
-   * how the editor and the daemon can be seen to be talking about the same
-   * pairing; `minConnectorVersion` is the oldest connector build the daemon
-   * will vouch for, and is **absent** on daemons that predate the field.
+   * serverTime, version, paired, fingerprint, minConnectorVersion,
+   * windowsOnline, windowKey}`. The fingerprint is how the editor and the
+   * daemon can be seen to be talking about the same pairing;
+   * `minConnectorVersion` is the oldest connector build the daemon will vouch
+   * for, and is **absent** on daemons that predate the field. `version` is the
+   * **daemon's** own build (187C) — the one that is *answering*, which may not
+   * be the one the connector was built from, and the only way to tell without a
+   * second `ping` round trip. `windowsOnline` / `windowKey` joined the frame
+   * with the window hub (023): the first is how many editor windows this daemon
+   * is holding *after* this one joined (so the editor can warn that another
+   * window is connected instead of meeting `WINDOW_UNSPECIFIED` later), and the
+   * second is the hub key this connection registered under — the name
+   * `bridge status` and `--instance` use, including the `~2` suffix when a
+   * second socket claimed one instance id. All three are announced, never
+   * enforced, and absent on a daemon that predates them.
    */
   onHelloResponse?: (data: Record<string, unknown>) => void;
   /**

@@ -18,15 +18,19 @@
 
 ## §0 当前在做（截至 2026-10-19）
 
-- **主攻**：原理图绘制质量（目标「一个模块画到及格线」）——`201A/201B` 已落，`201C` 踢出待复活，
-  `201D` **部分落**（525 的 `pin-text`；`text_overlap` 526 试了又撤，见 roadmap §4），`201E` 规划。
+- **主攻**：**527 收口批**（0.6.0 之前必须落地的尾巴，任务书 `tasks/527_pre060_loose_ends.md`，
+  目标是 v0.5.18 内测）：`527A` 已落工作树（`IntentSource` 转发三个需求小节 + 4 条回归），
+  `527B`（connector 页型守卫）/`527C`（189A2 分类）/`527D`（`parts classify`）在途，`527E` 文档收口。
+- **绘制线（搁置到 527 之后）**：`201A/201B` 已落，`201C` 踢出待复活，`201D` **部分落**
+  （525 的 `pin-text`；`text_overlap` 526 试了又撤，见 roadmap §4），`201E` 规划。
   `525`/`526` 的两处真缺陷与一个证伪结论已落（`bbf85a4` / `898f4e4`）。
-- **在途**：无。
-- **工作树（已完成未提交）**：无。
+- **在途**：`527B` / `527C` / `527D`（子代理）。
+- **工作树（已完成未提交）**：`527A`。
 - **搁置/踢出**：`201C`（150 落地页回归实锤，备份 `.tmp_201c_hold/`）；`121b`（10-06 暂停）；
-  `text_overlap` 代价项（526 撤回：只做一半的约束比不做更差）。
+  `text_overlap` 代价项（526 撤回：只做一半的约束比不做更差）；`R4` 真热更阶段二（岳裁：stub 立不立项待定）。
 - **发版**：`v0.5.15` ✅ 已发（2026-10-17，正式版；515B + 516；201C 踢出）；
-  `v0.5.16` / `v0.5.17` ✅ 已发（2026-10-18，内测；520/521/522 + 挖洞补做）。
+  `v0.5.16` / `v0.5.17` ✅ 已发（2026-10-18，内测；520/521/522 + 挖洞补做）；
+  `v0.5.18`（内测）本批发布。
 - **v0.6.0（押后到 10 月底）**：`200A/200B/200C` + `041`；远景 `R5`。
 
 ---
@@ -280,6 +284,8 @@
 | 188B | 185/186 低项清扫 | 已落 | `14ec0fe`；tasks/188b_low_items.md |
 | 189A1 | 撤 PadGeometry.layer_id | 已落 | `e97c0fb`；tasks/189a1_layer_id.md |
 | 189A2 | 原理图视图伪网（镜像引脚落位） | 已落 | `e97c0fb`；tasks/189a2_schematic_nets.md |
+| 189A2c | 跨视图检查读数复核（527C）：**旧 7/8/6/2 是错配探针**（没走 154 板链），真读数 34 条/5 板入口，A 0 / B 34 / C 0；`min_pins` 保持 3 | 已落（本批 v0.5.18） | outputs/189a2c/evidence.md；tasks/527_pre060_loose_ends.md §527C |
+| 189A2d | 跨视图 note 按**几何**分成「没画线 / 网名不同 / 落位嫌疑」，并点名全部位号（现在只列前 6） | 规划（527C2） | tasks/527_pre060_loose_ends.md §527C |
 | 189B | 中危打包（intent/stale/判型） | 已落 | `e97c0fb`；tasks/189b_mid_pack.md |
 | 189C | 离线几何渲染 canvas-svg | 已落 | `e9e914c`；tasks/189c_canvas_render.md |
 | 189Cf | 底层位号丝印画出视窗 | 已落 | `de2116c`；（无独立任务书） |
@@ -323,7 +329,11 @@
 | 551C | L2 datasheet 搜索：子代理并行（≤5 并发 / 每批 3–5 颗）、PDF 不进主上下文、三档可信度 | 第一段已落（520）；**三档可信度已落（522）** | docs/roadmap.md §7 |
 | 521 | 提取面：**不做「扩正则」**——AI 读 `.txt` 写 facts，工具当收件闸（六道校验，最硬一条是引文逐字） | 已落（随 v0.5.16/v0.5.17） | tasks/521_ai_facts.md；docs/parts.md §Stage three |
 | 522 | `facts_verified` 布尔 → `facts_trust` 三档（`candidate` / `machine_verified` / `verified`）；计算类规则吃机器核验，结论类仍要人工；finding 统一标注「未人工确认」；verdict 不涂绿 | 已落（`05b0302`；follow-up `f2bc7d2` 修层边界+重钉指纹） | tasks/522_facts_trust.md；tests/test_522_facts_trust.py；docs/parts.md §The gate |
-| 523 | `category` 的授予路径：`--apply-facts` 只写 facts 不写分类，机器核验的件仍判不了（报告已如实点出两条待办） | 规划 | 522 真板三读数的已知边界 |
+| 523 | `category` 的授予路径：`--apply-facts` 只写 facts 不写分类，机器核验的件仍判不了（报告已如实点出两条待办） | 已落（527D，v0.5.18）：`parts classify` + `category_trust`，两道闸都问分类自己的档位 | 522 真板三读数的已知边界；tasks/527_pre060_loose_ends.md §527D |
+| 527 | **v0.6.0 之前必须收口的尾巴**（527A `IntentSource` 转发三小节 / 527B connector 页型守卫 `/` 信封文档 / 527C 189A2 分类裁定 / 527D = 523 / 527E 文档收口） | 已落（v0.5.18 内测） | tasks/527_pre060_loose_ends.md |
+| 527D2 | `parts classify` 的证据**不落货架**（`machine_verified` 的分类事后无法追溯出处，与 521 口径不一致）；冻结态下内置架条目改不了的提示也没有 | 规划 | tasks/527_pre060_loose_ends.md §527D「已知边界」 |
+| 527D3 | **`entry.category` 的直读点**（`rules/pcb/mcureset`/`mcusupply`/`crystal`/`regulator`/`fbplacement`/`foc`/`focground`、`rules/params`/`paramspec`/`decap`/`archclosure`/`railratings`、`core/architecture`/`power_domains`）绕过 `shelf_declaration`，机器档分类仍能驱动结论规则 → 要一个分档感知的 `declared_category(entry, allow_machine=…)` 并逐条判定规则属于「数字」还是「结论」 | 规划（发版夜的裁决：先收窄承诺，不动设计） | tasks/527_pre060_loose_ends.md §527D 挖洞表 H3 |
+| V4 | **立创 EDA Pro 4.x 适配**（岳 2026-10-19 裁：**11 月起（0.6.x）做**）。四件事：① 在真 V4 上复跑 `doctor` + 一块板的 `checkup`，逐字段对拍 0.4.26 那次的结果包（当年结论：`.epro2` 归档与 V3 同格式、零适配；之后 0.5.x 六七个版本未在 V4 复测）；② 在线 connector-on-V4 探针重跑（当年 8/8 arity 一致、V4 是纯超集）；③ `.eprj3` 文件夹工程的真样本终验（yAxisDirection / NC 引脚 id / CANVAS 缺失，仍挂着）；④ `.eprj2` 导出引导在 V4 菜单里逐字核（V4 本地保存仍是 `.eprj2` SQLite 壳） | 规划（11 月开） | tasks/038-eprj3-tierA.md §V4.1.60 实测 |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）
 

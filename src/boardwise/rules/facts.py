@@ -38,6 +38,7 @@ from ..core.partkind import KIND_IC, classify_part, shelf_declaration
 from ..core.parts import (
     FACTS_TRUST_CANDIDATE,
     FACTS_TRUST_MACHINE,
+    FACTS_TRUST_VERIFIED,
     PartEntry,
     PartLibrary,
     is_ic_designator,
@@ -214,6 +215,31 @@ def _category_state(entry: PartEntry, *, allow_machine: bool) -> str:
         return _CATEGORY_UNKNOWN
     if entry.facts_trust == FACTS_TRUST_MACHINE and not allow_machine:
         return _CATEGORY_UNKNOWN
+    # 527D: the **category** has its own signature, and it is not `facts_trust`.
+    # `parts classify --from … --quote …` grants a class through 521's quote gate,
+    # so the evidence is machine-checked — but a class is a *conclusion* ("this is
+    # an LDO"), the same kind of claim as a connectivity or isolation finding, and
+    # 522's dividing line says a machine may drive a number and never a
+    # conclusion. So a machine-verified category is invisible to every conclusion
+    # rule (``allow_machine=False``) and visible to the calculation rules, exactly
+    # as a machine-verified fact is. Same answer as "no category", different
+    # sentence (`_category_absent_reason` names the review that is owed).
+    #
+    # The **candidate** class is gated unconditionally (the sweep's H5): 522's
+    # candidate facts drive nothing at all, whatever the rule's class, and a
+    # candidate *class* is the same draft one field over. Writing the gate as
+    # "anything not `verified` and not `allow_machine`" left `candidate` more
+    # permissive than `machine_verified` for the calculation rules — a tier
+    # nobody had checked opening a door the evidence-checked one had to knock on.
+    category_trust = getattr(entry, "category_trust", FACTS_TRUST_VERIFIED)
+    if category_trust == FACTS_TRUST_CANDIDATE:
+        return _CATEGORY_UNKNOWN
+    if (
+        not allow_machine
+        and (entry.category or "")
+        and category_trust != FACTS_TRUST_VERIFIED
+    ):
+        return _CATEGORY_UNKNOWN
     category = entry.category or ""
     if category.startswith("ic"):
         return _IC
@@ -250,6 +276,19 @@ _MACHINE_NOTE = (
     "verified IS the review)"
 )
 
+#: 527D: the same sentence one field over — what a machine-granted **category**
+#: reads as to a rule that draws a conclusion. Deliberately not `_MACHINE_NOTE`:
+#: that one is about parameters, and a reader who is told "its facts were not
+#: confirmed" about an entry whose *parameters* a human did sign would be sent to
+#: review the wrong half. This names the category, the route that granted it
+#: (`parts classify --from … --quote …`, which checked the quote and not the
+#: class), and the one-line fix.
+_CATEGORY_MACHINE_NOTE = (
+    " — machine_verified category: 分类是机器核验的（`parts classify --from … "
+    "--quote …` 只核了引文这条证据，分类本身是**结论**），本规则要人签字 —— "
+    "把 category_trust 改成 verified 就是那次签字"
+)
+
 
 def _facts_absent_reason(entry: PartEntry, *, allow_machine: bool = True) -> str:
     """Why the shelf cannot judge this part, in the entry's own terms.
@@ -271,10 +310,38 @@ def _facts_absent_reason(entry: PartEntry, *, allow_machine: bool = True) -> str
 
 
 def _category_absent_reason(entry: PartEntry, *, allow_machine: bool = True) -> str:
-    """The same answers about the classification rather than the facts."""
+    """The same answers about the classification rather than the facts.
+
+    **Asked in the same order `_category_state` answers** (527D's sweep, L1): a
+    candidate *facts* entry is blocked whatever anyone does to its class, so
+    telling the reader to sign the class would be a work order that changes
+    nothing — and this function's whole discipline is that its answer is the next
+    act, never merely a restatement of UNKNOWN.
+    """
     if entry.facts_trust == FACTS_TRUST_MACHINE and not allow_machine:
         return "its shelf entry is machine-verified and this rule needs a human" + (
             _MACHINE_NOTE
+        )
+    # 527D: `_category_state` says UNKNOWN here, so the sentence has to say *why*
+    # — "this entry has no category" would send a reader to classify a part that
+    # is already classified, which is the one work order this answer must not
+    # give. Then the category's own signature, candidate first: a draft class
+    # drives nothing at any tier (the sweep's H5), so its work order is the same
+    # one an unverified entry gets, not "sign the class".
+    category_trust = getattr(entry, "category_trust", FACTS_TRUST_VERIFIED)
+    if category_trust == FACTS_TRUST_CANDIDATE:
+        return "its shelf entry's category is a draft nobody has checked" + _GATE_NOTE
+    if (
+        not allow_machine
+        # A candidate *facts* entry is blocked whatever its class says, so the
+        # class's signature is not the next act for it — the fall-through below
+        # gives that shape the sentence it has always had.
+        and entry.facts_trust != FACTS_TRUST_CANDIDATE
+        and (entry.category or "")
+        and category_trust != FACTS_TRUST_VERIFIED
+    ):
+        return "its shelf entry's category is machine-verified and this rule needs a human" + (
+            _CATEGORY_MACHINE_NOTE
         )
     if entry.facts_verified:
         return "its shelf entry has no category"

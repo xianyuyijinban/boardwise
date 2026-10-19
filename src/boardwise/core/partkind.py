@@ -568,9 +568,19 @@ def shelf_declaration(entry: object | None) -> str:
     # *category* is a **conclusion**, and 522's ruling is that a conclusion needs
     # a human signature whatever the evidence chain says. So the question is
     # asked of the tier: only `verified` declares a category to a rule.
+    #
+    # 527D: and it is the **category's own** tier. `parts classify --from …
+    # --quote …` grants the machine tier for the class alone, on an entry whose
+    # facts may already be human-signed — so asking `facts_trust` here read a
+    # machine-granted class as if a person had signed it, straight into every
+    # 判型 path that calls this function (the whole point of giving the class a
+    # tier of its own). Two tiers, two questions; an entry written before the
+    # field existed answers `verified`, which is what it was by construction.
     if entry is None:
         return ""
     if getattr(entry, "facts_trust", "verified") != "verified":
+        return ""
+    if getattr(entry, "category_trust", "verified") != "verified":
         return ""
     return str(getattr(entry, "category", "") or "").strip()
 

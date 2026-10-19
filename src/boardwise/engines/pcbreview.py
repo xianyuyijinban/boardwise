@@ -380,9 +380,16 @@ def cross_view_lonely_pins(
       knowledge gap the model already discloses (``unproven_reasons``), so the
       row would read as a finding where the file says 「不知道」.
 
-    Both are measured as no-ops on the repo's own material: of the 23 rows this
-    check reports across the 14 fixtures, 0 fall on an unproven net and 0 name a
-    pin the schematic component lacks.
+    Both are **structural**, not a measurement that can drift: the loop below
+    ``continue``s on either, so a returned row cannot name a pin the schematic
+    component lacks and cannot point at an unproven net. What *is* a reading is
+    how many rows there are — 34 across the five board entries of the four
+    archives measured in `outputs/189a2c/evidence.md` — so the number lives
+    there, with its provenance, and not in this docstring. (The 「23 rows across
+    the 14 fixtures」 that used to be here was a **mismatched** reading: the probe
+    paired `boards[0]` with `docs[0]` instead of following the 154 board link, so
+    on two of the four archives it counted a different board's rows — 8 where the
+    link says 10, 2 where it says 10.)
 
     Rows are sorted by ``(designator, pin number)`` and are
     ``{designator, pin, schematicNet, schematicMembers, pcbNet, pcbMembers}``.

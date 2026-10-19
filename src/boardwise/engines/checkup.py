@@ -1959,6 +1959,14 @@ def shelf_can_drive_rules(entry: object | None) -> bool:
         return False
     if getattr(entry, "facts_trust", "") == FACTS_TRUST_MACHINE:
         return False
+    # 527D's sweep (H4): the class has a tier of its own now, and a
+    # machine-granted class is exactly as unsigned as machine-granted facts —
+    # the rules refuse to conclude from it (`_category_state`, `shelf_declaration`),
+    # so "the review can stop here" is not true either. Without this the report
+    # moved such a part out of `unreviewed_parts` into `reviewed_by_shelf` while
+    # a rule was simultaneously answering UNKNOWN about the same part.
+    if getattr(entry, "category_trust", "") == FACTS_TRUST_MACHINE:
+        return False
     return bool(str(getattr(entry, "category", "") or "").strip())
 
 

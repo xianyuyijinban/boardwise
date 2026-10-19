@@ -2260,6 +2260,75 @@ def build_parser() -> argparse.ArgumentParser:
             "reading. Needs no network — the dump is already on disk."
         ),
     )
+    parts_classify = parts_sub.add_parser(
+        "classify",
+        help=(
+            "Give an entry its `category` — with evidence (machine tier) or by "
+            "hand (human tier)."
+        ),
+        description=(
+            "523/527D: the first-class route to a shelf entry's `category`. "
+            "`parts hunt --apply-facts` can write facts that drive calculations, "
+            "but until this command existed nothing could set the class those "
+            "facts are judged against — `rules.facts._category_state` answers "
+            "UNKNOWN for an entry with no category whatever else is on it — so "
+            "the only way was editing blocklib/parts.json by hand. The word must "
+            "come from the shelf's own table (`core.parts.CATEGORY_VOCABULARY`); "
+            "anything else is exit 2 with the legal families listed, because the "
+            "table is extended by decision and never by typo. "
+            "`--from` + `--page` + `--quote` **together** are the evidence: the "
+            "quote goes through 521's gate (at least "
+            "10 characters / 3 words, whole-word, verbatim on the page it cites, "
+            "checked against a document on disk — no network), and the entry is "
+            "written `category_trust: machine_verified`. A category is a "
+            "**conclusion**, so 522's dividing line applies: the machine tier "
+            "unlocks the calculation rules and no connectivity / safety rule. "
+            "With no evidence at all the class is written as the **human** tier "
+            "(`verified`, the default — no key in the file) and the output says "
+            "so. Only the entry's `category` and `category_trust` move: every "
+            "other byte of the shelf is preserved, the file is backed up to a "
+            ".tmp sibling and re-parsed with the real validator. Exit 0 written "
+            "/ 2 a word outside the table, an entry the shelf does not have (this "
+            "command never creates one), or evidence that does not hold."
+        ),
+    )
+    parts_classify.add_argument(
+        "entry", help="MPN、货架 key 或 C 号码，例如 CH340N / ic.rt9013_33gb / C2977777。",
+    )
+    parts_classify.add_argument(
+        "category", help="分类词，必须落在货架词表里（如 ic.ldo、resistor、module）。",
+    )
+    parts_classify.add_argument(
+        "--from", dest="source", default="", metavar="URL|file:路径",
+        help=(
+            "分类这条结论的出处：http(s) URL，或 `file:<本地 PDF / 页 dump>`"
+            "（522/524 的保密口径：不收裸路径）。与 --page/--quote 三条齐全才算带证据。"
+        ),
+    )
+    parts_classify.add_argument(
+        "--page", type=int, default=0, metavar="N",
+        help="引文所在页码（1 开始）。要和 --from/--quote 一起给。",
+    )
+    parts_classify.add_argument(
+        "--quote", default="", metavar="文本",
+        help=(
+            "证据原句，走 521 的引文闸：≥10 字符、≥3 个词、两端词边界、"
+            "且逐字出现在 --page 那一页上（空白折叠是唯一的放宽）。"
+        ),
+    )
+    parts_classify.add_argument(
+        "--cache", default=None, metavar="DIR",
+        help=(
+            "http(s) --from 的引文对着这个资料缓存核（默认 <boardwise home>/datasheets，"
+            "即 parts fetch / parts hunt 留下的 <C码>/<C码>.pages.json）。"
+        ),
+    )
+    parts_classify.add_argument(
+        "--library", default=None, help="要改的货架（默认 blocklib/parts.json）。",
+    )
+    parts_classify.add_argument(
+        "--json", dest="json_path", metavar="PATH", help="Write the machine-readable result.",
+    )
     pick = parts_sub.add_parser(
         "select",
         help=(
@@ -14138,6 +14207,13 @@ def _entry_dump(entry: object) -> dict:
         "footprint_name": entry.footprint_name,
         "footprint_name_verified": entry.footprint_name_verified,
         "category": entry.category,
+        # 527D: the category's own tier beside it, the same pairing `factsTrust`
+        # makes for the facts. A JSON reader that saw only `category` could not
+        # tell a hand-signed class from a machine-granted one, and those drive
+        # different rule sets.
+        "categoryTrust": str(
+            getattr(entry, "category_trust", "") or ""
+        ),
         "params": dict(sorted(entry.params.items())),
         "datasheetUrl": entry.datasheetUrl,
         "datasheetPdfUrl": entry.datasheetPdfUrl,
@@ -14232,6 +14308,16 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
 
     facts = _facts_in_file(entry)
     origin = library.origin_of(entry)
+    # 522 §5.6 + 527D: the tier vocabulary, read once for both the category's
+    # signature and the facts' — the `parts show` header prints the two side by
+    # side, so both halves come from the same import.
+    from .core.parts import (
+        FACTS_TRUST_MACHINE,
+        FACTS_TRUST_MEANING,
+        FACTS_TRUST_TIERS,
+        FACTS_TRUST_VERIFIED,
+    )
+
     print(f"{entry.mpn or entry.key} — {entry.key}")
     # Which shelf this row came from, in `parts list`'s vocabulary (192C §2). "-"
     # on a single-file read: there was no merge, so there is no source to name.
@@ -14241,6 +14327,25 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
     print(f"  manufacturer: {entry.manufacturer or '-'}")
     print(f"  footprint: {entry.footprint_name or '-'}")
     print(f"  category: {entry.category or '-'}")
+    # 527D: who signed that class. Printed beside the category rather than in the
+    # facts block, because it is a fact about the category — and a reader who sees
+    # `ic.ldo` alone cannot tell a datasheet a human read from a quote a machine
+    # checked (`parts classify --from … --quote …`).
+    category_trust = str(getattr(entry, "category_trust", "") or "")
+    if entry.category:
+        print(
+            f"  category trust: {category_trust or '-'}"
+            + (
+                " — 分类是机器核验的（`parts classify --from … --quote …` 过的引文闸）："
+                "只喂计算类规则，连接/安规/隔离类仍要人签字"
+                if category_trust == FACTS_TRUST_MACHINE
+                else ""
+            )
+        )
+    elif category_trust and category_trust != FACTS_TRUST_VERIFIED:
+        # No class but a signature on it: nothing reads this combination, and
+        # printing the tier without the class would look like a classification.
+        print(f"  category trust: {category_trust}（但没有 category，未分类）")
     print(f"  params: {len(entry.params)} field(s)")
     print(f"  datasheet: {entry.datasheetUrl or '-'}")
     print(f"  datasheet pdf: {entry.datasheetPdfUrl or '-'}")
@@ -14249,13 +14354,6 @@ def _cmd_parts_show(args: argparse.Namespace) -> int:
     # because `machine_verified` reading `facts_verified = false` is exactly the
     # distinction this output exists to make visible.
     tier = getattr(entry, "facts_trust", "") or ""
-    from .core.parts import (
-        FACTS_TRUST_MACHINE,
-        FACTS_TRUST_MEANING,
-        FACTS_TRUST_TIERS,
-        FACTS_TRUST_VERIFIED,
-    )
-
     print(f"  facts trust: {tier or '-'}")
     for name in FACTS_TRUST_TIERS:
         marker = ">" if name == tier else " "
@@ -14535,10 +14633,21 @@ def _write_shelf_document(
     try:
         return load_parts(library_path), ""
     except PartError as exc:
-        if existed:
-            shutil.copy2(backup, library_path)
-        else:
-            library_path.unlink(missing_ok=True)
+        # 527D's sweep (L4): the rollback itself can fail — a read-only volume, a
+        # handle someone else holds — and an uncaught `copy2` there turns a
+        # refused entry into a traceback with the shelf left in a state only the
+        # writer can read. Say what happened instead of dying on it.
+        try:
+            if existed:
+                shutil.copy2(backup, library_path)
+            else:
+                library_path.unlink(missing_ok=True)
+        except OSError as rollback_error:
+            return None, (
+                f"the entry was refused by the validator, and the rollback failed "
+                f"too ({rollback_error}) — {library_path} may hold the refused "
+                f"document; the previous file is at {backup}. {exc}"
+            )
         return None, f"the entry was refused by the validator, rolled back: {exc}"
 
 
@@ -16206,6 +16315,7 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
     from boardwise.core.parts import (
         FACTS_TRUST_CANDIDATE,
         FACTS_TRUST_MACHINE,
+        FACTS_TRUST_VERIFIED,
         PartEntry,
         PartError,
         PartProvenance,
@@ -16280,6 +16390,18 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
             # requires the pair for exactly that. `--shelf` is supposed to enrich.
             value=existing.value if existing is not None else "",
             category=existing.category if existing is not None else "",
+            # 527D's sweep (H1): this rebuild inherits every *other* field by
+            # hand, and a fixed list is exactly what let a new field be added
+            # without being inherited — the entry came back `category_trust:
+            # verified`, i.e. **a machine-granted class silently upgraded to a
+            # human signature**, which is the one direction 522/527D exist to
+            # prevent. Inherit the tier, and keep this list honest: a field the
+            # rebuild forgets is a field that gets reset.
+            category_trust=(
+                existing.category_trust
+                if existing is not None
+                else FACTS_TRUST_VERIFIED
+            ),
             manufacturer=existing.manufacturer if existing is not None else "",
             deviceUuid=existing.deviceUuid if existing is not None else "",
             libraryUuid=existing.libraryUuid if existing is not None else "",
@@ -16345,6 +16467,366 @@ def _hunt_write_shelf(shelf_path: str, outcomes: list) -> str:
         f"{len(reloaded.parts)} 条）"
         + (f"，跳过 {skipped} 条已有 facts 的" if skipped else "")
     )
+
+
+#: 527D: what `parts classify` prints when a class is written with no evidence.
+#: A sentence rather than a bare tier label, because the difference between the
+#: two routes is the whole of this command: a reader has to be able to tell
+#: "someone checked a datasheet page" from "someone said so", and the terminal is
+#: where that is read.
+CLASSIFY_NO_QUOTE_NOTE = "无引文，按人工签署记账"
+
+
+def _category_vocabulary_lines() -> list[str]:
+    """The legal categories, grouped by family, for a refusal that is actionable.
+
+    `core.parts.category_families` rather than a second list typed here: the
+    table is extended by decision, and a help text that drifted from it would
+    refuse a word the shelf accepts (or the other way round).
+    """
+    from boardwise.core.parts import category_families
+
+    lines: list[str] = []
+    for family, words in category_families().items():
+        if words == (family,):
+            lines.append(f"    {family}")
+        else:
+            lines.append(f"    {family}：{', '.join(words)}")
+    return lines
+
+
+def _classify_lookup(library: object, query: str) -> tuple[object | None, str]:
+    """``(entry, matched-by)`` for `parts classify`: key → MPN → C-number.
+
+    `parts show`'s own resolution (:func:`_shelf_lookup`) plus the **C-number**,
+    which that helper does not cover and which is how a 立创 part is named in
+    practice: "MPN, then the C-number" is the chain the review resolves parts with
+    (`_shelf_identity_hit`), and a command the engineer cannot point at a C-number
+    would be a dead end for the half of the shelf that is filed by it.
+    """
+    folded = (query or "").casefold()
+    entry = _shelf_lookup(library, query)
+    if entry is not None:
+        return entry, ("key" if entry.key.casefold() == folded else "mpn")
+    for part in getattr(library, "parts", []) or []:
+        if part.lcsc and part.lcsc.casefold() == folded:
+            return part, "lcsc"
+    return None, ""
+
+
+def _classify_evidence(args: argparse.Namespace) -> tuple[dict | None, str]:
+    """``(evidence, error)`` — the three flags of `parts classify`, validated.
+
+    All three or none. A `--quote` with no `--page` (or the reverse) is a claim to
+    have evidence that names neither the sentence nor where it is, and this
+    command writes exactly two tiers — "there is evidence" and "there is none" —
+    so a half-filled set would have to be guessed into one of them. Refused
+    instead, at the door.
+
+    The two format rules are **re-used, not re-invented**: `--from` takes what
+    522/524 let into a citation (`http(s):` or `file:` — a bare path would have
+    the tool read a file the caller never named as a datasheet), and the quote's
+    floor is 521's own constants (`QUOTE_MIN_CHARS` / `QUOTE_MIN_TOKENS`) rather
+    than a second number chosen here.
+    """
+    from boardwise.engines import hunt
+
+    source = str(getattr(args, "source", "") or "").strip()
+    quote = str(getattr(args, "quote", "") or "").strip()
+    page = int(getattr(args, "page", 0) or 0)
+    given = (bool(source), bool(quote), page > 0)
+    if not any(given):
+        return None, ""
+    if not all(given):
+        return None, (
+            "证据要么三条齐全、要么一条都不给："
+            '`--from <URL|file:路径> --page <N> --quote "…"`；'
+            "只给一半的话，这条分类是按机器档还是人工档记账就必须靠猜——本命令不猜"
+        )
+    if not source.lower().startswith(("http://", "https://", "file:")):
+        return None, (
+            f"--from 只收 http(s) URL 或 file: 路径（522/524 的保密口径），"
+            f"拿到 {source[:80]!r}：本地文件要写成 `file:<路径>`，裸路径不收"
+        )
+    needle = hunt.fold_whitespace(quote)
+    if len(needle) < hunt.QUOTE_MIN_CHARS or len(needle.split()) < hunt.QUOTE_MIN_TOKENS:
+        return None, (
+            f"引文太短：折叠空白后 {len(needle)} 字符 / {len(needle.split())} 个词，"
+            f"521 的闸要至少 {hunt.QUOTE_MIN_CHARS} 字符、{hunt.QUOTE_MIN_TOKENS} 个词"
+            "（一个字符在任何一页上都能找到，那不叫证据）"
+        )
+    return {"source": source, "page": page, "quote": quote}, ""
+
+
+def _classify_pages(
+    evidence: dict, entry: object, cache_root: str | None
+) -> tuple[list[str] | None, str]:
+    """``(pages, error)`` — the document a classification's quote is checked on.
+
+    Two routes, both **offline**:
+
+    * ``file:`` — the document itself. A text file is a page dump the way
+      `parts fetch` / `parts hunt` leave one (`<<<page N>>>` markers); a `.pdf`
+      goes through the same pypdf helper those commands use. A text file with no
+      markers is **one page**, which is the honest reading of an excerpt somebody
+      pasted into a file.
+    * ``http(s):`` — the dump stage one already cached for **this entry**
+      (`<cache>/<C码>/<C码>.pages.json`, exactly what `--apply-facts` reads). The
+      command never dials out: 521's point is that a reading is checked against a
+      document on disk, and a classification fetched over the wire would be a
+      second, unaudited channel hidden under a flag whose other half is a citation.
+    """
+    from boardwise.engines import hunt
+
+    source = evidence["source"]
+    if source.lower().startswith("file:"):
+        # `file:<路径>` and the browser's own `file:///C:/…` are the same thing to
+        # a reader who just copied one, so the drive-letter form is unwrapped
+        # rather than refused (`//host/share` has no drive letter and is left as
+        # the UNC path it is).
+        target = source.split(":", 1)[1].strip()
+        if re.match(r"^/+[A-Za-z]:", target):
+            target = target.lstrip("/")
+        path = Path(target)
+        if not path.is_file():
+            return None, f"读不了 {path}（file: 后面指向的不是一个文件）"
+        if path.suffix.lower() == ".pdf":
+            try:
+                marked, _how = _pdf_text(path)
+            except ValueError as exc:
+                return None, f"提取不了 {path} 的文本：{exc}"
+        else:
+            try:
+                marked = path.read_text(encoding="utf-8")
+            except (OSError, ValueError) as exc:
+                return None, f"读不了 {path}：{exc}"
+        return (hunt.extract_pages(marked) or [marked]), ""
+
+    from boardwise.core.config import boardwise_home
+
+    identity = {"lcsc": str(entry.lcsc or ""), "mpn": str(entry.mpn or "")}
+    if not (identity["lcsc"] or identity["mpn"]):
+        return None, (
+            "这条货架条目既没有 C 码也没有 MPN，缓存里点不到它的资料——"
+            "要么给 `--from file:<本地 dump>`，要么先给条目补上身份"
+        )
+    root = cache_root or str(boardwise_home() / "datasheets")
+    pages = hunt.read_document(hunt.Cache(root), identity)
+    if pages is None:
+        return None, (
+            f"{root} 里没有 {identity['lcsc'] or identity['mpn']} 的页 dump"
+            "（<cache>/<C码>/<C码>.pages.json）—— 先跑 `boardwise parts fetch "
+            f"{identity['lcsc'] or identity['mpn']}` / `parts hunt` 把资料取回来，"
+            "或把 --from 改成 `file:` 指向已有的 dump。本命令不外呼"
+        )
+    return pages, ""
+
+
+def _cmd_parts_classify(args: argparse.Namespace) -> int:
+    """527D (TASKMAP 523): the first-class route to a shelf entry's `category`.
+
+    Why it exists: `parts hunt --apply-facts` can write facts that drive
+    calculations, but nothing could set the **class** those facts are judged
+    against — `rules.facts._category_state` answers UNKNOWN for an entry with no
+    category, whatever else is on it — so the only route was editing
+    `blocklib/parts.json` by hand.
+
+    Two tiers, and the second half is the point of 522's dividing line: a category
+    is a **conclusion** ("this is an LDO", not "this pin sources 4 A"), so an entry
+    whose class was granted by `--from/--page/--quote` is written
+    `category_trust: machine_verified`, which unlocks the calculation rules only.
+    No evidence at all means a human is behind it (`verified`, the default, and no
+    key in the file) — and the output says which of the two happened rather than
+    letting a reader assume the stronger one.
+
+    Only two keys of one entry move: `category` and `category_trust`. The write is
+    the JSON-document edit `parts add` already makes (backup to a `.tmp` sibling,
+    re-parse with the real validator, roll back on refusal), which is what keeps
+    every other byte of the shelf — and of every other entry — exactly where it was.
+    """
+    import json
+    import shutil
+
+    from boardwise.core.parts import (
+        CATEGORY_VOCABULARY,
+        FACTS_TRUST_MACHINE,
+        FACTS_TRUST_VERIFIED,
+        library_from_json,
+    )
+    from boardwise.engines import hunt
+
+    library_path = Path(_parts_library_path(args, writable=True))
+    if not library_path.is_file():
+        print(
+            f"boardwise parts classify: 没有货架 {library_path}"
+            "（本命令只改已有条目，不新建——新条目走 `parts add`）",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        raw = json.loads(library_path.read_text(encoding="utf-8"))
+        library = library_from_json(raw, str(library_path))
+    except (OSError, ValueError) as exc:
+        print(f"boardwise parts classify: cannot use {library_path}: {exc}", file=sys.stderr)
+        return 2
+
+    entry, matched_by = _classify_lookup(library, args.entry)
+    if entry is None:
+        folded = (args.entry or "").casefold()
+        near = [
+            part
+            for part in library.parts
+            if folded in part.key.casefold()
+            or folded in (part.mpn or "").casefold()
+            or folded in (part.lcsc or "").casefold()
+        ][:5]
+        print(
+            f"boardwise parts classify: 货架 {library_path} 里没有 {args.entry!r} 这个条目"
+            "（本命令只给已有条目分类，不新建条目）",
+            file=sys.stderr,
+        )
+        if near:
+            print("did you mean:", file=sys.stderr)
+            for candidate in near:
+                print(
+                    f"  {candidate.key}  {candidate.mpn or '-'}  {candidate.lcsc or '-'}",
+                    file=sys.stderr,
+                )
+        return 2
+
+    category = str(args.category or "").strip()
+    if category not in CATEGORY_VOCABULARY:
+        print(
+            f"boardwise parts classify: {category!r} 不在货架的分类词表里"
+            "（词表是唯一的合法词集，扩表是决策、不是拼写）。合法顶层项：",
+            file=sys.stderr,
+        )
+        for line in _category_vocabulary_lines():
+            print(line, file=sys.stderr)
+        return 2
+
+    evidence, error = _classify_evidence(args)
+    if error:
+        print(f"boardwise parts classify: {error}", file=sys.stderr)
+        return 2
+    tier = FACTS_TRUST_MACHINE if evidence else FACTS_TRUST_VERIFIED
+    if evidence is not None:
+        pages, error = _classify_pages(
+            evidence, entry, getattr(args, "cache", None)
+        )
+        if error:
+            print(f"boardwise parts classify: {error}", file=sys.stderr)
+            return 2
+        page = int(evidence["page"])
+        if not 1 <= page <= len(pages):
+            print(
+                f"boardwise parts classify: --page {page} 不在 1..{len(pages)} 里"
+                f"（{evidence['source']} 一共 {len(pages)} 页）",
+                file=sys.stderr,
+            )
+            return 2
+        if not hunt.quote_is_on_page(evidence["quote"], pages[page - 1]):
+            print(
+                f"boardwise parts classify: 第 {page} 页里找不到引文 "
+                f"{hunt.fold_whitespace(evidence['quote'])[:80]!r}（空白折叠是唯一的放宽，"
+                "一个字符不同就是另一句话）——这条分类一个字没写",
+                file=sys.stderr,
+            )
+            return 2
+
+    # The JSON-document edit, at the entry's own dict: mutating this object keeps
+    # the order of its keys and touches nothing else in the file, which is what
+    # makes "only `category` and `category_trust` moved" a fact rather than a hope.
+    index = next(
+        (
+            position
+            for position, item in enumerate(raw.get("parts") or [])
+            if isinstance(item, dict) and item.get("key") == entry.key
+        ),
+        None,
+    )
+    if index is None:  # pragma: no cover - the loader just returned this entry
+        print(
+            f"boardwise parts classify: 条目 {entry.key} 在 {library_path} 的文档里找不到"
+            "（验证器认了、文档里没有：文件可能在这一瞬间被改过）",
+            file=sys.stderr,
+        )
+        return 2
+    was_machine = entry.category_trust == FACTS_TRUST_MACHINE
+    body = raw["parts"][index]
+    body["category"] = category
+    if tier == FACTS_TRUST_VERIFIED:
+        # No key at all is how the file spells a human signature (039/522): the
+        # value `verified` is never written, and removing it is also what takes a
+        # previous machine signature back — the downgrade an engineer performs by
+        # re-running the command without evidence.
+        body.pop("category_trust", None)
+    else:
+        body["category_trust"] = tier
+
+    prospective, error = _prospective_shelf(raw, library_path)
+    if prospective is None:
+        print(f"boardwise parts classify: {error}", file=sys.stderr)
+        return 2
+    backup = library_path.with_suffix(library_path.suffix + ".tmp")
+    existed = library_path.is_file()
+    if args.json_path:
+        problem = _write_parts_json(
+            {
+                "command": "parts-classify",
+                "ok": True,
+                "library": str(library_path),
+                "backup": str(backup) if existed else "",
+                "entry": entry.key,
+                "matchedBy": matched_by,
+                "mpn": entry.mpn,
+                "lcsc": entry.lcsc,
+                "category": category,
+                "categoryTrust": tier,
+                "categoryTrustBefore": entry.category_trust,
+                "evidence": evidence,
+                "entriesOnShelf": len(prospective.parts),
+            },
+            args.json_path,
+        )
+        if problem:
+            print(f"boardwise parts classify: {problem}", file=sys.stderr)
+            return 2
+    if existed:
+        shutil.copy2(library_path, backup)
+    reloaded, error = _write_shelf_document(
+        library_path, raw, existed=existed, backup=backup
+    )
+    if reloaded is None:
+        print(f"boardwise parts classify: {error}", file=sys.stderr)
+        return 2
+
+    landed = reloaded.get(entry.key)
+    print(
+        f"classified: {entry.key}（按 {matched_by} 对上）→ category = "
+        f"{landed.category if landed is not None else category}"
+        f"（category_trust = {landed.category_trust if landed is not None else tier}）"
+    )
+    if evidence is not None:
+        print(
+            f"  evidence: {evidence['source']} 第 {evidence['page']} 页，引文逐字对上"
+            "（521 的闸）→ 机器核验档"
+        )
+        print(
+            "  gate: 分类是**结论**（522 口径）——机器档只喂计算类规则"
+            "（载流/降额/间距），连接/安规/隔离类规则仍要人签字"
+        )
+    else:
+        print(f"  {CLASSIFY_NO_QUOTE_NOTE}（category_trust = verified，文件里不写键）")
+    if was_machine and tier == FACTS_TRUST_VERIFIED:
+        print("  降档: 之前的机器核验档已被这次人工签署覆盖（category_trust 键已去掉）")
+    print(f"  shelf: {library_path}（共 {len(reloaded.parts)} 条）")
+    if existed:
+        print(f"  backup: {backup}")
+    print(f"next: boardwise parts show {entry.key}")
+    if args.json_path:
+        print(f"json: {args.json_path}")
+    return 0
 
 
 def _parts_accept_who(explicit: str) -> str:
@@ -26391,6 +26873,7 @@ PARTS_COMMANDS = {
     "accept-unknown": _cmd_parts_accept_unknown,
     "fetch": _cmd_parts_fetch,
     "hunt": _cmd_parts_hunt,
+    "classify": _cmd_parts_classify,
 }
 
 BOM_COMMANDS = {

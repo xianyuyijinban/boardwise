@@ -618,16 +618,36 @@ ACTIONS: tuple[Action, ...] = (
     # that the whole probe family is gone, not as a place to add another one.)
     Action(
         name="sch.readback",
-        summary="Schematic components and a primitive subset, for a netlist view.",
+        summary=(
+            "Schematic components and a primitive subset, for a netlist view. "
+            "Refused with PAGE_MISMATCH when the focused document is a PCB (527B): "
+            "the read answers in whatever namespace it is named after, not in the "
+            "focused page's, so a wrong-page call used to return a phantom row or "
+            "die on `null`."
+        ),
         params=("includePrimitives",),
-        returns="{components: [...], primitives: [...]}",
+        returns=(
+            "{kind, components: [...], primitives: [...], componentCount, "
+            "unreadable?: int (count of unreadable rows + failed reads + null "
+            "holes the host left), reason?: str (the first of them), "
+            "problems?: [str] (an unusable focus reading — an unnamed document "
+            "type means the page guard did not run)}"
+        ),
         risk="read",
     ),
     Action(
         name="pcb.readback",
-        summary="PCB components and a primitive subset (pads / tracks / vias).",
+        summary=(
+            "PCB components and a primitive subset (pads / tracks / vias). Same "
+            "PAGE_MISMATCH refusal as sch.readback, mirrored for a schematic page "
+            "in front (527B)."
+        ),
         params=("includePrimitives",),
-        returns="{components: [...], primitives: [...]}",
+        returns=(
+            "same shape with kind 'pcb'; includePrimitives adds "
+            "{__meta: {unavailable: [namespace], returned, nullEntries?}} as "
+            "primitives[0]"
+        ),
         risk="read",
     ),
     Action(

@@ -182,7 +182,19 @@ test('pcb.readback summarises components using the getState contract', async () 
 });
 
 test('sch.readback exposes the net of each component', async () => {
-  const { eda } = fakeEda();
+  // 527B: a readback now refuses when the focused document is the other kind
+  // (`PAGE_MISMATCH`), so this test asked for a schematic read on a window
+  // focused on the PCB — which is exactly the call the guard exists to refuse.
+  // The fixture follows the focus, the way the editor does: what this test is
+  // about is the `net` field, not the guard (that has its own file,
+  // `readback-page-guard.test.mjs`).
+  const { eda } = fakeEda({
+    dmt_SelectControl: {
+      getCurrentDocumentInfo: async () => ({
+        uuid: 'sch1', name: 'Sheet1', documentType: 1, tabId: 't1',
+      }),
+    },
+  });
   const data = await buildHandlers(eda)['sch.readback']({});
   assert.equal(data.kind, 'sch');
   assert.equal(data.components[0].net, 'TX');

@@ -83,6 +83,25 @@ CATEGORY_VOCABULARY = frozenset({
     "buzzer", "switch", "module",
 })
 
+
+def category_families() -> dict[str, tuple[str, ...]]:
+    """``{top-level family: (its words, …)}``, both levels sorted.
+
+    The vocabulary grouped by its **top-level family**, for the one message that
+    has to be actionable: `parts classify` refusing a word (527D). A flat list of
+    20 dotted words answers "is `ic.ldo` legal" but not "what may I write for an
+    op-amp", and the second is the question a refusal exists to answer. `ic.ldo`
+    files under `ic`; a word with no dot is its own family.
+
+    Derived, never typed twice: a hand-kept second list is one more thing to
+    forget when the table is extended by decision.
+    """
+    families: dict[str, list[str]] = {}
+    for word in sorted(CATEGORY_VOCABULARY):
+        families.setdefault(word.split(".", 1)[0], []).append(word)
+    return {name: tuple(words) for name, words in sorted(families.items())}
+
+
 #: Honest tri-state for facts we may or may not have evidence for. Used for
 #: `basic` and for whether the bridge corroborated a footprint name: ``None``
 #: means "not known", never "no".
@@ -645,11 +664,33 @@ def machine_trust_note(entry: "PartEntry") -> str:
     writing it per rule) is what keeps twelve rule bodies from drifting into
     twelve different disclaimers — or, on the day one of them forgot, into none.
 
+    **527D's sweep (H2): the class is a second way in.** A finding can be driven
+    by a machine-granted *class* on an entry whose facts a person signed — that
+    is exactly what `parts classify --from … --quote …` produces — and this
+    function used to answer ``""`` for it, so the finding carried no caveat at
+    all. It now fires for either tier and says which one (or both). The category
+    half uses the same wording the rules use in their UNKNOWN reason, so a reader
+    meets one sentence in two places rather than two sentences about one fact.
+
     Empty for every other tier, so a rule appends it unconditionally to its
     evidence and a curated entry's row stays byte-identical to what it was.
     """
-    if getattr(entry, "facts_trust", FACTS_TRUST_VERIFIED) != FACTS_TRUST_MACHINE:
+    facts_machine = (
+        getattr(entry, "facts_trust", FACTS_TRUST_VERIFIED) == FACTS_TRUST_MACHINE
+    )
+    class_machine = (
+        getattr(entry, "category_trust", FACTS_TRUST_VERIFIED) == FACTS_TRUST_MACHINE
+    )
+    if not facts_machine and not class_machine:
         return ""
+    if facts_machine and class_machine:
+        return (
+            f"参数与分类来源：机器核验（{_machine_source(entry)}），**未人工确认**"
+        )
+    if class_machine:
+        return (
+            f"分类来源：机器核验（{_machine_source(entry)}），**未人工确认**"
+        )
     return (
         f"参数来源：机器核验（{_machine_source(entry)}），**未人工确认**"
     )
@@ -709,6 +750,24 @@ class PartEntry:
     #: entry has not been classified. Absent ≠ unknown-to-a-rule: rules see
     #: "" and report UNKNOWN rather than guessing from a designator prefix.
     category: str = ""
+    #: 527D: **who signed the category** — one of :data:`FACTS_TRUST_TIERS`, with
+    #: the same meaning it has for :attr:`facts_trust` (``verified`` = a human
+    #: vouched, ``machine_verified`` = `parts classify --from … --quote …` checked
+    #: every quote verbatim on the page it cites and nobody has signed).
+    #:
+    #: A separate field rather than a re-use of ``facts_trust`` because the two
+    #: answer different questions about the same entry: a part may have
+    #: machine-verified parameters **and** a hand-signed class, or the reverse.
+    #: The default is ``verified``, so the 109 entries written before this field
+    #: existed keep behaving exactly as they did (`entry_to_json` writes the value
+    #: only when it is not ``verified``), and a rule that reads it sees a category
+    #: a person is behind.
+    #:
+    #: Why it matters: a category is a **conclusion** ("this is an LDO"), not a
+    #: number — 522's dividing line. So ``machine_verified`` here unlocks the
+    #: calculation rules (``allow_machine=True``) and no conclusion rule, which is
+    #: exactly what :func:`boardwise.rules.facts._category_state` now enforces.
+    category_trust: str = FACTS_TRUST_VERIFIED
     #: Datasheet facts (task 011b §2.3), or None when nothing has been
     #: recorded. Every recorded fact carries its own page-cited provenance;
     #: the loader refuses a fact that cannot say where it came from.
@@ -755,6 +814,13 @@ class PartEntry:
             raise PartError(
                 f"facts_trust must be one of {', '.join(FACTS_TRUST_TIERS)}, "
                 f"got {self.facts_trust!r}"
+            )
+        # 527D: `category_trust` shares the vocabulary, so it shares the rule —
+        # a typo'd tier is a trust claim nobody made, whichever field it is in.
+        if self.category_trust not in FACTS_TRUST_TIERS:
+            raise PartError(
+                f"category_trust must be one of {', '.join(FACTS_TRUST_TIERS)}, "
+                f"got {self.category_trust!r}"
             )
         # The gate, enforced on the object rather than only in the loader: no
         # construction route may produce an entry that carries facts a rule can
@@ -948,6 +1014,8 @@ _ENTRY_KEYS = (
     # 522: the tier. Both keys stay accepted so a file written by 039/521 still
     # loads; `entry_from_json` is where the two are reconciled (or refused).
     "facts_trust",
+    # 527D: who signed the **category** (absent = `verified`).
+    "category_trust",
     "provenance", "notes",
 )
 _PROVENANCE_KEYS = ("kind", "source", "designators", "note")
@@ -1388,6 +1456,26 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
             f"{where}.category: {category!r} is not in the vocabulary; the "
             "table is extended by decision, not by typo"
         )
+    # 527D: who signed that category. Same three shapes as `facts_trust` minus the
+    # 039 boolean, which never had a category-side spelling: an absent key means
+    # `verified` (the 109 entries written before this field existed are
+    # hand-curated and must not be demoted), a value outside the tier table is an
+    # error rather than a default, and `null` is an error too — `raw.get` cannot
+    # tell `{"category_trust": null}` from `{}`, and a file that meant `candidate`
+    # while writing a null would open the machine tier's door by accident (the
+    # hole 522 measured on `facts_trust`).
+    category_trust = FACTS_TRUST_VERIFIED
+    if "category_trust" in raw:
+        category_trust = raw["category_trust"]
+        if (
+            not isinstance(category_trust, str)
+            or category_trust not in FACTS_TRUST_TIERS
+        ):
+            raise PartError(
+                f"{where}.category_trust: {category_trust!r} is not one of "
+                f"{', '.join(FACTS_TRUST_TIERS)}; the vocabulary is shared with "
+                "facts_trust and extended by decision, not by typo"
+            )
     facts = raw.get("facts")
     if facts is not None:
         facts = _facts_from_json(facts, f"{where}.facts")
@@ -1410,6 +1498,7 @@ def entry_from_json(raw: Any, where: str = "<part>") -> PartEntry:
         datasheetPdfUrl=_as_str(raw.get("datasheetPdfUrl"), f"{where}.datasheetPdfUrl"),
         basic=_as_opt_bool(raw.get("basic"), f"{where}.basic"),
         category=category,
+        category_trust=category_trust,
         facts=facts,
         facts_trust=facts_trust,
         provenance=PartProvenance(
@@ -1437,9 +1526,11 @@ def entry_to_json(entry: PartEntry) -> dict[str, Any]:
     serialise exactly as they did (`facts_verified: false` becomes
     `facts_trust: "candidate"` on the next write, and nothing else moves), and
     ``machine_verified`` — a tier a machine granted, which a reader has to see
-    before trusting the number — is always spelled out. A closed gate writes the
-    entry's ``candidate_facts`` under ``facts`` so the claim is reviewable in the
-    diff; ``candidate_facts`` itself is derived, never serialised.
+    before trusting the number — is always spelled out. ``category_trust`` (527D)
+    obeys the identical rule beside ``category``: absent means a human signed the
+    class. A closed gate writes the entry's ``candidate_facts`` under ``facts`` so
+    the claim is reviewable in the diff; ``candidate_facts`` itself is derived,
+    never serialised.
     """
     body: dict[str, Any] = {
         "key": entry.key,
@@ -1465,6 +1556,12 @@ def entry_to_json(entry: PartEntry) -> dict[str, Any]:
     }
     if entry.category:
         body["category"] = entry.category
+    # 527D: same ruling as `facts_trust` one line down — a `verified` on the 109
+    # entries that predate the field would be a claim nobody typed, and would
+    # rewrite every line of the shelf. So a hand-signed category keeps its exact
+    # old bytes and only the machine tier is spelled out.
+    if entry.category_trust != FACTS_TRUST_VERIFIED:
+        body["category_trust"] = entry.category_trust
     # The authored facts go to the file either way: a candidate's claim has to be
     # reviewable in the diff, which is where the verification happens. `verified`
     # is **not** written, so the pre-039 entries stay byte-identical.
@@ -2044,6 +2141,7 @@ __all__ = [
     "IDENTITY_LCSC",
     "IDENTITY_MPN",
     "IDENTITY_NAME",
+    "category_families",
     "category_of",
     "corrections_from_json",
     "designator_category",

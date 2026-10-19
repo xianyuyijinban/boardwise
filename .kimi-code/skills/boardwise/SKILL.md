@@ -171,7 +171,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 | `document.current` | 活动文档/标签属于哪个工程 | 与 `doc.list` **不一致**是已知坑（坑 1） |
 | `sys.probe` | 宿主 API 面在位检查 | `params:{"checks":true}` 按生成的名单逐个 `typeof`；`{"checks":{...}}` 显式名单逐名覆盖；`{"call":"<动作>","params":{...}}` 调白名单内四个只读动作（025 批 1，绕坑 8 的加载期目录，probe 专用）；`{"realm":true}` 跑内置常量探针测扩展 realm 能力（PR#82，参数不参与构造、无任意执行面）；权威依据是**真机 probe**，不是类型包声明 |
 | `doc.open` | 打开/切到某个 uuid 的文档 | `{uuid}`；只在**活动工程**内寻址，跨工程找不到（坑 1） |
-| `sch.readback` | 页内器件清单 | 键集合写死：**没有 value、没有 mpn**（坑 3） |
+| `sch.readback` | 页内器件清单 | 键集合写死：**没有 value、没有 mpn**（坑 3）；527B 起**焦点不是原理图页就 `PAGE_MISMATCH`**（以前会读 PCB 命名空间、返回幻影行或 `TypeError`）。`unreadable` 是**计数**（含宿主留的 null 空槽），`problems` 非空 = 焦点读数不可用、守卫没跑 |
 | `sch.geometry` | 原始几何 + 实测页面 bbox | `{bboxIds}`；整页只读一次的坐标来源（打标/定位用） |
 | `sch.netlist` | 编辑器自己的网表 | 60 s；**没有** connector 内回退（旧 `getNetlist()` 实测会挂） |
 | `export.render` | 页/选区/工程的 PNG/SVG/PDF | **验收图走这条**；`scope:'selection'` 需 `ids`；多页工程可能回 zip |

@@ -4,6 +4,47 @@ Living index. Details live in `tasks/*.md` (one book per task) and
 `docs/implementation-log.md` (the connector debugging arc). This file only
 collects the current truth and the pointers.
 
+## [2026-10-19] 527：0.6.0 之前必须收口的四件尾巴（v0.5.18 内测）
+
+**这一批不是新功能，是把「会带着错结论进正式版」的东西清掉**。清点写在 `tasks/527_pre060_loose_ends.md`：
+200A/B/C 仍按岳裁冻在月底，本批只做**0.6.0 之前必须落地**的四件 + 两件结案。
+
+- **527A `IntentSource` 转发三个需求小节**：`core/designintent.py` 的类文档说「规则都拿 IntentSource」，
+  而 `rules/pcb/ipc.py` 用 `getattr(intent, "rails")` 问它——那是裸 `DesignIntent` 的字段名。按文档办事的
+  调用者因此拿到一份**静默的空合同**：没有电压、没有电流，而「没有合同」是合法状态，所以两条路都读不出错。
+  修法：`rails`/`signals`/`buses` 转发（`blocks`/`accepted_unknown` 不转，没人按名字问）。4 条回归要求
+  **两个载体的答案逐字相同，连出处字符串一起比**；变异 2/2 咬住。
+- **527B connector 读回页型守卫 + 信封文档**：焦点不在 PCB 页时 `pcb.readback` 照读 PCB 命名空间 →
+  宿主回 `null` → `TypeError: … reading 'map'`。现在精确得知页型且不符就 `PAGE_MISMATCH`（**复用**既有码，
+  不新造第二个名字），文案点名「请求什么 / 当前是什么 / 怎么修」；精确但类型不可命名时**不拒绝但留痕**
+  （`problems` 进返回体）。**挖洞 8 条**（独立只读红队）：最狠的一条是守卫在宿主用 `getState_*` 形状答时
+  **静默失效**（uuid 按两种形状读、`documentType` 只读 own-key），其次是 `8/9`（仿真原理图页）、
+  `12/15`（PCB 2D/3D 预览）落在 `unknown` 也漏拒、`includePrimitives` 路径的幻影行没跟着修、
+  `problems` 被丢弃、`unreadable` 换义未改声明、注释里两处事实错误（`pcb.geometry` 的 `bboxes:0`
+  **不是**这条改动治好的，它至今没有页型守卫）。全修，测试 11 条，变异 5/5 咬住；
+  connector **532 passed / 0 failed** + tsc 干净。证据 `outputs/527b/evidence.md`。
+- **527C 189A2 分类：旧读数本身是错的**。7/8/6/2 不是这条检查的输出，是探针没走 154 板链
+  （`boards[0]` 配 `docs[0]`）。接线后真读数 **34 条 / 5 个板入口**（ROBOT PCB1=7、09-17 PCB3=10、
+  v1.0.0 PCB1+PCB2=6+1、高速 PCB2=10；主代理独立复现了两块）。逐条分类 **A 真伪网 0 / B 归档自身不一致 34 /
+  C 噪声 0**；`min_pins` 3→10 逐格相同、17 才一次抹掉 10 条真读数 → **保持 3**。最锋利的反例：189A2 实板样本
+  能复现 14 条真伪网，其中 7 条在「网名+成员关系」上与这 34 条 B 类**不可区分**，只有几何分得开——
+  按名字降噪会吞掉真发现，故只出证据 + 立 527C2（note 按几何分两句）。`engines/pcbreview.py` 里手抄的
+  「23 rows」改成结构性表述（那两个排除是循环里 `continue` 出来的，不是量出来的）。证据 `outputs/189a2c/evidence.md`。
+- **527D `category` 的授予路径（=523）**：`parts hunt --apply-facts` 能写 facts 却写不了分类，所有
+  「是不是 IC / LDO」的规则对空分类一律 UNKNOWN。新命令 `parts classify` + `PartEntry.category_trust`
+  （缺省人工档，109 条旧条目字节与行为不变），**两道闸都问分类自己的档位**（`_category_state` 与
+  `core.partkind.shelf_declaration`）。**挖洞 8 条**全成立：H1 = `_hunt_write_shelf` 逐字段重建条目时
+  **漏继承 `category_trust`** → 机器档静默升格成人签（正是文档主推的「先 classify 再补 facts」路径）；
+  H2 = `machine_trust_note` 只读 facts 档，机器授分类的 finding 一句免责都没有；H4 = `checkup` 把这种件
+  移出「未审」；H5 = `candidate` 分类比 `machine_verified` **更宽**。全修并各带回归（H1 用**结构性**测试：
+  由 dataclass 字段推导每个 `*_trust` 必须被重建继承）。**H3 未修**：`entry.category` 的直读点有 14 处
+  （`mcureset`/`regulator`/`power_domains`…）仍绕过闸 → 立 527D3，docs 与 release notes **收窄承诺**到
+  实际生效的两道闸。证据 `outputs/527d/evidence.md`。
+- **527E 文档与版本**：189A1 **结案不改**（改读 `effective_layer_ids` 会撞 `test_125` 的岳亲裁 `[1,2,16]`）；
+  088b-deltas DRAFT 加归档横幅（三条偏差 10-02 已裁并随 followups 落账）；版本 0.5.18（`pyproject` /
+  `__init__` / `connector/package.json` / `extension.json`；dsh 插件仍 0.1.2，按岳裁等 0.6.0 同步）。
+
+
 ## [2026-10-19] 526：走廊不是瓶颈，是 pin 被文字行埋 —— 布局第一次看见「文字占地」
 
 525 修完（`bbf85a4`）后拓扑轮仍 0 candidate、仍拒 `FB_SENSE`。两轮实验把方向彻底改写：
@@ -828,3 +869,7 @@ point. Full measurement history: `tasks/010c-coordinate-convention.md`
 - 2026-10-18 **519 pin 尖跨网最小间距**（子代理 399，worktree `.tmp_pin_clearance`，已合入）：拓扑轮会把**两个不同网络的 pin 尖放在同一坐标**（实测 `Q1.3(SRC)=(75,165)` 与 `R5.2(PGND)=(75,165)`），router 把外网 pin 尖当墙 → `SRC` 直连必拒，且若走线沿该点通过就是**短路图**。`overlap` 只算 body、完全不管 pin 尖，这是缺口。新增 `pin-clearance` 项：阈值 `grid*2=10`、权重 `W_PIN_CLEARANCE=40`。**探针**枚举拓扑答案 46 个 pin 尖的全部异网对：重合 **0** 对、<10 单位 **0** 对（基线 12 对 <25 单位）。**两个关键发现**：① 修复必须做成**第二遍**（第一遍用历史请求、答案仍挤时才跑第二遍）—— 初版挂进 `evaluate()` 让第一遍就带，`098 scene08` 的逐字节 hash 从 `1e7a8583` 变 `31919a64`，因为**退火是路径搜索，在最优点为 0 的代价在路径上并不为 0**；改第二遍后 098 十二个产物全部逐字节一致。② `grid*3` 被退回的理由是**太松**：15 对 098（最小异网针尖 20.6）是「无事可做」却照样触发第二遍，`grid*2=10` 时它不跑 —— 一条会对没有话可说的图起作用的规则不是对的规则。`test_114`/`test_116` 全绿，变异 3/3 红，零位移闸 374 零移动。**全量 6317 passed / 25 skipped / 0 failed**（1022.06s）。`SRC` 不再被拒；拓扑轮现拒 `net 'SW'` 的直连义务（下一个 blocker）。
 - 2026-10-18 **520 L2a 批量寻址 `parts hunt`**（子代理 400 首版 + 主代理复核改三处，worktree `.tmp_hunt_l2a`，**未 commit**）：L2 原先被当成「贵在搜索」，实测不是——**合法 C 号覆盖一块板的 42%–98%**（llc 23/47、DCDC 22/29、FPC 45/56、超声波 10/24、级联驱动 45/46、级联主拓扑 28/57、滤波采样 50/56），而 `GET wmsc.lcsc.com/ftps/wm/product/detail?productCode=<C号>` 一次请求就给 `pdfUrl`（本会话实测 C2977777 → 200 + 真 PDF，1.9 s，**请求体只有一个 C 号**）。所以架构成两段一管线：先逐颗判通道（`c-number`/`mpn-only`/`no-identity`，`lcsc_part` 不可信——llc_board 27 个非空值里 **4 个装的是 MPN**，故 `^C\d{4,}$` 守卫，脏值回落 MPN 通道），能取的自己取，取不到的写 `hunt-plan.json` 工单（每条只有 `{designator, mpn, query}`，query 恒为 `"<mpn>" datasheet pdf`，`assert_query_is_safe` 越界即抛）；`--apply` 把 AI/人搜来的 URL 灌回**同一条**下载→校验→提取→落架路径（第二份实现就是第二套没人测的失败模式）。**真板读数**（`级联多电平-驱动模块`，46 颗，24 个唯一 C 号）：冷启 **41 s / 24 次外呼 / 0 失败**，热缓存 **1.2 s / 0 外呼**；隐私面只有 C 号离开机器，`hunt-audit.jsonl` 逐条记 `{ts, channel, request, http, bytes, sha256}` 且 `request` 必与 C 号/MPN 逐字相等——这是「没把板子信息发出去」的唯一证据。**同批最重要的实测（521 的立项依据）**：46 颗 **0 条 extracted / 45 条 no-facts**，包括 `UCC21520DWR` 的 52 页 TI 手册（文本很干净）。根因不是词表窄：真实表格的范围是**列布局**（`VCCI VCCI Input supply voltage 3 18 V`、`–0.3 20 V`、`–40 125 °C`），而 `_RANGE` 只认显式 `to`/`-`/`~`/`..`；且 pin 名会跨行（`VDDA,` 自己一行、`VDDB …` 在下一行）。**探针证伪了「扩白名单」这条便宜的假设**：`.tmp_probe/whitelist.py` 同时改 `SUPPLY_NAMES` 与 `_NAMES_RE`（两者是同一问题的两个答案，#75 的老坑），11 → 39 个名字（`VCCI/VCCO/VDDA/VDDB/VDDH/VIO/VBUS/VSYS/PVIN/VDD1/VDD2/VEE/VM…`），命中 **0/15 → 0/15，一条没动**（pin 行认得出，没有范围行可 join）。**主代理改的三处都在收「说假话」**：①`parse-failed` 一名两义（读不出 vs 不认识）→ 拆 `no-facts` / `parse-failed`；②`--offline` 把 45 颗带合法 C 号的料全塞进搜索工单（工单的读法是「去搜」，而它们去掉 flag 重跑就能自取）→ 新 `deferred-online`，改后离线工单 **0 条**；③缺 pypdf 被记成逐颗 `parse-failed`（下了 45 份 PDF 才被告知解释器没装东西，等于把一句环境问题说成 45 个零件的问题）→ 新 `_pdf_runtime_problem()` **整批前置检查**，缺就 exit 2 给一行装法（实测指向不存在的解释器 → `run 不动 … WinError 2` + exit 2，一颗都不跑）。**测试** `tests/test_520_parts_hunt.py` **42 条零网络**（三个 seam 注入假件；脏 C 号断言 detail API 零调用、HTML 落地页断言提取器零调用、`--offline` 用会炸的 fetcher 证明零外呼、`deferred-online` 不进工单、no-facts 与 parse-failed 分家）；子代理变异 3 组（`%PDF` 头检查 / `is_c_number` 守卫 / query 模板等值）全 CAUGHT。文档：`docs/parts.md` 新增 hunt 节（outcome 闭合词表逐个释义 + 列布局实测边界 + 隐私与缓存口径）、`docs/roadmap.md` §7 改成分层表并写入「L2 主体不是 web search」的实测修正、TASKMAP 补 519/520/521、SCHEDULE 当前主攻改为「审查线优先」。**遗留**：①521 已立项并写好任务书（`tasks/521_ai_facts.md`）——**方向是 AI 读 `.txt` 写 facts、工具当收件闸，四道校验里最硬的一条是「引文必须在对应页逐字出现」**（改一个字就拒收），不重写提取器；②`facts_verified` 仍是布尔，520 写出的条目一律 `false`（三档是 522）；③L2c 搜索兜底工具侧就绪、harness 侧未接；④`.tmp_cache` 15 份真 PDF/15 MB 已复制到主树 `.tmp_cache_hunt520` 供 521 当真语料。**全量 6221 passed / 98 skipped / 0 failed / 532.02 s**（`-n 4 --dist loadfile --basetemp=.tmp_pt_full`，日志 `.tmp_full_run.log`；两条被排除的另跑：`test_193_process_guards` 单跑 **41 passed / 25 s**、`test_190s_bottom_silk_direction` 在 worktree 里因缺 gitignored 的 `.tmp_bug98b/` 归档而 import 期炸，本批未改动该文件、与 520 无关）。**本批零真机、零 git 写、零 rm**；`.tmp_hunt_l2a` 分支 `l2a-hunt`，HEAD 仍是 `1453ac7`。
 - 2026-10-18 **521 `--apply-facts`：AI 读 txt 写 facts，工具只当收件闸**（子代理 401 首版 + 主代理复验改两处，worktree `.tmp_ai_facts` 基于 520 的 `l2a-hunt` 工作树拷贝，**未 commit**）：520 实测把「贵在搜索」这个前提推翻（C 号覆盖 42%–98%，一次 detail 请求就给 `pdfUrl`），也把「正则提取」这条路证伪（46 颗 0 提取；扩 `SUPPLY_NAMES` 11→39 个名字 **0/15 → 0/15**，因为真实表格的范围是**列布局** `3 18 V`，`_RANGE` 只认显式 `to`/`-`，pin 名还会跨行）。所以本批不改提取器，改**分工**：那条通道的产出是 **PDF + 带页码的 `.txt`**，facts 由 AI 读 txt 产出，工具负责校验它有没有证据。新第三阶段 `parts hunt --apply-facts <file>`（与 `--apply` 的 URL 回灌并列）：答案文件闭合（`designator`/`lcsc`/`mpn` 定位 + `facts` + `quotes[]`，多余键是**文件**错误 exit 2 而不是逐条拒收——拼错的 `quote` 被静默忽略会把一份有证据的陈述变成作者看不懂原因的拒收）。**六道闸按序**：schema（直接调 `core/parts.py::_facts_from_json`，不写第二份，所以货架装不下的形状这里也收不了）→ 页码在 `1..len(pages)` → **引文逐字**（`quotes[].text` 必须在它引的那一页出现，比较前只做「去首尾空白 + 连续空白折一个」，**折空白是唯一放宽**：文字层会把一格折成两行，跨折行的引文仍是那句话；大小写/数字/单位/顺序都逐字比）→ pin 在该文档出现过（只查出现不查语义：`VDDA-3` 算命中因为连字符在这类表里是分隔符，`VDDA3`/`30` 不算）→ 有文档（缓存里 `.txt`/`.pages.json` 都没有则 `no-document`，**不并进 `quote-not-found`**：读者引的可能是本机没见过的资料，告诉他"引文错了"会把人送去审一句没问题的句子）→ 重复 claim。outcome 加 `facts-accepted` / `facts-rejected`，拒收行的 `facts` 一律 `{}` 而不是回填第一阶段的正则结果（带 facts 会被货架写手捞走）；落架仍只在 `--shelf` 给了才写、一律 `facts_verified: false`、provenance 分 `hunt-read` / `hunt-extract`。**真板读数**（`级联多电平-驱动模块` 的 `U2 = UCC21520DWR`，真语料 `E:\boardwise\.tmp_cache_hunt520\C601651\`，`--offline` 零外呼）：引文照抄第 4/5 页 → `facts-accepted 1`、`candidates/U2.candidate.json` 写成、0 外呼；把最后一条引文改成 `3 19 V` → `facts-rejected 1` / `refusal: quote-not-found` / `facts: {}` / **`candidates/` 目录根本没建**（不是空文件、不是写完删）。**主代理复验时抓到两处**：①文档的示例答案把 `provenance` 写成 `C601651.txt, p.4`，被 039 的既有 schema 闸拒（**provenance 必须是 URL 或 `file:` 路径**）——这坑我自己第一次就踩了，已把 `file:C601651.pdf, p.4` 的真实形状写进 `docs/parts.md` 并注明「本批的示例第一版就写错了」；②终端那句「拒 N 条（一条都没落架）」在 N=0 时读成「0 条被拒、什么都没落架」，与事实相反 → 改成按 N 分句。**测试** `tests/test_521_ai_facts.py` **23 条零网络** + `tests/test_520_parts_hunt.py` 42 条回跑，范围运行 `-k "parts or hunt or catalog or datasheet"` **383 passed / 3 skipped / 70 s**；子代理变异 3 组全 CAUGHT（`quote_is_on_page` 恒真 → 4 红含真板那条、`pin_appears` 恒真 → 4 红、拒收分支塞回 facts → 2 红；`cp` + sha256 还原）。**遗留**：①`read_document` 只读 `.txt`/`.pages.json`，只有 PDF 时判 `no-document`（有意为之：现场抽 PDF 会让 `--offline` 也依赖 pypdf 环境）；②`hunt-plan.json` 结构未动（「这些料该让 AI 读 txt」不进工单，属 522）；③`--limit` 与 `--apply-facts` 的交互未测（被截掉的料上提交 claim → `unknown-designator`，行为可解释但没钉）；④`OUTCOMES` 多两个值，520 的报告 JSON 因此多两个恒 0 的键；⑤connector / dsh-plugin / tsc 三线本批未跑（只碰 Python 与文档）。**本批零真机、零 git 写、零 rm、未改 `engines/datasheet.py`**。
+
+**三闸（2026-10-19 晚）**：**挖洞** 两条缝（527B connector 读回、527D parts 分类）共 16 洞、14 修 2 记（527D3 / 527D2）· **实测** pytest 全量 **6472 passed / 25 skipped / 0 failed**（974.8 s，`-n 4 --dist loadfile`）、connector **532/0** + `tsc --noEmit`、dsh-plugin **50 passed / 1 skipped** + typecheck + build、冻结 exe 冒烟（`boardwise 0.5.18` + 内嵌 bundle 0.5.18 `c26383ef…` + `checkup --file` 的 `exit: 3` 语义）、发布件保密闸 **488 个 exe 压缩流 0 命中** · **上机** `test` 窗热更 `0.5.15→0.5.18` **verified**，B4 正例 `[PAGE_MISMATCH]`（exit 1、stdout 空）+ 镜像反例 + **对照实验**（同一 daemon 下 0.5.15 窗口仍给旧行为 ⇒ 守卫在 connector 侧）、在线 checkup 两次 **56 条逐字节一致**（38E/0W/18I，14 s / 11 s）、实板A 四对高侧间距 66.9350/62.9921/62.9921/37.8938 mil 全 WARN@100（517 仍成立）、**零写动作**。
+产物：exe `8e547a0b…`（14 709 596 B）· eext `48abe3b5…`（73 410 B）· dsh tgz `e84862c1…`（与 0.5.17 逐字节相同）。证据 `outputs/527b/`、`outputs/527d/`、`outputs/189a2c/`、`outputs/518live/`。
+**V4 适配已排 0.6.x（岳 10-19 裁：11 月起）**，四件事与判据写进 `tasks/038-eprj3-tierA.md` §V4。

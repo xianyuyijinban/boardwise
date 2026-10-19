@@ -1246,11 +1246,28 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # verdict 不涂绿）；`core/parts.py`、`core/power_domains.py`、
     # `core/partkind.py`、`engines/checkup.py` 的改动不在本配方里。
     assert recursive != old_digest, "the subpackage is inside the recipe now"
-    assert old_digest == "46e1f698"
+    # 527D 的挖洞修复（主代理重钉，第二十九批之二）：H5 给 `_category_state` 加了
+    # candidate 分类的无条件闸、L1 把 `_category_absent_reason` 的分支顺序对齐，
+    # 两处都在 `rules/facts.py` 一个直接文件里 ⇒ 两个摘要一起动
+    # （4eb1135e/d8cc0aa7 -> 4733469e/78b346aa）。
+    assert old_digest == "4733469e"
     # eb48cb9b -> 5c878604（517：191D 的稳压器输出档 500 -> 800 与「输入档一个
     # 电容都没有 -> WARN」，外加 A1 的同层测量 `net_clearance(same_layer_only)`）。
     # 三处都在 `rules/pcb/` 与 `core/measure.py` 里，所以两个摘要一起动。
-    assert recursive == "5c878604", (
+    # **527D moved BOTH** — direct 46e1f698 -> 4eb1135e，recursive 5c878604 ->
+    # d8cc0aa7（第二十九批 527D，TASKMAP 523）：`parts classify` 要有一条一等入口
+    # 把 `category` 写进货架，而规则侧必须回答「这条分类是谁签的」，于是
+    # `rules/facts.py` 的 `_category_state` / `_category_absent_reason` 各加一道
+    # `category_trust` 闸（机器核验的分类对**结论类**规则仍是 UNKNOWN，只喂
+    # `allow_machine=True` 的算数字规则；原因文案换一句，说清「分类是机器核验的、
+    # 本规则要人签字」）。落点只有 `rules/facts.py` 一个**直接**文件（多一个
+    # `FACTS_TRUST_VERIFIED` 导入），所以两个摘要一起动；`rules/pcb/` 一个字没改。
+    # 两个值均在**只替换该文件为 HEAD 版**的树上复量过：46e1f698 / 5c878604 正是
+    # 换掉本批改动后的读数，即两个摘要的位移全部来自 527D，与工作区里别的未提交
+    # 改动无关（`core/designintent.py`、`tasks/088b-…` 不在本配方里）。
+    # **判决语义**的钉在 `tests/test_527_parts_classify.py`（词表闸、两个档位、
+    # 引文闸、机器档只喂计算、旧条目逐字不变）。
+    assert recursive == "78b346aa", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

@@ -21,6 +21,7 @@ trustworthy enough to place a part with.
 | `datasheetUrl`, `datasheetPdfUrl` | declared by the source; the PDF URL is empty when the source has none, rather than guessed |
 | `basic` | JLC basic-part flag: `true`/`false` **with evidence**, `null` without |
 | `category` | the electrical class from the vocabulary — absent means "not classified", which a rule reports as UNKNOWN rather than guessing from the designator |
+| `category_trust` | **who signed that class (527D)**: `verified` / `machine_verified`, written **only when it is not `verified`** (an absent key means a human). Set by `parts classify` — see 「Giving an entry its class」 below |
 | `facts` | datasheet claims (039's vocabulary: `supply_pins` / `required_caps` / `nc_pins` / `must_connect` / `pull_required` / `ldo` / `led`), each with its own page-cited provenance. Since issue #17 an `ldo` record may also carry the optional `fixed_output` (`{"volts": 3.3, "provenance": "…, p.3 …"}`): the domain inference then quotes that page instead of decoding the part number, and labels an entry that has none as the **guess** it is |
 | `facts_trust` | **the trust tier (522)**: `candidate` / `machine_verified` / `verified`. Written **only when it is not `verified`**, and an absent key means `verified`. See 「三档可信度」 below — 039's boolean `facts_verified` is still *read* (and is still what an entry's `facts_verified` attribute answers), but it is no longer the field |
 | `provenance` | `kind` (`board-extract` / `catalog-select` / `manual-curation` / `hunt-read` / `hunt-extract`), `source`, and `designators` — the accumulating track record |
@@ -556,6 +557,85 @@ Consequences worth knowing:
   under the `机器核验待人工确认` bucket of `unreviewedByClass`, because an unconfirmed
   fact set is an open item. That is a code-level refusal, not a convention:
   `engines/checkup.shelf_can_drive_rules` answers False for the tier.
+
+### Giving an entry its class: `parts classify` (527D / TASKMAP 523)
+
+`--apply-facts` can land facts that drive calculations, but until 527D nothing
+could set the **class** those facts are judged against: `rules.facts._category_state`
+answers UNKNOWN for an entry whose `category` is empty, whatever else is on it, so
+a machine-verified part stayed unjudgeable and the only route was editing
+`blocklib/parts.json` by hand.
+
+```bash
+# with evidence: the quote goes through 521's gate, the class is machine-verified
+boardwise parts classify LM5164DDAR ic.buck \
+  --from file:.tmp_datasheets/LM5164DDAR.txt --page 2 \
+  --quote "LM5164 is a 100 V step-down buck converter."
+# without evidence: the class is the engineer's own signature ("无引文，按人工签署记账")
+boardwise parts classify LM5164DDAR ic.buck
+# signing by hand over a machine-granted class takes the machine key back off
+boardwise parts classify LM5164DDAR ic.buck    # → category_trust key removed
+```
+
+* **The word must be in the shelf's own table** (`core.parts.CATEGORY_VOCABULARY`).
+  Anything else is exit 2 with the legal families listed, because the table is
+  extended by decision and never by typo.
+* **`<entry>`** resolves the way `parts show` does — shelf key → MPN
+  (case-insensitive) → C-number.
+* **The entry must already be on the shelf.** This command never creates one
+  (`parts add` does that); a miss is exit 2 with what the shelf does have.
+* **Evidence is all three flags or none.** `--from` takes `http(s)` or `file:`
+  (522/524's 保密口径 — a bare path is refused), `--page` is 1-based, and
+  `--quote` runs through 521's gate: ≥10 characters, ≥3 words, whole-word on both
+  ends, and **verbatim on the page it cites** after whitespace folding. Half the
+  set is refused rather than guessed into a tier.
+* **Where the document comes from.** `file:` reads that file — a `.txt` page dump
+  (`<<<page N>>>` markers, what `parts fetch` / `parts hunt` leave) is split per
+  page, a `.pdf` goes through the same pypdf helper, and a text file with no
+  markers is one page. `http(s)` reads the dump **already cached for this entry**
+  (`<boardwise home>/datasheets/<C码>/<C码>.pages.json`, overridable with
+  `--cache`) — the same read `--apply-facts` makes. This command never dials out.
+* **Machine tier vs human tier, and what each drives.** A class is a
+  **conclusion** ("this is an LDO"), so 527D reuses 522's 结论 vs 数字 line without
+  inventing a second one:
+
+  | written | file | a calculation rule (`allow_machine=True`) | a conclusion rule (`allow_machine=False`) |
+  |---|---|---|---|
+  | with evidence | `category_trust: machine_verified` | classified — IC / non-IC as the word says | **UNKNOWN**, and the reason says 「分类是机器核验的…本规则要人签字」 |
+  | without evidence | no key (`verified`, the default) | classified | classified |
+
+  `facts_trust` and `category_trust` are **independent**: an entry may have
+  hand-signed parameters and a machine-granted class, or the reverse, and each
+  field is asked separately at the same choke point. The class's tier is asked at
+  **two** choke points, because a class reaches a verdict by two roads:
+  `_category_state` (the facts rules) and `core.partkind.shelf_declaration` (the
+  judging gate every 判型 path goes through — `rules/pcb/distance`,
+  `rules/sensebias`, `rules/archclosure`, `classify_part`). A machine-granted
+  class is invisible at both, and a finding it drives carries the same
+  「分类来源：机器核验…未人工确认」 caveat machine-verified facts carry.
+
+  **Known gap (TASKMAP 527D3)** — read this before trusting the tier as a
+  blanket: a dozen PCB rules read `entry.category` **directly** and do not go
+  through either choke point (`rules/pcb/mcureset`, `mcusupply`, `crystal`,
+  `regulator`, `fbplacement`, `foc`, `focground`, `rules/params`, `paramspec`,
+  `decap`, plus `archclosure`'s op-amp test and `railratings`' LDO test). Those
+  paths will act on a machine-granted class. The tier is therefore enforced where
+  it is claimed — the facts rules and the judging gate — and not yet
+  board-wide; closing it needs a tier-aware accessor and a per-rule ruling on
+  which side of 数字/结论 each one sits.
+* **Only two keys move.** The write is the JSON-document edit `parts add` makes —
+  only the entry's `category` and `category_trust` change, every other byte of the
+  shelf (including the other 108 entries) is preserved, the file is backed up to a
+  `.tmp` sibling and re-parsed with the real validator before the write is called
+  done. `verified` is never written as a value (039/522's spelling), which is also
+  what makes re-signing without evidence a real downgrade rather than a second key.
+* **Compatibility:** `category_trust` is absent in every entry written before this
+  field existed, and absent reads `verified` — so those 109 entries behave exactly
+  as they did. An invalid value in the file is a loader error, never a fallback
+  to a tier nobody typed.
+
+`parts show` prints the tier beside the category (`category trust: …`), and
+`parts show --json` carries it as `categoryTrust`.
 
 ### The other way out of the gate: `parts accept-unknown` (191A)
 

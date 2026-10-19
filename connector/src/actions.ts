@@ -303,6 +303,16 @@ const DOC_KIND_BY_TYPE: Record<number, string> = {
   2: 'symbol',     // SYMBOL_COMPONENT
   0: 'blank',      // BLANK
   [-1]: 'home',    // HOME
+  // 527B, from the hole sweep: these four are the *same* two kinds opened a
+  // different way, and leaving them as `unknown` made a focused PCB preview look
+  // like a document this build cannot name — which is what the readback guard
+  // reads as "no evidence, so do not refuse" (the `8`-page and `12`-page probes
+  // in `outputs/527b/evidence.md`). Naming them costs nothing and buys the guard
+  // the two refusals it was written for.
+  8: 'page',       // SIMULATION_SCHEMATIC_PAGE_NGSPICE
+  9: 'page',       // SIMULATION_SCHEMATIC_PAGE_SIMULIDE
+  12: 'pcb',       // PCB_2D_PREVIEW
+  15: 'pcb',       // PCB_3D_PREVIEW
 };
 
 /** Turn whatever the host called a document type into a stable kind string. */
@@ -340,6 +350,41 @@ async function infoUuid(info: any): Promise<string | null> {
     }
   }
   return null;
+}
+
+/**
+ * The document type of an info object, in whichever of the two shapes the host
+ * handed it over — the same lesson as {@link infoUuid}, and the reason this
+ * exists rather than one line at the call site.
+ *
+ * **What the hole sweep (527B F1) caught.** `activeDocument` read the type with
+ * `plainGet(info, 'documentType')`, i.e. own enumerable keys only, while the
+ * *same* info object's uuid was read with the two-shape fallback right above.
+ * On a host that answers through `getState_*` on the prototype, the type came
+ * back `undefined` → `documentKind` → `'unknown'` → and the readback guard, whose
+ * whole rule is "an unnamed type is not evidence", silently did nothing. The
+ * uuid was precise and the type was missing, so `source` still said the answer
+ * was direct — the refusal that B4 exists for was skipped, with no signal.
+ *
+ * Returns the raw value (`number` or `string`) and lets
+ * {@link documentKind} decide, so "the host said nothing" and "the host said a
+ * number this build cannot name" stay distinguishable: the first is `undefined`,
+ * the second is that number.
+ */
+async function infoDocumentType(info: any): Promise<unknown> {
+  const direct = plainGet(info, 'documentType');
+  if (direct !== undefined && direct !== null) return direct;
+  for (const name of ['getState_DocumentType', 'getState_documentType']) {
+    const member = readMember(info, name);
+    if (typeof member.value !== 'function') continue;
+    try {
+      const value = await settle((member.value as () => unknown).call(info));
+      if (value !== undefined && value !== null) return value;
+    } catch {
+      /* this spelling is not the one; try the next */
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -517,6 +562,19 @@ type ActiveDocumentReading = {
 };
 
 /**
+ * The `source` that means "the host answered *exactly* which document is in
+ * front", as opposed to one of the per-kind fallbacks, which can only say
+ * "a document of my kind is open" and are therefore a heuristic.
+ *
+ * Anything in this codebase that must tell a measurement from a guess compares
+ * `active.source` with this one string — so it lives here, named once, rather
+ * than being re-typed by each reader. `document.current` reports it as
+ * `typeSource` and as `heuristic`, and `readback` refuses a wrong-page read
+ * only when the answer came from it (527B B4).
+ */
+const DIRECT_DOCUMENT_SOURCE = 'dmt_SelectControl.getCurrentDocumentInfo';
+
+/**
  * The **one** read of "which document is active", shared by `doc.list` and
  * `document.current`.
  *
@@ -542,7 +600,9 @@ async function activeDocument(
   eda: Eda,
   problems: string[],
 ): Promise<ActiveDocumentReading | null> {
-  const DIRECT = 'dmt_SelectControl.getCurrentDocumentInfo';
+  // The precise getter, whose `source` is what tells a measurement from a
+  // heuristic (see {@link DIRECT_DOCUMENT_SOURCE}).
+  const DIRECT = DIRECT_DOCUMENT_SOURCE;
   // A placeholder is a *reading*, not a failure, so it is named where every
   // other "we asked and the answer was unusable" is named — the caller gets
   // `null` (no active document) plus the evidence, never a uuid it might act
@@ -564,8 +624,10 @@ async function activeDocument(
       const parentLibraryUuid = plainGet(info, 'parentLibraryUuid');
       return {
         uuid,
-        // Same vocabulary as `doc.list`'s `documents[].type`.
-        type: documentKind(plainGet(info, 'documentType')),
+        // Same vocabulary as `doc.list`'s `documents[].type` — read in both the
+        // shapes this host hands info objects over in (`infoDocumentType`, which
+        // exists because reading only one of them made the readback guard skip).
+        type: documentKind(await infoDocumentType(info)),
         ...(typeof tabId === 'string' && tabId ? { tabId } : {}),
         // Carried through unchanged when the host offers them, omitted when it
         // does not — "the host did not say" is a different fact from "no
@@ -876,21 +938,113 @@ export const documentCurrent: ActionHandler = async (_params, eda) => {
     // heuristic and must not be used as a criterion: the tab tree has no
     // document type on this host, so its answer is a guess dressed as data.
     typeSource: active?.source ?? 'none',
-    heuristic: active !== null && active.source !== 'dmt_SelectControl.getCurrentDocumentInfo',
+    heuristic: active !== null && active.source !== DIRECT_DOCUMENT_SOURCE,
     tabs,
     ...(problems.length ? { problems } : {}),
   };
 };
+
+/**
+ * The `sch` / `pcb` kind a `document.current`-vocabulary document type maps to,
+ * or `null` when it is not a kind a readback can address.
+ *
+ * `page` and `schematic` are both `sch` because this vocabulary has said so
+ * since 004f — a schematic *page* is what a caller reads back, the schematic is
+ * its container. Everything else (`symbol`, `project`, `blank`, `home`, and any
+ * number this build cannot name, which `documentKind` reports as `unknown`)
+ * answers `null`, and `null` is deliberately **not** treated as a mismatch: see
+ * the guard in {@link readback}.
+ */
+function readbackKindOf(type: unknown): 'sch' | 'pcb' | null {
+  if (type === 'pcb') return 'pcb';
+  if (type === 'page' || type === 'schematic') return 'sch';
+  return null;
+}
 
 /** Shared readback: every primitive of the current document, summarised. */
 async function readback(eda: Eda, kind: 'sch' | 'pcb', params: Record<string, unknown>) {
   const api = kind === 'pcb' ? 'pcb_PrimitiveComponent' : 'sch_PrimitiveComponent';
   const label = kind === 'pcb' ? 'PCB' : 'schematic';
   const components: Array<{ primitiveId: string; [key: string]: unknown }> = [];
+  const action = kind === 'pcb' ? 'pcb.readback' : 'sch.readback';
+
+  // B4 (527B) — refuse a read aimed at a page the window does not have in
+  // front. `getAll()` of the other kind's namespace answers `null` (or a list
+  // with null holes) on a window whose focus is elsewhere; the read then either
+  // comes back as nothing at all or as a phantom component row, and the user
+  // reported it on the real machine as `pcb.readback` failing with
+  // `TypeError: Cannot read properties of null (reading 'map')`. Nothing is
+  // invented to cover it: the read is refused, and the caller is told which page
+  // is actually open.
+  //
+  // (`pcb.geometry` reporting `bboxes: 0` in the same report is **not** this
+  // defect and is not fixed by this: its ids come from its caller, not from
+  // here, and it has no page guard of its own — see `outputs/527b/evidence.md`.
+  // The first draft of this comment claimed otherwise; the hole sweep caught it.)
+  //
+  // The guard fires on an **exact** reading only — `activeDocument`'s direct
+  // getter, the same string `document.current` reports as `typeSource` — and
+  // only when that reading maps to one of the two kinds this action can read
+  // *and* is not the one asked for. An unknown or unnamed type is not evidence,
+  // so it does not refuse: a heuristic answer (the per-kind fallbacks) cannot
+  // tell "a PCB is open" from "a PCB exists", and turning it into a refusal
+  // would block reads that work today.
+  //
+  // "Direct but unnamed" is the one combination that used to be silent, and it
+  // is named below instead (527B F1): if the type could not be read at all, the
+  // caller is told that the guard did not run, rather than getting a read that
+  // looks as checked as any other.
+  //
+  // The code is `PAGE_MISMATCH`, the one this connector already uses for "the
+  // document you named is not the one in front" (`guardPage` / `guardPcb` /
+  // `pcb.export_fab` / `pcb.drc_ruleset`, and the refusals `bridge/protocol.py`
+  // documents for them). A second name for the same fact is the 「one concept,
+  // two keys」 mistake the 516 feedback caught: two codes mean two switch arms to
+  // keep in step, and a caller that matches only one of them silently reads a
+  // refusal as a payload.
+  const problems: string[] = [];
+  const active = await activeDocument(eda, problems);
+  const activeKind = active === null ? null : readbackKindOf(active.type);
+  if (
+    active !== null
+    && active.source === DIRECT_DOCUMENT_SOURCE
+    && active.type === 'unknown'
+  ) {
+    problems.push(
+      'the active document was named by the host but its type could not be read, '
+        + `so this ${label} read was not checked against the focused page — the `
+        + 'refusal that a wrong-page read gets cannot fire on an unnamed type',
+    );
+  }
+  if (
+    active !== null
+    && active.source === DIRECT_DOCUMENT_SOURCE
+    && activeKind !== null
+    && activeKind !== kind
+  ) {
+    const activeLabel = activeKind === 'pcb' ? 'PCB' : 'schematic page';
+    throw new ActionError(
+      'PAGE_MISMATCH',
+      `${action} reads the ${label} page, but the active document is a `
+        + `${activeLabel} (${active.uuid}) — bring the ${label} page to the front `
+        + `(doc.focus, or doc.open if it is not open) and call ${action} again`,
+      { kind, active: { uuid: active.uuid, type: active.type }, source: active.source },
+    );
+  }
 
   let items: any[] = [];
+  let nullEntries = 0;
   try {
-    items = (await requireFn(eda, `${api}.getAll`)()) ?? [];
+    // `?? []` because a host with no page of this kind to hand over answers
+    // `null` rather than an array, and `.filter(Boolean)` because a null hole
+    // used to become a **component row with every field null** (a phantom
+    // part, `primitiveId: ''`, that a review would count as a placement).
+    // The holes are then **counted** below instead of vanishing: a null entry
+    // is a fact about the host, and dropping it silently is how a caller ends
+    // up reporting a measurement it never took.
+    const raw: unknown[] = ((await requireFn(eda, `${api}.getAll`)()) ?? []) as unknown[];
+    items = raw.filter(Boolean) as any[];
+    nullEntries = raw.length - items.length;
   } catch (error) {
     if (isActionError(error)) {
       throw new ActionError(
@@ -904,6 +1058,12 @@ async function readback(eda: Eda, kind: 'sch' | 'pcb', params: Record<string, un
 
   const unreadable: string[] = [];
   const readErrors: string[] = [];
+  if (nullEntries > 0) {
+    unreadable.push(
+      `${nullEntries} entr${nullEntries === 1 ? 'y' : 'ies'} of ${api}.getAll() came back null `
+        + '(the host had no primitive to hand over there)',
+    );
+  }
   for (const item of items) {
     let fields: Record<string, unknown>;
     try {
@@ -940,8 +1100,18 @@ async function readback(eda: Eda, kind: 'sch' | 'pcb', params: Record<string, un
   return {
     kind, components, primitives,
     componentCount: components.length,
+    // 527B F3: the focus reading travels with the answer, the way
+    // `document.current` sends its own. Without it, "the host could not say
+    // which document is in front" and "I confirmed it is this board" came back
+    // as the same shape, and the difference — whether the page guard ran at
+    // all — was invisible to the caller.
+    ...(problems.length ? { problems } : {}),
     ...(unreadable.length || readErrors.length
       ? {
+          // A **count**, deliberately: `unreadable` in `pcb.geometry` /
+          // `pcb.drc_ruleset` is a list of reasons and this is not that field
+          // (the sweep called the two out, 527B F5). The first reason rides in
+          // `reason`; per-row reasons are not preserved here by design.
           unreadable: unreadable.length + readErrors.length,
           reason: unreadable[0] ?? readErrors[0],
         }
@@ -965,6 +1135,7 @@ async function readOtherPrimitives(eda: Eda, kind: 'sch' | 'pcb') {
 
   const out: unknown[] = [];
   const unavailable: string[] = [];
+  let nullEntries = 0;
   for (const ns of namespaces) {
     const getAll = (eda as any)?.[ns]?.getAll;
     if (typeof getAll !== 'function') {
@@ -973,7 +1144,13 @@ async function readOtherPrimitives(eda: Eda, kind: 'sch' | 'pcb') {
     }
     let items: any[] = [];
     try {
-      items = (await getAll.call((eda as any)[ns])) ?? [];
+      // `?? []` and the same null-hole accounting the component path does
+      // (527B F4): a namespace that answers `[null, {…}]` used to turn the hole
+      // into a row with every field empty — a phantom primitive a review would
+      // count as a placed object, and `__meta.returned` counted it too.
+      const raw: unknown[] = ((await getAll.call((eda as any)[ns])) ?? []) as unknown[];
+      items = raw.filter(Boolean) as any[];
+      nullEntries += raw.length - items.length;
     } catch {
       unavailable.push(ns);
       continue;
@@ -983,7 +1160,11 @@ async function readOtherPrimitives(eda: Eda, kind: 'sch' | 'pcb') {
       out.push({ namespace: ns, primitiveId: String(fields.PrimitiveId ?? ''), fields });
     }
   }
-  return [{ __meta: { unavailable, returned: out.length } }, ...out];
+  return [{ __meta: {
+    unavailable,
+    returned: out.length,
+    ...(nullEntries ? { nullEntries } : {}),
+  } }, ...out];
 }
 
 /**

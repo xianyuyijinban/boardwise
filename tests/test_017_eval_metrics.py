@@ -734,6 +734,12 @@ def test_the_report_carries_the_provenance_a_run_has_to_record():
     # 517 moved both again — 5c878604 for the widened recipe (191D's output tier
     # 500 -> 800 and the input tier's empty-pool WARN, plus A1's same-layer
     # measurement in `core/measure.py`) (126a ledger).
+    # 527D moved both again — 46e1f698/5c878604 -> 4eb1135e/d8cc0aa7 ->
+    # 4733469e/78b346aa (the second move is 527D's own sweep): `category`
+    # gained a `category_trust` gate in `rules/facts.py` (a machine-verified class
+    # is UNKNOWN to a conclusion rule and reads for a calculation rule), which is
+    # what `parts classify` writes. Decision semantics are pinned in
+    # `tests/test_527_parts_classify.py` (126a ledger).
     # 187A/187B/189A1's entries live in test_126a only (this note is the pointer).
     # The running ledger with the pinned values is
     # `tests/test_126a_pcb_review_plumbing.py`; this note is the pointer to it.

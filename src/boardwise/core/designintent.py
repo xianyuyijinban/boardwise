@@ -961,6 +961,37 @@ class IntentSource:
         """
         return self.document.entry(SECTION_DECISIONS, subject)
 
+    # ------------------------------------------------- the requirement sections
+    #
+    # 527: `rules.pcb.ipc` asks the carrier for its sections **by name**
+    # (`getattr(intent, "rails", None)` / `"signals"`), because a bare
+    # `DesignIntent` is what `checkup` hands a PCB rule. A caller who follows
+    # this class's own advice — hand the rule an `IntentSource`, the carrier this
+    # module exists for — then gets `None` for every section, and the contract is
+    # read as empty **in silence**: no rails is a legal state (an unpriced board),
+    # so no rule can tell 「no contract」 from 「contract that says nothing」.
+    #
+    # Forwarding the three requirement sections makes the two shapes answer the
+    # same question the same way, which is what the class docstring already
+    # promised. `blocks` and `accepted_unknown` are not forwarded: no PCB rule
+    # asks for them by name, and inventing carriers nobody reads is how a
+    # second, drifting API starts.
+
+    @property
+    def rails(self) -> list[IntentRail]:
+        """``document.rails`` — the contract's rail requirements."""
+        return self.document.rails
+
+    @property
+    def signals(self) -> list[IntentSignal]:
+        """``document.signals`` — net-level signal requirements."""
+        return self.document.signals
+
+    @property
+    def buses(self) -> list[IntentBus]:
+        """``document.buses`` — bus-family requirements."""
+        return self.document.buses
+
 
 def _segment(text: str) -> str:
     """One path segment: a project uuid with a slash in it must not invent a level."""
