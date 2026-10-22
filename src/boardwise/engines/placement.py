@@ -66,7 +66,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from ..core.geometry import transform_point
 from ..core.symbolprofile import Box, SymbolPose, SymbolProfile, pose_box
-from ..core.textmetrics import render_width
+from ..core import textmetrics
 
 #: What a caller writes into a report that names the placement it used.
 PLACEMENT_NAME = "boardwise-placement/1"
@@ -1440,7 +1440,10 @@ def _pin_clearance_term(
 
 
 def text_rows(
-    request: PlacementInput, part_id: str, origin: tuple[float, float]
+    request: PlacementInput,
+    part_id: str,
+    origin: tuple[float, float],
+    pose: SymbolPose | None = None,
 ) -> list[tuple[str, str, Box]]:
     """``(kind, text, box)`` for every row this part's **symbol** declares.
 
@@ -1452,30 +1455,24 @@ def text_rows(
     :data:`TEXT_ROW_HEIGHT` tall and as wide as the host's own ruler says
     (:func:`boardwise.core.textmetrics.render_width`).
 
+    531 routed the box itself through
+    :func:`boardwise.core.textmetrics.symbol_rows` so the three callers of this
+    rule (this one, the compiler's, and the island layout's) cannot drift apart:
+    the island path had its own invented-position model and its boxes sat 50+
+    units from where the host prints (`evidence/531/report.md` §2). The output is
+    unchanged, row for row.
+
     A symbol that declares no anchors returns nothing, and every profile written
     before 146 does: a library without measurements compiles exactly as it did.
     """
     part = request.part(part_id)
-    out: list[tuple[str, str, Box]] = []
-    for declared in part.profile.texts:
-        if declared.x is None or declared.y is None:
-            continue
-        if declared.kind == "reference":
-            text = part_id
-        elif declared.kind == "value":
-            text = part.value
-        else:
-            continue
-        if not text:
-            continue
-        anchor = (origin[0] + declared.x, origin[1] + declared.y)
-        width = render_width(text)
-        out.append((
-            declared.kind,
-            text,
-            (anchor[0], anchor[1], anchor[0] + width, anchor[1] + TEXT_ROW_HEIGHT),
-        ))
-    return out
+    return [
+        (kind, text, box)
+        for kind, text, box in textmetrics.symbol_rows(
+            part.profile, origin, reference=part_id, value=part.value,
+            pose=pose,
+        )
+    ]
 
 
 def _burial_depth(point: tuple[float, float], box: Box) -> float:
@@ -1531,7 +1528,9 @@ def _pin_text_term(
         if origin is None:
             rows[part.part_id] = []
             continue
-        rows[part.part_id] = text_rows(request, part.part_id, origin)
+        rows[part.part_id] = text_rows(
+            request, part.part_id, origin, pose=state.poses.get(part.part_id),
+        )
     if not any(rows.values()):
         return CostTerm(
             "pin-text", 0.0,

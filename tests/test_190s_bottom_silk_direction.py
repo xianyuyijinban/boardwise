@@ -177,7 +177,10 @@ def test_other_origins_keep_their_meaning_on_the_bottom_face():
     assert (top[1], top[3]) == (5.0, 50.0)
 
 
-@pytest.mark.skipif(not REAL_BOARD.exists(), reason="实板A 只在有归档的机器上在场")
+@pytest.mark.skipif(
+    REAL_BOARD is None or not REAL_BOARD.exists(),
+    reason="实板A 只在有归档的机器上在场",
+)
 def test_real_board_stops_reporting_a_designator_over_a_neighbours_pad():
     """实板A：标定后**没有**一条底层位号压在别人的同面焊盘上。
 
@@ -214,7 +217,10 @@ def test_real_board_stops_reporting_a_designator_over_a_neighbours_pad():
     assert [(a, b) for a, b, _c, _d in hits["pre_190s"]] == [("R22", "EC3")], hits["pre_190s"]
 
 
-@pytest.mark.skipif(not REAL_BOARD.exists(), reason="实板A 只在有归档的机器上在场")
+@pytest.mark.skipif(
+    REAL_BOARD is None or not REAL_BOARD.exists(),
+    reason="实板A 只在有归档的机器上在场",
+)
 def test_real_board_bottom_boxes_never_move_further_from_their_own_part():
     """标定**不会**把任何一条底层位号的盒子推离它自己的器件。
 

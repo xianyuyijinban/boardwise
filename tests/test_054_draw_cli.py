@@ -397,12 +397,23 @@ def _plan(tmp_path: Path, *, page: str = "", pool=(), name: str = "plan.json",
 
 
 def _live_netlist_for(plan: ChangePlan) -> dict:
-    """The netlist the plan says the finished page must show, hand-written."""
+    """The netlist the plan says the finished page must show, hand-written.
+
+    A net the plan **states a name for** comes back under that name — a flag's own
+    net, or the name a label's wire carries — because that is what the editor does
+    with the flag/wire it was given; a net the plan states no name for lands under
+    the editor's own auto name (530D, 岳's ruling A: the name lives on a flag or a
+    label, so the wires of an unnamed net carry nothing for the netlist to read).
+    """
     live = {"components": {}}
+    stated = drawapply.planned_net_names(plan)
     for index, island in enumerate(sorted(
         {tuple(item.mates) for item in plan.change.islands}
     )):
-        name = f"NET{index + 1}"
+        name = next(
+            (stated[member] for member in sorted(island) if member in stated),
+            f"NET{index + 1}",
+        )
         for member in island:
             designator, _sep, pin = member.partition(".")
             entry = live["components"].setdefault(
@@ -422,9 +433,10 @@ def _page_with(plan: ChangePlan) -> _FakeEditor:
                    value=part.value if part.value_key else None)
     # A flagged net's wires are drawn **unnamed** (069 sec.9: the flag states the
     # name), so a page that already holds this plan holds them the same way.
-    flagged = drawapply.unnamed_nets(plan)
     for wire in plan.change.draw_wires:
-        editor.wire("" if wire.net in flagged else wire.net, wire.points)
+        editor.wire(
+            wire.net if drawapply.wire_carries_its_name(wire) else "", wire.points
+        )
     for flag in plan.change.draw_flags:
         editor.flag(flag.net, flag.x, flag.y)
     return editor

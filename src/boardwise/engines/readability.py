@@ -27,10 +27,13 @@ is pinned by a test, so the two modules never have to import each other.
 `soft_metrics` has no total by design (052 sec.6: "不能只报 aesthetics=4.2"),
 and every key in `soft_reasons` is a key in `soft_metrics`.
 
-**The eleven hard constraints**, each with its own kind (the vocabulary is in
-:data:`HARD_KINDS`, and violations are emitted in this order). 147 added the two
-the landed page showed were missing — a wire lying *along* a symbol's own line,
-and a conductor printed through a text row:
+**The eleven hard constraints**, each with its own kind — twelve kinds, because
+147 split two of them off the fourth and fifth and 532 split one off the sixth
+(the vocabulary is in :data:`HARD_KINDS`, and violations are emitted in this
+order). 147 added the two the landed page showed were missing — a wire lying
+*along* a symbol's own line, and a conductor printed through a text row — and
+532 the one it showed was missing one level down, a symbol's **own pin text**
+pressed against its own rows (`KIND_PIN_TEXT_PRESSED`):
 
 ======================================  ==========================================
 kind                                    what it refuses
@@ -170,7 +173,7 @@ from typing import Any, Callable
 
 from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.geometry import transform_point
-from boardwise.core.layoutplan import LayoutPlan
+from boardwise.core.layoutplan import LayoutPlan, label_wire_indices
 from boardwise.core.pagelayoutplan import PageLayoutPlan
 from boardwise.core.presentationspec import PresentationSpec, main_path_wire
 from boardwise.core.symbolprofile import (
@@ -180,6 +183,7 @@ from boardwise.core.symbolprofile import (
     SymbolProfile,
     check_box,
     flag_glyph_box,
+    SymbolPose,
     flag_glyph_kind,
     pose_box,
     role_siblings,
@@ -187,6 +191,7 @@ from boardwise.core.symbolprofile import (
 from boardwise.core.textmetrics import (
     TEXT_WIRE_PENETRATION,
     flag_name_box,
+    pin_rows,
     wire_name_box,
 )
 
@@ -198,6 +203,7 @@ __all__ = [
     "KIND_GEOMETRY_OUTSIDE_FRAMES",
     "KIND_MAIN_PATH_EDGE_NOT_WIRED",
     "KIND_MODULE_FRAME_OVERFLOW",
+    "KIND_PIN_TEXT_PRESSED",
     "KIND_MODULE_FRAME_OVERLAP",
     "KIND_MODULE_PART_UNASSIGNED",
     "KIND_NC_PIN_CONNECTED",
@@ -257,6 +263,15 @@ KIND_WIRE_THROUGH_BODY = "wire-through-body"
 KIND_WIRE_ON_PIN_LINE = "wire-on-pin-line"
 KIND_TEXT_OVERLAP = "text-overlap"
 KIND_TEXT_ON_WIRE = "text-on-wire"
+#: 532: a **symbol's own pin typography** pressed against that same symbol's own
+#: rows. A distinct kind because it is a distinct sentence: `text-overlap` is about
+#: a *foreign* text landing on a component — the contract's own words, see
+#: :func:`text_overlap`'s docstring — while a pin's name landing on its own value
+#: row is the library symbol's business, printed inside its own extent, and no
+#: placement of ours can move either. Reported (the gate must *see* it: 531 found
+#: four such collisions on the landed render and `_text_boxes` had no pin text in
+#: it at all) and accounted, not silently dropped.
+KIND_PIN_TEXT_PRESSED = "pin-text-press"
 KIND_OUT_OF_PAGE = "out-of-page"
 KIND_USER_LOCK_VIOLATED = "user-lock-violated"
 KIND_NC_PIN_CONNECTED = "nc-pin-connected"
@@ -280,11 +295,47 @@ HARD_KINDS: tuple[str, ...] = (
     KIND_WIRE_ON_PIN_LINE,
     KIND_TEXT_OVERLAP,
     KIND_TEXT_ON_WIRE,
+    KIND_PIN_TEXT_PRESSED,
     KIND_OUT_OF_PAGE,
     KIND_USER_LOCK_VIOLATED,
     KIND_NC_PIN_CONNECTED,
     KIND_REQUIRED_PIN_NOT_CONNECTED,
 )
+
+#: The object prefixes that say "the text in this violation is a row the **host**
+#: prints, not one this generator places".
+#:
+#: Both hard kinds that a *text* participates in name their text as
+#: ``objects[0]``, and both draw their text from :func:`_text_boxes`' list.  Two
+#: of that list's five members are not ours: a wire's own net name
+#: (:func:`_named_wire_rows`, anchored by the host at the midpoint of the wire's
+#: longest run) and a rail flag's own name (`_flag_name_row`, printed ten units
+#: past the glyph).  The other three — ``texts[i]``, ``labels[i]`` and the flag's
+#: own ``powerSymbols[i]`` glyph — are boxes this generator positions, so a
+#: violation among them is ours to fix.
+#:
+#: 530F reads this distinction to decide what an island page may be **delivered
+#: with**: the layout can move a box it placed, and it cannot place a row the host
+#: prints.  See `drawcompiler.ISLAND_GATE_TOLERATED_LIMITS`.
+_HOST_ROW_PREFIX = "segments["
+_HOST_ROW_FLAG_SUFFIX = " name"
+
+
+def is_host_printed_row(object_name: str) -> bool:
+    """Is this object a text row the **host** prints rather than one we place?"""
+    if object_name.startswith(_HOST_ROW_PREFIX):
+        return True
+    if _is_pin_text(object_name):
+        # 532: a placed part's pin name and number. Not a `_HOST_ROW_PREFIX` case
+        # because the name is built in `_text_boxes` and carries the part, but it is
+        # the same fact: the host draws it at the symbol's own offsets and the
+        # compiler has no primitive for it.
+        return True
+    return (
+        object_name.startswith("powerSymbols[")
+        and object_name.endswith(_HOST_ROW_FLAG_SUFFIX)
+    )
+
 
 # ------------------------------------------------- the page-level domain (056)
 
@@ -690,7 +741,7 @@ def check(
     keepouts: Sequence[Box] = (),
     grid: float = DEFAULT_GRID,
 ) -> CheckResult:
-    """Run the eleven hard constraints and measure the soft metrics.
+    """Run the hard constraints and measure the soft metrics.
 
     ``profiles`` is the set of :class:`SymbolProfile` the plan's symbols were
     drawn with, as a mapping ``symbolRef -> SymbolProfile`` or any iterable of
@@ -1382,11 +1433,31 @@ def _check_text(
     boxes = _text_boxes(layout_plan, profile_map)
     for left in range(len(boxes)):
         for right in range(left + 1, len(boxes)):
-            name_a, box_a, _part_a, text_a = boxes[left]
-            name_b, box_b, _part_b, text_b = boxes[right]
+            name_a, box_a, part_a, text_a = boxes[left]
+            name_b, box_b, part_b, text_b = boxes[right]
             if _one_statement(name_a, text_a, name_b, text_b):
                 continue
             if not _overlap(box_a, box_b):
+                continue
+            # 532: a **symbol's own pin typography** against that same symbol's own
+            # rows is a different sentence from a foreign text landing on a part —
+            # see `KIND_PIN_TEXT_PRESSED`. It is reported under its own kind so the
+            # delivery policy can account for it without loosening `text-overlap`
+            # (which is, and stays, the class the placement can answer).
+            if (
+                part_a
+                and part_a == part_b
+                and (_is_pin_text(name_a) or _is_pin_text(name_b))
+            ):
+                out.append(HardViolation(
+                    KIND_PIN_TEXT_PRESSED,
+                    (name_a, name_b),
+                    f"{name_a} {text_a!r} {_box_text(box_a)} and {name_b} "
+                    f"{text_b!r} {_box_text(box_b)} intersect — both belong to "
+                    f"{part_a}, whose own artwork the host draws: a pin's name and "
+                    "number are printed inside its symbol at the symbol's own "
+                    "offsets, so no placement of this drawing can separate them",
+                ))
                 continue
             out.append(HardViolation(
                 KIND_TEXT_OVERLAP,
@@ -1409,6 +1480,11 @@ def _check_text(
                 f"{extent_name} {_box_text(extent)}",
             ))
     return out
+
+
+def _is_pin_text(name: str) -> bool:
+    """Is this ``_text_boxes`` name one of a part's **pin** rows? (532)"""
+    return ".pinName[" in name or ".pinNumber[" in name
 
 
 def _check_text_on_wire(
@@ -1575,15 +1651,25 @@ def _named_wire_rows(layout_plan: LayoutPlan) -> list[tuple[str, Box, str, str]]
     into this checker, because a name row is a text on the canvas like any other —
     it can land on a component body, on another row, or across a conductor.
 
-    **Which** wires are named: every wire of a net the page does *not* carry a
-    power flag for. A flagged net is named by its flag (the rail writes its name
-    itself), so the host prints no second name along the trunk — 146's render
-    confirms it (its 16 named wires are exactly the plan's unflagged nets).
+    **Which** wires are named: 530D's rule, and it is the landing's own
+    (`core.layoutplan.named_wire_nets`, the one statement both sides read).  岳's
+    ruling A (2026-10-21) takes the net's name off the wire: a rail is named by its
+    flag and an island-internal net is named by nothing, so those conductors carry
+    no name and the host prints no row over them — which is what the 8 rows this
+    model used to report were (every one of the flyback page's 8 hard violations).
+
+    What is left is the wire that **is** the drawing's label — on this host a label
+    has no primitive of its own (029: `sch.place_netlabel` cannot place one), so the
+    name is carried by a wire and that wire is the label (`core.layoutplan.
+    label_wire_indices`, the same statement the landing marks its wires by).  A
+    *conductor* of a labelled net is not a label and carries nothing.  Those rows
+    are still reported: they are texts on the canvas like any other, and a gate that
+    stopped modelling them would report a page nobody will see.
     """
-    flagged = {symbol.net for symbol in layout_plan.power_symbols}
+    carriers = label_wire_indices(layout_plan)
     out: list[tuple[str, Box, str, str]] = []
     for index, segment in enumerate(layout_plan.segments):
-        if not segment.net or segment.net in flagged:
+        if index not in carriers or not segment.net:
             continue
         box = wire_name_box(list(segment.points), segment.net)
         if box is not None:
@@ -1621,6 +1707,26 @@ def _text_boxes(
         (f"texts[{index}]", item.bbox, item.part_id, item.text)
         for index, item in enumerate(layout_plan.texts)
     ]
+    # 532: every pin name/number row the **host** prints for a placed part — the
+    # sixth kind, and the one this list was missing. 531 found four collisions on
+    # the landed render between a part's own pin text and its own value row (`U5`'s
+    # `ANODE` x `3`, the transformer's `2`/`5` x `EE16_3+3_V02`) and the gate could
+    # not see any of them: none of the five kinds above is a pin's own typography.
+    # The rows are the host's (`textmetrics.pin_rows` measures them off the same
+    # landing the designator/value anchors came from), so their owner is their part
+    # — a pin name printed over its own symbol's extent is that symbol's own text.
+    for part in layout_plan.parts:
+        profile = profile_map.get(part.symbol_ref)
+        if profile is None:
+            continue
+        pose = SymbolPose(
+            rotation=int(part.rotation), mirror=bool(part.mirror),
+        )
+        for kind, text, box in pin_rows(profile, (part.x, part.y), pose):
+            boxes.append((
+                f"parts[{part.part_id}].{kind}[{text}]", box,
+                part.part_id, text,
+            ))
     boxes.extend(
         (f"labels[{index}]", item.bbox, item.part_id, item.text)
         for index, item in enumerate(layout_plan.labels)

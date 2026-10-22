@@ -87,7 +87,10 @@ None of them say "no solution".
 * offline only — no bridge, no connector, no editor, no rules;
 * label policy is hard-coded: a net the grammar promised to wire is wired, and
   only a cross-module net or a high-fan-out net may be expressed as a label or a
-  flag. A promise is never quietly downgraded to a name;
+  flag. A promise is never **quietly** downgraded to a name — 520E: a
+  `direct-wire` obligation the router cannot keep is downgraded per net, into the
+  label expression the compiler already draws, and the downgrade is recorded
+  (`CompileResult.label_fallbacks`, and a `downgrade:` note), never inferred;
 * no global law: the axis, the direction of the chain and the side everything
   hangs from come from `sidePreferences` and the grammar's own constraint kinds
   (which read the same preferences), never from a constant like "inputs are on
@@ -275,6 +278,21 @@ FLAG_LEAD = 30.0
 #: on its side, so a horizontal lead turns by this much and the flag hangs at the
 #: end of the turn.
 FLAG_JOG = 25.0
+
+#: 520B2: the longest run a flag's lead may reach from the pin it names. Every
+#: rung past this is dropped from :func:`_flag_anchor`'s ladder, so a crowded pad
+#: can no longer be answered by a seat that is **legal but thrown far**.
+#:
+#: The value is 069 sec.3's own ceiling, read off :data:`SIBLING_LEAD`: "069
+#: sec.3's ceiling, beyond which a power pin's reach is a long run rather than a
+#: stub" is 60, which is also the top of 069 sec.1's band (40-60, whose middle
+#: `SIBLING_LEAD` is). The rung it removes is the ladder's last reach,
+#: ``4.0 * FLAG_LEAD``. Measured on the flyback page (520B2): the seat the rail
+#: ladder now picks for `SEC_12V` reaches **30** with a 12.5 jog (43.5 in total,
+#: the drawing 520B's diagnosis accepted), while the member-id order it replaced
+#: reached **120** and put the flag 145 units from the pad it supplies — the
+#: shape the same diagnosis judged "readable but pointed at the wrong place".
+FLAG_LEAD_LIMIT = 2.0 * FLAG_LEAD
 
 #: The margin a flag keeps between its whole box — glyph **and** the name row the
 #: host prints — and anything else. 069 sec.8 (岳: 「3V3的旗标标识和5V的导线重合了」)
@@ -570,6 +588,54 @@ KIND_RELATION_BROKEN = "grammar-relation-broken"
 KIND_OBLIGATION_MISSING = "grammar-obligation-missing"
 
 
+@dataclass(frozen=True)
+class LabelFallback:
+    """One net the compiler promised as a wire and expressed as a **name** instead.
+
+    The record 岳 asked for when he ruled that the choice between a long wire and a
+    net label is not the algorithm's alone ("什么时候打网络标签不是纯算法决定的，
+    应该由算法反馈模型决定"): a net whose ``direct-wire`` obligation the router could
+    not keep is no longer a whole-page refusal — it is downgraded per net and
+    **accounted for here**, in a field a caller can count, rather than in a note
+    somebody has to grep for.
+
+    ``role`` is why the compiler promised it in the first place (the reason
+    :func:`_expression_style` gave — the obligation's own text), ``reason`` is why
+    the wire was not drawn (the measured failure :func:`_connect_net` came back
+    with), and ``note`` is the sentence the plan carries —
+    :data:`~boardwise.core.layoutplan.DOWNGRADE_NOTE_PREFIX` included, which is how
+    `drawapply` promotes it into the change plan's ``downgrades``.
+    """
+
+    net: str
+    members: tuple[str, ...]
+    #: The style it was promised — ``"wire"`` for every fallback this batch makes.
+    promised: str
+    #: Why the compiler promised that style (the obligation's own reason).
+    role: str
+    #: Where the wire failed: ``"trunk"`` (the run between the net's two ends) or
+    #: ``"attachment"`` (reaching one pin from the net's own wiring).
+    stage: str
+    #: The measured failure, verbatim.
+    reason: str
+    #: What the reader of this page does not get.
+    gave_up: str
+    #: The plan note, :data:`DOWNGRADE_NOTE_PREFIX` included.
+    note: str
+
+    def as_dict(self) -> dict[str, Any]:
+        """The machine-readable shape, report-ready (the prefix dropped)."""
+        return {
+            "net": self.net,
+            "members": list(self.members),
+            "promised": self.promised,
+            "role": self.role,
+            "stage": self.stage,
+            "reason": self.reason,
+            "gaveUp": self.gave_up,
+        }
+
+
 @dataclass
 class RejectedCandidate:
     """A variant that lost — so "why is there no candidate" stays answerable."""
@@ -578,6 +644,11 @@ class RejectedCandidate:
     reason: str
     violations: list[str] = field(default_factory=list)
     failure: GrammarFailure | None = None
+    #: The nets this variant had already downgraded to a name before it was
+    #: refused (``label_fallbacks``): a refusal that followed a downgrade is the
+    #: "neither the wire nor the name has anywhere to go here" case, and this is
+    #: where that stays visible per variant.
+    label_fallbacks: list[LabelFallback] = field(default_factory=list)
 
 
 @dataclass
@@ -589,6 +660,9 @@ class Candidate:
     metrics: dict[str, float]
     reasons: dict[str, list[str]]
     key: tuple[Any, ...]
+    #: The nets this candidate expresses by a name instead of a wire, because the
+    #: router could not join them (see :class:`LabelFallback`).
+    label_fallbacks: list[LabelFallback] = field(default_factory=list)
 
     def describe_key(self) -> str:
         """``legality=0, findings=0, crossings=0, …`` — the layers, in order."""
@@ -660,11 +734,35 @@ class CompileResult:
     #: a result assembled by hand — :func:`summarize_failure_rounds` backfills
     #: it into one dict for a reader who wants the pairs.
     failure_rounds: list[FailureRound] = field(default_factory=list)
+    #: 520E: the nets this page expresses by a **name** instead of a wire, because
+    #: the router could not join them inside the corridor (each :class:`LabelFallback`
+    #: carries the net, why it was promised a wire, why the wire failed and what
+    #: the reader gives up). With a candidate it is the **best** candidate's list —
+    #: the page the caller is about to draw; with none it is every net any refused
+    #: variant had already downgraded, deduplicated by net, so a refusal that
+    #: followed a downgrade still says which nets were named rather than wired.
+    #: This is the countable half of the ruling: a caller asks `label_fallbacks`
+    #: (or :meth:`summarize_label_fallbacks`) instead of grepping `notes`.
+    label_fallbacks: list[LabelFallback] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         """At least one legal plan came out."""
         return bool(self.candidates)
+
+    def summarize_label_fallbacks(self) -> list[dict[str, Any]]:
+        """The downgrades as ``{net, members, promised, role, stage, reason,
+        gaveUp}`` dicts, report-ready — the audit entry beside
+        :meth:`summarize_failure_rounds`.
+
+        The pairs are the point: a reader who is told "this page has two named
+        nets" can see *which* nets, *why* each was promised a wire, *what* the
+        router said instead, and *what* they do not get. A hand-built result with
+        the field empty returns an empty list rather than inventing one — "no
+        downgrade was recorded" and "the downgrades were not kept" are different
+        claims, and only the compiler's own result can tell them apart.
+        """
+        return [item.as_dict() for item in self.label_fallbacks]
 
     def best(self) -> LayoutPlan | None:
         return self.candidates[0] if self.candidates else None
@@ -813,37 +911,65 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
 
     # 5. geometry: variants -> plans -> the hard gate.
     seen: set[str] = set()
-    _try_variants(ctx, _variants(ctx), result, seen, circuit_spec,
-                  presentation_spec, book, budget, intent)
-
-    # 119: the pose ladder, widened. This runs **only** when the ladder just tried
-    # produced no candidate at all, and only for the one situation a wider ladder
-    # can answer — see :func:`_widened_variants` for both halves of that claim
-    # and for why it is structurally the identity on every input that compiles.
-    widened = _widened_variants(ctx, result)
-    if widened:
-        result.notes.append(
-            f"no candidate from the {len(result.rejected)} base variant(s); every "
-            f"one of them was refused by the same relation "
-            f"({_widening_blocker_label(result)}), so the pose ladder was widened "
-            f"to the {len(widened)} variant(s) its accepted poses still hold"
-        )
-        _try_variants(ctx, widened, result, seen, circuit_spec,
+    # 520m: a presentation that declares **several layout islands** is drawn as
+    # a page — one local picture per island, packed as rigid blocks (岳
+    # 2026-10-20: 岛内地线连，岛间名字接).  Everything else, including every
+    # document that says nothing about islands, takes the path it always took:
+    # `effective_islands()` returns one implicit island for a spec that states
+    # none, so this is a no-op on those, and the page compiler's own module view
+    # never carries `islands` (`pagecompiler._module_view`) — so a module
+    # compiled for a page cannot reach the island path either.
+    multi_island = len(presentation_spec.effective_islands()) > 1
+    if multi_island:
+        _try_island_variants(ctx, result, seen, circuit_spec, presentation_spec,
+                             book, budget, intent)
+    else:
+        _try_variants(ctx, _variants(ctx), result, seen, circuit_spec,
                       presentation_spec, book, budget, intent)
 
-    # 201B: the topology search, for the inputs the constructive ladder cannot
-    # draw at all. Identity on every input that compiles, because it is only
-    # reached with `result.ranked` empty.
-    if not result.ranked:
-        _topology_round(ctx, result)
+    # 119 and 201B are **single-module** mechanisms: one ladder of a chain's pose
+    # variants, and one topology search over the same chain.  A page of islands
+    # has one drawing by construction and no chain to re-pose, so neither round
+    # is run for it — running the topology search would hand back a *single*
+    # drawing for a spec that declared islands, which is the one outcome that
+    # would make the declaration mean nothing.
+    if not multi_island:
+        # 119: the pose ladder, widened. This runs **only** when the ladder just
+        # tried produced no candidate at all, and only for the one situation a
+        # wider ladder can answer — see :func:`_widened_variants` for both halves
+        # of that claim and for why it is structurally the identity on every
+        # input that compiles.
+        widened = _widened_variants(ctx, result)
+        if widened:
+            result.notes.append(
+                f"no candidate from the {len(result.rejected)} base variant(s); "
+                f"every one of them was refused by the same relation "
+                f"({_widening_blocker_label(result)}), so the pose ladder was "
+                f"widened to the {len(widened)} variant(s) its accepted poses "
+                "still hold"
+            )
+            _try_variants(ctx, widened, result, seen, circuit_spec,
+                          presentation_spec, book, budget, intent)
+
+        # 201B: the topology search, for the inputs the constructive ladder cannot
+        # draw at all. Identity on every input that compiles, because it is only
+        # reached with `result.ranked` empty.
+        if not result.ranked:
+            _topology_round(ctx, result)
 
     if not result.ranked:
         result.failures = _no_candidate_failures(result, budget)
         result.failure_rounds = _failure_rounds(result)
+        result.label_fallbacks = _rejected_label_fallbacks(result)
         return result
 
     result.ranked.sort(key=lambda item: item.key)
     result.candidates = [item.plan for item in result.ranked]
+    # 520E: the fallbacks of the **best** candidate — the page the caller is about
+    # to draw. Read off the ranked leader rather than off whichever variant
+    # happened to run last, because the ranking is what picks the drawing and a
+    # caller counting "how many nets are named here" is counting that page's.
+    result.label_fallbacks = list(result.ranked[0].label_fallbacks)
     result.notes.append(
         f"{len(result.candidates)} legal candidate(s) from "
         f"{len(result.candidates) + len(result.rejected)} variant(s) built; "
@@ -2392,6 +2518,20 @@ def _pin_walls(
         inner = _posed(
             (pin.tip[0] + dx * pin.length, pin.tip[1] + dy * pin.length), pose, origin
         )
+        # 520G: ``inward`` is stated in the symbol's **own** frame, but everything
+        # below is page coordinates — so the direction the offset-and-thickness fold
+        # reads has to be the *posed* one. Reading the local one dropped the box
+        # for every turned pose: ``inner - tip`` lies along the turned lead, whose
+        # projection on the unturned direction is zero, so the "shorter than the
+        # landing" test below took its ``continue``. Measured on the flyback's own
+        # library: `XFMR-WE-749118105`, `C0603` and `R0603` each build a box per pin
+        # at rot 0 and **none** at 90/180/270 — and the flyback places 10 of its 19
+        # parts on a quarter turn, which is how `SEC_SW` came to run 15 units along
+        # `parts[T1].4`'s lead with the obstacle table reporting it clear.
+        span = math.hypot(inner[0] - tip[0], inner[1] - tip[1])
+        if span <= 0.0:
+            continue  # a zero-length lead draws nothing to reserve
+        ux, uy = (inner[0] - tip[0]) / span, (inner[1] - tip[1]) / span
         # The box is the lead from :data:`PIN_LINE_OVERLAP` inward: thick across,
         # and **not a hair past the tip**. Two things follow, and both are
         # measured rather than assumed. A wire that arrives at the tip from
@@ -2402,11 +2542,11 @@ def _pin_walls(
         # landing the tip keeps is exactly the length `readability`'s
         # `wire-on-pin-line` tolerates, so the two agree by construction.
         start = (
-            tip[0] + dx * PIN_LINE_OVERLAP, tip[1] + dy * PIN_LINE_OVERLAP,
+            tip[0] + ux * PIN_LINE_OVERLAP, tip[1] + uy * PIN_LINE_OVERLAP,
         )
-        if (inner[0] - start[0]) * dx + (inner[1] - start[1]) * dy <= 0:
+        if (inner[0] - start[0]) * ux + (inner[1] - start[1]) * uy <= 0:
             continue  # a lead shorter than the landing reserves nothing
-        across = (abs(dy), abs(dx))
+        across = (abs(uy), abs(ux))
         x0, x1 = sorted((start[0], inner[0]))
         y0, y1 = sorted((start[1], inner[1]))
         out.append((
@@ -2695,14 +2835,11 @@ def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
     Read from this module's **own** rules, so the reservation and the flag that
     later uses it cannot be two answers:
 
-    * **which pin** — a rail's flag hangs at the pin the rail supplies, which is
-      the first point on the net belonging to a chain part
-      (:func:`_power_flag_pin` reads the same ordering the same way) and, for a
-      net with no chain part on it, the first member by id; a **ground**'s seat
-      is the same ladder :func:`_flag_seat_pins` walks when it places the
-      symbol — the far end first, then the pads by member id (515A hole 6: one
-      ruler for "where does this net's flag go"), so the room is reserved at
-      the pad the flag really stands on;
+    * **which pin** — :func:`_flag_seat_pins`, the *same* ladder the flag pass
+      walks when it hangs the symbol: a ground's far end first (088b), a rail's
+      supplying pin first (069 sec.7), then that net's remaining pads (515A hole
+      6 / 520B2: one ruler for "where does this net's flag go"), so the room is
+      reserved at the pad the flag really stands on;
     * **which way** — a rail's glyph hangs *up* out of the rail and a ground's
       hangs *down*: :func:`flag_glyph_kind` of the net's own symbol decides, which
       is the same fact :func:`_rail_flag_seat` hangs by;
@@ -2727,33 +2864,30 @@ def _flag_seats(ctx: _Context) -> tuple[placement.FlagReservation, ...]:
         profile = _net_flag_profile(ctx, net)
         if profile is None:
             continue
-        if net.cls == "gnd":
-            # 515A hole 6: the ground branch reads the **same** seat ladder the
-            # flag pass does (:func:`_flag_seat_pins` — far end first, then the
-            # net's pads by member id), instead of a second, divergent
-            # "first chain member" reading. Two ladders for one symbol is how
-            # the reservation guards a pad the flag never stands on while the
-            # pad the flag does stand on stays unguarded.
-            expression = _Expression(
-                net=net.id, style="flag",
-                points=tuple(
-                    (member, (0.0, 0.0)) for member in members
-                ),
-                reason="the seat ladder needs only the member ids",
-            )
-            seat_pair = _flag_seat_pins(ctx, expression, net.cls)
-            seat = next(
-                (member for member, _point in seat_pair if member), members[0],
-            )
-        else:
-            seat = next(
-                (
-                    member for member in members
-                    if (ctx.slots.get(member.partition(".")[0]) is not None
-                        and ctx.slots[member.partition(".")[0]].kind == "chain")
-                ),
-                members[0],
-            )
+        # 515A hole 6 / 520B2: **both** classes read the one seat ladder the flag
+        # pass uses (:func:`_flag_seat_pins`) instead of a second, divergent
+        # reading — a ground by its far end, a rail at the pin it supplies, then
+        # that net's remaining pads. Two ladders for one symbol is how the
+        # reservation guards a pad the flag never stands on while the pad the flag
+        # does stand on stays unguarded, which is exactly what happened here: the
+        # rail branch used to answer "first chain member" on its own, and 520B2
+        # widened the flag's ladder past that answer without this call noticing.
+        #
+        # The expression carries ``(0.0, 0.0)`` for every pad: this reservation is
+        # an **input** to the layout search, so the pads have no coordinates yet
+        # and the ladder's "nearest first" order degrades to member id here (it
+        # already did for a ground). The **rule** is shared, the geometry is not.
+        expression = _Expression(
+            net=net.id, style="flag",
+            points=tuple(
+                (member, (0.0, 0.0)) for member in members
+            ),
+            reason="the seat ladder needs only the member ids",
+        )
+        seat_pair = _flag_seat_pins(ctx, expression, net.cls)
+        seat = next(
+            (member for member, _point in seat_pair if member), members[0],
+        )
         part_id, _, token = seat.partition(".")
         kind = flag_glyph_kind(profile)
         up = kind != FLAG_GLYPH_KIND_GND
@@ -2879,17 +3013,17 @@ def _place(
     return _place_chain_and_shelf(ctx, variant)
 
 
-def _place_chain_and_shelf(
+def _chain_and_shelf_layout(
     ctx: _Context, variant: _Variant
-) -> tuple[_Placement | None, GrammarFailure | None]:
-    """Ranks and lanes -> origins, through the real symbols.
+) -> tuple[
+    dict[str, tuple[float, float]], dict[str, SymbolPose], tuple[float, float]
+] | GrammarFailure:
+    """Ranks and lanes -> origins, **before** any relation was consumed.
 
-    **Not called by :func:`compile` since 201B stage 2** — it is the solver this
-    compiler shipped from 053 to 201A (chain on one line, branches hung off the
-    pin they share a net with, free parts on a shelf, locks honoured), kept whole
-    because it is still the honest answer to two questions: what a *constructive*
-    placement does with a grammar, and whether a drawing the search refuses can be
-    drawn at all. Everything below this line is that solver, unchanged.
+    The solver this compiler shipped from 053 to 201A (chain on one line,
+    branches hung off the pin they share a net with, free parts on a shelf,
+    locks honoured), whole and unmoved — 520A2 split it out of
+    :func:`_place_chain_and_shelf` so the baseline can be measured on it.
 
     The chain is laid on one line with a pitch per neighbouring pair taken from
     the two parts' own extents plus a wiring channel, scaled by the ladder rung;
@@ -2898,6 +3032,12 @@ def _place_chain_and_shelf(
     drawing still shows it. Locked parts take their lock exactly — place *and*
     rotation (:func:`_locked_pose`) — and the chain is translated so the unlocked
     parts keep their relations to it.
+
+    The split is what :func:`_order_baseline` needs: "which relations the
+    tightest spacing cannot keep" is a question about a rung's layout with the
+    relaxation pass **not** yet run, and asking it of a rung requires the rung.
+    This function must therefore stay free of :func:`_order_baseline` — it is
+    the input that measurement is taken on.
     """
     poses: dict[str, SymbolPose] = {}
     for part_id, accepted in ctx.accepted.items():
@@ -2923,7 +3063,7 @@ def _place_chain_and_shelf(
             lattice_points.append(_posed(pin.tip, poses[part_id], (0.0, 0.0)))
     residue = _lattice_residue(lattice_points, ctx.budget.grid)
     if residue is None:
-        return None, GrammarFailure(
+        return GrammarFailure(
             category=FAILURE_LAYOUT_UNSAT,
             subject="lattice",
             detail=(
@@ -3043,25 +3183,100 @@ def _place_chain_and_shelf(
             _snap(origins[part_id][0], ctx.budget.grid, residue[0]),
             _snap(origins[part_id][1], ctx.budget.grid, residue[1]),
         )
-    # 116: after the lattice snap, so a step this pass takes is already on the
-    # same lattice the gate measures and the final snap cannot undo it. Runs
-    # before _anchor_to_page so the page anchor is chosen around the honoured
-    # orders, not around the ones the pass is about to fix.
-    #
-    # The baseline is the set the **tightest** rung breaks, measured from the
-    # same origins this rung reached before the pass ran. It is computed once
-    # and cached on the context, so every rung is filtered by the *same*
-    # statement of "what the base layout cannot do" — the pass then consumes a
-    # relation the base layout also broke, and leaves the ladder to judge the
-    # ones only the wide rungs broke.
-    baseline = getattr(ctx, "_order_baseline", None)
-    if baseline is None:
-        baseline = frozenset(
+    return origins, poses, residue
+
+
+def _order_baseline(
+    ctx: _Context,
+    origins: Mapping[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+) -> frozenset[tuple[str, str, str]]:
+    """The relations the **tightest spacing** cannot keep, before the pass runs.
+
+    The filter 116 put on :func:`_honour_bound_orders`: only a relation in here
+    may be consumed, so the pass heals what the *placement* got wrong and leaves
+    the **spacing ladder** to answer for a page that has no room. The distinction
+    is the reason the pass is the identity on the five shipped grammars
+    (:func:`_honour_bound_orders`' docstring carries the measurement).
+
+    520A2 (A3): 116 measured this set on **one rung** — the first one, which is
+    ``spacing=<ladder[0]> pose-variant=0`` — and that is a pose as well as a
+    pitch. The flyback's ``right-of(C10, U5)`` holds on that rung's layout and
+    breaks on **every other** rung's, so it never entered the set, so the pass
+    was never allowed to touch it on the rungs that break it: 21 of 24 rungs
+    were refused naming a relation the stage had been forbidden to read.
+
+    The tightest **rung** is therefore the wrong unit and the tightest
+    **spacing** is the right one, because the ladder's own claim is about room:
+    "this pitch cannot hold it, under any pose we draw" is the ladder speaking,
+    while "this pose cannot hold it" is the pose ladder's business — and the
+    pose ladder is consulted separately and first, by :func:`_pose_can_say`.
+    So the set is the union over the rungs the ladder draws **at the tightest
+    spacing**, each read off its layout before the pass runs
+    (:func:`_chain_and_shelf_layout`), and it is computed once and cached on the
+    context so every rung is filtered by one statement of what the base layout
+    cannot do — the same single statement 116 wanted, measured over the base
+    *pitch* rather than over one of its poses.
+
+    A rung whose own layout is refused (no shared lattice) contributes nothing:
+    it has no placement to measure.
+
+    **The change is a widening, never a narrowing.** 116's own reading of "the
+    rung that ran first" is still in the set — it is the one a caller that starts
+    the ladder *above* the tightest spacing gets for itself, and
+    :func:`_place_chain_and_shelf` is called directly by tests and by the batch
+    tools with exactly such a rung. So every caller sees a superset of what it
+    saw before 520A2: a relation the pass could consume still can, and relations
+    the tightest **pitch** cannot keep are consumable on the wider rungs too.
+    """
+    cached = getattr(ctx, "_order_baseline", None)
+    if cached is not None:
+        return cached
+    # 116's own set: what the rung that is asking broke, before the pass ran.
+    broken: set[tuple[str, str, str]] = {
+        (item.kind, item.subject, item.object)
+        for item in _bound_orders(ctx, origins, poses, None)
+    }
+    tightest = min(ctx.budget.spacing_ladder)
+    for variant in _variants(ctx):
+        if variant.scale != tightest:
+            continue
+        layout = _chain_and_shelf_layout(ctx, variant)
+        if isinstance(layout, GrammarFailure):
+            continue
+        rung_origins, rung_poses, _residue = layout
+        broken.update(
             (item.kind, item.subject, item.object)
-            for item in _bound_orders(ctx, origins, poses, None)
+            for item in _bound_orders(ctx, rung_origins, rung_poses, None)
         )
-        setattr(ctx, "_order_baseline", baseline)
-    _honour_bound_orders(ctx, origins, poses, variant.pose_index, baseline)
+    baseline = frozenset(broken)
+    ctx._order_baseline = baseline
+    return baseline
+
+
+def _place_chain_and_shelf(
+    ctx: _Context, variant: _Variant
+) -> tuple[_Placement | None, GrammarFailure | None]:
+    """One rung: the constructive layout, then the bound orders it breaks.
+
+    **Not called by :func:`compile` since 201B stage 2** — the solver it wraps is
+    kept because it is still the honest answer to two questions: what a
+    *constructive* placement does with a grammar, and whether a drawing the
+    search refuses can be drawn at all. The layout itself is
+    :func:`_chain_and_shelf_layout` (unmoved since 053); what happens here is
+    what 116 added on top of it — :func:`_honour_bound_orders` consuming the
+    orders the base pitch cannot keep, then the page anchor, then the gate.
+    """
+    layout = _chain_and_shelf_layout(ctx, variant)
+    if isinstance(layout, GrammarFailure):
+        return None, layout
+    origins, poses, residue = layout
+    # 116: the layout is already lattice-snapped, so a step this pass takes is
+    # on the same lattice the gate measures and the final snap cannot undo it.
+    # The pass runs before _anchor_to_page so the page anchor is chosen around
+    # the honoured orders, not around the ones the pass is about to fix.
+    _honour_bound_orders(
+        ctx, origins, poses, variant.pose_index, _order_baseline(ctx, origins, poses))
     _anchor_to_page(ctx, origins, poses, residue)
     placed = _Placement(origins=origins, poses=poses, residue=residue)
     conflict = _relation_failures(ctx, placed)
@@ -3791,9 +4006,11 @@ def _honour_bound_orders(
     the axis that order names until the relation checker stops reporting it.
     Three design choices, each for a stated reason:
 
-    * **only a relation the tightest layout already breaks** moves anything.
+    * **only a relation the tightest pitch already breaks** moves anything.
       This is the rule that makes the 83 shipped previews byte-identical, and
       it is worth stating in full because the obvious weaker version is wrong.
+      Which relations those are is :func:`_order_baseline`'s answer, and 520A2
+      widened it from one rung to the whole tightest spacing.
 
       The obvious rule — "move whatever this variant breaks" — is **not** a
       no-op on the existing grammars, and measuring that is how this one was
@@ -3805,56 +4022,181 @@ def _honour_bound_orders(
       answer, which is a decision, not a defect.
 
       The distinction that holds: a relation the **tightest** rung already
-      keeps is the ladder saying "this page has no room", and a relation every
-      rung breaks is a **placement** failure the grammar stated and this stage
-      never read. All three of the flyback's ``C10``-against-``U5`` relations
-      are broken at ``spacing=1 pose-variant=0`` as well as at every wider
-      rung, while 098's ``near(C1, U1)`` holds there. So the pass is the
-      identity on all five existing grammars and still consumes the four on
-      the page that needs them.
+      keeps is the ladder saying "this page has no room", and a relation the
+      tightest **pitch** cannot keep is a **placement** failure the grammar
+      stated and this stage never read. 520A2 read that distinction one rung too
+      narrowly — see :func:`_order_baseline`, which was widened from one rung to
+      the whole tightest spacing. 116's note here claimed "all three of the
+      flyback's ``C10``-against-``U5`` relations are broken at ``spacing=1
+      pose-variant=0`` as well as at every wider rung"; measured on the fixture,
+      ``right-of(C10, U5)`` **holds** on that rung's layout and breaks on every
+      other one, so under the one-rung reading it never entered the set at all
+      and 21 of 24 rungs were refused naming a relation this stage had been
+      forbidden to read. 098's ``near(C1, U1)``, by contrast, holds on both rungs
+      of its tightest pitch, which is why the widened set still leaves the
+      ladder to answer for it. So the pass remains the identity on all five
+      existing grammars — measured this session, 83/83 previews byte-identical —
+      and still consumes the four on the page that needs them.
     * **pose first** — 115①'s hard lesson, in the form 115 had to be rewritten
       to learn it. If the movable side has a **pose the ladder actually
       explores** whose pad already points the relation's way, the pose ladder
       is left to find it. A variant *is* one rung of that ladder (053 sec.4),
       so answering for it redraws a variant whose poses the search has not
-      exhausted; that is the byte 098 scene 08 lost in 114, and it is why
-      ``same-column(Q1, R5)`` — a relation between two **chain** parts, which
-      nothing may move — is reported as pose-solvable rather than moved.
-    * **the placed side is the reference** — 114's lane paradigm. A chain part
-      is the page's spine and a lock is the engineer's own coordinate; neither
-      moves. When both ends are free the lower rank keeps its place, so every
-      shift's direction comes from the grammar's own order rather than from
-      iteration order.
+      exhausted; that is the byte 098 scene 08 lost in 114. ``same-column(Q1,
+      R5)`` — a relation between two **chain** parts — is this rule's own case:
+      it is reported as pose-solvable on the rungs the pose ladder really
+      answers, and walked **across** the chain (never along it) on the ones it
+      does not (A2, :func:`_order_step`).
+    * **the placed side is the reference** — 114's lane paradigm. A lock is the
+      engineer's own coordinate and never moves; of two movable ends the lower
+      rank keeps its place, so every shift's direction comes from the grammar's
+      own order rather than from iteration order.
+
+    **520A2 (A1): a chain part is not fixed, it is *crossable*.** Until 520A
+    every part in :attr:`_Context.chain` was in the `fixed` set, and that is not
+    the same statement as "the chain is the page's spine": it made any relation
+    whose **two ends are both chain members** permanently unbreachable, since
+    neither end could ever walk and the pass has nothing else to do with it.
+    The flyback's ``right-of(D3, T1)`` is exactly that pair (both are chain
+    members, 520A section 2.4), it is broken on **all 24 ladder rungs**, and it
+    is the reason the whole page has no candidate at all.
+
+    What the chain really needs is what makes it a chain: its members stand on
+    one line, and that line is :attr:`_Context.progress`. So the relaxation is
+    exactly one axis wide — a chain part may be walked **across** the chain
+    (the axis ``progress`` is not on) and never **along** it. The second half is
+    not decoration: without it a chain member dragged along ``progress`` leaves
+    the line at once and the very next relation between two chain members
+    (``below(R5, Q1)``) breaks in the rung that was supposed to be repaired —
+    measured on the same fixture, see A2 in :func:`_order_step`.
+
+    It is also **one pair wide**: the walk is opened for a relation whose other
+    end is a chain member too, and for nothing else. A relation to a branch
+    already had a walker — the branch, which is what 116 consumed those with —
+    and a relation to a **lock** may not drag the spine onto the lock's own
+    coordinate: measured on ``power_entry_xt30``, opening it that far cost three
+    more broken relations and the loss of the refusal that names
+    ``userLocks[C115]``. Both halves are :func:`_hold_rank`'s, and the reason is
+    written there.
 
     The walk is bounded by :data:`ORDER_RELAX_ROUNDS`. Running out of rounds is
     not a silent pass: whatever is still broken stays where it is and the
     relation checker reports it with the two measured points it would have
     reported anyway — the honest refusal 115 kept.
     """
-    fixed = {
-        part_id for part_id in ctx.slots
-        if ctx.locked(part_id) is not None or part_id in ctx.chain
+    locked = {
+        part_id for part_id in ctx.slots if ctx.locked(part_id) is not None
     }
+    chain = set(ctx.chain)
+    across = _across_axis(ctx)
     for _round in range(ORDER_RELAX_ROUNDS):
         moved = False
         for item in _bound_orders(ctx, origins, poses, baseline):
             here, there = item.subject, item.object
             if here not in origins or there not in origins:
                 continue
-            here_fixed, there_fixed = here in fixed, there in fixed
-            if here_fixed and there_fixed:
+            here_rank = _hold_rank(ctx, here, there, item, locked, chain, across)
+            there_rank = _hold_rank(ctx, there, here, item, locked, chain, across)
+            if here_rank == 2 and there_rank == 2:
+                # Neither end may move: the pair is out of this pass's hands
+                # and the checker reports it, exactly as it did before 520A2.
                 continue
-            if here_fixed or (not there_fixed and _keeps(ctx, here, there)):
-                reference, walking = here, there
+            if here_rank == there_rank:
+                # Both ends are held equally — 114's rule then decides: the
+                # lower rank keeps its place.
+                keeps = _keeps(ctx, here, there)
             else:
-                reference, walking = there, here
+                keeps = here_rank > there_rank
+            reference, walking = (here, there) if keeps else (there, here)
             if _pose_can_say(ctx, item, walking, reference, poses, origins,
                              pose_index):
                 continue
-            if _order_step(ctx, item, walking, reference, origins, poses):
+            if _order_step(
+                ctx, item, walking, reference, origins, poses,
+                allowed_axis=across if walking in chain else None,
+            ):
                 moved = True
         if not moved:
             return
+
+
+def _across_axis(ctx: _Context) -> int:
+    """The axis index (0 = x, 1 = y) that crosses the chain.
+
+    :attr:`_Context.progress` is the direction the chain runs in and is always
+    axis-aligned (:func:`_progress` reads it off the presentation's own side
+    vector), so the crossing axis is the one whose component of ``progress`` is
+    zero — the same axis :meth:`_Context.lateral` returns as a vector.
+    """
+    return 1 if ctx.progress[1] == 0.0 else 0
+
+
+def _order_axis(kind: str) -> int | None:
+    """The axis index an order kind names, or ``None`` when it names neither.
+
+    The same split :func:`_order_asks` makes, restated only because this reader
+    must answer **before** a walk is worked out: ``2`` is not an axis and a
+    ``near`` states a distance rather than a side, so both are ``None`` — the
+    axis a ``near`` will use is only knowable once the two points are measured
+    (:func:`_order_step_near`), and the guard there is what holds the chain.
+    """
+    if kind in (LEFT_OF, RIGHT_OF, SAME_COLUMN):
+        return 0
+    if kind in (ABOVE, BELOW, SAME_ROW):
+        return 1
+    return None
+
+
+def _hold_rank(
+    ctx: _Context,
+    part_id: str,
+    other: str,
+    item: Any,
+    locked: set[str],
+    chain: set[str],
+    across: int,
+) -> int:
+    """How **held** this end of ``item`` is: ``0`` free, ``1`` chain, ``2`` never.
+
+    ``0`` — a part the grammar holds to nothing here may be walked either way.
+    ``1`` — a **chain** part whose walk would cross the chain: the one
+    relaxation 520A2 (A1) makes, and the only rank the caller can sort a chain
+    pair by. ``2`` — an end this pass must not move at all: a lock, which is the
+    engineer's own coordinate, or a chain part moved where the chain is not the
+    thing being repaired.
+
+    The caller moves the **lower** rank and leaves the higher one where it is.
+    Reading the rank before the walk rather than refusing after it is the
+    correction A2's first draft needed: with the chain simply "not fixed", a
+    pair whose *free* end happened to sort second lost its walk to a chain end
+    that then refused the axis — and the flyback's ``above(D1, Q1)``, which the
+    pass consumed on every rung before 520A2, came back broken on all six base
+    rungs.
+
+    **The chain is walked only inside the chain.** A chain part is rank ``1``
+    only when ``other`` is *also* a chain part and **neither end is locked**;
+    every other relation leaves it at ``2``, which is exactly what it was before
+    520A2. The narrower reading is the one A1's own purpose needs: the pairs
+    that were unreachable were the ones **between two chain members** (520A
+    section 2.4 — ``right-of(D3, T1)``, ``same-column(Q1, R5)``), and a relation
+    whose other end is a branch already had a walker (the branch, which is what
+    116 consumed them with). Letting a chain member be walked *anything* was
+    measured to cost more than it bought: on ``power_entry_xt30`` the two
+    chain-members-to-a-locked-part relations dragged the spine onto the lock and
+    in doing so broke **three more** relations (``same-row(CN1, D1)``,
+    ``same-row(CN1, C116)``, the two ``adjacent``) while the page still refused
+    — and the refusal stopped naming ``userLocks[C115]``, which is the one thing
+    053 sec.5 scenario 12 promises a reader with a lock they cannot have. A lock
+    is the engineer's own coordinate; it may not pull the page's spine sideways.
+    """
+    if part_id in locked:
+        return 2
+    if part_id not in chain:
+        return 0
+    if other not in chain or other in locked:
+        return 2
+    axis = _order_axis(item.kind)
+    return 1 if axis is None or axis == across else 2
 
 
 def _bound_orders(
@@ -3906,6 +4248,7 @@ def _order_step(
     reference: str,
     origins: dict[str, tuple[float, float]],
     poses: Mapping[str, SymbolPose],
+    allowed_axis: int | None = None,
 ) -> bool:
     """Move ``walking`` one whole step onto the side ``item`` names.
 
@@ -3916,10 +4259,22 @@ def _order_step(
     against a different ruler than the gate uses. 114's
     :func:`_lane_coordinate` is that one measurement, reused rather than
     restated.
+
+    **520A2 (A2):** ``allowed_axis`` is the one axis this walk may move on, and
+    it is what makes A1's relaxation safe. The caller passes
+    :func:`_across_axis` for a **chain** part and ``None`` for every other, so a
+    chain part can be pushed off the chain line and never along it: the axis a
+    walk would use is read off the relation's own kind — here — rather than
+    guessed by the caller, and a walk that would use the wrong one is refused
+    **before** anything moves. Refusing rather than undoing matters: the part
+    keeps the coordinate the lattice snap put it on, so the checker still
+    reports the pair honestly instead of reporting a position the drawing does
+    not have.
     """
     shared = _shared_net_of(ctx, walking, reference)
     if item.kind == NEAR:
-        return _order_step_near(ctx, shared, walking, reference, origins, poses)
+        return _order_step_near(
+            ctx, shared, walking, reference, origins, poses, allowed_axis)
     if item.kind in (SAME_ROW, SAME_COLUMN):
         # A same-line kind asks for **equality**, not a side, so there is no
         # sign to step past: the walk is a snap onto the reference's own
@@ -3927,6 +4282,8 @@ def _order_step(
         # `same-column` shares one **x** (index 0), a `same-row` one **y** —
         # the same reading 114's lane pass uses.
         index = 0 if item.kind == SAME_COLUMN else 1
+        if allowed_axis is not None and index != allowed_axis:
+            return False
         current = _lane_coordinate(ctx, walking, shared, index, origins, poses)
         target = _lane_coordinate(ctx, reference, shared, index, origins, poses)
         if current is None or target is None:
@@ -3935,6 +4292,12 @@ def _order_step(
             return False
         return _shift_origin(ctx, walking, index, current, target, origins)
     index, sign = _order_asks(item.kind, walking == item.subject)
+    if allowed_axis is not None and index != allowed_axis:
+        # 520A2 (A2): this order names the axis the chain runs on, so moving
+        # `walking` to satisfy it would take a chain part off its line — the
+        # relation stays broken and the checker names it, which is the same
+        # honest refusal the pass gives a relation it cannot reach.
+        return False
     # An **order** kind is measured between the two **origins** — never on
     # pins. That is :func:`_points_for_relation`'s own split, and reading the
     # pins here would move the part by its own pad offset: the 116 draft's
@@ -4064,6 +4427,7 @@ def _order_step_near(
     reference: str,
     origins: dict[str, tuple[float, float]],
     poses: Mapping[str, SymbolPose],
+    allowed_axis: int | None = None,
 ) -> bool:
     """Trim a ``near`` down to its budget, on the axis that separates the pair.
 
@@ -4075,12 +4439,19 @@ def _order_step_near(
     inside :data:`ORDER_RELAX_ROUNDS` rounds, and not a slide onto the
     reference, which satisfies the relation and destroys the drawing.
 
-    Which side moves is decided by the caller, on 114's rule: the chain and the
-    lock never move, and of two free parts the lower rank keeps its place. So a
-    ``near`` between two branches of one string pulls the **later** arm toward
-    the earlier one, and the earlier arm's own ``near`` to its owner is left
+    Which side moves is decided by the caller, on 114's rule: a lock never
+    moves, and of two free ends the lower rank keeps its place. So a ``near``
+    between two branches of one string pulls the **later** arm toward the
+    earlier one, and the earlier arm's own ``near`` to its owner is left
     alone — which is the point: the string closes without either arm leaving
     what it hangs off.
+
+    **520A2 (A2):** ``near`` is the one kind whose axis is not in its name, so
+    the chain guard cannot be applied by the caller — the separating axis is
+    only known here, after the four coordinates are read. ``allowed_axis`` is
+    therefore tested **after** ``index`` is chosen and before anything moves: a
+    chain part pulled toward its reference along the chain would stop being a
+    chain member, which is exactly what A1 must not buy the page.
 
     Bounded by the round count like every other step: a pair still too far apart
     after :data:`ORDER_RELAX_ROUNDS` rounds is left broken and is reported with
@@ -4094,6 +4465,10 @@ def _order_step_near(
     if None in (here_x, there_x, here_y, there_y):
         return False
     index = 0 if abs(here_x - there_x) >= abs(here_y - there_y) else 1
+    if allowed_axis is not None and index != allowed_axis:
+        # 520A2 (A2): the trim would run along the chain. See this function's
+        # docstring: the axis is only knowable here, so the guard is here.
+        return False
     mine, theirs = (here_x, there_x) if index == 0 else (here_y, there_y)
     # ``near`` is a **two-dimensional** distance, so the excess is taken off the
     # distance and not off the separating axis. Reading it off the axis is the
@@ -5244,8 +5619,10 @@ def _expression_style(
     """``(style, why)`` for one net — the policy of 053 sec.7, spelled out.
 
     The order of the questions is the order of the priorities: a promise first
-    (a `direct-wire` obligation is never downgraded to a name), then the net's
-    own class, then the label policy the presentation states.
+    (a `direct-wire` obligation decides the *style* here, and 520E is what happens
+    later if the router cannot keep it — a downgrade, recorded, not this
+    function's business), then the net's own class, then the label policy the
+    presentation states.
     """
     modules = _net_modules(ctx, net_id)
     policy = ctx.presentation.label_policy
@@ -5266,7 +5643,10 @@ def _expression_style(
             "wire",
             "the grammar's direct-wire obligation (or the presentation's "
             "directWiringObligations) promises this net as a wire — 053 sec.7: a "
-            "local topology is drawn, and a promise is never downgraded to a name",
+            "local topology is drawn as a wire rather than named. The wiring has "
+            "to keep that promise; 520E is what happens when it cannot — this net "
+            "is then expressed by a name at each of its pins, and the compiler "
+            "records the downgrade rather than leaving it to be inferred",
         )
     if cls == "gnd":
         return (
@@ -5418,37 +5798,34 @@ def _declared_rows(
     An empty list means the symbol declares no row — every symbol profile
     written before 146 — and the caller keeps the old ladder, so a library
     without measurements compiles exactly as it did.
+
+    531 routed the box through :func:`boardwise.core.textmetrics.symbol_rows`,
+    which is now the one home for the rule: the island path used to invent a side
+    for every row instead, and those boxes sat 50+ units from where the host
+    prints (`evidence/531/report.md` §2). The output here is unchanged, row for
+    row.
     """
-    out: list[tuple[str, str, Box]] = []
-    for declared in profile.texts:
-        if declared.x is None or declared.y is None:
-            continue
-        if declared.kind == "reference":
-            text = part_id
-        elif declared.kind == "value":
-            part = ctx.circuit.part(part_id)
-            text = part.value if part is not None else ""
-        else:
-            continue
-        if not text:
-            continue
-        # 147: the anchor is an offset from the part's **origin in the page
-        # frame** — the host does not turn a part's text rows with the pose. Three
-        # pose families on the landed page say so (`outputs/147/20_text_row_pose.txt`,
-        # 33 rows of 19 parts): R10 at rot 180 is drawn at `(740, 425)`, the
-        # unrotated anchor, where a turned anchor puts it at `(760, 415)`; U5 at
-        # rot 180 likewise; C13 at rot 90 mirrored at `(435, 660)` where turning
-        # says `(410, 670)`. 146 modelled the turn and flagged the quarter-turn
-        # case as an extrapolation; the measurement says the whole turn is absent.
-        anchor = (origin[0] + declared.x, origin[1] + declared.y)
-        width = textmetrics.render_width(text)
-        out.append((
-            declared.kind,
-            text,
-            (anchor[0], anchor[1], anchor[0] + width,
-             anchor[1] + TEXT_ROW_HEIGHT),
-        ))
-    return out
+    # 147: the anchor is an offset from the part's **origin in the page frame** —
+    # the host does not turn a part's text rows with the pose. Three pose families
+    # on the landed page say so (`outputs/147/20_text_row_pose.txt`, 33 rows of 19
+    # parts): R10 at rot 180 is drawn at `(740, 425)`, the unrotated anchor, where
+    # a turned anchor puts it at `(760, 415)`; U5 at rot 180 likewise; C13 at rot
+    # 90 mirrored at `(435, 660)` where turning says `(410, 670)`. 146 modelled the
+    # turn and flagged the quarter-turn case as an extrapolation; the measurement
+    # says the whole turn is absent. 531 re-measured it on a fresh landing of the
+    # island page: all 11 rot-0 rows match their declaration to the unit
+    # (`evidence/531/raw/anchor_landed_before.txt`), and the rotated ones are
+    # re-anchored by the host (see `symbol_rows`' own note).
+    part = ctx.circuit.part(part_id)
+    return [
+        (kind, text, box)
+        for kind, text, box in textmetrics.symbol_rows(
+            profile, origin,
+            reference=part_id,
+            value=part.value if part is not None else "",
+            pose=pose,
+        )
+    ]
 
 
 def _part_texts(
@@ -5896,6 +6273,76 @@ def _flag_wire_fallback(
     return downgraded, note
 
 
+def _label_fallback(
+    ctx: _Context,
+    net_id: str,
+    expression: _Expression,
+    unrouted: _Unrouted,
+) -> tuple[_Expression, LabelFallback]:
+    """The name expression for a net the router could not wire (520E).
+
+    The ruling this implements is 岳's: which nets are named rather than wired is
+    **not** the algorithm's alone — the algorithm's own feedback decides, per net
+    ("什么时候打网络标签不是纯算法决定的，应该由算法反馈模型决定"), and "长得像经典拓扑
+    不等于它一定每个引脚靠导线相接，布局接近拓扑即可". So a `direct-wire` obligation the
+    router cannot keep stops being a whole-page refusal. One net is downgraded to
+    the expression the compiler already knows how to draw for it — a name at each
+    of its pins (`_label_for`, and `drawapply`'s own "a label this host cannot
+    place becomes a wire carrying the name" leg, 057 sec.4 / 145d) — and the
+    substitution is recorded rather than left to be discovered.
+
+    The record is the trigger model's other half: :class:`LabelFallback` says
+    which net, why it was promised a wire (``expression.reason`` — the obligation's
+    own sentence), why the wire was not drawn, and what the reader gives up. The
+    returned note carries :data:`DOWNGRADE_NOTE_PREFIX` for the same reason
+    :func:`_flag_wire_fallback`'s does, so `drawapply` promotes it into the change
+    plan's ``downgrades`` and the human authorising the plan is told.
+
+    The expression keeps its ``points`` (the pins that have to be named) and drops
+    ``detached``/``pivot``: that pair describes a *wire* split over the body
+    (069 sec.2), and there is no wire here to split. Its ``reason`` is rewritten
+    so a reader of the plan sees the obligation *and* its failure in one place.
+    """
+    members = tuple(member for member, _point in expression.points)
+    reason = (
+        f"the net's own expression was promised as a wire ("
+        f"{expression.reason}) and the wiring could not keep that promise: "
+        f"{unrouted.reason}"
+    )
+    gave_up = (
+        "a conductor between its pins — what a reader of this page gets is the "
+        "net's **name** at each of those pins, not a wire that shows them joined. "
+        "The netlist still reads them as one node, so the drawing is"
+        " electrically what the spec says; it is the picture that is weaker"
+    )
+    note = (
+        DOWNGRADE_NOTE_PREFIX
+        + f"net {net_id}: its expression was promised as a **wire**, and the "
+        f"router could not join its {len(members)} pin(s) — {unrouted.reason}. It "
+        "is expressed by its name at each of its pins instead (the expression the "
+        "compiler draws for a net it does not wire: a label at the pin, carried on "
+        f"the canvas as a name stub, 057 sec.4). What this gives up: {gave_up}. "
+        "Why the net was promised a wire in the first place, as the compiler read "
+        f"it: {expression.reason}"
+    )
+    downgraded = _Expression(
+        net=expression.net,
+        style="label",
+        points=expression.points,
+        reason=reason,
+    )
+    return downgraded, LabelFallback(
+        net=net_id,
+        members=members,
+        promised="wire",
+        role=expression.reason,
+        stage=unrouted.stage,
+        reason=unrouted.reason,
+        gave_up=gave_up,
+        note=note,
+    )
+
+
 def _compress(points: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
     """Collapse collinear runs, so a wire's vertices are its bends.
 
@@ -6049,7 +6496,8 @@ def _try_variants(
                 return
             previous_rung, this_rung = this_rung, {}
         scale = variant.scale
-        built, failure, violations = _build_candidate(ctx, variant)
+        fallbacks: list[LabelFallback] = []
+        built, failure, violations = _build_candidate(ctx, variant, fallbacks)
         if built is None:
             this_rung[variant.pose_index] = _refusal_signature(violations, failure)
             result.rejected.append(RejectedCandidate(
@@ -6057,6 +6505,7 @@ def _try_variants(
                 reason=failure.detail if failure is not None else "no legal layout",
                 violations=violations,
                 failure=failure,
+                label_fallbacks=list(fallbacks),
             ))
             continue
         plan = built.plan
@@ -6069,6 +6518,7 @@ def _try_variants(
             result.rejected.append(RejectedCandidate(
                 variant=variant.label,
                 reason="the same geometry as an earlier variant",
+                label_fallbacks=list(fallbacks),
             ))
             continue
         seen.add(digest)
@@ -6088,7 +6538,407 @@ def _try_variants(
             },
             notes=[f"candidate from {COMPILER_NAME} variant {variant.label}"],
         )
-        result.ranked.append(_measure(plan, findings, ctx))
+        result.ranked.append(_measure(plan, findings, ctx, fallbacks))
+
+
+# ------------------------------------------------- the island page's delivery policy
+
+#: What an **island page** may carry and still be delivered — the *host-printed
+#: rows*, per kind, and nothing else.  Every entry is ``(kind, how many)``.
+#:
+#: This is 岳's ruling 2 of 2026-10-20 (`evidence/523/DESIGN.md` §14.2) read as a
+#: rule instead of as a number: the acceptance anchor is "zero hard violations",
+#: and where the drawing provably cannot reach it, the page is delivered anyway —
+#: with the count bounded at 520n's own budget for that class (DESIGN §9.2), **and
+#: with every tolerated violation named** (`island_gate_tolerance_notes`).  Two
+#: entries, and the reasons are different in kind:
+#:
+#: * ``text-on-wire`` ≤ 10 — the ceiling `test_520n_tight_packing` guarded with.
+#:   The rows that reach it are the ones 147 taught this checker to model: the
+#:   **host** prints a wire's own net name at the midpoint of the wire's longest
+#:   run, and positions a rail flag's name ten units past its glyph.  Which wire
+#:   carries a name is this repository's decision (530D's ruling A: only the
+#:   wire that *is* the label), where that row lands is not — the compiler can
+#:   move the objects it placed, not the row the host draws over them.
+#: * ``text-overlap`` ≤ 1 — measured, not feared.  530D's landing projection read
+#:   the one finding left on the real flyback island page: `LED_K`'s label wire,
+#:   whose host-printed name row lands on `R7`'s drawn extent.  530D §3.3 then
+#:   tried to move it out of the way four ways — the stub ladder's rungs 30/62/94,
+#:   `slot_rungs` 4, 5 and 6 — and the finding survives every one of them: at
+#:   rungs 5 and 6 it changes victim (`R7` → `R9`) **and** pushes `area/part` from
+#:   2.99 to 3.01, over the 3.0× budget `test_520n_tight_packing` guards.  A
+#:   `text-overlap` between two boxes this compiler *placed* is a different thing
+#:   and stays hard — it is the one class the placement really can answer, which is
+#:   why the cap here is one and not ten.
+#: * ``pin-text-press`` ≤ 3 — 532's class, and measured the same way. `readability`
+#:   now models a placed part's **pin name and number rows**
+#:   (`textmetrics.pin_rows`, off the same landing the designator/value anchors came
+#:   from), and a pin's text pressed against another row of *its own* symbol is
+#:   printed inside that symbol at the symbol's own offsets: no placement of this
+#:   drawing can separate them. On the real flyback island page the count is
+#:   **3**, all three on the transformer — `T1`'s `2`/`5`/`5` against its own
+#:   `EE16_3+3_V02` — and 531's four were three: its render probe measured every
+#:   row from its anchor with the same left-to-right box and ignored the SVG's own
+#:   ``text-anchor``, which is ``end`` for `U5`'s `ANODE` — that row ends 4.2 units
+#:   short of the `3` beside it, so 531's fourth "collision" was the probe's, not the
+#:   page's (`evidence/532/report.md` §4).
+#:
+#: A kind not named here is always hard, and that is the whole of the electrical
+#: side: `wire-through-body`, `netlist-partition-mismatch`, `undeclared-junction`,
+#: `required-pin-not-connected` (and `nc-pin-connected`, `dangling-wire-end`,
+#: `wire-on-pin-line`, `out-of-page`, `user-lock-violated`), plus the packer's own
+#: keep-out conflict, which `_try_island_variants` refuses before this policy is
+#: ever asked.  岳's five electrical names are a subset of that list; the rest are
+#: the same kind of fact — a drawing whose connectivity is not the netlist's — and
+#: none of them is a row the host prints.
+#:
+#: **Scoped to the island page**, deliberately.  The single-module path has the
+#: one lever this policy is the answer to *not having*: `_build_one_variant`'s
+#: name-row escape ladder (`NAME_ESCAPE_ROUNDS`) moves a run and re-grades until
+#: the rows clear, and it is the path every other document in the repository
+#: compiles through.  Widening the policy there would change which single-module
+#: pages produce candidates at all — a different batch's question, and one with no
+#: measured residual behind it.
+ISLAND_GATE_TOLERATED_LIMITS: tuple[tuple[str, int], ...] = (
+    (readability.KIND_TEXT_ON_WIRE, 10),
+    (readability.KIND_TEXT_OVERLAP, 1),
+    (readability.KIND_PIN_TEXT_PRESSED, 3),
+)
+
+
+def island_gate_violations(
+    violations: Sequence[readability.HardViolation],
+) -> tuple[list[readability.HardViolation], list[readability.HardViolation]]:
+    """Split the gate's reading into what refuses the page and what it carries anyway.
+
+    A violation is **tolerated** when both halves of one sentence hold, and the
+    sentence is the policy above read one clause at a time:
+
+    1. its kind is one of :data:`ISLAND_GATE_TOLERATED_LIMITS`, and
+    2. the text it is about is a row the **host** prints — `readability.
+       is_host_printed_row` on the violation's own first object, which is the text
+       object in both kinds that take one.
+
+    Clause 2 is what makes this an accounting rule rather than a relaxed constant.
+    A `text-overlap` between a `LayoutText` and a `LayoutLabel`, or between two
+    `LayoutText`s, is a box this compiler placed: the page may move it, so the page
+    has to.  Only the two rows that are drawn by the editor — a wire's net name and
+    a flag's name — are outside the compiler's reach, and only those are forgiven.
+
+    532 widens clause 2 by **one** case, and it is a widening of *which object is
+    asked*, not of the sentence: for `pin-text-press` the pair is a part's pin row
+    against another row of that same part, and the checker's own line names the
+    non-pin row first whenever the pin row sorts later — so asking `objects[0]`
+    alone would refuse every one of them for the wrong reason. For that kind the
+    clause asks whether **any** named object is a host-printed row, which is still
+    the same question ("is this about a row the editor prints?"), and the kind
+    itself already guarantees a pin row is one of the two.
+
+    A kind over its cap takes **every one of its lines** with it rather than the
+    ones past the cap: the caps bound a class, they do not ration it, and a page
+    that came in with eleven rows is not a page that got ten of them right.
+    """
+    limits = dict(ISLAND_GATE_TOLERATED_LIMITS)
+    refusing: list[readability.HardViolation] = []
+    tolerated: list[readability.HardViolation] = []
+    for item in violations:
+        if item.kind not in limits:
+            refusing.append(item)
+            continue
+        named = list(item.objects) if item.objects else [""]
+        if item.kind == readability.KIND_PIN_TEXT_PRESSED:
+            printed = any(readability.is_host_printed_row(name) for name in named)
+        else:
+            printed = readability.is_host_printed_row(named[0])
+        if not printed:
+            refusing.append(item)
+            continue
+        tolerated.append(item)
+    counts: dict[str, int] = {}
+    for item in tolerated:
+        counts[item.kind] = counts.get(item.kind, 0) + 1
+    if any(count > limits[kind] for kind, count in counts.items()):
+        return [*refusing, *tolerated], []
+    return refusing, tolerated
+
+
+def island_gate_tolerance_notes(
+    tolerated: Sequence[readability.HardViolation],
+) -> list[str]:
+    """The page's account of what it was delivered **with**, one line per finding.
+
+    Two shapes, and both are load-bearing: a header that states the policy and
+    where it comes from, then the checker's own line for each tolerated violation,
+    **verbatim** (`HardViolation.render`), so a reader who greps the note finds the
+    same objects, the same boxes and the same kind the gate found.  A tolerance
+    nobody can enumerate is indistinguishable from a gate that stopped looking.
+    """
+    if not tolerated:
+        return []
+    caps = ", ".join(f"{kind} <= {cap}" for kind, cap in ISLAND_GATE_TOLERATED_LIMITS)
+    counts: dict[str, int] = {}
+    for item in tolerated:
+        counts[item.kind] = counts.get(item.kind, 0) + 1
+    found = ", ".join(f"{kind} {count}" for kind, count in sorted(counts.items()))
+    return [
+        f"the delivery gate tolerated {len(tolerated)} host-printed row(s) on this "
+        f"page ({found} of {caps}): the editor prints these rows, not this "
+        "compiler — every one of them is named below, and a violation the compiler "
+        "placed is never among them",
+        *[f"tolerated: {item.render()}" for item in tolerated],
+    ]
+
+
+def _try_island_variants(
+    ctx: _Context,
+    result: CompileResult,
+    seen: set[str],
+    circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
+    book: Mapping[str, SymbolProfile],
+    budget: CompileBudget,
+    intent: Any,
+) -> None:
+    """The whole page as **one** drawing: every island laid out, then packed (520m).
+
+    Sibling of :func:`_try_variants`, and deliberately not a variant of it. That
+    function walks a ladder of pose variants of **one** chain because that is what
+    the single-module compiler draws; a presentation that declared several islands
+    has one drawing by construction — every island's local picture is a function
+    of its own parts and nets — so there is no ladder to walk and no ranking to do
+    among rungs. What the result gets instead is the page the islands make when
+    they are packed, and the same gate every other candidate passes.
+
+    The gate comes second for the same reason it does everywhere: the readability
+    checker is independent of this module (:func:`check_grammar` re-binds the
+    grammar itself), so the page is not "legal because the compiler said so".
+
+    The region check is the one thing the packer cannot do for itself: the blocks
+    are placed from their own sizes, and a page that does not fit the stated sheet
+    has to be *refused* rather than emitted and then complained about one object at
+    a time — which is what the single-module path does with
+    ``budget.page_box`` and what :func:`_plan_bbox` exists for.
+
+    A page with hard violations is refused, exactly as a single-module variant is
+    (`_build_one_variant`'s gate): "candidate" means the drawing passed the gate,
+    and a page that did not is a refusal with its numbers, not a legal drawing.
+    """
+    from . import islandlayout as island_layout
+
+    page = island_layout.island_page(
+        circuit_spec, presentation_spec, book,
+        # 530A: the two flag words come from the caller's own budget, so an island
+        # page and a single-module page of one document cannot name one rail two
+        # ways (and `gnd_flag=""` — 178's 「this drawing names no ground with a
+        # flag」 — reaches the island path like it reaches every other one).  The
+        # defaults of the two dataclasses are the same pair, so a caller that has
+        # not touched them gets exactly the page it got before.
+        budget=island_layout.IslandBudget(
+            gnd_flag=budget.gnd_flag, power_flag_prefix=budget.power_flag_prefix,
+        ),
+        # 530G: the page's own two statements travel together.  `page_box` was
+        # already here; `keepouts` is the half S-01 needs — the sheet's title
+        # block, derived by the caller (`core.pageframe`) and handed to **both**
+        # consumers from this one field: the packer below packs up from it, and the
+        # readability gate a few lines down is handed `budget.keepouts` itself,
+        # which is the same tuple.  A second derivation here would be the way the
+        # two could come to disagree about where the title block is.
+        page_budget=island_layout.PageBudget(
+            grid=budget.grid, page_box=budget.page_box,
+            keepouts=tuple(budget.keepouts),
+        ),
+    )
+    plan = page.plan(source=LayoutSource(
+        circuit_sha256=circuit_spec.sha256(),
+        presentation_sha256=presentation_spec.sha256(),
+    ))
+    # 530E, `DESIGN` §5.6 L3: an island whose id still says ``auto-`` is a partition
+    # that came out of a geometry, and the page is legal all the same — S-14's
+    # 「箱数 = 名字数」 is about **net** names, not island titles.  The sentence is
+    # written into the compile result, the evidence and the block's own note
+    # (`islandlayout.layout_island`), so a reader who greps any of the three finds the
+    # same words.
+    derived = [
+        island.id for island in presentation_spec.effective_islands()
+        if island.id.startswith(island_layout.AUTO_ISLAND_PREFIX)
+    ]
+    for note in page.notes:
+        result.notes.append(note)
+    for island_id in derived:
+        result.notes.append(island_layout.derived_cluster_note(island_id))
+
+    box = page.bbox()
+    refused: GrammarFailure | None = None
+    if page.keepout_conflicts:
+        # Not reachable through `pack_islands`' floor (which clears every keep-out
+        # sharing the drawing's x-range before anything is placed) — and checked
+        # anyway, because the one thing that must not happen to a keep-out is that
+        # a later change to the packing makes it advisory.  A page that has one is
+        # refused here rather than emitted and then refused object by object by the
+        # gate below, which is the same reason the page box is tested at this stage.
+        refused = GrammarFailure(
+            category=FAILURE_LAYOUT_UNSAT,
+            subject="islands",
+            detail=(
+                f"{len(page.keepout_conflicts)} island block(s) are inside a "
+                "keep-out after packing: " + "; ".join(page.keepout_conflicts)
+            ),
+            action=(
+                "this is a packing defect, not an input to widen — the floor is "
+                "derived from the keep-outs themselves (`islandlayout._page_floor`)"
+            ),
+        )
+    elif budget.page_box is not None and not (
+        budget.page_box[0] <= box[0] and box[2] <= budget.page_box[2]
+        and budget.page_box[1] <= box[1] and box[3] <= budget.page_box[3]
+    ):
+        default_floor = island_layout.PageBudget().margin
+        raised = (
+            f"; {len(budget.keepouts)} keep-out box(es) and the "
+            f"{island_layout.BOTTOM_BLANK:.0%} bottom blank band set "
+            f"the packing floor at y={page.floor:g}, so the sheet has that much "
+            "less room than its own size suggests"
+            if page.floor > default_floor else ""
+        )
+        refused = GrammarFailure(
+            category=FAILURE_LAYOUT_UNSAT,
+            subject="islands",
+            detail=(
+                f"the {len(page.blocks)} island block(s) pack into "
+                f"({box[0]:g}, {box[1]:g})-({box[2]:g}, {box[3]:g}), which is "
+                f"outside the stated page {budget.page_box} — each block's own "
+                "size is what fixed this page, so the sheet or the island split "
+                f"is what has to change{raised}"
+            ),
+            action=(
+                "widen budget.page_box, or declare fewer islands (each island "
+                "carries its own channel and its own parts' text)"
+            ),
+        )
+    if refused is not None:
+        # Both records, deliberately.  `result.failures` is what the page path's
+        # caller reads; `result.rejected` is what `_no_candidate_failures` reads
+        # when nothing ranked, and before this the island page's own refusal was
+        # the one that stopped at `failures` — the run then reported "no variant
+        # produced a plan, and none recorded a reason" over the top of it, which is
+        # 053 sec.4's forbidden refusal-without-a-reason happening to the one
+        # refusal that *did* have one.  It also makes the count true: this really
+        # is the island page's variant being built and refused.
+        result.failures.append(refused)
+        result.rejected.append(RejectedCandidate(
+            variant=f"island-page ({len(page.blocks)} islands)",
+            reason=refused.detail,
+            violations=[],
+            failure=refused,
+        ))
+        return
+
+    digest = plan.geometry_sha256()
+    if digest in seen:
+        return
+    seen.add(digest)
+
+    checked = readability.check(
+        plan, circuit_spec, presentation_spec, book,
+        grammar_checker=partial(check_grammar, intent=intent),
+        page_box=budget.page_box,
+        keepouts=budget.keepouts,
+        grid=budget.grid,
+    )
+    # 530F: the page is measured against the delivery policy rather than against
+    # "zero violations, always" — see :func:`island_gate_violations`.  What is left
+    # in `refusing` is what the page is refused for; what is left in `tolerated` is
+    # what it is **delivered with** and named for, one line each (below).
+    refusing, tolerated = island_gate_violations(checked.hard_violations)
+    if refusing:
+        result.rejected.append(RejectedCandidate(
+            variant=f"island-page ({len(page.blocks)} islands)",
+            reason=(
+                "the independent readability checker refused "
+                f"{len(refusing)} hard violation(s)"
+            ),
+            violations=[item.render() for item in refusing],
+            failure=GrammarFailure(
+                category=FAILURE_LAYOUT_UNSAT,
+                subject="islands",
+                detail=(
+                    "the island page was refused by the readability checker: "
+                    + "; ".join(item.render() for item in refusing[:3])
+                ),
+                action=(
+                    "a local picture is what has to move — the packing only "
+                    "translates blocks, so the finding belongs to the island the "
+                    "objects are in"
+                ),
+            ),
+        ))
+        return
+
+    tolerance_lines = island_gate_tolerance_notes(tolerated)
+    result.notes.extend(tolerance_lines)
+
+    findings = check_grammar(
+        plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent
+    )
+    plan.evidence = LayoutEvidence(
+        checker=CHECKER_NAME,
+        # 530F: the hard half is what the page was **refused** for, and this page
+        # was not refused — `refusing` is empty, which is the whole of the claim.
+        # The tolerated rows go to `notes` on purpose: `LayoutEvidence.verdict` is
+        # `FAIL` on a non-empty list (``core.layoutplan``), and a delivered page
+        # whose own evidence reads `fail` is a contradiction a reader would have to
+        # resolve by trusting one field over the other.
+        hard_violations=[],
+        grammar_findings=[item.render() for item in findings],
+        soft_metrics=dict(checked.soft_metrics),
+        soft_reasons={
+            key: " | ".join(value)
+            for key, value in checked.soft_reasons.items()
+        },
+        notes=[
+            f"candidate from {COMPILER_NAME} island page "
+            f"({len(page.blocks)} islands packed)",
+            *[island_layout.derived_cluster_note(island_id) for island_id in derived],
+            *tolerance_lines,
+        ],
+    )
+    result.ranked.append(_measure(plan, findings, ctx, []))
+
+
+def _refusal_after_downgrade(
+    failure: GrammarFailure | None, fallbacks: Sequence[LabelFallback]
+) -> GrammarFailure | None:
+    """A refusal that followed a downgrade says so, in the refusal's own words.
+
+    This is 520E's other half. A net is no longer refused for having a wire
+    obligation the router could not keep — it is named instead — so the *only*
+    thing left that can refuse the whole page is the variant failing on top of
+    that downgrade. When it does, the reader is owed the sentence that says the
+    page had no room for **either** expression: "the long wire was already
+    abandoned for a name, and the name did not fit either". Without it the
+    refusal reads like an ordinary crowding complaint and the downgrade is
+    invisible in exactly the case where it matters most.
+
+    The original failure keeps its category, subject and action: this adds a
+    clause, it does not re-diagnose. A ``None`` failure (a variant that recorded
+    no reason at all) is left alone — there is nothing to attach to, and the
+    zero-reason path is already refused elsewhere as a defect.
+    """
+    if failure is None or not fallbacks:
+        return failure
+    nets = ", ".join(item.net for item in fallbacks)
+    return GrammarFailure(
+        category=failure.category,
+        subject=failure.subject,
+        detail=(
+            f"{failure.detail} — and the name had nowhere to go either: "
+            f"{len(fallbacks)} net(s) were already downgraded from a wire to a "
+            f"name at each pin ({nets}) because the router could not join them, "
+            "and this drawing was still refused on top of that, so neither the "
+            "long wire nor the name has a way out on this page"
+        ),
+        action=failure.action,
+    )
 
 
 #: The prefix of every signature that may stop the spacing ladder (147b): a
@@ -6656,13 +7506,80 @@ def _geometry_nodes(
     return out
 
 
+@dataclass(frozen=True)
+class _Unrouted:
+    """Why one net's wire could not be drawn — the measured failure, in words.
+
+    The router answers ``None`` for "not found inside the corridor" and carries no
+    message of its own (see :meth:`~engines.router._Router.route`), so the one
+    layer that knows *which* stage gave up and *between which points* is this one.
+    It is a value rather than a ``None`` because 520E's downgrade record has to
+    quote the failure to a reader: a net the compiler stops drawing has to say
+    why, or the name it gets instead is an unexplained substitution.
+    """
+
+    #: ``"trunk"``, ``"attachment"`` or ``"unenterable"`` — which half of
+    #: :func:`_connect_net` failed, and whether it failed or was known in advance.
+    stage: str
+    reason: str
+
+
+def _unenterable_goal(
+    router: _Router,
+    start: tuple[float, float],
+    goals: Sequence[tuple[float, float]],
+) -> str:
+    """Why no run can ever reach any of ``goals`` from ``start`` — ``""`` if it can.
+
+    **Proof of the claim, read off the search itself.** ``_Router.route`` pushes
+    ``start_node`` and, from then on, only ever pushes a neighbour ``other`` after
+    ``not self._in_bounds(other) or wall_at_node(other)`` has let it through
+    (`router.py:480-481`), then returns the moment a popped node is one of
+    ``goal_nodes`` (`:475-476`). A node :meth:`~engines.router._Router._wall` calls a
+    wall is therefore never popped, so a goal node that is a wall can only ever be
+    answered by the one early return at the top of ``route`` — the case where
+    ``start_node`` *is* the goal. Every other walled (or out-of-bounds) goal is
+    unreachable, and the search spends its whole reachable region proving what is
+    already known. Measured on the flyback at `spacing=1`: `CLAMP`'s goal
+    `(10, -115)` and `CLAMP_B`'s `(30, -135)` are both walled nodes, and the two
+    dead searches cost **20.1 s + 19.8 s** (`test_116`'s 40 s budget, 68.5 s total).
+    The same two nets at `spacing=1.5` have a walkable goal and route in 1.4 s.
+
+    This answers ``""`` — "run the search" — unless **every** goal is unenterable
+    and the start is not already one of them, so the only thing it can change is
+    how long a *certain* failure takes. It is a claim about the lattice the router
+    itself builds (``router._wall`` is the search's own predicate, asked through
+    ``router.node`` the way ``route`` rounds a point), not a second opinion about
+    the drawing: a goal this calls unenterable is a goal ``route`` provably
+    refuses.
+    """
+    start_node = router.node(start)
+    nodes = [router.node(point) for point in goals]
+    if not nodes:
+        return ""
+    if start_node in nodes:
+        # `route` has its own answer for this one, and it is a path.
+        return ""
+    for node in nodes:
+        if router._in_bounds(node) and not router._wall(node):
+            return ""
+    first = goals[0]
+    return (
+        f"the point {_point_text(first)} this net has to reach lies inside a wall "
+        "on the drawing's own lattice (a part body, a text box, a pin's lead or a "
+        "keep-out), and the search never enters a walled node — so no run can "
+        "reach it however far it searches. This is 'no solution', not 'not found "
+        "inside the budget'"
+    )
+
+
 def _connect_net(
     ctx: _Context,
     router: _Router,
     expression: _Expression,
     blocked: set[tuple[float, float]],
     existing: Sequence[LayoutSegment] = (),
-) -> tuple[list[LayoutSegment], str] | None:
+) -> tuple[list[LayoutSegment], str] | _Unrouted:
     """Wire one net: trunk first, then the search, then the attachments.
 
     "主干优先" (053 sec.4): the trunk is the line the *chain* runs along, so when
@@ -6679,9 +7596,10 @@ def _connect_net(
     it carries its own flag instead of a run over the body), so the trunk and the
     attachments are computed from the rest.
 
-    Returns ``None`` when the net could not be drawn inside the corridor (the
-    caller falls back to a name, or refuses the candidate — never to a wire that
-    pretends to connect something it does not).
+    Returns :class:`_Unrouted` — a net that could not be drawn inside the corridor,
+    with the stage that gave up and the points it was about — when the wiring
+    failed. The caller falls back to a name (520E) or refuses the candidate, and
+    never to a wire that pretends to connect something it does not.
     """
     points = sorted({
         _key(point) for member, point in expression.points
@@ -6712,16 +7630,42 @@ def _connect_net(
     if elbow is not None:
         segments.append(LayoutSegment(net=expression.net, points=elbow))
     else:
+        # The search is asked only when the answer can still be yes: a goal the
+        # search may not enter is refused here in microseconds rather than after
+        # exploring the whole page (:func:`_unenterable_goal` — 20.1 s + 19.8 s on
+        # the flyback at `spacing=1`, both for a goal that is a wall).
+        known = _unenterable_goal(router, trunk[0], [trunk[1]])
+        if known:
+            return _Unrouted(stage="unenterable", reason=known)
         path = router.route(trunk[0], trunk[1])
         if path is None:
-            return None
+            return _Unrouted(
+                stage="trunk",
+                reason=(
+                    f"no free run between the net's two ends "
+                    f"{_point_text(trunk[0])} and {_point_text(trunk[1])}: neither "
+                    "a one-bend route nor the lattice search found a path that "
+                    "crosses no body, no text box and no foreign connection inside "
+                    "the corridor this net was given"
+                ),
+            )
         segments.append(LayoutSegment(net=expression.net, points=_compress(path)))
     for point in sorted(points, key=lambda item: (-_distance_to(segments, item), item)):
         if _on_geometry(segments, point):
             continue
         attached = _attach(router, point, segments, blocked, expression.net)
-        if attached is None:
-            return None
+        if attached is None or isinstance(attached, _Unrouted):
+            return (
+                attached if isinstance(attached, _Unrouted) else _Unrouted(
+                    stage="attachment",
+                    reason=(
+                        f"nothing reaches the pin at {_point_text(point)} from this "
+                        "net's own wiring: every one-bend run from it is blocked, and "
+                        "the lattice search found no path from that point to any "
+                        "point already on the net"
+                    ),
+                )
+            )
         segments.append(attached)
     return segments, (
         "trunk along the chain's own pins, then every other pin attached"
@@ -6836,7 +7780,7 @@ def _attach(
     segments: Sequence[LayoutSegment],
     blocked: set[tuple[float, float]],
     net_id: str,
-) -> LayoutSegment | None:
+) -> LayoutSegment | _Unrouted | None:
     """Reach one pin from the net's own wiring: an elbow if one fits, else search.
 
     The nearest wiring node is tried first, so a branch hangs off the closest point
@@ -6850,6 +7794,12 @@ def _attach(
         elbow = _elbow_route(router, point, target, blocked)
         if elbow is not None and len(elbow) >= 2:
             return LayoutSegment(net=net_id, points=elbow)
+    # Same guard as the trunk's (:func:`_unenterable_goal`): a pin whose own node
+    # is a wall is a pin the search can never arrive at, and asking it costs the
+    # whole reachable region to learn.
+    known = _unenterable_goal(router, point, list(targets))
+    if known:
+        return _Unrouted(stage="unenterable", reason=known)
     path = router.route(point, point, targets=targets)
     if path is None:
         return None
@@ -6996,15 +7946,44 @@ class _Built:
 
 
 def _build_candidate(
-    ctx: _Context, variant: _Variant
+    ctx: _Context,
+    variant: _Variant,
+    label_fallbacks: list[LabelFallback] | None = None,
 ) -> tuple[_Built | None, GrammarFailure | None, list[str]]:
     """One variant -> one plan, gated by the independent readability checker.
+
+    Everything the variant *measures* happens in :func:`_build_one_variant`; what
+    this adds is 520E's bookkeeping, and it adds it **here** rather than at the
+    caller so the variant has exactly one verdict: a refusal that followed a
+    downgrade says so (:func:`_refusal_after_downgrade`), whether it is read by
+    :func:`_try_variants`, by a test that calls this directly, or by anything
+    else. Two copies of that sentence would eventually disagree about the same
+    variant.
+
+    ``label_fallbacks`` is the caller's own list, appended to **as the variant is
+    built** rather than returned: a variant that downgrades a net and is *then*
+    refused has to hand the downgrade back too, and the third return value is the
+    gate's rendered violations — a list whose shape every reader of it,
+    :func:`_refusal_signature` included, depends on.
+    """
+    fallbacks = label_fallbacks if label_fallbacks is not None else []
+    built, failure, violations = _build_one_variant(ctx, variant, fallbacks)
+    return built, _refusal_after_downgrade(failure, fallbacks), violations
+
+
+def _build_one_variant(
+    ctx: _Context,
+    variant: _Variant,
+    label_fallbacks: list[LabelFallback],
+) -> tuple[_Built | None, GrammarFailure | None, list[str]]:
+    """One variant -> one plan, or the measured reason it could not be drawn.
 
     Every refusal here is a *measured* one: the region the drawing needs, the pin
     a wire could not reach, the box the text landed on. None of them is "tried
     and gave up silently" — the candidate is dropped with its reason, and
     :func:`compile` reports the first one when no candidate survives.
     """
+    fallbacks = label_fallbacks
     placed, failure = _place(ctx, variant)
     if placed is None:
         return None, failure, []
@@ -7168,26 +8147,46 @@ def _build_candidate(
                 [item for item in segments if item.net == net_id],
             )
             obligated = net_id in _obligation_nets(ctx)
-            if drawn is None:
+            if isinstance(drawn, _Unrouted) or drawn is None:
+                # `_connect_net` answers with its own reason; a test stub that
+                # replaces it with a bare `None` answers without one, and that is
+                # recorded as what it is rather than crashing here.
+                unrouted = (
+                    drawn if isinstance(drawn, _Unrouted)
+                    else _Unrouted(
+                        stage="unknown",
+                        reason=(
+                            "the net was not drawn and no reason came back with "
+                            "it (`_connect_net` answered `None`)"
+                        ),
+                    )
+                )
                 if obligated:
-                    return None, GrammarFailure(
-                        category=FAILURE_LAYOUT_UNSAT,
-                        subject=net_id,
-                        detail=(
-                            f"net {net_id!r} has a direct-wire obligation and its "
-                            "pins could not be joined inside the searched "
-                            "corridor without a wire crossing a body, a text box "
-                            "or a foreign connection — the promise is not "
-                            "downgraded to a label"
-                        ),
-                        action=(
-                            "enlarge the region (or lower budget.spacing_ladder's "
-                            "first rung is already the geometric minimum), move "
-                            "the keep-out that blocks the corridor, or drop the "
-                            "direct-wire obligation if a label is acceptable here"
-                        ),
-                    ), []
-                if net_id in flag_downgraded and len(expression.points) > 1:
+                    # 520E, 岳's ruling: the choice between a long wire and a name
+                    # is not the algorithm's alone ("什么时候打网络标签不是纯算法决定
+                    # 的，应该由算法反馈模型决定"). A `direct-wire` obligation the
+                    # router cannot keep **is** a failure — of one net, not of the
+                    # page — so this net is expressed by a name and the downgrade is
+                    # *recorded* rather than left to be inferred: `label_fallbacks`
+                    # carries the net, why it was promised a wire, the failure the
+                    # router came back with and what the reader gives up, and the
+                    # plan note says the same in prose with
+                    # :data:`DOWNGRADE_NOTE_PREFIX` so `drawapply` promotes it into
+                    # the change plan's `downgrades`.
+                    #
+                    # Written back to `expressions` for the same reason the two
+                    # fallbacks below are: the passes after the loop read
+                    # `expressions[net_id]`, and a local rebinding alone would draw
+                    # this net a second way. The label itself is drawn by the
+                    # `style == "label"` branch below, which is now this net's own
+                    # branch — the downgrade reuses that path instead of copying it.
+                    expression, fallback = _label_fallback(
+                        ctx, net_id, expression, unrouted,
+                    )
+                    expressions[net_id] = expression
+                    fallbacks.append(fallback)
+                    notes.append(fallback.note)
+                elif net_id in flag_downgraded and len(expression.points) > 1:
                     # 143 F1: this net was a flag net the library carries no
                     # symbol for, and it cannot be wired either. A label is the
                     # one answer 053 sec.7 forbids here — `sch.place_netlabel` is
@@ -8179,6 +9178,11 @@ def _flag_anchor(
         *leads, FLAG_LEAD, router.grid * 2.0,
         2.0 * FLAG_LEAD, 4.0 * FLAG_LEAD, 0.0,
     ):
+        # 520B2: no rung past `FLAG_LEAD_LIMIT` is a candidate — see the constant.
+        # The ``0.0`` rung (069 sec.8's flag on its own pin) is *not* a reach and is
+        # never dropped: it is the ladder's last word, not a distance.
+        if length > FLAG_LEAD_LIMIT:
+            continue
         if length not in lengths:
             lengths.append(length)
     #: 175/B-2's **preference** rung: the first rung that passed every other test
@@ -8539,12 +9543,16 @@ def _rail_flag(
     net = ctx.circuit.net(net_id)
     cls = net.cls if net is not None else "power"
     seat = router.flag_seats.get((net_id, pin[0]))
-    if seat is None and cls == "gnd":
+    if seat is None:
         # 201A: the reservation may have seated this net's one symbol at a
         # **different** pad of the same rail (`_flag_seat_pins`'s ladder) — the
         # seat is the reservation pass's decision and this is the same net, so
         # the first pad it holds a seat for is the answer. Re-deciding here would
         # be a second decision about one symbol.
+        #
+        # 520B2 widened that ladder to every pad of a rail, so this replay is now
+        # the rail's ordinary path rather than the ground's alone: on the flyback
+        # page the seat is `R7.1` while the pin this call is handed is `D3.1`.
         for other in _flag_seat_pins(ctx, expression, cls):
             seat = router.flag_seats.get((net_id, other[0]))
             if seat is not None:
@@ -8578,7 +9586,8 @@ def _wire_flag_seats(
 
     * **069 sec.7's rail flag** — a power rail drawn as a wire carries one of its
       own, hung off the rail at the pin that supplies it (the same pin
-      :func:`_power_flag_pin` picks for the placement);
+      :func:`_power_flag_pin` picks for the placement) or, when that pin has no
+      legal seat, at another pad of the same rail (520B2);
     * **088b sec.1's ground outlet** — a declared group states its return with
       one symbol of its own, at the rail's far end (:func:`_gnd_outlet_pin`).
 
@@ -8605,11 +9614,13 @@ def _wire_flag_seats(
         wanted: list[tuple[str, tuple[float, float], str, bool]] = []
         if _net_needs_flag(ctx, net_id, ()):
             # 069 sec.7's rail flag / 201A's one ground symbol: both are a
-            # vertical run off the rail (:func:`_rail_flag_seat`). A rail hangs it
-            # at the one pin that supplies it; a **ground** may hang it at any of
-            # its pads, nearest the rail's far end first — 201A sec.3's 「就近挪旗位」,
-            # and the ladder exists because 岳's own bottom rail carries its mark
-            # wherever there is room, not at a pad the circuit picked.
+            # vertical run off the rail (:func:`_rail_flag_seat`), and both walk
+            # the whole of :func:`_flag_seat_pins` — a rail from the pin it
+            # supplies (069 sec.7) and a **ground** from the rail's far end
+            # (088b), each then over the net's other pads, nearest first: 201A
+            # sec.3's 「就近挪旗位」. The ladder exists because 岳's own bottom rail
+            # carries its mark wherever there is room, not at a pad the circuit
+            # picked — and 520B2 measured a rail needing it for the same reason.
             candidates = _flag_seat_pins(ctx, expression, cls)
             for member, point in candidates:
                 wanted.append((member, point, cls, True))
@@ -8641,6 +9652,23 @@ def _flag_seat_pins(
     id. That ladder is sec.3 of this batch — 「仍有冲突时降级为就近挪旗位」, never a
     crossing — and it changes nothing about *which* net carries a symbol, only
     where on its own rail the symbol stands.
+
+    520B2: a **rail** walks the same ladder now, and the only difference left
+    between the two classes is how the *first* pad is chosen (the rail supplies
+    one, a ground has none). Measured on the flyback page: `SEC_12V` has five pads
+    and the supplying one, `D3.1`, is the only pad on the net with **no** legal
+    seat — 11.5 units of clearance up (the diode's own body) and a text row down —
+    so the page used to be refused with `no legal place to hang one` while four
+    pads of the same net stood clear. The seat the ladder now takes there is
+    `R7.1`, 30 units out and 12.5 down, which is the same shape
+    :func:`_rail_flag_seat` draws for every other rail.
+
+    The pads after the first are ordered **nearest first** (:func:`_gnd_outlet_pin`
+    reads the same way — 201A sec.3's 「就近挪旗位」), so a rail that cannot use the
+    pad it supplies falls back to the pad the reader is already looking at, not to
+    whichever id sorts first. When the caller has no coordinates (the reservation
+    pass, whose expression carries ``(0.0, 0.0)`` for every pad) that order
+    degenerates to member id, exactly as the ground ladder already does there.
     """
     if cls == "gnd":
         far = _gnd_outlet_pin(ctx, expression)
@@ -8649,7 +9677,15 @@ def _flag_seat_pins(
         out.extend(item for item in ordered if item != far)
         return out
     pin = _power_flag_pin(ctx, expression)
-    return [pin] if pin is not None else []
+    if pin is None:
+        return []
+    others = sorted(
+        (item for item in sorted(expression.points) if item[0] != pin[0]),
+        key=lambda item: (
+            abs(item[1][0] - pin[1][0]) + abs(item[1][1] - pin[1][1]), item[0],
+        ),
+    )
+    return [pin, *others]
 
 
 def _rail_flag_room_failure(
@@ -8673,11 +9709,13 @@ def _rail_flag_room_failure(
         detail=(
             f"net {net_id!r} is a rail drawn as a wire and every power flag on "
             f"it must be stated (069 sec.7), but no legal place to hang one was "
-            f"found at the pin that supplies it, {member} at {_point_text(point)}: "
-            f"{blocked_by}. The flag is not drawn on the pin instead — a flag "
-            "standing on its own pin opens its glyph across the run that leaves "
-            "the pin and prints its name row over whatever is beside it, which is "
-            "the shape 岳 read as a short on the landed page"
+            f"found on any pad of that rail: 069 sec.7 asks for it at the pin "
+            f"which supplies the net, {member} at {_point_text(point)}, and from "
+            f"there the ladder walks the net's other pads. {blocked_by}. The flag "
+            "is not drawn on the pin instead — a flag standing on its own pin "
+            "opens its glyph across the run that leaves the pin and prints its "
+            "name row over whatever is beside it, which is the shape 岳 read as a "
+            "short on the landed page"
         ),
         action=(
             "enlarge the region, move the neighbouring part the message names, or "
@@ -8852,13 +9890,17 @@ def _seat_wire_flags(
     walls: list[Box] = []
     #: 201A: a **ground** rail carries exactly one symbol, so the first pad of its
     #: ladder that yields a seat takes the symbol and the rest of that net's
-    #: candidates are passed over (`_flag_seat_pins`). A rail keeps 069 sec.7's
-    #: single answer, and 088b's outlet is its own shape.
-    seated_grounds: set[str] = set()
+    #: candidates are passed over (`_flag_seat_pins`). 520B2: a **rail** is the
+    #: same kind of thing and now walks the same multi-pad ladder, so it is held to
+    #: the same rule — without this the widened ladder would take a seat at *every*
+    #: pad of the net that can hold one and 069 sec.7's single flag would become
+    #: one symbol per pad. 088b's outlet is its own shape and is not suppressed
+    #: (its ``vertical`` flag is ``False``).
+    seated_nets: set[str] = set()
     for net_id, member, point, profile, _ref, cls, vertical in _wire_flag_seats(
         ctx, expressions, net_order
     ):
-        if vertical and cls == "gnd" and net_id in seated_grounds:
+        if vertical and net_id in seated_nets:
             continue
         # A rail flag reaches for 069 sec.7's straight vertical run first and only
         # then for the bent lead (:func:`_rail_flag_seat`); an outlet is placed by
@@ -8889,8 +9931,8 @@ def _seat_wire_flags(
         _remember_lead(router, net_id, flag_glyph_kind(profile), lead)
         router.flag_seats[(net_id, member)] = (anchor, rotation, lead)
         walls.append(box)
-        if vertical and cls == "gnd":
-            seated_grounds.add(net_id)
+        if vertical:
+            seated_nets.add(net_id)
     return walls
 
 
@@ -9508,6 +10550,7 @@ def _measure(
     plan: LayoutPlan,
     findings: Sequence[GrammarFinding],
     ctx: _Context,
+    label_fallbacks: Sequence[LabelFallback] = (),
 ) -> Candidate:
     """One gated plan -> the numbers the ranking compares."""
     metrics = dict(plan.evidence.soft_metrics)
@@ -9518,6 +10561,7 @@ def _measure(
         metrics=metrics,
         reasons=reasons,
         key=rank_key(plan, findings, ctx),
+        label_fallbacks=list(label_fallbacks),
     )
 
 
@@ -9589,6 +10633,27 @@ def _variant_round(label: str) -> str:
     return "base"
 
 
+def _rejected_label_fallbacks(result: CompileResult) -> list[LabelFallback]:
+    """Every net the refused variants had downgraded, deduplicated by net (520E).
+
+    A refusal is not a reason to lose the record. A page that downgraded two nets
+    and was then refused anyway is exactly the page whose reader needs to know
+    both facts — "and the name had nowhere to go either"
+    (:func:`_refusal_after_downgrade`) is a claim about *those* nets. The first
+    record per net wins, in run order: the same net downgraded at two rungs is one
+    net, and the first measured failure is the one the smallest rung saw.
+    """
+    out: list[LabelFallback] = []
+    seen: set[str] = set()
+    for item in result.rejected:
+        for fallback in item.label_fallbacks:
+            if fallback.net in seen:
+                continue
+            seen.add(fallback.net)
+            out.append(fallback)
+    return out
+
+
 def _no_candidate_failures(
     result: CompileResult, budget: CompileBudget | None = None
 ) -> list[GrammarFailure]:
@@ -9645,8 +10710,16 @@ def _ladder_stopped(
     """
     if budget is None or not budget.spacing_ladder:
         return ""
-    built = {item.variant.split(" pose", 1)[0] for item in result.rejected}
-    if len(built) >= len(budget.spacing_ladder):
+    # The ladder's rungs are the rejections whose label says which rung they are
+    # (`spacing=<scale> pose-variant=<i>`).  A rejection that is *not* a rung — the
+    # topology search's, or 520m's island page — must not be counted as one, and a
+    # run with no rung among its rejections has no ladder to have stopped.
+    built = {
+        label for item in result.rejected
+        for label in [item.variant.split(" pose", 1)[0]]
+        if label.startswith("spacing=")
+    }
+    if not built or len(built) >= len(budget.spacing_ladder):
         return ""
     return (
         f"; the spacing ladder was stopped early (147b) — {len(built)} of "

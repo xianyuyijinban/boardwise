@@ -67,7 +67,12 @@ from ..core.changeplan import (
 from ..core.circuitspec import CircuitSpec
 from ..core.geometry import transform_point
 from ..core import textmetrics
-from ..core.layoutplan import DOWNGRADE_NOTE_PREFIX, LayoutPart, LayoutPlan
+from ..core.layoutplan import (
+    DOWNGRADE_NOTE_PREFIX,
+    LayoutPart,
+    LayoutPlan,
+    label_wire_indices,
+)
 from ..core.model import is_ground_net
 from ..core.presentationspec import PresentationSpec
 from ..core.symbolprofile import SymbolProfile, SymbolPose, pose_box, role_siblings
@@ -94,13 +99,18 @@ __all__ = [
     "expected_pin_points",
     "flag_kind",
     "guard_problems",
+    "is_label_wire",
     "islands_from_circuit",
+    "label_wire_nets",
     "library_problems",
     "live_islands",
+    "live_partitions",
     "module_plan",
+    "named_wire_nets",
     "net_name_problems",
     "netlabel_items",
     "plan_pins",
+    "planned_net_names",
     "placement_problems",
     "posed_pin_offsets",
     "postcondition_problems",
@@ -137,6 +147,22 @@ LABEL_STUB_LENGTH = 2 * DRAW_GRID
 LABEL_STUB_LENGTHS: tuple[float, ...] = (
     2 * DRAW_GRID, DRAW_GRID, 3 * DRAW_GRID, 4 * DRAW_GRID, 6 * DRAW_GRID,
     8 * DRAW_GRID,
+)
+
+#: The words a planned wire's ``purpose`` carries when the wire **is** the
+#: drawing's label for its net — the marker :func:`label_wire_nets` reads.
+#:
+#: It is a marker on the wire rather than a field of its own because the plan's
+#: ``purpose`` slot is exactly "why this conductor is here", and this is the
+#: strongest answer a conductor can give: on this host a label has no primitive of
+#: its own (`sch.place_netlabel` is measured unusable, 029), so the name is
+#: carried by the wire and the wire *is* the label.  Two spellings, because 057's
+#: stub and an island's boundary label are written by two different places and
+#: both are labels; both contain the first word, which is why one marker covers
+#: them.
+LABEL_WIRE_PURPOSES: tuple[str, ...] = (
+    "name stub",              # 057 sec.4 / 520f: the stub that stands in for a label
+    "the wire that carries this net's label",  # 530D: an island's boundary label
 )
 
 #: The four runs a stub can leave its anchor along, before the preferred one.
@@ -876,7 +902,9 @@ def module_plan(
       adaptation. 145d: a **single-module** plan stakes the same stub for a net
       that has a name and *no conductor at all* (GATE/VFB_NF's shape: one pin, one
       label, no wire), which the page path already covers — what it may not do is
-      claim the wire carries the name while drawing none;
+      claim the wire carries the name while drawing none. 520f: "no conductor" is
+      read off the **plan**, once, before the label pass — so *every* label of such
+      a net gets its own stub, not just the first one to reach the branch;
     * ``module_label`` — how the plan's target names what it draws (a page names
       its modules; the default is the presentation's grammar, as 054 wrote it).
 
@@ -998,6 +1026,12 @@ def module_plan(
             # Value (measured 054 C3), and every value-reading rule would have to
             # fall back to the MPN's EIA code.
             value_key=DRAW_VALUE_KEY,
+            # 532: S-21's way out of a collision, carried to the paper. The layout
+            # says which parts' value rows are not printed and the landing step
+            # writes the host's own `valueVisible` from this field — without it the
+            # plan only *omits a row from its text list*, and the host paints it
+            # anyway (`evidence/532/report.md` §1).
+            value_visible=part.value_visible,
             footprint=spec_part.params.get("footprint", "") if spec_part.params else "",
             symbol_ref=part.symbol_ref,
             symbol_hash=profile.geometry_hash(),
@@ -1025,16 +1059,32 @@ def module_plan(
                     return f"{spec_id}.{number}"
         return ""
 
-    for segment in layout.segments:
+    #: Which of the drawing's segments **are** its labels.  A `LayoutLabel` has no
+    #: primitive of its own on this host (`sch.place_netlabel` is unusable, 029), so
+    #: a label is drawn as a stub and named by the wire that carries it — and the
+    #: wire the label sits at the end of is therefore the label, not a conductor
+    #: that happens to be named.  530D needs to tell the two apart: what lands
+    #: named is exactly this set, and everything else lands unnamed (岳's ruling A).
+    #: The rule is stated in one place (`core.layoutplan.label_wire_indices`) and
+    #: this is its landing half — the gate's half is `readability._named_wire_rows`.
+    carriers = label_wire_indices(layout)
+
+    for index, segment in enumerate(layout.segments):
         if len(segment.points) < 2:
             raise DrawPlanError(
                 f"net {segment.net!r} has a segment with {len(segment.points)} point(s) "
                 "— a segment is at least two, or it draws nothing"
             )
+        carried = [(point[0], point[1]) for point in segment.points]
         built.wires.append(PlanDrawWire(
             net=segment.net,
-            points=[(point[0], point[1]) for point in segment.points],
+            points=carried,
             from_pin=pin_at(segment.points[0]),
+            purpose=(
+                "the wire that carries this net's label (S-14's name at a boundary, "
+                "and this host has no net-label primitive: 029)"
+                if index in carriers else ""
+            ),
         ))
 
     for symbol in layout.power_symbols:
@@ -1114,6 +1164,18 @@ def module_plan(
         body = stub_bodies.get(designator_of.get(part_id, part_id))
         if body is not None:
             owner.append((f"the drawn body of {part_id}", body))
+    #: 520f: which nets the **plan** draws a conductor for, frozen before the label
+    #: pass starts. `bare` below asks "does this net have no conductor?", and 145d
+    #: meant the plan's own wires — but it read `built.wires` *while the loop was
+    #: appending the stubs it draws into that same list*, so the first label of a
+    #: no-conductor net flipped the answer for every later label of it: one pin got
+    #: its stub, the rest were left unnamed and unconnected (520E's single-module
+    #: measurement; the shape is one rail, four pins, four labels, one stub).
+    #: The snapshot is the plan's conductors and nothing else: a net that already
+    #: has one keeps exactly the behaviour it had (145d), and a net with none gets
+    #: a stub on **every** label, which is what 057 sec.4's "each pin needs its own
+    #: name" asks for.
+    planned_conductor_nets = {wire.net for wire in built.wires}
     for label in layout.labels:
         covered = any(flag.net == label.net for flag in built.flags)
         if covered:
@@ -1136,7 +1198,10 @@ def module_plan(
         # appear zero times, 145c sec.5.3). `bare` is that fact and nothing wider: a
         # net that already has a conductor keeps exactly the behaviour it had (the
         # label's anchor is on one of its wires, or 057's own `label_stubs` decides).
-        bare = not any(wire.net == label.net for wire in built.wires)
+        # 520f: it reads `planned_conductor_nets`, the plan's own conductors, not
+        # `built.wires` — that list grows a stub per label, and asking it here made
+        # the net's *first* label flip the answer for the rest of them.
+        bare = label.net not in planned_conductor_nets
         if (label_stubs or bare) and not carried:
             stub, blockers = _place_label_stub(
                 label, built, stub_bodies, stub_pins,
@@ -2334,13 +2399,134 @@ def all_satisfied(state: Mapping[str, list[str]]) -> bool:
     return not state.get("live") and not state.get("canvas")
 
 
+def _live_key(pin: str) -> tuple[str, str]:
+    """``<designator>.<pin>`` as the ``sch.netlist`` mapping spells it."""
+    designator, _sep, number = pin.partition(".")
+    return designator, number
+
+
+def _spec_nets(plan: ChangePlan) -> list[tuple[list[str], list[str]]]:
+    """The plan's own pins, grouped the way the **spec** groups them (530D).
+
+    One entry per spec net: its members as the plan states them, and the plan's
+    pins that carry them.  The grouping is over ``change.islands`` (121's netlist
+    expectation, one entry per pin, ``mates`` including the pin itself), so two
+    pins of one net give one group rather than two identical ones.
+    """
+    groups: dict[tuple[str, ...], set[str]] = {}
+    for island in plan.change.islands:
+        groups.setdefault(tuple(sorted(island.mates)), set()).add(island.pin)
+    return [(list(members), sorted(pins)) for members, pins in sorted(groups.items())]
+
+
+def planned_net_names(plan: ChangePlan) -> dict[str, str]:
+    """``<designator>.<pin>`` -> the name the plan puts on the page for that pin.
+
+    Read off the plan's own conductors and flags (their ``from_pin`` / ``on_pin``
+    are spelled in spec ids, which the pool maps to designators).  A pin the plan
+    draws no named carrier for is simply absent — which is the ordinary case for
+    an island-internal net, and the reason the partition half exists.
+    """
+    pool = {part.spec_id: part.designator for part in plan.change.draw_parts}
+    out: dict[str, str] = {}
+    for wire in plan.change.draw_wires:
+        if not wire.net or not wire.from_pin:
+            continue
+        spec_id, _sep, number = wire.from_pin.partition(".")
+        designator = pool.get(spec_id)
+        if designator and number:
+            out.setdefault(f"{designator}.{number}", wire.net)
+    for flag in plan.change.draw_flags:
+        if not flag.net or not flag.on_pin:
+            continue
+        spec_id, _sep, number = flag.on_pin.partition(".")
+        designator = pool.get(spec_id)
+        if designator and number:
+            out.setdefault(f"{designator}.{number}", flag.net)
+    return out
+
+
+def live_partitions(
+    plan: ChangePlan, live: Mapping[tuple[str, str], str]
+) -> list[dict]:
+    """One row per spec net: what the plan says, and what the editor's netlist says.
+
+    This is 530D's **mapping**, and it is the evidence `draw apply` writes for the
+    connectivity re-verification — 「同一组脚 ⇔ 同一条网」 made readable rather
+    than only judged.  Each row carries:
+
+    * ``pins`` / ``wanted`` — the spec net's pins, as the plan states them;
+    * ``net`` — the name the plan puts on the page for them (``""`` when it puts
+      none: 岳's ruling A leaves an island-internal net unnamed, `named_wire_nets`);
+    * ``live`` — the editor's own name for the partition the pins landed on, and
+      ``liveNames`` — every name the pins landed under (more than one is the
+      "one spec net drawn as two" failure);
+    * ``partition`` — every planned pin the editor puts on that live net, i.e. the
+      live partition restricted to this plan (a pin of *another* spec net in here
+      is the "two spec nets drawn as one" failure);
+    * ``anchored`` — whether the page states this net's name with a flag or a
+      label, which is what decides *how* it is checked (`_live_problems`);
+    * ``others`` — company from outside the plan, which is reported and not judged
+      (054 C7: the editor's netlist is project-wide);
+    * ``siblings`` — the plan's pins sharing the live net, for the reader.
+    """
+    planned = {f"{designator}.{pin}" for designator, pin in plan_pins(plan)}
+    names = planned_net_names(plan)
+    anchored = named_wire_nets(plan) | {
+        item.net for item in plan.change.draw_flags if item.net
+    }
+    live_of: dict[str, str] = {}
+    for pin in planned:
+        name = live.get(_live_key(pin))
+        if name is not None:
+            live_of[pin] = name
+    rows: list[dict] = []
+    for members, pins in _spec_nets(plan):
+        landed = [live_of[pin] for pin in pins if pin in live_of]
+        distinct = sorted({name for name in landed if name})
+        here = distinct[0] if len(distinct) == 1 else ""
+        stated = sorted({names[pin] for pin in pins if names.get(pin)})
+        partition = sorted(
+            pin for pin in planned if here and live_of.get(pin) == here
+        )
+        rows.append({
+            "pins": pins,
+            "wanted": sorted(members),
+            "net": stated[0] if len(stated) == 1 else "",
+            "live": here,
+            "liveNames": distinct,
+            "partition": partition,
+            "anchored": bool(set(stated) & anchored),
+            "others": sorted(pin for pin in partition if pin not in set(pins)),
+            "siblings": sorted(pin for pin in planned - set(pins)
+                               if live_of.get(pin) == here and here),
+            "landed": len(landed),
+        })
+    return rows
+
+
 def _live_problems(
     plan: ChangePlan, live: Mapping[tuple[str, str], str]
 ) -> list[str]:
-    """The netlist leg: **the plan's own pins**, grouped as the plan says.
+    """The netlist leg: **the plan's own pins**, as one netlist or as partitions.
 
     Membership, never names (035 round 4): an auto-named net is renumbered
-    whenever the wiring changes, so "which pins are together" is the fact.
+    whenever the wiring changes, so "which pins are together" is the fact.  Until
+    530D the reading was one thing; 岳's ruling A takes the net's name off the
+    wire, so a net the page gives no flag and no label to lands under the editor's
+    own auto name (``NET1…``) and there is nothing to read by name — the reading
+    therefore comes in two halves, and `live_partitions` says how each net is read:
+
+    * a net the page **states the name of** (a flag, or a label — `named_wire_nets`)
+      is read **by name**: every pin of it must sit under that one name, and the
+      partition must be the spec net's pins;
+    * every other net is read by **partition equivalence**: the live net holding
+      its pins holds exactly its pins.  「同一组脚 ⇔ 同一条网」 — the geometry is
+      all the editor has to say, and it says the same thing a name would.
+
+    Both halves refuse the same two shapes, and they are named apart so the report
+    says which one happened: one spec net **drawn as two** (a conductor missing, or
+    a name that did not land) and two spec nets **drawn as one** (a short).
 
     The comparison is scoped to the plan's own pins, and **that scoping is a
     measurement, not a convenience** (054 C7, 2026-09-28): the editor's netlist is
@@ -2349,40 +2535,47 @@ def _live_problems(
     on net 'VIN' with ['R1.1', 'R4.1']``, where ``R1.1`` sits on another page.
     The exact-membership reading then refused a drawing that was wired exactly as
     planned, and it would refuse every second module whose nets are named the way
-    the first one's are. So:
-
-    * **inside the plan's pins, the partition must be exact** — two of the
-      module's pins that were supposed to be on different nets and now share one
-      is a short, and a planned mate that did not join is a missing wire;
-    * **company from outside the plan is reported, not judged** — it is what the
-      name means in a flat multi-page project, and whether that is wanted is a
-      naming decision (052's labelPolicy), which this batch does not make.
+    the first one's are. So **company from outside the plan is reported, not
+    judged** — it is what the name means in a flat multi-page project, and whether
+    that is wanted is a naming decision (052's labelPolicy) this batch does not make.
     """
-    planned = {f"{designator}.{pin}" for designator, pin in plan_pins(plan)}
-    island_of: dict[str, set[str]] = {}
-    for name in {net for net in live.values() if net}:
-        island_of[name] = {
-            f"{designator}.{pin}"
-            for (designator, pin), net in live.items()
-            if net == name
-        }
     problems: list[str] = []
-    for island in plan.change.islands:
-        designator, _sep, pin = island.pin.partition(".")
-        name = live.get((designator, pin))
-        if name is None:
+    for row in live_partitions(plan, live):
+        pins = set(row["pins"])
+        if row["landed"] < len(pins):
+            absent = [
+                pin for pin in row["pins"] if _live_key(pin) not in live
+            ]
             problems.append(
-                f"{island.pin} is not in the editor's netlist at all "
+                f"{absent[0]} is not in the editor's netlist at all "
                 "(the part or the pin did not land)"
             )
             continue
-        members = island_of.get(name, set())
-        inside = sorted(member for member in members if member in planned)
-        wanted = sorted(island.mates)
-        if inside != wanted:
+        if len(row["liveNames"]) > 1:
             problems.append(
-                f"{island.pin} is on net {name!r} with {inside or 'nothing'} among this "
-                f"plan's pins, but the plan says {wanted}"
+                f"the spec net {row['wanted'][0] if row['wanted'] else ''} is drawn as "
+                f"{len(row['liveNames'])} partitions on the page "
+                f"({', '.join(repr(name) for name in row['liveNames'])}) over "
+                f"{sorted(pins)} — one spec net coming apart is a conductor that did "
+                "not land, or a name that did"
+            )
+            continue
+        if set(row["partition"]) != pins:
+            problems.append(
+                f"{row['pins'][0]} is on net {row['live']!r} with "
+                f"{row['others'] or 'nothing'} among this plan's pins, but the plan "
+                f"says {row['wanted']}"
+            )
+            continue
+        if row["anchored"] and row["live"] != row["net"]:
+            # The partition is right; the **name** is not.  Read only where the page
+            # states one (ruling A): a net the page anchors with a flag or a label
+            # whose pins land under a different name is a name that did not land —
+            # and on a flat multi-page project that is also what two islands' halves
+            # of one signal look like when the label is missing.
+            problems.append(
+                f"the plan states this net's name as {row['net']!r} with a flag or a "
+                f"label, and the editor has {sorted(pins)} under {row['live']!r}"
             )
     return problems
 
@@ -2395,8 +2588,20 @@ def live_islands(
     ``others`` is the project-wide company :func:`_live_problems` deliberately
     does not judge: pins outside this plan that the editor puts on the same net,
     which in a flat multi-page project is what a shared net *name* means.
+
+    Since 530D each row also carries the **partition reading** of its net — the
+    plan's stated name for it, the editor's own name for the partition, every
+    planned pin on that partition, and whether the page anchors the name with a
+    flag or a label.  That is `live_partitions`' row for the same net, so a reader
+    of the report can see the mapping the re-verification used rather than only
+    its verdict.
     """
     planned = {f"{designator}.{pin}" for designator, pin in plan_pins(plan)}
+    live_of: dict[str, str] = {}
+    for pin in planned:
+        name = live.get(_live_key(pin))
+        if name is not None:
+            live_of[pin] = name
     island_of: dict[str, set[str]] = {}
     for name in {net for net in live.values() if net}:
         island_of[name] = {
@@ -2404,16 +2609,24 @@ def live_islands(
             for (designator, pin), net in live.items()
             if net == name
         }
+    net_row: dict[tuple[str, ...], dict] = {
+        tuple(row["wanted"]): row for row in live_partitions(plan, live)
+    }
     rows: list[dict] = []
     for island in plan.change.islands:
         designator, _sep, pin = island.pin.partition(".")
         name = live.get((designator, pin), "")
         members = island_of.get(name, set())
+        partition = net_row.get(tuple(sorted(island.mates)), {})
         rows.append({
             "pin": island.pin,
             "net": name,
             "mates": sorted(island.mates),
             "others": sorted(member for member in members if member not in planned),
+            "plannedName": partition.get("net", ""),
+            "anchored": partition.get("anchored", False),
+            "livePartition": partition.get("partition", []),
+            "liveNames": partition.get("liveNames", []),
         })
     return rows
 
@@ -2472,8 +2685,55 @@ def _part_problems(
     return problems
 
 
+def is_label_wire(wire: PlanDrawWire) -> bool:
+    """Is this planned wire the drawing's **label** for its net? (530D)
+
+    True when the plant that built it wrote one of :data:`LABEL_WIRE_PURPOSES` in
+    its ``purpose`` — 057's name stub on the page path, an island's boundary label
+    on 520m's.  A label on this host is a wire whose name the editor prints
+    (`sch.place_netlabel` is measured unusable, 029), so this is also the answer
+    to "does this wire carry the net's name".
+    """
+    purpose = wire.purpose or ""
+    return any(marker in purpose for marker in LABEL_WIRE_PURPOSES)
+
+
+def label_wire_nets(plan: ChangePlan) -> set[str]:
+    """The nets this plan draws a **label** on: one of its wires is the label.
+
+    Read off the wires rather than off a list of names, because that is where the
+    landing keeps it (a plan's labels are its wires — see :func:`is_label_wire`).
+    """
+    return {wire.net for wire in plan.change.draw_wires if wire.net and is_label_wire(wire)}
+
+
+def wire_carries_its_name(wire: PlanDrawWire) -> bool:
+    """Does this wire land with its net's name?  Exactly when it **is** the label.
+
+    The landing's whole half of 岳's ruling A: ``sch.place_wire`` takes ``net`` as an
+    optional parameter, and this decides whether this plan passes it.  A named
+    conductor is a name the host prints at the middle of a wire that is not the
+    name — 8 of the flyback page's 8 hard violations were exactly that.
+    """
+    return bool(wire.net) and is_label_wire(wire)
+
+
+def named_wire_nets(plan: ChangePlan) -> set[str]:
+    """The nets this plan states a name for with a **label** (not with a flag).
+
+    These are the netlist's name-anchored nets: the ones a reader — and
+    `_live_problems` — can check by name rather than by partition alone.  The
+    landing does not name *all* of their wires, only the label's own one
+    (:func:`wire_carries_its_name`), but a net is named as soon as one wire of it
+    carries the name, because the editor takes the name from that wire.
+    """
+    return set(label_wire_nets(plan)) - {
+        item.net for item in plan.change.draw_flags if item.net
+    }
+
+
 def unnamed_nets(plan: ChangePlan) -> set[str]:
-    """The nets this plan's wires are drawn **without a name** for (069 sec.9).
+    """The nets **none** of whose wires land with a name (069 sec.9, widened by 530D).
 
     A net the plan states with a flag carries its name on the flag; naming its wires
     too prints the name twice, which is what 岳 sent the landed page back for
@@ -2482,11 +2742,21 @@ def unnamed_nets(plan: ChangePlan) -> set[str]:
     editor (岳's own P22: its wires answer ``Net: ""`` while its flags carry the
     names, and the netlist still joins them by geometry).
 
-    The two places that read a landed wire back — the canvas leg and the discard —
+    **530D (岳's ruling A, 2026-10-21) widens this to every net the drawing gives
+    no name of its own**, and to every wire of a net that is not the label itself:
+    a rail flag's conductor and an island-internal net's conductor were both still
+    drawn named, and the host printed a blue row at the middle of every one of
+    those segments.  The set below is the net-level reading of the same rule
+    (:func:`wire_carries_its_name` is the per-wire one, and the landing uses that).
+
+    The places that read a landed wire back — the canvas leg and the discard —
     therefore match those wires by **geometry**: the page has no name to match them
     by, and the netlist leg is what says which net they are on.
     """
-    return {item.net for item in plan.change.draw_flags if item.net}
+    return {
+        wire.net for wire in plan.change.draw_wires
+        if wire.net and not wire_carries_its_name(wire)
+    }
 
 
 def _flag_problems(plan: ChangePlan, geometry: Any) -> list[str]:
@@ -2599,15 +2869,15 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     length did not shrink. The netlist leg is the acceptance's main judgement;
     this one says "the drawn thing is on the canvas".
 
-    A net in :func:`unnamed_nets` has no name on the page to be found under (069
-    sec.9), so its wiring is recognised **by geometry** instead: the page's
-    vertices that lie on a polyline the plan drew for that net are the set its
-    ends are measured against, and its length is compared against the plan's
-    total — *which* net those wires belong to is the netlist leg's judgement, and
-    the ends still have to be on the canvas. A net whose unnamed wiring cannot be
-    recognised that way is **reported**, not waved past (163b): this used to fall
-    back to every vertex on the page, under which any other net's corner read as
-    "the wire landed".
+    A wire that lands with **no name** — since 530D every wire but a label's own
+    (:func:`wire_carries_its_name`) — has no name on the page to be found under (069
+    sec.9), so its wiring is recognised **by geometry** instead: the page's vertices
+    that lie on the polyline the plan drew for that wire are the set its ends are
+    measured against, and its length is compared against the plan's total — *which*
+    net those wires belong to is the netlist leg's judgement, and the ends still have
+    to be on the canvas. A wire whose unnamed geometry cannot be recognised that way
+    is **reported**, not waved past (163b): this used to fall back to every vertex on
+    the page, under which any other net's corner read as "the wire landed".
     """
     vertices: dict[str, set[tuple[float, float]]] = {}
     lengths: dict[str, float] = {}
@@ -2633,18 +2903,16 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
             )
         lengths[net] = lengths.get(net, 0.0) + total
     problems: list[str] = []
-    planned_length: dict[str, float] = {}
-    unnamed = unnamed_nets(plan)
     all_vertices = {spot for spots in vertices.values() for spot in spots}
-    # 069 sec.9, tightened by 163b: a flagged net's wires are drawn unnamed, so
-    # the page holds them under no name and matching by name finds nothing. They
-    # used to fall back to **every vertex on the page** (`all_vertices`), which is
-    # not an answer source: it says "some vertex of *some* net is at this point"
-    # and calls that "the redrawn wire landed". The set an unnamed net's ends are
-    # measured against is now its own wiring — the page's vertices that lie on a
-    # polyline the plan drew for that net — and a net whose wiring cannot be
-    # recognised at all is **reported** rather than answered from the page's
-    # vertices in general.
+    # 069 sec.9, tightened by 163b and made per-wire by 530D: an unnamed wire is
+    # drawn with no name, so the page holds it under no name and matching by name
+    # finds nothing. They used to fall back to **every vertex on the page**
+    # (`all_vertices`), which is not an answer source: it says "some vertex of
+    # *some* net is at this point" and calls that "the redrawn wire landed". The
+    # set an unnamed wire's ends are measured against is its own geometry — the
+    # page's vertices that lie on the polyline the plan drew — and a wire whose
+    # geometry cannot be recognised at all is **reported** rather than answered
+    # from the page's vertices in general.
     #
     # Deliberately still permissive about the *wire* a vertex came from (any page
     # wire passing through the plan's own geometry counts). The host merges wires
@@ -2654,22 +2922,21 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
     # `only permissive about touching, never about being elsewhere` is the line
     # this draws.
     unnamed_vertices: dict[str, set[tuple[float, float]]] = {}
-    for net in unnamed:
-        polylines = [
-            [(float(point[0]), float(point[1])) for point in wire.points]
-            for wire in plan.change.draw_wires
-            if wire.net == net and len(wire.points) >= 1
-        ]
-        if polylines:
-            unnamed_vertices[net] = {
-                spot
-                for spot in all_vertices
-                if any(_on_polyline(spot, line) for line in polylines)
-            }
     for wire in plan.change.draw_wires:
-        have = vertices.get(wire.net, set())
+        if not wire.net or wire_carries_its_name(wire) or not wire.points:
+            continue
+        line = [(float(point[0]), float(point[1])) for point in wire.points]
+        unnamed_vertices.setdefault(wire.net, set()).update(
+            spot for spot in all_vertices if _on_polyline(spot, line)
+        )
+    planned_length: dict[str, float] = {}
+    unnamed_length = 0.0
+    unnamed_nets_here: set[str] = set()
+    for wire in plan.change.draw_wires:
+        named = wire_carries_its_name(wire)
+        have = vertices.get(wire.net, set()) if wire.net else set()
         attributed = True
-        if not have and wire.net in unnamed:
+        if not named and wire.net:
             have = unnamed_vertices.get(wire.net) or set()
             attributed = bool(have)
         for end in (wire.points[0], wire.points[-1]):
@@ -2684,30 +2951,31 @@ def _wire_problems(plan: ChangePlan, geometry: Any) -> list[str]:
             else:
                 problems.append(
                     f"net {wire.net}: no wire vertex on the page lies on the wiring the plan "
-                    "drew for it — this is a net the plan draws unnamed (069 sec.9), so its "
-                    "wires cannot be matched by name, and nothing confirms the end at "
-                    f"({end[0]:g}, {end[1]:g}) landed"
+                    "drew for it — this is a wire the plan draws unnamed (069 sec.9, widened "
+                    "by 530D), so it cannot be matched by name, and nothing confirms the end "
+                    f"at ({end[0]:g}, {end[1]:g}) landed"
                 )
-        planned_length[wire.net] = planned_length.get(wire.net, 0.0) + sum(
+        length = sum(
             abs(wire.points[index][0] - wire.points[index - 1][0])
             + abs(wire.points[index][1] - wire.points[index - 1][1])
             for index in range(1, len(wire.points))
         )
+        if named:
+            planned_length[wire.net] = planned_length.get(wire.net, 0.0) + length
+        else:
+            unnamed_length += length
+            if wire.net:
+                unnamed_nets_here.add(wire.net)
     # The unnamed wires (069 sec.9) cannot be counted per net — the page holds them
     # under no name — so their lengths are compared as one bucket. They are still
     # counted: a segment that did not land is exactly as visible here.
-    unnamed_wanted = sum(
-        value for net, value in planned_length.items() if net in unnamed
-    )
-    if unnamed_wanted and lengths.get("", 0.0) + HALF_GRID < unnamed_wanted:
+    if unnamed_length and lengths.get("", 0.0) + HALF_GRID < unnamed_length:
         problems.append(
-            f"the plan draws {unnamed_wanted:g} units of unnamed wire (nets "
-            + ", ".join(sorted(net for net in planned_length if net in unnamed))
+            f"the plan draws {unnamed_length:g} units of unnamed wire (nets "
+            + ", ".join(sorted(unnamed_nets_here))
             + f") and the page holds {lengths.get('', 0.0):g} — a segment did not land"
         )
     for net, wanted in sorted(planned_length.items()):
-        if net in unnamed:
-            continue
         have = lengths.get(net, 0.0)
         if have + HALF_GRID < wanted:
             problems.append(
@@ -3191,49 +3459,84 @@ def discard_selection(plan: ChangePlan, geometry: Any) -> DiscardSelection:
         selection.flags.append((mine[0]["id"], flag.net))
         selection.matched.append(f"flag {flag.net} ({mine[0]['id']})")
 
-    planned: dict[str, list[list[tuple[float, float]]]] = {}
-    for wire in plan.change.draw_wires:
-        planned.setdefault(wire.net, []).append(
-            [(float(point[0]), float(point[1])) for point in wire.points]
+    #: One entry per planned **wire**, not per net: since 530D a net may have both
+    #: a named wire (the label) and unnamed ones (its conductors), so the identity
+    #: a page wire is recognised by has to be the wire's own (岳's ruling A —
+    #: `wire_carries_its_name`).
+    planned: list[tuple[str, bool, list[tuple[float, float]]]] = [
+        (
+            wire.net,
+            wire_carries_its_name(wire),
+            [(float(point[0]), float(point[1])) for point in wire.points],
         )
-    unnamed = unnamed_nets(plan)
-    for net, polylines in sorted(planned.items()):
-        mine: list[dict[str, Any]] = []
-        for row in wire_rows:
-            # 069 sec.9: a flagged net's wires are drawn *unnamed*, so the page holds
-            # them under no name (or under the host's own auto name) — they are the
-            # plan's when their geometry lies on the plan's wiring, and the "touches
-            # the plan's wiring and reaches beyond it" test below is what still
-            # refuses a wire the host merged with somebody else's.
-            if row["net"] != net and not (net in unnamed and not row["net"]):
+        for wire in plan.change.draw_wires
+    ]
+    #: Every name the plan states anywhere — a label's wire, a flag.  An unnamed
+    #: plan wire may answer to **any other** name (the host's own ``NET1…`` is what
+    #: an unnamed conductor gets), but not to one of these: that name belongs to
+    #: another of the plan's wires and claiming it here would delete that wire too.
+    stated_names = {
+        wire.net for wire in plan.change.draw_wires if wire_carries_its_name(wire)
+    } | {item.net for item in plan.change.draw_flags if item.net}
+    def belongs_to(row: dict[str, Any], wire: tuple) -> bool:
+        """May this page row be the plan's ``wire``, before any geometry is read?
+
+        069 sec.9, made per-wire by 530D: a wire the plan draws **named** is
+        recognised by that name; a wire the plan draws *unnamed* has no name on the
+        page (or carries the host's own auto name) and is recognised by geometry —
+        but not against a name the plan states elsewhere, because that name belongs
+        to another of the plan's wires and claiming the row here would delete it too.
+        """
+        net, named, _line = wire
+        if named:
+            return row["net"] == net
+        return not (row["net"] and row["net"] in stated_names)
+
+    matched_by_net: dict[str, list[dict[str, Any]]] = {}
+    for row in wire_rows:
+        points = [(float(point[0]), float(point[1])) for point in row["points"]]
+        if not points:
+            continue
+        touching: list[tuple] = []
+        covering: list[tuple] = []
+        for wire in planned:
+            if not belongs_to(row, wire):
                 continue
-            points = [(float(point[0]), float(point[1])) for point in row["points"]]
-            on = [any(_on_polyline(point, line) for line in polylines) for point in points]
-            if not any(on):
-                continue
-            if not all(on):
-                stray = [point for point, hit in zip(points, on) if not hit]
+            on = [any(_on_polyline(point, line) for line in [wire[2]]) for point in points]
+            if all(on):
+                covering.append(wire)
+            elif any(on):
+                touching.append(wire)
+        if not covering:
+            if touching:
+                net = touching[0][0]
+                line = touching[0][2]
+                stray = [
+                    point for point in points
+                    if not any(_on_polyline(point, other[2]) for other in touching)
+                ]
                 selection.mismatches.append(
                     f"wire {row['id']} ({net}) reaches the plan's wiring and also "
                     + ", ".join(f"({x:g}, {y:g})" for x, y in stray[:3])
                     + ", which the plan never drew — the host merged it with another "
                     "wire (pit 32), and deleting it would delete that wire too"
                 )
-                continue
-            mine.append(row)
-            selection.wires.append((row["id"], net))
-            selection.matched.append(f"wire {net} ({row['id']})")
-        for line in polylines:
-            reached = [
-                end for end in (line[0], line[-1])
-                if any(
-                    _near(end, (float(point[0]), float(point[1])), 1e-6)
-                    for row in mine for point in row["points"]
-                )
-            ]
-            if len(reached) < 2:
-                selection.absent.append(
-                    f"wire {net} ({line[0][0]:g}, {line[0][1]:g}) → "
-                    f"({line[-1][0]:g}, {line[-1][1]:g})"
-                )
+            continue
+        net = covering[0][0]
+        matched_by_net.setdefault(net, []).append(row)
+        selection.wires.append((row["id"], net))
+        selection.matched.append(f"wire {net} ({row['id']})")
+    for net, _named, line in planned:
+        reached = [
+            end for end in (line[0], line[-1])
+            if any(
+                _near(end, (float(point[0]), float(point[1])), 1e-6)
+                for row in matched_by_net.get(net, []) for point in row["points"]
+            )
+        ]
+        if len(reached) < 2:
+            selection.absent.append(
+                f"wire {net} ({line[0][0]:g}, {line[0][1]:g}) → "
+                f"({line[-1][0]:g}, {line[-1][1]:g})"
+            )
     return selection

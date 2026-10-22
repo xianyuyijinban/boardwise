@@ -60,6 +60,15 @@ def test_143a_h1_a_lock_the_drawing_cannot_keep_is_reported_as_the_lock_conflict
     reported the input as "a compiler-side geometry problem, not a spec
     problem" — while the lock was the whole reason. The pose is now taken from
     the lock and the *relation* is what names the conflict.
+
+    **530D moved the reading one rung further (岳's ruling A).** With the host's
+    name rows out of the gate, the later pose variant that puts R2 into R1's own
+    column — lock kept *and* `same-column` honoured — is a clean drawing, so this
+    scene is now **solved** and there is no refusal left to read. The hole this
+    test is about is still measured, one layer in: the spacing ladder's first pose
+    variant is refused with the lock named as the reason (`result.rejected`), and
+    the sentence is the same one the failure used to carry. A scene that cannot be
+    solved at all would be a stronger subject for the hole; this one no longer is.
     """
     circuit = T.divider_circuit()
     presentation = T.divider_presentation(
@@ -67,17 +76,26 @@ def test_143a_h1_a_lock_the_drawing_cannot_keep_is_reported_as_the_lock_conflict
     )
     result = dc.compile(circuit, presentation, T.library())
 
-    assert result.candidates == []
-    assert result.categories() == ["presentation-poor"], _failures(result)
-    failure = result.failures[0]
-    assert failure.subject == "R1"
-    assert f"{LOCK}[R1]" in failure.detail
-    assert "the relation" in failure.detail
+    assert [item.variant for item in result.rejected] == [
+        "spacing=1 pose-variant=0",
+        "spacing=1.5 pose-variant=0",
+        "spacing=2.2 pose-variant=0",
+    ], [item.variant for item in result.rejected]
+    for item in result.rejected:
+        assert f"{LOCK}[R1]" in item.reason, item.reason
+        assert "the relation" in item.reason, item.reason
+    assert result.failures == [], _failures(result)
+    assert len(result.candidates) == 1, [c.geometry_sha256() for c in result.candidates]
     # The two sentences the defect was: the compiler's own action denied that any
     # spec input was involved, and the plan's JSON called the whole input
-    # `layout-unsat`.
-    assert "compiler-side geometry problem" not in failure.action
-    assert "layout-unsat" not in result.categories()
+    # `layout-unsat`.  530D: there is no failure object left to read (the scene is
+    # solved), so the same two sentences are read off what remains — the rejected
+    # variants' actions, and the categories the result reports.
+    for item in result.rejected:
+        assert "compiler-side geometry problem" not in (item.failure.action if item.failure else ""), (
+            item.reason
+        )
+    assert "layout-unsat" not in result.categories(), result.categories()
 
 
 def test_143a_h1_the_pose_chooser_reads_the_lock_not_the_ladder_index():

@@ -58,6 +58,7 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Iterable, Mapping
 
 from boardwise.core.geometry import (
     COORD_PRECISION as _COORD_PRECISION,
@@ -2329,13 +2330,69 @@ def collect_page_layout(path: str | Path) -> PageLayout:
         )
 
     # --- the sheet's declared geometry (A4 / 1170 x 825 / border / ...)
-    for body in loose:
+    layout.sheet_attrs.update(sheet_attrs_from_bodies(loose))
+    return layout
+
+
+def sheet_attrs_from_bodies(bodies: Iterable[Mapping[str, Any]]) -> dict[str, str]:
+    """The sheet symbol's declared geometry, from loose ATTR bodies.
+
+    The one reading of :data:`_SHEET_ATTR_KEYS`, shared by
+    :func:`collect_page_layout` (which has the bodies a *file* parse produced)
+    and :func:`sheet_attrs_from_text` (which has the bodies a *document source*
+    produced, 533) — so a page read off the editor cannot answer a different
+    sheet than the same page read off disk.
+    """
+    attrs: dict[str, str] = {}
+    for body in bodies:
         key = str(body.get("key") or "")
         if key in _SHEET_ATTR_KEYS:
             value = body.get("value")
             if value is not None:
-                layout.sheet_attrs[key] = str(value)
-    return layout
+                attrs[key] = str(value)
+    return attrs
+
+
+def sheet_attrs_from_text(text: str) -> dict[str, str]:
+    """A page's declared sheet geometry, from a record stream as **text**.
+
+    The stream `sys.get_document_source` hands back (533) is the active
+    document's own ``||``-separated records, the same shape an ``.epru`` entry
+    inside an ``.epro2`` has — so the reader is the file reader over a string:
+    :func:`_iter_schematic_records` then :func:`_split_page`, and then the sheet
+    keys out of the loose ATTRs. Nothing here reads geometry or connectivity; a
+    caller that wants those has the file paths.
+
+    An empty or unreadable stream returns ``{}``, which a caller must read as
+    "this page stated nothing", never as "this page is A4".
+
+    **Two homes, because the host writes them in two.** A file parse leaves the
+    sheet attrs *loose* (that is what :func:`collect_page_layout` has always
+    read); the live document source returned by `sys.get_document_source`
+    attaches them to the sheet symbol's own **instance** instead — measured
+    2026-10-21 on `test`'s page `f575d25746aca408`, where every sheet key came
+    back under the instance whose ``Symbol`` is ``24bca7036f446d3c``. So both
+    are read, and the instance half only from an instance that states **both**
+    ``Width`` and ``Height``: that pair is the sheet symbol's own signature, and
+    it keeps a part that happens to carry a ``Size`` attribute out of the
+    answer.
+    """
+    stats = ParseStats(source="<document source>")
+    records = _iter_schematic_records(text, stats)
+    if not records:
+        return {}
+    split = _split_page(records)
+    attrs = sheet_attrs_from_bodies(item.body for item in split.loose)
+    for instance in split.instances:
+        held = dict(instance.attrs)
+        if "Width" not in held or "Height" not in held:
+            continue
+        found = sheet_attrs_from_bodies(
+            {"key": key, "value": value} for key, value in held.items()
+        )
+        for key, value in found.items():
+            attrs.setdefault(key, value)
+    return attrs
 
 
 def collect_symbol_bodies(path: str | Path) -> dict[str, tuple[float, float, float, float]]:

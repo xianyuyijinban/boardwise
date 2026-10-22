@@ -423,76 +423,212 @@ def test_a_page_with_two_accepted_poses_gets_no_extra_rungs():
         "ladder already drew both of — the widening has nothing left to try"
     )
 
-# =========================================== 4 真实反激：加宽确实在那里点火
+# ======================= 4 真实反激：520A2 之后加宽**不再**点火（前提没了）
 
 
 def test_the_real_flyback_widens_and_still_refuses_honestly():
-    """**真数据**上的端到端一遍：加宽**点火**了，`same-column` **被清掉**，页面
-    **仍然诚实拒绝**，而拒绝换成了走线。
+    """**真数据**上的端到端一遍——**520A2 重钉**：加宽**不再点火**，页面仍然诚实
+    拒绝，而拒绝现在停在**布线**层。
 
-    前两节量的是「加宽这个机制对不对」；这一条量的是「它对**这一页**对不对」。
-    三段断言各钉一件：
+    函数名是 119 时代的历史名字，留着是为了 node id 稳定；它现在钉的是反面：
+    加宽**不许**悄悄点火。
 
-    * **点火**：notes 里写着哪条关系点的火、加了几档；
-    * **被救**：`same-column(Q1, R5)` **不在**任何一个拒绝里了——这正是 118
-      实测「R5 转 90° 能救、而那个位姿不在 0/1 阶梯里」那句话的兑现；
-    * **仍拒**：`ok=False`、零候选、且失败**点名**了现在真正拦路的东西。
+    **改动前的读数**（119 写这条时的世界）：六个基础档**全部**被**同一条**
+    `same-column(Q1, R5)` 拒掉 → 加宽点火、补 18 档（3 间距 × 6 剩余位姿）、
+    `same-column` 被清掉、页面仍拒且摘要点名 `same-column`。
+
+    **改动后的读数（520A2）**：链件可沿**横跨链**的方向 walk，六档的拒绝**不再
+    同因**——实测 2 档过关系闸、死在布线（`net 'HVDC'` / `net 'SEC_12V'` 的
+    `direct-wire obligation`），4 档各点名一条不同的关系（`left-of(R8, U4)`、
+    `right-of(C10, U5)`、`near(C13, T1)`）。加宽的条件正是「每一条拒绝都点名
+    同一条关系」，它现在**不成立**，于是 `_widened_variants` 返回 `[]`、一档
+    都不补。这不是覆盖丢失：机制本身仍由本文件上半段的合成单测钉着。
+
+    **520E 的读数**：那 2 档也过了布线层——连不上的直连义务现在被**降级成名字并
+    记账**（`label_fallbacks` = `HVDC`、`SEC_12V`），2 档改死在**可读性闸**
+    （`13` / `14` 条硬违反），另外 4 档仍各点名一条关系——所以「不同因」这个读数
+    **没变**，变的是那 2 档的**去处**。加宽依旧不点火，理由依旧成立。
+
+    前两节量的是「加宽这个机制对不对」；这一条量的是「它对**这一页**现在对不对」。
+
+    **530F 重钉（改账簿，按任务书工作项 2）**：反激这份**文档**在 520m 之后声明了
+    `islands`，于是它编译走的是**岛路**（`drawcompiler.compile` 的
+    `multi_island`）。岛路上加宽轮**结构上不存在**——那一页由构造只有一个图，
+    没有链可以重新摆姿态——所以「这一页有没有点火」在岛路上问的是一个**没有
+    执行者**的问题。这一条于是改成钉**岛路实际形态**：这份文档编译出来是什么，
+    以及它**没有**阶梯的痕迹。加宽对这个文档的历史读数（不点火 / 6 档基阶梯 /
+    2 档过关系闸死在可读性闸 / 其余 4 档各点名一条关系）一条都没丢——它们搬到
+    紧邻的 `test_the_single_module_flyback_still_shows_the_widening_reading`，
+    用**剥掉 islands 的同一份文档**量。病历不许伪造，但也得量在真跑的那条路上。
+    """
+    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
+    presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
+    # 岛路那半用**产品的那把尺子**（`SymbolProfile.from_dict`，与
+    # `draw compile --profiles` 同源）：手搓 loader 丢掉 `$.texts` 与引脚
+    # `length`，量出来的岛页不是 `draw compile` 会画的那一张（530C/530D 记过
+    # 这件事）。加宽那半继续用 119 时代的手搓尺子，因为它的历史读数就是那把尺子
+    # 量出来的——两半各用各的，理由写在各自那一行上。
+    import test_551a_failure_rounds as t551a
+    book = t551a._flyback_library_real()
+
+    result = dc.compile(circuit, presentation, book,
+                        dc.CompileBudget(max_candidates=64))
+    notes = " ".join(result.notes)
+    # 1) 岛路上没有阶梯，也就没有加宽——两种说法都是同一个结构事实的两面。
+    assert "pose ladder was widened" not in notes, (
+        "the widening fired on a document that declares islands: the island page "
+        "has one drawing by construction and no chain to re-pose, so a note about "
+        f"a ladder here means the page left the island path — notes: {notes[-400:]}"
+    )
+    assert "constructive variant" not in notes, (
+        "the island page builds no constructive ladder at all; a rung count here "
+        f"means the single-module path ran — notes: {notes[-400:]}"
+    )
+    assert any("island" in note.lower() for note in result.notes), (
+        f"the page must say it is a page of islands — notes: {notes[-400:]}"
+    )
+    # 2) 这份文档在岛路上的实际判决：delivered（530F 的交付口径）。
+    #    **531 重钉**：530F 时这一页交付时带**一条**被点名容忍的主机行
+    #    （`LED_K` 的名字行压 `R7`）；531 把 `R7` 挪开了，所以容忍账现在是**空**的
+    #    —— 交付与否（本测试真正的主语）没变，变的是账本。
+    assert result.ok and result.candidates, (
+        "the island page must be delivered under 530F's gate policy; a refusal "
+        f"here means the policy or the page moved — failures: "
+        f"{[item.detail[:200] for item in result.failures]}"
+    )
+    # **532 重钉**：账本又变了，而这一次变的是**哪一类**行。532 之前这条断言写的是
+    # 「账本是空的」（531 把 `R7` 挪开，`LED_K` 的名字行不再压件）；现在这一页带
+    # **三**条被点名的容忍行，全部是变压器自己的引脚文字（`T1` 的 `2`/`5`）压在
+    # `T1` 自己的值行上——`readability` 在这批之前**根本看不见**引脚名/号
+    # （`textmetrics.pin_rows` / `KIND_PIN_TEXT_PRESSED`）。交付与否（本测试真正
+    # 的主语）仍然没变：`ok=True`、1 候选。
+    tolerated = [note for note in result.notes if note.startswith("tolerated: ")]
+    assert len(tolerated) == 3 and all(
+        "[pin-text-press]" in note for note in tolerated
+    ), (
+        "this page delivers with three named rows, all of them the transformer's "
+        f"own pin typography: {tolerated}"
+    )
+    # 3) 单模块那条路（同一个模块、剥掉 islands）仍按老读数跑。
+    _assert_single_module_widening_reading(
+        circuit, presentation, book,
+        named=("HVDC", "SEC_12V", "FB_SENSE"),
+    )
+
+
+def _assert_single_module_widening_reading(
+    circuit, presentation, book, *, named: tuple[str, ...] = ("HVDC", "SEC_12V"),
+) -> None:
+    """119 的历史读数，量在**它真正会跑的那条路**上（530F 剥岛夹具）。
+
+    Extracted so both the re-pinned test above and the standalone one below read
+    the same numbers: the widening's trigger is gone, six base rungs are built, two
+    of them get past the relation gate and die at the readability gate with the
+    downgraded nets beside them, and the other four each name a relation of their
+    own.  Nothing here was re-measured — it is the same page measured where the
+    ladder actually runs.
+
+    ``named`` is the one number the two callers do **not** share, and 531 is why:
+    this test's own hand-made library has no `$.texts`, so nothing about its routing
+    changed, while the caller that hands the **real** profile book
+    (`SymbolProfile.from_dict`, table above) now measures the rows the host really
+    prints and cannot join a second long wire (`FB_SENSE`).  A caller states which
+    book it is measuring rather than one expectation being loosened for both — and
+    the parameter is called ``named`` rather than ``downgraded`` because the body
+    already computes a ``downgraded`` of its own from the rungs' own fallbacks.
+    """
+    single = dataclasses.replace(presentation, islands=None)
+    result = dc.compile(circuit, single, book, dc.CompileBudget(max_candidates=64))
+    notes = " ".join(result.notes)
+    # 1) 不点火，且 notes 说清基础阶梯建了几档。
+    assert "pose ladder was widened" not in notes, (
+        "the widening fired on the flyback again: under 520A2 the six base rungs "
+        "no longer agree on one relation, which is exactly the widening's "
+        f"precondition, so it must not run — notes: {notes[-400:]}"
+    )
+    assert "6 constructive variant" in notes, (
+        "the notes must say how many constructive rungs were built and refused; "
+        f"a different count means the ladder was re-pinned — {notes[-400:]}"
+    )
+
+    base = [
+        item for item in result.rejected
+        if "(widened)" not in item.variant and item.variant != "topology-search"
+    ]
+    assert len(base) == 6, (
+        f"the base ladder is 6 rungs under 520A2 (24 before it), got {len(base)}"
+    )
+    assert not [item for item in result.rejected if "(widened)" in item.variant], (
+        "a widened rung was built even though the widening's precondition (every "
+        "refusal names the same relation) no longer holds — re-measure"
+    )
+
+    # 2) 前提消失，按实测的两种去处量：过关系闸 / 各点名一条关系。
+    #
+    # **520E 重钉**：过关系闸的那两档现在死在**可读性闸**（不再是布线的直连
+    # 义务——那条义务连不上时被降级成名字了）。所以这里量的是「两档过关系闸、
+    # 死在闸上」，且它们就是**记账降级**的那两档：把降级与「过关系闸」绑在一起
+    # 才是本批的断言，只数「2 档死在闸上」会漏掉降级悄悄消失这种情况。
+    at_the_gate = [
+        item for item in base
+        if "the independent readability checker refused" in item.reason
+    ]
+    assert len(at_the_gate) == 2, (
+        "520A2 measured two of the six base rungs passing the relation gate; "
+        f"under 520E both die at the readability gate; got {len(at_the_gate)} — "
+        "re-measure before trusting the rest of this test"
+    )
+    assert sorted(
+        {item.variant for item in at_the_gate}
+    ) == ["spacing=1 pose-variant=0", "spacing=1.5 pose-variant=0"]
+    downgraded = sorted(
+        {fb.net for item in at_the_gate for fb in item.label_fallbacks}
+    )
+    assert downgraded == ["HVDC", "SEC_12V"], (
+        "the two rungs that get past the relation gate are the two the router "
+        f"cannot wire — and 520E names those nets instead: {downgraded}"
+    )
+    relations = {
+        dc._refusing_relation(item.failure) for item in base
+        if dc._refusing_relation(item.failure) is not None
+    }
+    assert len(relations) >= 3, (
+        "the base rungs agreeing on a single relation is the widening's trigger "
+        "coming back — the refusals named relations "
+        f"{sorted(relations)} (expected at least left-of(R8, U4), "
+        "right-of(C10, U5), near(C13, T1))"
+    )
+
+    # 3) 页面仍被诚实拒绝，且摘要点名**现在**真正拦路的那一层。
+    assert not result.ok and not result.candidates
+    joined = " ".join(item.detail for item in result.failures)
+    assert joined, "a refusal with no reason is not a refusal"
+    assert "the independent readability checker refused" in joined, (
+        "the summary must name the layer the page now stops on (520E moved it "
+        f"from the routing to the readability gate): {joined[:300]}"
+    )
+    assert [item.net for item in result.label_fallbacks] == list(named), (
+        "and the page's own account of what it named instead must be visible "
+        f"beside it: {[f.net for f in result.label_fallbacks]}"
+    )
+
+
+def test_the_single_module_flyback_still_shows_the_widening_reading():
+    """530F: 119 的历史读数量在**加宽真的会跑的那条路**上（剥岛夹具）。
+
+    See `DESIGN` §9.3: the widening's guard lives behind
+    `drawcompiler.compile`'s ``if not multi_island:``, so a flyback that declares
+    islands never reaches it.  Taking the declaration off the fixture — and not
+    adding a compiler switch, which would give the product a branch that exists for
+    tests only — is what keeps this measurement a measurement.  The numbers are
+    `_assert_single_module_widening_reading`'s; this test exists separately so the
+    reading is still named in `pytest -v` after the re-pin above.
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
     import test_113_flyback_grammar as t113
     book = t113._library_from(SPECS / "flyback_uc3845.library.json")
-
-    result = dc.compile(circuit, presentation, book,
-                        dc.CompileBudget(max_candidates=64))
-    notes = " ".join(result.notes)
-    assert "pose ladder was widened" in notes, (
-        f"the flyback's six base rungs are refused by one relation in common, so "
-        f"the widening should have fired; notes were: {notes[-400:]}"
-    )
-    assert "same-column(Q1, R5)" in notes, (
-        "the note must name the relation that triggered the widening"
-    )
-    # same-column is gone from every **widened** refusal: the widening resolved
-    # it. The base rungs still name it — they always did, and they stay in the
-    # record, because a refusal that vanished instead of being superseded would
-    # be a refusal nobody can audit.
-    base_still = [
-        item.reason for item in result.rejected
-        if "(widened)" not in item.variant and "same-column(Q1, R5)" in item.reason
-    ]
-    wide_still = [
-        item.reason for item in result.rejected
-        if "(widened)" in item.variant and "same-column(Q1, R5)" in item.reason
-    ]
-    assert len(base_still) == 6, (
-        f"the six base rungs should still be refused on same-column, got "
-        f"{len(base_still)}"
-    )
-    assert wide_still == [], (
-        f"the widening did not rescue same-column(Q1, R5): {wide_still[:2]}"
-    )
-    # And the page is still honestly refused, with a named blocker.
-    assert not result.ok and not result.candidates
-    joined = " ".join(item.detail for item in result.failures)
-    assert joined, "a refusal with no reason is not a refusal"
-    assert "same-column(Q1, R5)" in joined, (
-        f"the summary must name a relation: {joined[:300]}"
-    )
-    # Every widened rung is refused on a **different, named** relation than the
-    # one the widening chased. That is the honest shape of "a wider look, not a
-    # lower bar": the page moved forward one relation and is still red, for a
-    # reason that is written down rather than swallowed.
-    wide_reasons = {
-        dc._refusing_relation(item.failure) for item in result.rejected
-        if "(widened)" in item.variant
-    }
-    assert None not in wide_reasons, (
-        "a widened rung was refused without a named relation; the widening must "
-        "not turn a page it cannot help into a noisier refusal"
-    )
-    assert (SAME_COLUMN, "Q1", "R5") not in wide_reasons
-    assert len(wide_reasons) >= 1, "the widened rungs recorded no reason at all"
+    _assert_single_module_widening_reading(circuit, presentation, book)
 
 
 # ================================ 5 换料带来的新拦路者（真数据，逐条量）

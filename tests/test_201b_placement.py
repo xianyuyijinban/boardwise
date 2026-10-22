@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import json
 import math
@@ -434,9 +435,21 @@ def _request_from(
     )
 
 
-def _flyback() -> tuple[pl.PlacementInput, dc.CompileResult]:
+def _flyback(*, single_module: bool = False) -> tuple[pl.PlacementInput, dc.CompileResult]:
+    """The flyback as the document states it — or with `islands` taken off (530F).
+
+    `single_module=True` is `DESIGN` §9.3's fixture swap for 201B: this module
+    (`engines/placement.py`) is the **single-module** topology search, and since
+    520m made the island path the one a spec with `islands` compiles through
+    (`drawcompiler.compile`'s `multi_island`), a test that measures this module
+    through the real document no longer measures it at all.  Stripping the
+    declaration — not a compiler switch — puts the fixture back on the path the
+    assertions are about.
+    """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
+    if single_module:
+        presentation = dataclasses.replace(presentation, islands=None)
     book = _library_from(SPECS / "flyback_uc3845.library.json")
     budget = dc.CompileBudget(max_candidates=64)
     compiled = dc.compile(circuit, presentation, book, budget)
@@ -458,15 +471,54 @@ def _flyback_placed() -> tuple[pl.PlacementInput, pl.PlacementResult, float]:
 
 
 def test_the_flyback_has_no_candidate_today_which_is_why_this_module_exists():
-    """先把病情钉住：现编译器对这份输入给 0 候选，死因是 `same-column(Q1, R5)`。
+    """先把病情钉住：现编译器对这份输入仍然给 0 候选，但**拦路的换了一层**。
 
     这条测试是**病历**，不是验收——阶段二把 `_place` 接上之后它会跟着改口径。
+
+    **520A2 重钉**（这份病历的又一次换口径，历史的每一次都写在这里）：
+
+    * 改动前：死因是 **`same-column(Q1, R5)`**——序关系闸。构造阶梯 24 档
+      全被它（或同族的关系）拒掉，`_place` 连一个摆放都交不出来。
+    * 改动后（520A2，链件可沿**横跨链**的方向 walk）：序关系闸上活下来 2 档
+      （`spacing=1 pose-variant=0`、`spacing=1.5 pose-variant=0`），页面往前
+      走到**布线**层，死在 `net 'HVDC' … direct-wire obligation`。
+    * 再改动后（520E）：布线层也过去了。直连义务连不上时那条网被**降级成名字
+      并记账**（岳的裁决：什么时候打标签该由算法反馈决定），2 档于是停在
+      **可读性闸**（手搓 loader 下 `13` 条硬违反），`label_fallbacks` 点名
+      `HVDC` 与 `SEC_12V`。
+
+    **530F 换夹具（`DESIGN` §9.3）**：这份文档的 `islands[]` 在 520m 之后把
+    `compile` 送上了**岛路**，而 201B 的主体 `engines/placement.py` 是
+    **单模块**的拓扑搜索——留在岛页上量它，量的是一个这份模块根本没有跑的东西
+    （岛路上 `_topology_round` 结构上不点火，`drawcompiler.compile` 的
+    `if not multi_island:`）。所以这一条现在把 `islands` **从夹具上剥掉**
+    （`_flyback(single_module=True)`），让它回到它声称要量的那条路上。
+    **不加编译器开关**：开关等于让产品多一个只为测试存在的分支（§9.3 的原话）。
+    剥岛之后本节的历史读数**逐字成立**：0 候选、停在可读性闸、`HVDC`/`SEC_12V`
+    被降级点名——201B 的病历一个字不用改。
+
+    所以「0 候选」这个事实没变，变的是**哪一层**把它拒掉。断言按这个新事实写：
+    它抓的是「页面又退回关系闸」这种回归，也抓「降级凭空消失」这种回归。
     """
-    _, compiled = _flyback()
+    _, compiled = _flyback(single_module=True)
     assert compiled.ok is False
     assert compiled.candidates == []
     reasons = " ".join(item.detail for item in compiled.failures)
-    assert "same-column(Q1, R5)" in reasons
+    assert "the independent readability checker refused" in reasons, (
+        "the page no longer stops at the relation gate; under 520A2 the refusal "
+        "moved one layer forward, to the routing, and under 520E to the "
+        "readability gate — if it moved again, say where in this docstring "
+        f"rather than leaving the old text: {reasons[:300]}"
+    )
+    assert [item.net for item in compiled.label_fallbacks] == ["HVDC", "SEC_12V"], (
+        "520E's own subject: the nets the router could not join are named and "
+        f"recorded, not silently dropped: {[f.net for f in compiled.label_fallbacks]}"
+    )
+    assert "same-column(Q1, R5)" not in reasons, (
+        "the relation the page used to die on is honoured by the placement now; "
+        "a refusal that names it again means the chain walk regressed: "
+        f"{reasons[:300]}"
+    )
 
 
 def test_the_flyback_is_placed_with_every_relation_kept_and_nothing_hard_broken():

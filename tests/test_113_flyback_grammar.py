@@ -1051,12 +1051,28 @@ def test_the_feedback_chain_is_stated_by_order_and_hug_not_by_a_row():
 
 
 def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
-    """**120 更新**：又换了一次料，这条再跟着换一次——**形状**仍然不变。
+    """**520A2 更新**：又换了一次口径，这条再跟着换一次——**形状**仍然不变。
 
     **120 的现实**：岳选了 WE 749118105（`C17189451`，六脚两绕组，pin 2/5 是 NC），
     辅助链整条拆掉。118 的「五脚装不下三绕组」**前提没了**（两绕组要的端数 4 <
-    脚数 6），119 的「加宽能救 `same-column`」**照旧成立**，而整页**仍然编译不出来**
-    ——这次拦着的是 120 量到的两条新病（孤岛落子、走廊压线），都不是位姿。
+    脚数 6），整页**仍然编译不出来**——120 拦着的是两条新病（孤岛落子、走廊压线），
+    都不是位姿。
+
+    **520A2 的现实**：链件不再一律钉死，可沿**横跨链**的方向 walk。于是序关系闸
+    上活下来 2 档（`spacing=1/1.5 pose-variant=0`），整页往前走到**布线**层，
+    死在 `net 'HVDC' … direct-wire obligation`；而 119 的加宽轮**不再点火**
+    （它的前提「六个基础档同因」正是本次修掉的东西——现在六档各有各的去处，
+    4 档各点名一条关系、2 档过关系闸）。
+
+    **520E 的现实**：布线层也过去了。岳裁定「什么时候打网络标签不是纯算法决定的，
+    应该由算法反馈模型决定」之后，连不上的直连义务**per net 降级成名字**并记账
+    （`label_fallbacks` = `HVDC`、`SEC_12V`），于是这一页往前走到**可读性闸**：
+    基阶梯第一档 `spacing=1 pose-variant=0` 被闸拒 13 条
+    （`netlist-partition-mismatch · FB_SENSE` 等），拓扑轮拒 24 条。**`ok`/
+    `candidates` 没变**（`False`/`0`），变的还是「谁拒的」——而拒绝里现在带着
+    降级那一句（「长线和名字都没有出路」）。本页用**手搓 loader**
+    （`_library_from`，丢掉 `$.texts` 与引脚 `length`），真尺子的读数短一截，
+    见 `tests/test_551a_failure_rounds.py`。
 
 
     118 的版本写的是「反激整页被五脚变压器拦着」。岳 2026-10-04 深夜换了料：
@@ -1071,10 +1087,12 @@ def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
       `same-column(Q1, R5)` 拒掉。118 实测 `R5` 转 90° 就把它的 `SRC` pad 放回
       `Q1` 的列——而那个位姿**不在** `_variants` 只探索的 0/1 两档里。119 给
       `_variants` 加了一条**只在 candidates=0 时点火**的加宽：这六档既然都被同
-      一���关系拒掉，就把阶梯往它自己的接受位姿集**试完**。加宽之后
-      `same-column` **确实**被清掉了（见
-      `tests/test_119_pose_ladder_widening.py` 的合成单测）——所以这一拨不是
-      拦路的了。
+      一关系拒掉，就把阶梯往它自己的接受位姿集**试完**。加宽之后 `same-column`
+      **确实**被清掉了（见 `tests/test_119_pose_ladder_widening.py` 的合成单测）。
+      **520A2 之后这一拨换了位置**：序关系闸不再把六档全拒（2 档过闸、4 档各拒
+      一条关系），加宽的前提「六档同因」消失，于是它不点火——真正把
+      `same-column` 清掉的是 520A2 让链件沿横跨方向 walk。加宽这个机制本身
+      一个字没改，仍由 119 的合成单测钉着。
     * **第二拨（120 量到的两条，都不是位姿）**：
       - **孤岛落子**：`_place` 给每个 (owner, 方向) 组的第 `i` 颗支路
         `lane*scale*(1+i)`，在 `spacing=2.2` 上是 `132*(1+2) = 396`——**在加 anchor
@@ -1087,7 +1105,16 @@ def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
         120 逐脚量到 **4 处**这样的压线。
 
     断言写成真形状：编译不过、**每一个**拒绝都被点名、点名的**不是一句含糊的
-    「排不出来」**、而且加宽确实**发生**了（在 notes 里，不是在沉默里）。
+    「排不出来」**、**加宽没有点火**（520A2 之后它的前提不成立），而 notes 里
+    说清了基础阶梯建了几档、第一档拒在哪条关系上。
+
+    **530F 重钉**：这份文档在 520m 之后走**岛路**，上面那一段里属于单模块路径的
+    读数（哪个阶梯、哪条关系、两网被降级）全部搬去了跑在那条路上的测试
+    （`test_119_pose_ladder_widening.py` 的
+    `test_the_single_module_flyback_still_shows_the_widening_reading`、
+    `test_551a_failure_rounds.py`）。**不剥岛**：113 的题材是「反激这一份文档
+    编译出来是什么」，那是产品行为（`DESIGN` §9.3：「账簿该改就改，病历不该
+    伪造」）。下面断言群里 530F 那一段逐条写了岛路的实际形态。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
@@ -1102,19 +1129,89 @@ def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
     assert not placed.candidates
     joined = " ".join(item.detail for item in placed.failures)
     assert joined, "a refusal with no reason is not a refusal"
-    # 119: the widening is not allowed to be silent. If it fired, the reader is
-    # told which relation triggered it and how many rungs it added.
     notes = " ".join(placed.notes)
-    assert "pose ladder was widened" in notes, (
-        "the base ladder was refused by one relation in all six rungs, so 119's "
-        f"widening should have fired; notes were: {notes[-400:]}"
+    # **530F 重钉（改账簿，按任务书工作项 2）**：这份文档在 520m 之后声明了
+    # `islands`，于是它编译走的是**岛路**——`drawcompiler.compile` 的
+    # `multi_island` 那一边。113 是**语法与文档的端到端**测试，它钉的正是
+    # 「反激这一份文档编译出来是什么」，那是**产品行为**，所以这里**不剥岛**
+    # （`DESIGN` §9.3 的原话：「账簿该改就改，病历不该伪造」）。剥岛之后的那几条
+    # 读数（加宽不点火 / 6 档基阶梯 / 它点名哪条关系 / 两网被降级记账）没有丢——
+    # 它们由 `test_119_pose_ladder_widening.py` 的
+    # `test_the_single_module_flyback_still_shows_the_widening_reading` 与
+    # `test_551a_failure_rounds.py` 钉着，两条都跑在**阶梯真的会跑的那条路**上。
+    #
+    # 这一页在岛路上的实际形态，逐条：
+    #   * 判决没变（`ok=False`、0 候选），换的是**谁拒的**：岛页的可读性闸。
+    #   * notes 说的是岛页自己的话（几个岛、各自落在哪、岛间不拉线），
+    #     **没有**阶梯的痕迹——岛路上根本没有阶梯。
+    #   * 拒绝里点名**对象**（哪两个东西撞了），这是 053 §4「拒绝必须说出理由」
+    #     在岛路上的措辞。
+    assert "pose ladder was widened" not in notes, (
+        "the widening fired again — and it has no executor on the island path at "
+        "all, so a note about it here means the document left the island path. "
+        f"notes: {notes[-400:]}"
     )
-    # And the widening did NOT rescue the page: the honest refusal is still here,
-    # and it is the *routing* that is left, not the relation the widening chased.
-    assert "direct-wire obligation" in joined or "same-column(Q1, R5)" in joined, (
-        "a refusal that names neither the relation nor the routing is a shrug: "
-        f"{joined[:400]}"
+    assert "constructive variant" not in notes, (
+        "the island page builds no constructive ladder; a rung count here means "
+        f"the single-module path ran. notes: {notes[-400:]}"
     )
+    assert "boardwise-island-page" in notes, (
+        "the notes must say what the page **is** — a page of islands packed as "
+        f"rigid blocks: {notes[-400:]}"
+    )
+    assert "island 'primary'" in notes and "island 'bridge'" in notes, (
+        "every island's own placement must be on the record, so 'which island "
+        f"moved' is answerable: {notes[-600:]}"
+    )
+    # **530F**：岛路的拒绝措辞是 `the island page was refused by the readability
+    # checker`，并且它点名对象。旧文字钉的是单模块那一层的措辞
+    # （`the independent readability checker refused`），那条路这份文档已经不走。
+    assert "the island page was refused by the readability checker" in joined, (
+        "the refusal must name the layer that now refuses the page: since 520m the "
+        "flyback document compiles through the island path, whose gate reports in "
+        f"its own words — got: {joined[:400]}"
+    )
+    # **531 重钉**: the kinds this asserts moved, and both the reason and the
+    # consequence are this batch's subject. `_library_from` — this test's own
+    # hand-made loader — builds profiles with **no text anchors and no declared
+    # poses** (it reads `body`/`pins` and stops). Until 531 the island path *invented*
+    # a position for every row, so this variant still produced `[text-overlap]`
+    # findings; now a profile with no anchors is a part whose rows nobody can state,
+    # so the text kinds cannot appear at all and the refusal the page does carry is
+    # its **electrical** one — `[netlist-partition-mismatch]` / `[undeclared-junction]`,
+    # which the default-pose layout of this loader produces.
+    #
+    # 两条 531 留下的线索，532 **证清了一条、保留一条**，证据在
+    # `evidence/532/raw/test113_head_probe.txt`（探针
+    # `evidence/532/probes/20_test113_head_probe.py`，用 `git archive HEAD src` 把
+    # 提交态解开到临时目录，**不碰工作树**）：
+    #
+    # (a) **仍然成立**：这个 loader 丢掉 `poses` 与 `$.texts`，所以它量出来的**不是**
+    #     产品的布局——真库（`_flyback()` 那条路）编译同一份文档是 `ok=True`。
+    #
+    # (b) **已证清：这一变体上的电学拒因不是 531 引进的。** 两条读数：
+    #     * 这个 loader 造出来的书里 `declaredTextRows = 0`、
+    #       `declaredPinTextTables = 0` —— 531/532 新加的那两个文字读者
+    #       （`textmetrics.symbol_rows` / `pin_rows`）在这份书上**一句话都没有**，
+    #       路由与摆放根本没有行可避，所以拒因不可能出自文字模型；
+    #     * HEAD 对照跑不动岛路：`islands` 这个键是**未提交的工作**，HEAD 的
+    #       `PresentationSpec` 直接拒收（`unknown key(s) islands`），所以在 HEAD 上
+    #       这一页只有单模块路径可跑，它的拒因是**关系闸**
+    #       （`same-column(Q1, R5)`），一条可读性都没有；工作树上同一条单模块路径的
+    #       拒因才是可读性（11 条 `text-overlap`，**没有一条是电学的**）。电学拒因
+    #       只在**岛路**上出现，而岛路在 HEAD 上不存在——它属于 520m 以来的岛路
+    #       本身，不属于 531 的文字量尺。
+    assert "[" in joined and "]" in joined, (
+        "a refusal owes its objects, not just a count — the island gate names the "
+        f"kind and the two things that collide: {joined[:400]}"
+    )
+    assert placed.label_fallbacks == [], (
+        "the island path names no net by downgrading a wire obligation: the "
+        "crossing nets are expressed by their own name in each island at "
+        f"construction (岳裁定 A), so there is nothing left to fall back to — got "
+        f"{[f.net for f in placed.label_fallbacks]}"
+    )
+
 
 def test_the_grammar_still_binds_the_measured_circuit():
     """**语法层是好的**——118 只换了 profile 与 token，没有换语法。

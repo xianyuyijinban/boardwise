@@ -465,6 +465,13 @@ class PlanDrawPart:
     #: The attribute key ``value`` is written into (``"Value"``, see
     #: :data:`DRAW_VALUE_KEY`), or ``""`` when the plan claims no value write.
     value_key: str = ""
+    #: Is this part's **value row** printed? ``False`` (532) means the plan states
+    #: it is suppressed, and apply writes the host's own ``valueVisible`` on the
+    #: placed part's value row — the only thing that stops the row being painted
+    #: (measured, `evidence/532/report.md` §1: 531 left four values out of the
+    #: plan's text list and the host printed all four).  ``True`` is written
+    #: nowhere: a plan whose values are printed keeps the document it had.
+    value_visible: bool = True
     footprint: str = ""
     symbol_ref: str = ""
     symbol_hash: str = ""
@@ -887,6 +894,9 @@ class ChangePlan:
                         # that claims nothing keeps the document it had (the
                         # kind-aware rule this method exists for).
                         **({"valueKey": item.value_key} if item.value_key else {}),
+                        # 532: the same rule for the one field that says a row is
+                        # **not** on the paper — a printed value writes nothing.
+                        **({"valueVisible": False} if not item.value_visible else {}),
                         "pins": [
                             {"number": pin.number, "dx": pin.dx, "dy": pin.dy}
                             for pin in item.pins
@@ -1961,6 +1971,13 @@ def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[
         if not isinstance(mirror, bool):
             raise ChangePlanError(f"{spot}.mirror must be a boolean, got {mirror!r}")
         pins = _draw_pins_from(item.get("pins"), spot)
+        value_visible = item.get("valueVisible", True)
+        if not isinstance(value_visible, bool):
+            raise ChangePlanError(
+                f"{spot}.valueVisible must be a boolean, got {value_visible!r} — it is "
+                "the plan's statement that the host must not print this part's value "
+                "row (S-21's way out of a collision), and apply writes it verbatim"
+            )
         out.append(PlanDrawPart(
             spec_id=spec_id,
             designator=designator,
@@ -1968,6 +1985,7 @@ def _draw_parts_from(value: Any, profile_hashes: list[tuple[str, str]]) -> list[
             lcsc=lcsc,
             value=value,
             value_key=_draw_value_key(item.get("valueKey"), spot),
+            value_visible=value_visible,
             footprint=str(item.get("footprint") or ""),
             symbol_ref=ref,
             symbol_hash=digest,

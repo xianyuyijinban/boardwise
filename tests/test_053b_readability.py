@@ -268,14 +268,17 @@ def _kinds(result) -> list[str]:
 # ------------------------------------------------ the contract and its shape
 
 
-def test_the_hard_kinds_are_the_eleven_the_contract_names():
-    """The vocabulary itself: eleven constraints, one kind each, fixed order.
+def test_the_hard_kinds_are_the_twelve_the_contract_names():
+    """The vocabulary itself: twelve constraints, one kind each, fixed order.
 
     147 added `wire-on-pin-line` and `text-on-wire` — the two classes 岳 caught by
     eye on a page every gate called clean (`outputs/147/FINDINGS.md`): a wire
     lying *along* a symbol's own lead, and a conductor printed through a text row.
     `wire-through-body`'s box could not see the first (a line is not a box) and
-    `text-overlap` never looked at a conductor at all.
+    `text-overlap` never looked at a conductor at all. 532 added `pin-text-press`,
+    the same kind of addition one level down: `_text_boxes` carried no *pin* name
+    or number at all, so four collisions between a symbol's own pin text and its
+    own rows were invisible to this checker (`evidence/532/report.md` §4).
     """
     assert HARD_KINDS == (
         "netlist-partition-mismatch",
@@ -285,6 +288,7 @@ def test_the_hard_kinds_are_the_eleven_the_contract_names():
         "wire-on-pin-line",
         "text-overlap",
         "text-on-wire",
+        "pin-text-press",
         "out-of-page",
         "user-lock-violated",
         "nc-pin-connected",
@@ -771,12 +775,14 @@ def test_a_wire_between_its_own_two_pins_may_enter_its_own_body():
     assert _of(result, KIND_WIRE_THROUGH_BODY) == []
     assert _of(result, KIND_WIRE_ON_PIN_LINE) == []
     rows = _of(result, KIND_TEXT_OVERLAP)
-    assert [item.objects for item in rows] == [("segments[0]", "parts[R1]")]
-    assert "'MID'" in rows[0].evidence, (
-        "the row the host prints a wire's own name in is anchored at the wire's "
-        "midpoint, which here is the middle of the part"
-    )
-    assert len(result.hard_violations) == 1, _kinds(result)
+    # 530D (岳's ruling A): this scene has **no label** on `MID`, so the page states
+    # no name for that net at all — the wire lands unnamed and the host prints no row
+    # over it. The reading that a name row *can* land on a part is 147's own, on the
+    # scene that carries a label (`test_the_host_draws_a_wires_name_and_the_checker
+    # _sees_where`); what stays here is this test's subject — the **wire** entering
+    # its own body is legal.
+    assert rows == []
+    assert len(result.hard_violations) == 0, _kinds(result)
 
 
 # ------------------------------------------------------------------ 5. text
@@ -1065,9 +1071,12 @@ def test_an_nc_pin_the_drawing_wires_up_is_detected():
     ]
     assert "pins[R1.2], pins[R2.1]" in found[0].evidence
     rows = _of(result, KIND_TEXT_OVERLAP)
-    assert [item.objects for item in rows] == [("segments[2]", "parts[R2]")]
-    assert "'MID'" in rows[0].evidence
-    assert len(result.hard_violations) == 2, _kinds(result)
+    # 530D: the stray wire is a conductor of a net whose label sits elsewhere (the
+    # base fixture's label is the tap's own wire), so this one lands unnamed and
+    # brings no row. "The stray wire is the only defect **it** adds" is therefore
+    # true again — of the wire, and now of the page as well.
+    assert rows == []
+    assert len(result.hard_violations) == 1, _kinds(result)
 
 
 def test_an_nc_pin_carrying_a_power_flag_is_detected():
@@ -1331,20 +1340,20 @@ def test_text_spacing_and_occupancy_are_measured_in_canvas_units():
     assert "texts[0] and texts[2]: 15 units apart" in result.soft_reasons[
         "min_text_gap"
     ][0]
-    # Two bodies (20x40 each), four text/label boxes, and — since 147 — the two
-    # rows the host prints this net's own name in: `MID` is not carried by a power
-    # flag, so its two wires each print a name, at (100, 300) growing down (13.103
-    # units wide) and at (150, 300) growing right (13.103 units wide). 3300 +
-    # 2 x 131.03 = 3562.06 units^2 of 800000. The old expectation counted the boxes
-    # the *plan* declares; a wire's own name is a box the plan does not declare and
-    # the page still carries, which is what 147 put into this set. (150 re-measured
-    # the width: `MID` is 13.103 units, not 18.33 — `outputs/150/t2_verdict.md`.)
-    assert result.soft_metrics["occupied_ratio"] == pytest.approx(3562.06 / 800000.0)
-    assert "8 box(es) cover 3562.06 units^2" in result.soft_reasons[
+    # Two bodies (20x40 each), four text/label boxes, and — since 147 — the row the
+    # host prints a **named** wire's own name in. 530D (岳's ruling A) narrows
+    # "named" to the wire that *is* the label: `MID`'s label sits on the tap's own
+    # wire (150, 300), so that one prints (13.103 units wide) and the chain wire at
+    # (100, 300) does not — it is a conductor, and a conductor carries no name.
+    # 3300 + 131.03 = 3431.03 units^2 of 800000. The old expectation counted both
+    # rows, from when every wire of an unflagged net printed. (150 re-measured the
+    # width: `MID` is 13.103 units, not 18.33 — `outputs/150/t2_verdict.md`.)
+    assert result.soft_metrics["occupied_ratio"] == pytest.approx(3431.03 / 800000.0)
+    assert "7 box(es) cover 3431.03 units^2" in result.soft_reasons[
         "whitespace_ratio"
     ][0]
     assert result.soft_metrics["whitespace_ratio"] == pytest.approx(
-        1.0 - 3562.06 / 800000.0
+        1.0 - 3431.03 / 800000.0
     )
     assert "800000 units^2" in result.soft_reasons["whitespace_ratio"][0]
 

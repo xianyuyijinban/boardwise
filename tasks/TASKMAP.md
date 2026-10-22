@@ -36,6 +36,14 @@
   `text_overlap` 代价项（526 撤回：只做一半的约束比不做更差）；`R4` 真热更阶段二（待岳裁）。
 - **发版**：`v0.5.15` 正式（10-17）· `v0.5.16` / `v0.5.17` / `v0.5.18` 内测（10-18 / 10-19）。
 
+> **2026-10-21 追加（岛系列，工作树未提交）**：`520k`–`520v` + `530A`–`530G` 是**同一条线**——
+> 把「一个功能模块一张局部图」的**多岛原理图**从设计（`evidence/523/DESIGN.md`，岳 2026-10-20
+> 六条裁定）做到验收。**530F 是收口批**：闸降级口径落地 + 5 条老红销账（全量 0 红）+
+> `LayoutIsland.name` + **真机总验收**（`draw compile` 真反激岛页 `ok=True`，1 条主机自印行
+> 被点名容忍；落 `test` 新页回读 0 失配 / 10 旗标 / 标题栏零相交；删页存盘）。
+> 索引见本文件 530A–530G 七行，细节在 `evidence/530f/report.md`。
+> **这一批未 commit**（AGENTS.md 红线：git 变更逐次经岳点头）。
+
 ---
 
 ## 001–099
@@ -341,6 +349,14 @@
 | 528 | **0.6.0 门槛重写 + 四条裁决落地**（R4-C `update-connector --no-reload`；191D 数值不动；绘图线做硬门槛；527D2/D3 升为 0.6.0 阻塞项） | 在途 | tasks/528_060_gate.md |
 | 529 | 191D 的**分类空白带**（`HF ≤ 1µF` 与 `bulk ≥ 10µF` 之间的 2.2µF/4.7µF 落 unknown → 假 WARN；补档后撤销 191D 的「输入侧无候选才 WARN」收窄） | 规划（非阻塞） | tasks/528_060_gate.md §4 |
 | 528A | `bridge update-connector --no-reload`：写记录不 reload，点一次扩展菜单生效（R4 实验④的产物） | 在途 | tasks/528_060_gate.md §1 |
+| 530A | **岛页旗标**：`IslandBlock.power_symbols`（加性）+ 跨岛地/电源一律旗标（S-16），旗标进 `bbox`；真机 10 旗标落 `test` 新页，连通 44 脚 0 失配。设计见 `evidence/523/DESIGN.md` | 工作树 | evidence/530a/（报告 + probes + raw + 落图 PNG/SVG） |
+| 530B | **岛内布局核心**：主器件居中（S-03）+ 两脚件贴它服务的引脚（S-04）+ 去耦贴供电脚 ≤30（S-05）+ 同规格成排（S-06）；单岛路径几何逐字节不变 | 工作树 | evidence/530b/ |
+| 530C | **岛内连线修订**：`_route` 加 `bends` / `true_crossings` 两键与「压外来针尖 / 落在外来导体上」两档过滤（S-09/S-11）；导线网名清空档实测硬违反 8→0 并查出开关 | 工作树 | evidence/530c/ |
+| 530D | **命名分量化**（S-14：一条网每个连通分量恰好一个名）+ **落图不印导线网名**（岳裁定 A，`label_wire_indices`）+ 连通回验改**分区核对**；真机 16 条 spec 网 / 44 脚 / 0 失配；闸 8→1（残余是 `LED_K` 标签自己的行压 `R7`） | 工作树 | evidence/530d/ |
+| 530E | `draw islands propose`（几何聚类只产出**待写的文档**）与 `draw islands apply`（六道闸 + §5.6 四级保守回退 + 件守恒）；离线两条命令，不碰编辑器 | 工作树 | evidence/530e/ |
+| 530F | **多岛总验收**：① 闸降级口径落地——电学类硬拒，被容忍的**主机自印行**每页有上限且**逐条点名**（`ISLAND_GATE_TOLERATED_LIMITS`）；② 5 条老红销账（201b/551a 换夹具、113/119 改账簿、145a 改账簿）后全量 0 红；③ `LayoutIsland.name`（加性）+ `apply` 写入 + 岛页 notes 报名字；④ 真机落图终验：`draw compile` ok=True（1 条被容忍且点名）→ 落 `test` 新页 → 连通 0 失配 / 12 根带名导线=标签 / 10 旗标 / 标题栏零相交 → PNG + plan SVG → 删页存盘 | 工作树 | evidence/530f/（报告 + probes + raw + 落图 PNG/SVG） |
+| 530G | **标题栏 keepout 进岛打包**（S-01）：矩形是**图页符号自己的 `TABLE`**（700×180，锚在角上、不随图幅缩放，`core.pageframe`）+ 下方留白 15%；真反激岛页对真矩形零相交；无 page_box 的岛页摘要仍冻结 | 工作树 | evidence/530g/ |
+| 533 | **岛页落图强制保护**（补 530G 的缺口：`--page-box` 是可选的，不带就没有 keepout → 530F 偏离 4 与 532 页 A 两次落进标题栏）：① 真机探明页面图幅**读得出来**——`sys.get_document_source` 的记录流里图纸符号自己带 `Width/Height/Blade Width/Title Block Position`（`document.current` 的 `schematicPage` 盒是 `{}`，读不出），接进 `parsers.schematic.sheet_attrs_from_text` → `pageframe.title_block_from_sheet_attrs`；② `draw plan` 绑活页 + 多岛时**自动**读图幅推 page_box+keepouts，读不到又没给 `--page-box` 则 exit 5；③ `draw apply` 核对 plan 自己记的 keep-out（`keep_out_note`）与目标页图幅，没记/对不上/读不到则 exit 5，**绝不静默落进标题栏**；④ 真机回归：新建 test 页自动读图幅 → 落图 → 标题栏矩形内 **0** 图元（同口径 532 页 A 仍 32）→ 连通 0 失配 → 删页存盘 | 工作树 | evidence/533/（报告 + probes + raw + 落图 PNG/SVG） |
 | V4 | **立创 EDA Pro 4.x 适配**（岳 2026-10-19 裁：**11 月起（0.6.x）做**）。四件事：① 在真 V4 上复跑 `doctor` + 一块板的 `checkup`，逐字段对拍 0.4.26 那次的结果包（当年结论：`.epro2` 归档与 V3 同格式、零适配；之后 0.5.x 六七个版本未在 V4 复测）；② 在线 connector-on-V4 探针重跑（当年 8/8 arity 一致、V4 是纯超集）；③ `.eprj3` 文件夹工程的真样本终验（yAxisDirection / NC 引脚 id / CANVAS 缺失，仍挂着）；④ `.eprj2` 导出引导在 V4 菜单里逐字核（V4 本地保存仍是 `.eprj2` SQLite 壳） | 规划（11 月开） | tasks/038-eprj3-tierA.md §V4.1.60 实测 |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）

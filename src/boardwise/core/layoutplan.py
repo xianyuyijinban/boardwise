@@ -60,6 +60,7 @@ __all__ = [
     "LayoutSource",
     "LayoutTarget",
     "LayoutText",
+    "label_wire_indices",
 ]
 
 #: Identifies the document; see `circuitspec.CIRCUIT_SPEC_KIND` for the rule.
@@ -128,6 +129,7 @@ _PART_KEYS = (
     "y",
     "rotation",
     "mirror",
+    "valueVisible",
 )
 _SEGMENT_KEYS = ("net", "points")
 _JUNCTION_KEYS = ("net", "x", "y")
@@ -183,6 +185,18 @@ class LayoutPart:
     a designator (see `circuitspec.SpecPart`), so the landing step names the
     part, and it may still be empty in a plan that has not landed. `symbol_hash`
     is the profile's :meth:`~boardwise.core.symbolprofile.SymbolProfile.geometry_hash`.
+
+    ``value_visible`` (532) is the one field that says a row is **not** on the
+    paper: S-21's way out of a collision is to hide a value, and until 532 that
+    sentence only ever reached a note.  The host draws a placed part's designator
+    and value itself, so a plan that hides one has to say so **here** — the
+    landing step then writes the host's own ``valueVisible`` flag on that part's
+    value row, which is the only thing that actually stops the row being painted
+    (`evidence/532/report.md`: 531 hid four values in the plan and the render
+    printed 4/4 of them).  A designator is never hidden (S-21), so this is the
+    value row only, and the field is written **only when it is false** — a part
+    whose value is printed says nothing, which keeps every plan this repo has
+    already recorded digest-identical.
     """
 
     part_id: str
@@ -193,6 +207,9 @@ class LayoutPart:
     rotation: float = 0.0
     mirror: bool = False
     reference: str = ""
+    #: Is this part's **value row** printed? False means the plan states it is
+    #: suppressed, and the landing step writes the host's ``valueVisible``.
+    value_visible: bool = True
 
 
 @dataclass
@@ -316,6 +333,82 @@ class LayoutEvidence:
         return EVIDENCE_VERDICT_FAIL if self.hard_violations else EVIDENCE_VERDICT_PASS
 
 
+def label_wire_indices(plan: "LayoutPlan") -> frozenset[int]:
+    """Which of the plan's segments **are** its labels — the name carriers.
+
+    岳's ruling A (2026-10-21, `docs/schematic-style-spec.md` §七.5): 「导线网名 →
+    一律不印 …… 名字只住在旗标/标签上」.  Read against what this host can actually
+    draw, the statement has one carrier per kind of name:
+
+    * a net the drawing states with a **flag** is named by that flag, and its
+      wires land unnamed (069 sec.9 — 「有了旗标就不要反复标注网络标识了」);
+    * a net the drawing states with a **label** is named by that label, and on
+      this host a label **is** a wire whose name the editor prints:
+      ``sch.place_netlabel`` is measured unusable (029, `docs/pits.md` #9,
+      「网名靠 wire 承载」).  A label with no named wire on it names nothing, and the
+      two islands it joins would be two nets — `DESIGN` §7.1's 「岛间名字接」 is
+      load-bearing, not decoration;
+    * every other wire — a rail's own conductor, an island-internal net's — lands
+      with **no** name at all, which is what 530D changes: the editor then holds it
+      under its own auto name (`NET1…`), exactly as 岳's own board does (30 of its
+      38 wires answer ``Net: ""``).
+
+    A segment is a label when the label's own anchor lies **on** it — at an end,
+    which is how an island places one (a stub out of the pin with the name at the
+    far end), or mid-span, which is how a page carries one when a planned wire
+    already runs through the point the label wanted (057 sec.4's ``carried`` case:
+    the conductor is what carries the name, so the conductor *is* the label).  Both
+    are the same statement — "this wire is where the drawing says the net's name"
+    — and it needs no second list to keep in step.
+
+    One statement, three readers — the landing marks exactly these wires
+    (`drawapply`'s purposes), the readability gate models a name row for exactly
+    these segments (:func:`readability._named_wire_rows`), and the connectivity
+    re-verification reads the names of exactly these nets (`drawapply._live_problems`).
+    They must not drift: a gate that models a row nobody prints, or a re-verification
+    that looks for a name nobody wrote, reports a page that is not the one on the
+    canvas.
+    """
+    def on_run(
+        start: tuple[float, float],
+        stop: tuple[float, float],
+        point: tuple[float, float],
+    ) -> bool:
+        """Does the run ``start``-``stop`` reach ``point`` (its ends included)?"""
+        if abs(start[0] - stop[0]) < 1e-9:  # vertical
+            return abs(point[0] - start[0]) < 1e-6 and (
+                min(start[1], stop[1]) - 1e-6 <= point[1] <= max(start[1], stop[1]) + 1e-6
+            )
+        if abs(start[1] - stop[1]) < 1e-9:  # horizontal
+            return abs(point[1] - start[1]) < 1e-6 and (
+                min(start[0], stop[0]) - 1e-6 <= point[0] <= max(start[0], stop[0]) + 1e-6
+            )
+        return False
+
+    anchors = [
+        (str(label.net), (float(label.x), float(label.y)))
+        for label in plan.labels if label.net
+    ]
+    out: list[int] = []
+    for index, segment in enumerate(plan.segments):
+        if not segment.net or len(segment.points) < 2:
+            continue
+        runs = [
+            (
+                (float(segment.points[position][0]), float(segment.points[position][1])),
+                (float(segment.points[position + 1][0]),
+                 float(segment.points[position + 1][1])),
+            )
+            for position in range(len(segment.points) - 1)
+        ]
+        if any(
+            net == segment.net and any(on_run(start, stop, anchor) for start, stop in runs)
+            for net, anchor in anchors
+        ):
+            out.append(index)
+    return frozenset(out)
+
+
 @dataclass
 class LayoutPlan:
     """One compiled drawing, as data."""
@@ -387,6 +480,10 @@ class LayoutPlan:
                     "y": item.y,
                     "rotation": item.rotation,
                     "mirror": item.mirror,
+                    # 532: only when the value row is **suppressed**. A printed
+                    # value says nothing here, so every plan whose parts print
+                    # their values keeps the digest it already had.
+                    **({"valueVisible": False} if not item.value_visible else {}),
                 }
                 for item in self.parts
             ],
@@ -631,6 +728,9 @@ def _parts_from(value: Any) -> list[LayoutPart]:
             rotation=_pose(body.get("rotation", 0), f"{spot}.rotation"),
             mirror=_boolean(body.get("mirror", False), f"{spot}.mirror"),
             reference=reference,
+            value_visible=_boolean(
+                body.get("valueVisible", True), f"{spot}.valueVisible"
+            ),
         ))
     return out
 

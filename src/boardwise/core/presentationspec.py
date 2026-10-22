@@ -50,6 +50,12 @@ cross-check belongs to whoever holds both documents — the phase-B compiler and
 for modules, the page compiler. Validating them here would either duplicate the
 circuit schema in this file or accept a document that silently refers to nothing.
 
+`islands` is the one group this file *does* check, and for the opposite reason:
+its facts are **this document's own** (which of the parts the modules name sits
+in which block) and nothing outside can decide them. The reading lives in
+`islands.py` — this file holds the key, the field and the boundary — because a
+block that a spec states as data is not a block the layout has to invent.
+
 **Serialisation stays byte-stable for a document that says nothing new.** The
 `grammarRef` / `presentation` / `branchOrder` keys of a module and the top-level
 `flow` list are written **only when stated**, because a LayoutPlan's geometry
@@ -57,7 +63,9 @@ digest pins the presentation digest: an untouched 053 spec has to hash — and
 therefore compile — to exactly the plan it did before this batch. The fields are
 additions, not changes: absent reads as "this module inherits" (or, for the
 order, "no order stated"), and a page that declares no flow is the page whose
-modules are read in name order.
+modules are read in name order. `islands` (520j) is an addition on the same
+terms: a spec that states none serialises exactly as it did before the key
+existed, and is read as one implicit island holding every part.
 """
 
 from __future__ import annotations
@@ -70,6 +78,13 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from .circuitspec import PORT_DIRECTIONS
+from .islands import (
+    IslandError,
+    LayoutIsland,
+    declared_part_ids,
+    implicit_island,
+    parse_islands,
+)
 from .symbolprofile import POSE_ROTATIONS
 
 __all__ = [
@@ -91,6 +106,7 @@ __all__ = [
     "DirectWiringObligation",
     "FlowEdge",
     "LabelPolicy",
+    "LayoutIsland",
     "PresentationModule",
     "PresentationPath",
     "PresentationSpec",
@@ -147,6 +163,7 @@ _TOP_KEYS = (
     "kind",
     "specVersion",
     "modules",
+    "islands",
     "flow",
     "mainPaths",
     "feedbackPaths",
@@ -332,6 +349,17 @@ class PresentationSpec:
     """The whole presentation intent, in normal form."""
 
     modules: list[PresentationModule] = field(default_factory=list)
+    #: The layout islands the page is arranged in (520j,
+    #: `docs/multi-island-design.md`). ``None`` means **the document states
+    #: none**, which reads as one implicit island holding every part — a spec
+    #: that says nothing about islands is a spec whose layout is what it always
+    #: was, and that is a promise this field keeps rather than a convention
+    #: downstream code has to remember (ask
+    #: :meth:`effective_islands`, never test for `None`). Declaring islands is
+    #: the only thing that switches multi-island layout on, and it is read by
+    #: the layout layer only — `modules` keeps its own meaning (a
+    #: grammar-binding scope) and is not a second way of stating this.
+    islands: list[LayoutIsland] | None = None
     #: Module-level flow directions (056 sec.1). A partial order over module ids:
     #: the page compiler reads it to order the page and to find the edges it may
     #: wire as one whole connection. Empty = read the modules in name order.
@@ -375,6 +403,38 @@ class PresentationSpec:
         """Every module that claims this part — one, none, or the contradiction."""
         return [item.id for item in self.modules if part_id in item.parts]
 
+    def declared_part_ids(self) -> list[str]:
+        """Every part this document names, in first-mention order, no repeats.
+
+        The parts come from the modules — that is where a presentation spec
+        names its parts — and this is the reference set the island partition is
+        checked against (520j). One definition, used by the parse
+        (:func:`boardwise.core.islands.parse_islands`) and by
+        :meth:`effective_islands`, so the implicit island and the rule that
+        refuses an incomplete partition cannot disagree about which parts exist.
+        """
+        return declared_part_ids(module.parts for module in self.modules)
+
+    def effective_islands(self) -> list[LayoutIsland]:
+        """The islands the layout reads: the declared ones, or the implicit one.
+
+        A spec that states no `islands` is a spec whose parts are **one block** —
+        the default this batch exists to preserve. Returning that as a real
+        island rather than as `None` is the whole point of the method: every
+        consumer gets one shape, so no consumer can forget the case, and the
+        single-island path is the same code as the multi-island one.
+        """
+        if self.islands is not None:
+            return list(self.islands)
+        return [implicit_island(self.declared_part_ids())]
+
+    def island_of_part(self, part_id: str) -> str | None:
+        """The island that owns this part, or ``None`` when none does."""
+        for island in self.effective_islands():
+            if part_id in island.parts:
+                return island.id
+        return None
+
     def sides_for_module(self, module: PresentationModule) -> dict[str, str]:
         """The sides a module draws with: the document's, overridden by its own."""
         merged = dict(self.side_preferences)
@@ -394,12 +454,20 @@ class PresentationSpec:
         are written **only when stated**: a document that says nothing new
         serialises exactly as it did before the page layer existed, which is what
         keeps an existing spec's digest (and therefore every plan compiled from
-        it) byte-identical (053B's scene hashes are a contract).
+        it) byte-identical (053B's scene hashes are a contract). `islands`
+        follows the same rule for the same reason (520j): a spec that states no
+        islands hashes — and therefore compiles — to exactly what it did before
+        this key existed.
         """
         return {
             "kind": PRESENTATION_SPEC_KIND,
             "specVersion": self.spec_version,
             "modules": [_module_json(module) for module in self.modules],
+            **(
+                {"islands": [_island_json(island) for island in self.islands]}
+                if self.islands is not None
+                else {}
+            ),
             **(
                 {"flow": [
                     {"from": edge.from_module, "to": edge.to_module,
@@ -437,8 +505,13 @@ class PresentationSpec:
                 f"$.specVersion is {version!r}, this build reads "
                 f"{PRESENTATION_SPEC_VERSION} — regenerate the spec"
             )
+        modules = _modules_from(root)
+        # Islands after modules, and not merely in this order: an island's parts
+        # are checked against the parts the modules name, so the modules have to
+        # be read first. Nothing else in this parse depends on the order.
         return cls(
-            modules=_modules_from(root),
+            modules=modules,
+            islands=_islands_from(root, modules),
             flow=_flow_from(root),
             main_paths=_paths_from(root, "mainPaths"),
             feedback_paths=_paths_from(root, "feedbackPaths"),
@@ -564,6 +637,42 @@ def _module_json(module: PresentationModule) -> dict[str, Any]:
     if module.core:
         out["core"] = module.core
     return out
+
+
+def _island_json(island: LayoutIsland) -> dict[str, Any]:
+    """One island, with its role and name written only when it states one.
+
+    Same rule as a module's overrides: `role` and `name` are optional, so an
+    island that states neither writes neither and reads back as `""`. (A spec that
+    states no islands at all writes no `islands` key — see
+    :meth:`PresentationSpec.to_jsonable`.)
+    """
+    out: dict[str, Any] = {"id": island.id, "parts": list(island.parts)}
+    if island.role:
+        out["role"] = island.role
+    if island.name:
+        out["name"] = island.name
+    return out
+
+
+def _islands_from(
+    root: dict[str, Any], modules: Sequence[PresentationModule]
+) -> list[LayoutIsland] | None:
+    """Read `islands`, or ``None`` for "this document states none".
+
+    All of the reading is :func:`boardwise.core.islands.parse_islands`' — this
+    function is the boundary that hands it the reference set (the parts the
+    modules name) and translates its refusal into this module's error, so a
+    caller of :meth:`PresentationSpec.load` sees one error type whatever part of
+    the document was wrong. ``None`` means the *implicit* island downstream, and
+    never reaches further than :meth:`PresentationSpec.effective_islands`.
+    """
+    try:
+        return parse_islands(
+            root.get("islands"), declared_part_ids(m.parts for m in modules)
+        )
+    except IslandError as exc:
+        raise PresentationSpecError(f"$.{exc}") from exc
 
 
 def _modules_from(root: dict[str, Any]) -> list[PresentationModule]:
