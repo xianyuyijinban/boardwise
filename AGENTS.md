@@ -1,9 +1,13 @@
 # boardwise — AI 协作约定（轻量）
 
-本仓库 AI 约定的**唯一权威**是
-[`.kimi-code/skills/boardwise/SKILL.md`](.kimi-code/skills/boardwise/SKILL.md)：何时加载、
-审查闭环、真机纪律 R1–R3、bridge 动作速查、真机坑表、三线命令与交付纪律，全在那里。
-本文件只列最常被违反的红线，**不复制**那份内容；两处说法冲突时以 SKILL.md 为准。
+本仓库 AI 约定的**唯一权威**是 SOP 的**两份同步副本**：
+[`.kimi-code/skills/boardwise/SKILL.md`](.kimi-code/skills/boardwise/SKILL.md)（kimi 的约定路径）
+与 [`.agents/skills/boardwise/SKILL.md`](.agents/skills/boardwise/SKILL.md)（dsh 等通用入口——
+它们的 skill 扫描根是 `.agents/skills`，`.kimi-code/` 不在其中）：何时加载、审查闭环、
+真机纪律 R1–R3、bridge 动作速查、真机坑表、三线命令与交付纪律，全在那里。两份是**同一份
+文件放在两个地方**，同步由 `tests/test_doc_claims.py` 盯着（逐字节不一致即红），
+**clone 下来读哪份都行**。本文件只列最常被违反的红线，**不复制**那份内容；
+两处说法冲突时以 SKILL.md 为准。
 
 ## 项目地图（动手前先读这三份）
 
@@ -16,6 +20,9 @@
 
 `tasks/SCHEDULE.md` 是**滚动排期**（最近几个版本的具体任务与依赖）；
 `PROGRESS.md` 是按时间的**流水账**，**不要从头读**——只在需要查历史细节时 grep 它。
+[`docs/handoff.md`](docs/handoff.md) 是**交接记忆**：三条线的当前状态与下一步、铁律索引、
+怎么干活（命令/子代理纪律/证据惯例）。**换 harness、开新会话、或换人接手时先读它**，
+它只做路由，细节一律指到上面那几份权威文件。
 
 ## 红线
 
@@ -65,7 +72,9 @@
 ## 给 clone 本仓库的 AI（入口指引，不是第五条红线）
 
 - 审查 SOP 的权威文件是
-  [`.kimi-code/skills/boardwise/SKILL.md`](.kimi-code/skills/boardwise/SKILL.md)：
+  [`.agents/skills/boardwise/SKILL.md`](.agents/skills/boardwise/SKILL.md)
+  （[`.kimi-code/skills/boardwise/SKILL.md`](.kimi-code/skills/boardwise/SKILL.md) 是它的同步
+  副本，两份逐字节相同，由 `tests/test_doc_claims.py` 盯着）：
   **仓库内文件，clone 下来直接读，零安装**。要审板子先读它。
 - 你的 harness 若有用户级 skill 目录：把这份文件复制成
   `<你的用户级 skills>/boardwise/SKILL.md`（约定在哪你自己知道；已有一份异版先备份成
@@ -74,4 +83,6 @@
   `boardwise install-skill --agent`——后者打印一段引导指令，粘给你在用的 AI，它自己装。
 - **DeepSeek Harness（dsh）不用装 skill**：它读**工作区**的 `AGENTS.md`，本仓库自带一份
   并已指向 `docs/roadmap.md` / `docs/product-boundary.md` / `tasks/TASKMAP.md`，把仓库当工作区
-  打开即可；`boardwise install-skill --harness dsh` 把这句原因打印出来（exit 0，不写任何文件）。
+  打开即可。SOP 本身也随仓库走——dsh 扫 `.agents/skills`，那里有一份与 kimi 路径逐字节相同的
+  `boardwise/SKILL.md`（`tests/test_doc_claims.py` 盯着同步）。`boardwise install-skill
+  --harness dsh` 把这句原因打印出来（exit 0，不写任何文件）。

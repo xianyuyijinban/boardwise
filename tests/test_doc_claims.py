@@ -445,3 +445,42 @@ def test_the_sop_and_the_writer_agree_that_one_answer_fills_both_voltage_keys():
         "the pair moved — update docs/review-sop.md §3.1b in the same breath, and this "
         "pin with it"
     )
+
+
+# ========================================== dsh 迁移：SOP 的两个入口必须同源
+#: SOP 的**两份同步副本**。dsh 的 skill 扫描根是 `<repo>/.dsh/skills` 与
+#: `<repo>/.agents/skills`（顶层 `<name>/SKILL.md`），`.kimi-code/` 不在其中；而 kimi
+#: 的约定恰好就是 `.kimi-code/`。所以同一份 320 行 SOP 落两次——它们是**一份文件放在
+#: 两个地方**，不是两个版本。两份路径与 `AGENTS.md` 的权威指针段逐字对应。
+SOP_COPIES: tuple[str, ...] = (
+    ".kimi-code/skills/boardwise/SKILL.md",
+    ".agents/skills/boardwise/SKILL.md",
+)
+
+
+def test_the_two_sop_copies_stay_byte_identical():
+    """护 dsh 迁移（2026-10-22）：两份 SKILL.md 必须**逐字节**相同。
+
+    失效时的样子（本钉就是为此写的）：在 `.kimi-code/` 那份里改一条纪律、忘了同步
+    `.agents/` 那份。两边各自「存在、frontmatter 合法、指针解析得通」，所以没有任何东西
+    会响——直到某个 dsh 会话按**另一套规矩**干活。这不是 DRY 洁癖：读哪份决定按哪套规矩
+    办事，两份分叉就是两套 SOP（kimi 会话纠正过的坑，dsh 会话照旧踩）。
+
+    比字节而不是比正文，是因为行尾也在契约里：`core.autocrlf=true` 下一次 checkout 会把
+    两份一起写成 CRLF，逐字节仍然相等；只改一份的内容或行尾都会在这里红。搬家/复制用
+    `cp`，不要手抄。
+    """
+    reference = REPO / SOP_COPIES[0]
+    assert reference.is_file(), f"the SOP itself is missing: {SOP_COPIES[0]}"
+    expected = reference.read_bytes()
+    for relative in SOP_COPIES[1:]:
+        path = REPO / relative
+        assert path.is_file(), (
+            f"the SOP copy at {relative} is missing — dsh's skill roots are "
+            "`.dsh/skills` and `.agents/skills`, so a SOP that only lives under "
+            "`.kimi-code/` is invisible there and its session silently loses R1–R3"
+        )
+        assert path.read_bytes() == expected, (
+            f"{relative} drifted from {SOP_COPIES[0]} — the two are one file in two "
+            "places; re-copy it (`cp`), never re-edit one side"
+        )
