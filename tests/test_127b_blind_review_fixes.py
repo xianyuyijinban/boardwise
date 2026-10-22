@@ -17,7 +17,9 @@ The five fixes, and where each is pinned:
    and the bulk / HF candidate split.
 4. ``pcb-voltage-spacing`` — :func:`test_two_ground_islands_are_exempt` and
    :func:`test_two_nets_at_the_same_voltage_are_exempt`.
-5. the round-2 acceptance — :func:`test_the_bishe_foc_board_is_clean_under_both_distance_rules`.
+5. the round-2 acceptance — :func:`test_the_bishe_foc_board_under_both_distance_rules`
+   (its decap rows moved once more when issue #86 taught the pool to read an
+   old-library instance's blank ``Value``; the test says which rows and why).
 """
 from __future__ import annotations
 
@@ -650,26 +652,47 @@ def test_a_cross_layer_pair_is_dropped_not_reported_as_a_short():
 # ---------------------------------------------------------------------------
 
 
-def test_the_bishe_foc_board_is_clean_under_both_distance_rules(foc_project):
+def test_the_bishe_foc_board_under_both_distance_rules(foc_project):
     """**The acceptance the task book asks for, as a single pin.**
 
     岳's blind review returned nineteen false positives from the 126 module-level
     report. This asserts the board total those nineteen came from, so the number
     cannot come back by any of the five routes at once:
 
-    * **19 -> 4.** PCB1's 17 spacing WARNs and PCB3's 5 collapse to 4, all of
-      them same-side, cross-net and non-touching. Six of the nine top x bottom
-      pairs and the same-net pairs are exempt by the measurement itself
-      (:func:`boardwise.core.measure.component_distance`).
+    * **19 -> 4 spacing WARNs.** PCB1's 17 spacing WARNs and PCB3's 5 collapse to
+      4, all of them same-side, cross-net and non-touching. Six of the nine
+      top x bottom pairs and the same-net pairs are exempt by the measurement
+      itself (:func:`boardwise.core.measure.component_distance`).
     * **the 5 decap WARNs -> 0.** Q1/Q3/Q7 are MOSFETs and U4/U6/U1/U2 are
       2x6 headers; none is an IC, and the 330 µF cans would have been bulk
       anyway.
     * **PCB2 and PCB3 contribute nothing.** PCB2's outline is a single point
       (126b's degenerate case) and PCB3 has no IC.
 
-    What the board still reports is the part a reviewer can act on: four INFO
-    rows naming the (IC, net) pairs with no high-frequency candidate, each
-    carrying the IC judgement and every candidate's declared value.
+    What the board still reports is the part a reviewer can act on: the (IC, net)
+    pairs, each carrying the IC judgement and every candidate's role with the
+    value that decided it.
+
+    **Issue #86 moved this board's decap rows, and the reason is a bug it
+    fixed.** The paragraph above used to end 「four INFO rows ... with no
+    high-frequency candidate」, and that premise was false: ``C30`` on ``+5V`` is
+    a 100 nF capacitor whose ``Value`` field is **empty** on this fixture while
+    its MPN ``CC0805KRX7R9BB104`` states ``104``. The pool read only the field,
+    so the rail was reported as having no high-frequency decoupling at all. With
+    the value recovered from the part's identity the pools are real, and the two
+    rows move as ``tests/test_126b_pcb_distance_rules.py`` derives:
+
+    * ``U11``/``+5V`` — INFO -> **WARN** at **561.3 mil** (``C30``), over that
+      rail's 稳压器输入档 of 300 mil. A true row, previously hidden by the false
+      「no candidate」 INFO;
+    * ``U13``/``+5V`` — INFO -> **silence** (``C30`` is **113.97 mil** from its
+      VIN pad, inside 300).
+
+    So this pin is now three rows with **one** WARN, and the WARN's own evidence
+    carries the disclosure ``recovered '100nF'`` — the value was not declared on
+    the schematic, and the row says so (岳's #86 third ask). The nineteen false
+    positives 岳 rejected are untouched by any of this: they are the *spacing*
+    population, and that count is still 4.
     """
     model, boards = foc_project
     findings, section = run_pcb_review(FOC, model=model)
@@ -685,16 +708,24 @@ def test_the_bishe_foc_board_is_clean_under_both_distance_rules(foc_project):
     )
     assert not [f for f in spacing if f.target.measurement["value"] == 0.0]
 
-    assert not [f for f in decap if f.severity == "WARN"], (
-        "no decap WARN survives: no part on this board that the rule asks about "
-        "is anything but an IC, and no candidate pool is a high-frequency one"
+    assert len(decap) == 3, (
+        "two pools with no high-frequency candidate and one measured rail "
+        f"(issue #86): {[(f.target.component_ref, f.target.net_refs, f.severity) for f in decap]}"
     )
-    assert len(decap) == 4 and all(f.severity == "INFO" for f in decap)
+    assert [f.severity for f in decap] == ["WARN", "INFO", "INFO"]
+    warn = decap[0]
+    assert (warn.target.component_ref, tuple(warn.target.net_refs)) == ("U11", ("+5V",))
+    assert warn.target.counterpart_ref == "C30"
+    assert warn.target.measurement["value"] == pytest.approx(561.3)
+    assert "recovered '100nF'" in " | ".join(warn.evidence), (
+        "the WARN is measured on a value the pool recovered, and says so"
+    )
+    assert all(f.board == "PCB1" for f in decap)
     for finding in decap:
         joined = " | ".join(finding.evidence)
         assert "judged an IC because" in joined
         assert any("candidate " in line for line in finding.evidence), (
-            "every INFO names the candidates it excluded and why"
+            "every decap row names the candidates it judged and why"
         )
 
     assert len(section["boards"]) == 3

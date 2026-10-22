@@ -794,8 +794,8 @@ def foc_findings():
     return findings, section
 
 
-def test_foc_pcb1_the_decap_readings_are_four_infos_and_no_warn(foc_findings):
-    """毕设FOC PCB1 anchor: **no WARN at all**, and four INFO rows.
+def test_foc_pcb1_the_decap_readings_are_two_infos_and_one_warn(foc_findings):
+    """毕设FOC PCB1 anchor: **one WARN and two INFO rows** after issue #86.
 
     **This is the 127b flip, and it is the whole point of the exercise.** 126b
     reported one WARN here — ``U6`` at 555.8 mil on ``+24V`` — and 岳's blind
@@ -809,12 +809,36 @@ def test_foc_pcb1_the_decap_readings_are_four_infos_and_no_warn(foc_findings):
     1.1.0 fixture it is a header — 127a established that the审查对象 was wrong,
     not the parser. See the task book.)
 
-    The four rows that remain are this board's (IC, net) pairs, all INFO because
-    **no candidate on any of them is a high-frequency decoupling capacitor**
-    (127b 裁定 5b). What is pinned is the pair set and the fact that not one is a
-    WARN — the INFO-vs-WARN split *is* the fix, and a reader who wants to know
-    why a pair is INFO reads the ``evidence`` lines, which now carry the IC
-    judgement and every candidate's role with the declared value that decided it.
+    **Issue #86 moved this board's rows, and the movement is the evidence.**
+    127b pinned four INFO rows on the premise 「no candidate pool is a
+    high-frequency one」. That premise was an artifact of a bug: ``C30`` — the
+    100 nF capacitor on ``+5V`` — has an **empty** ``Value`` field on this
+    fixture (an old-library instance) while its MPN ``CC0805KRX7R9BB104`` states
+    ``104`` = 100 nF. The pool read only the field, so ``C30`` entered it with no
+    readable capacitance, was counted in neither pool, and the rule reported
+    「no high-frequency decoupling capacitor found」 on a rail that has one. #86
+    recovers the value from the part's identity, and two rows move as a result:
+
+    * ``U11`` on ``+5V`` — **INFO -> WARN**. The pool is now non-empty, so the
+      distance is measured: ``C30`` is **561.3 mil** from ``U11``'s pad on the
+      net, over that rail's own tier (``U11`` pin 1 is ``VIN``, so the rail is
+      graded at the 稳压器输入档's 300 mil — 191D). A true row that the false
+      「no HF capacitor」 INFO was hiding;
+    * ``U13`` on ``+5V`` — **INFO -> silence**. ``U13`` is the other
+      ``+5V``-input regulator on this board, and its ``VIN`` pad sits **113.97
+      mil** from ``C30``'s pad, inside the same tier's 300 mil. The old INFO
+      claimed the rail had no high-frequency capacitor to place; it has one, and
+      it is close enough.
+
+    What is left is the two pairs where the pool really is empty — ``U11`` on
+    ``NET10`` and ``U7`` on ``+24V`` — and both are INFO, for the reason 127b
+    gave: whether a rail *needs* a capacitor is the datasheet's ``required_caps``
+    question (``decap-required-caps``). The IC judgement and every candidate's
+    role are still quoted, so 「why is there no U6 row」 stays answerable from the
+    report rather than from this file.
+
+    The unit-level half of #86 is ``tests/test_86_legacy_value.py``; the mapping
+    from ``C30``'s MPN to 100 nF is pinned there and in ``recovered_capacitance``.
     """
     findings, _section = foc_findings
     pcb1 = [
@@ -822,20 +846,34 @@ def test_foc_pcb1_the_decap_readings_are_four_infos_and_no_warn(foc_findings):
         if f.board == "PCB1" and f.rule_id == "pcb-decap-distance"
     ]
     assert pcb1, "the three supply nets still produce (IC, net) pairs"
-    assert all(f.severity == "INFO" for f in pcb1), (
-        "no decap WARN survives on this board: every candidate pool is bulk, "
-        "unreadable, or in the band between the HF ceiling and the bulk floor"
-    )
     pairs = {(f.target.component_ref, tuple(f.target.net_refs)) for f in pcb1}
     assert pairs == {
         ("U11", ("+5V",)),
         ("U11", ("NET10",)),
-        ("U13", ("+5V",)),
         ("U7", ("+24V",)),
     }, (
-        "the same pairs 126b examined, minus U6 — which the schematic says is "
-        "a 2x6 header, not an IC"
+        "the pairs 126b examined, minus U6 (the schematic says it is a 2x6 "
+        "header, not an IC) and minus U13/+5V, which is now *measured* rather "
+        "than reported as a rail with no candidate"
     )
+    by_pair = {(f.target.component_ref, tuple(f.target.net_refs)): f for f in pcb1}
+    warn = by_pair[("U11", ("+5V",))]
+    assert warn.severity == "WARN", (
+        "C30 reads 100nF once its MPN is decoded, so this pool is a "
+        "high-frequency one and the 561.3 mil gap is judged"
+    )
+    assert warn.target.measurement["value"] == pytest.approx(561.3)
+    assert warn.target.counterpart_ref == "C30"
+    assert "C30" in warn.message and "561.3" in warn.message
+    assert "recovered '100nF'" in " | ".join(warn.evidence), (
+        "and the row says the value was recovered from the MPN rather than "
+        "declared — the disclosure #86 asks for"
+    )
+    for pair in (("U11", ("NET10",)), ("U7", ("+24V",))):
+        assert by_pair[pair].severity == "INFO", pair
+        assert by_pair[pair].target.measurement is None, (
+            "a rail with no high-frequency candidate has no distance to report"
+        )
     # The IC judgement is quoted, so 「why is there no U6 row」 is answerable from
     # the report rather than from this file.
     for finding in pcb1:

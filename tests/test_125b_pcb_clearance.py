@@ -241,14 +241,29 @@ def test_llc_chs_vs_dcp_plus_pad_clearance(llc_board):
     y = -2709.996, centres 2279.998 and 2494.168 apart -> 214.170 in x, with
     the x-ranges touching-span. Each pad's facing half-width is
     110.236 / 2 = 55.118, so the edge-to-edge gap is
-    214.170 − 55.118 − 55.118 = 103.934 mil.
+    214.170 − 55.118 − 55.118 = **103.934 mil for that pair**.
+
+    **Issue #83 moved the answer to 85.965, and 103.934 is no longer the
+    minimum.** That pad-to-pad gap is still the arithmetic above, but
+    ``_capsule_distance``'s containment test compared each polygon with its own
+    vertices, so every pair with a pour on either side was decided by a
+    tautology and dropped out of the minimum — including ``DC+``'s FILL pour
+    against this same ``Q1.2`` pad, which is the closer copper at **85.965**.
+    With the operands back in the docstring's order the fill pair is measured
+    again and takes the minimum. Asserted in the same run as
+    ``test_83_pour_containment.py``, and corroborated independently: rebuilding
+    the pour polygons from ``PourShape.rings`` (the arcs-expanded view, 135 /
+    R2-1) instead of the ``points`` chords gives the same 85.9650927 for the
+    same pair.
     """
     result = net_clearance(llc_board, "CHS", "DC+")
     assert result is not None
-    assert result.distance == pytest.approx(214.170 - 110.236, abs=0.01)
-    # Both pads are through-hole (layer 12 = MULTI), so they share copper.
-    assert "Q1.3" in result.element_a
+    assert result.distance == pytest.approx(85.9650927, abs=0.01)
+    # The fill is CHS's copper, the pad is DC+'s, both on layer 1.
+    assert "de532d473516ee3b" in result.element_a
     assert "Q1.2" in result.element_b
+    assert result.shared_layer_ids == [1]
+    assert result.overlapping is False
 
 
 def test_llc_chs_vs_chg_track_clearance_hand_computed(llc_board):

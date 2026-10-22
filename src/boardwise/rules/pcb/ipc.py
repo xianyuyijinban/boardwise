@@ -49,12 +49,31 @@ internal one, the 10 °C rise and the 1 oz (1.378 mil) copper thickness are the
 constants the standard's own table is quoted at. The rule inverts it — the
 contract states the current, the board carries a width, and the comparison that
 matters is 「does this width carry this current」 — and then takes the **minimum**
-width per copper layer from :func:`~boardwise.core.measure.track_width_stats`,
-because the narrowest segment of a net is the one that heats up, not the average.
+width per copper layer
+(:func:`~boardwise.core.measure.conductor_copper`), because the narrowest segment
+of a net is the one that heats up, not the average.
 516 A2 widens the unit of judgement from the net **name** to the **conductor**:
 one piece of copper can be exported under two names (``IRbus``/``IRBUS`` on 实板
 A), so each declared net is expanded to its overlapping-copper component and the
 component is judged at its narrowest point.
+
+**Issue #84 narrows what that minimum is allowed to conclude.** The contract
+states **one current per net**, and a net is not obliged to be one conductor all
+the way along it: 实板 A's ``IRbus`` carries its main current on a 30 mil trunk
+plus two layers of pour and reaches its four 100 Ω shunt resistors' sense taps
+along 27 segments of 10 mil, and ``ACN`` the same with a pour whose cross-section
+is ~125 mil and five 10 mil zero-crossing sense lines. Reading the net's current
+against the layer's narrowest track judged those sense lines as overloads — four
+false ERRORs on one board, and the model that is missing is **branch**. So when a
+conductor also carries copper **at least three times as wide as its narrowest
+segment and wide enough for the declared current on its own** (a trunk, or a pour
+read as a track, :data:`BRANCH_WIDTH_RATIO`), the narrow segments are reported as
+an **UNKNOWN that names them** — width, count, total length, coordinate span and
+each segment's own endpoints — instead of as an overload. What the rule still
+does not do is decide *which* segment carries the current: only the designer
+knows where the load is, so the row is a work order that says so and names the
+copper it would otherwise have judged.
+
 Insufficient is an **ERROR**: an overloaded conductor is a safety defect (it
 runs hot, it anneals the copper, it is the failure mode that ends in a smoke),
 and it is the one judgement in the PCB side that is not a matter of taste.
@@ -88,9 +107,17 @@ it happens, and the test module pins the count of pairs it skipped.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from ..base import Finding, FindingTarget
 from ...core.architecture import generate_architecture
-from ...core.measure import ClearanceResult, net_clearance, track_width_stats
+from ...core.measure import (
+    ClearanceResult,
+    ConductorCopper,
+    LayerCopper,
+    conductor_copper,
+    net_clearance,
+)
 from ...core.model import is_ground_net
 from ...core.values import parse_current_amps, parse_voltage_volts
 from .base import PcbReviewContext, PcbRule
@@ -116,6 +143,29 @@ TEMP_RISE_C = 10.0
 #: 1 oz copper thickness in mils: 1 oz/ft² of copper is 1.37 mil thick, the
 #: conversion the IPC conductor tables use (34.8 µm / 1000 mil → 1.378).
 COPPER_THICKNESS_MIL = 1.378
+
+#: How much wider than a conductor's **narrowest** segment a different piece of
+#: its own copper must be before the narrow segments stop being read as its
+#: current path (issue #84, 岳 2026-10-22).
+#:
+#: **Why a ratio at all, and why three.** The question is 「is this narrow copper
+#: the conductor, or a branch off the conductor」, and the only fact the rule has
+#: is width — a sense line off a power trunk is narrower than the trunk by the
+#: *design rule of the two functions*, while two segments of the same path differ
+#: by routing, not by role. The threshold is the pair 岳's issue states: wide
+#: copper must be at least this many times the narrowest segment **and** at least
+#: the width the declared current needs (:meth:`TrackAmpacity._load_bearing`), so
+#: a conductor whose widest copper is itself too narrow for the current keeps
+#: every row it had.
+#:
+#: Three is a house number and is stated as one: it is the smallest ratio at
+#: which a 10 mil sense line (the one 实板 A actually routes) can sit beside a
+#: trunk, and it is deliberately not tunable per board — a rule that asked the
+#: designer how much wider the trunk is would be asking the party under review to
+#: set the threshold. What the ratio decides is only whether a row is an ERROR or
+#: an UNKNOWN: the segments are **named either way**, so a wrong three costs a
+#: reader one confirmation, not a missed defect.
+BRANCH_WIDTH_RATIO = 3.0
 
 #: The copper weight the thickness above belongs to, in ounces per square foot.
 COPPER_OZ_PER_FT2 = 1.0
@@ -660,6 +710,45 @@ def _measurement(kind: str, value: float, layer_ids: list[int] | None = None) ->
     return payload
 
 
+def _clearance_measurement(
+    measured: ClearanceResult, *, external: ClearanceResult | None = None
+) -> dict:
+    """The clearance reading **with the closest pair identified as fields** (#85).
+
+    :func:`_measurement` carries the number; this adds the pair the number was
+    read from, because the number alone cannot be acted on. ``element_a`` /
+    ``element_b`` are the two labels the message already quotes, and
+    ``component_a`` / ``component_b`` are the same claim in a field a consumer
+    can compare — ``""`` for an element that belongs to no placement (a track, a
+    via, a pour), the documented spelling of 「not resolvable」 that
+    :class:`~boardwise.rules.base.FindingTarget` already uses.
+
+    ``within_one_footprint`` is the question those two fields answer, **written
+    out rather than left for the reader to derive**: the pair is one
+    footprint's own pad pitch, which no routing change can move (issue #85).
+    Leaving it absent when false would make 「no」 and 「nobody said」 read the
+    same, which is the one thing a structured claim may not do.
+
+    ``external_*`` appear only when the reading was taken twice — when the
+    closest pair *is* a footprint pitch, the gap that a layout change can move
+    is the nearest pair outside it, and both numbers belong in the evidence (岳's
+    second reading of #85).
+    """
+    payload = _measurement("clearance", measured.distance)
+    payload["element_a"] = measured.element_a
+    payload["element_b"] = measured.element_b
+    payload["component_a"] = measured.component_a
+    payload["component_b"] = measured.component_b
+    payload["within_one_footprint"] = measured.within_one_footprint
+    if external is not None:
+        payload["external_value"] = round(external.distance, 1)
+        payload["external_element_a"] = external.element_a
+        payload["external_element_b"] = external.element_b
+        payload["external_component_a"] = external.component_a
+        payload["external_component_b"] = external.component_b
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # pcb-track-ampacity
 # ---------------------------------------------------------------------------
@@ -690,8 +779,21 @@ class TrackAmpacity(PcbRule):
       layer that carries the conductor's tracks: the required width
       (:func:`required_width_mil`) against the **minimum** measured width over
       all the component's nets on that layer
-      (:func:`~boardwise.core.measure.track_width_stats`), and **ERROR** when the
+      (:func:`~boardwise.core.measure.conductor_copper`), and **ERROR** when the
       measured one is narrower;
+    * a layer whose narrowest segments sit beside **load-bearing copper** — a
+      trunk or a pour at least :data:`BRANCH_WIDTH_RATIO` times as wide as they
+      are and wide enough for the declared current on its own — → **UNKNOWN**,
+      one row per width class of those segments, naming them all (width, count,
+      total length, coordinate span, each segment's own endpoints) and stating
+      which copper the current is more likely to be on. This is issue #84's
+      finding and the fifth state: the contract states **one current per net**,
+      the board says the net's copper comes in two widths, and which segment
+      carries the load is a fact about the *load*, not about the copper. The row
+      is the work order that says so; the segments are named either way, so the
+      reader confirms a location rather than hunts for one. See
+      :meth:`_load_bearing` for the threshold's two halves and why a ratio is a
+      ratio, and :meth:`_branch_rows` for what one row claims;
     * an **unreadable** declaration — ``"5"`` with no unit, ``"5V"``, prose — →
       **UNKNOWN**, an INFO finding naming the net, quoting the offending text
       and both addresses a current may be written at. This is the one UNKNOWN
@@ -705,6 +807,17 @@ class TrackAmpacity(PcbRule):
     * a track on a copper layer the document does not define → **UNKNOWN**
       naming the layer id, since choosing outer or inner there would halve or
       double a safety threshold.
+
+    **The pour boundary, said on both sides.** 「Pad and pour area is a different
+    conductor model」 is why a conductor whose copper is all pads and pours has no
+    width to judge; issue #84 makes the same boundary work in the other
+    direction: a pour (or a trunk) far wider than the narrowest track is copper
+    the current *can* be flowing in, so the narrow track is not read as the
+    conductor on width alone. What is read off a pour here is a **coarse** mean
+    width (:attr:`~boardwise.core.measure.LayerCopper.pour_mean_width`), which is
+    all the rule needs to ask 「is there much wider copper on this conductor」 and
+    explicitly not a capacity claim — the finding it produces is an UNKNOWN, never
+    a pass.
 
     **Margin is silence.** A track wider than it needs is not a finding. A
     design is entitled to over-provision copper and a rule that called that a
@@ -722,7 +835,11 @@ class TrackAmpacity(PcbRule):
     ``source``: an overloaded conductor is the one judgement on this side that
     is a safety matter rather than a preference. The number is the standard's,
     the current is the contract's and the width is the board's, so all three are
-    printed in the message and a reviewer can disagree with any of them.
+    printed in the message and a reviewer can disagree with any of them. The one
+    row that is **not** an ERROR is #84's branch row, and it says so in its own
+    words: it is an **UNKNOWN** — the rule declining to convict on a fact about
+    the load it cannot read — and 钉 6's convention is that an UNKNOWN travels as
+    INFO, with the work order written out.
 
     **Measured on the ROBOT ctrl-FOC fixture** (``ProPrj_ROBOT ctrl FOC``, the
     contract's own ``range: "±3A"``): ``U+`` and ``W+`` both carry their phase
@@ -731,7 +848,13 @@ class TrackAmpacity(PcbRule):
     140.0 mil, and 10.0 is nowhere near either. That is the rule's true-positive
     case and it is exactly why the finding is an ERROR: three amps down a 10 mil
     trace on the outer layer is a conductor this standard says will run far past
-    a 10 °C rise.
+    a 10 °C rise. It is also the case that pins #84's gate shut rather than
+    opening it: measured through
+    :func:`~boardwise.core.measure.conductor_copper`, ``U+``'s widest track is
+    15.0 mil and ``W+``'s 14.0 mil, neither net carries a pour at all, and the
+    bar on either is 53.8 mil (outer) / 140.0 mil (inner) — so these six rows
+    stayed six ERRORs when the branch reading landed, which is the negative half
+    of the issue's evidence.
     """
 
     id = "pcb-track-ampacity"
@@ -741,7 +864,9 @@ class TrackAmpacity(PcbRule):
         "IPC-2221 conductor-current relation I = k·ΔT^0.44·A^0.725 "
         "(k = 0.048 external / 0.024 internal, ΔT = 10 °C, 1 oz = 1.378 mil), "
         "against the current declared in the design-intent contract and the "
-        "per-layer minimum track width read off the board"
+        "per-layer minimum track width read off the board, against the widest "
+        "copper the same conductor carries (issue #84: a branch beside a trunk "
+        "or a pour is named as UNKNOWN, not judged by the net's whole current)"
     )
 
     def check(self, ctx: PcbReviewContext) -> list[Finding]:
@@ -791,6 +916,14 @@ class TrackAmpacity(PcbRule):
         what carries the current, and a rule that judged each name alone would
         miss the narrower alias.
 
+        Since issue #84 the per-layer reading is taken at segment resolution
+        (:func:`~boardwise.core.measure.conductor_copper`) and the narrowest
+        width is not the whole answer: when the conductor also carries copper
+        wide enough to be the current path on its own (:func:`_load_bearing`), the
+        layer's undersized segments are reported by :meth:`_branch_rows` as
+        UNKNOWN and named, instead of as an overload. Layers where that gate does
+        not open keep the ERROR the rule always produced.
+
         The names that are *declared* but carry no readable current still get
         their UNKNOWN (that is the 「you declared something here and it is not a
         current」 work order, unchanged). A component that also contains a net the
@@ -836,24 +969,24 @@ class TrackAmpacity(PcbRule):
             (currents[net] for net in priced_members), key=lambda item: item[0]
         )
         primary = priced_members[0]
-        per_layer: dict[int, dict[str, float]] = {}
-        track_count = 0
-        for net in members:
-            stats = track_width_stats(board=ctx.board, net=net)
-            track_count += stats.track_count
-            for layer_id, layer in stats.per_layer.items():
-                agg = per_layer.get(layer_id)
-                if agg is None:
-                    per_layer[layer_id] = {
-                        "min_width": layer.min_width,
-                        "track_count": layer.track_count,
-                        "total_length": layer.total_length,
-                    }
-                else:
-                    agg["min_width"] = min(agg["min_width"], layer.min_width)
-                    agg["track_count"] += layer.track_count
-                    agg["total_length"] += layer.total_length
-        if not per_layer:
+        # Issue #84: the layer reading is kept at **segment** resolution, because
+        # the rule now has to name the segments it declines to judge and has to
+        # ask what else the layer carries. `track_count` is the conductor's whole
+        # track population, layer or no layer, exactly as `track_width_stats`
+        # counts it — it is what the "no width to compare" row below reports.
+        #
+        # The layer the rule *iterates* is still 「a layer with tracks」: a pour on
+        # a layer that carries no track is copper the conductor has (so it can
+        # load-bear, see `_load_bearing`) but it is not a width, and a net whose
+        # copper is all pads and pours keeps the UNKNOWN it always had instead of
+        # falling silent.
+        copper = conductor_copper(ctx.board, members)
+        judged_layers = {
+            layer_id: layer
+            for layer_id, layer in copper.layers.items()
+            if layer.tracks
+        }
+        if not judged_layers:
             return [
                 self._unknown(
                     ctx,
@@ -862,9 +995,9 @@ class TrackAmpacity(PcbRule):
                     where,
                     missing=(
                         f"the per-layer track widths of net {primary!r} — it "
-                        f"carries {track_count} tracks but none of them names a "
-                        "copper layer, so there is no width to compare"
-                        if track_count
+                        f"carries {copper.track_count} tracks but none of them "
+                        "names a copper layer, so there is no width to compare"
+                        if copper.track_count
                         else f"a track on net {primary!r} — this PCB document "
                         "carries it as pads and pours only"
                     ),
@@ -878,8 +1011,8 @@ class TrackAmpacity(PcbRule):
         else:
             subject = f"net {primary!r}"
         findings: list[Finding] = []
-        for layer_id in sorted(per_layer):
-            layer = per_layer[layer_id]
+        for layer_id in sorted(judged_layers):
+            layer = judged_layers[layer_id]
             outer = _is_outer(ctx.board, layer_id)
             if outer is None:
                 findings.append(
@@ -898,9 +1031,29 @@ class TrackAmpacity(PcbRule):
                 )
                 continue
             needed = required_width_mil(amps, inner=not outer)
-            if layer["min_width"] + 1e-9 >= needed:
+            if layer.min_width + 1e-9 >= needed:
                 continue  # margin is silence, not a finding
             name = ctx.board.layer_name(layer_id)
+            # Issue #84: before the narrowest segment becomes an overload, ask
+            # whether it is the conductor at all — see `_load_bearing`.
+            load = _load_bearing(copper, layer=layer, needed=needed)
+            if load is not None:
+                findings.extend(
+                    self._branch_rows(
+                        ctx,
+                        members=members,
+                        subject=subject,
+                        primary=primary,
+                        layer=layer,
+                        layer_name=name,
+                        outer=outer,
+                        needed=needed,
+                        amps=amps,
+                        where=where,
+                        load=load,
+                    )
+                )
+                continue
             findings.append(
                 Finding(
                     rule_id=self.id,
@@ -909,17 +1062,17 @@ class TrackAmpacity(PcbRule):
                     message=(
                         f"{subject} carries {amps:g} A ({where}) but its "
                         f"{'external' if outer else 'internal'} copper on layer "
-                        f"{layer_id} ({name}) is {layer['min_width']:.1f} mil wide "
+                        f"{layer_id} ({name}) is {layer.min_width:.1f} mil wide "
                         f"at its narrowest, and IPC-2221 at ΔT={TEMP_RISE_C:g} °C "
                         f"/ {COPPER_OZ_PER_FT2:g} oz needs {needed:.1f} mil — "
-                        f"{needed / layer['min_width']:.1f}x over the copper that "
+                        f"{needed / layer.min_width:.1f}x over the copper that "
                         "is there"
                     ),
                     evidence=[
                         f"net {primary!r}: {where}",
-                        f"layer {layer_id} ({name}), {int(layer['track_count'])} "
-                        f"track(s), min width {layer['min_width']:.4f} mil, "
-                        f"total length {layer['total_length']:.2f} mil",
+                        f"layer {layer_id} ({name}), {layer.track_count} "
+                        f"track(s), min width {layer.min_width:.4f} mil, "
+                        f"total length {layer.total_length:.2f} mil",
                         f"IPC-2221: k={OUTER_K if outer else INNER_K}, "
                         f"ΔT={TEMP_RISE_C:g} °C, thickness {COPPER_THICKNESS_MIL} mil "
                         f"→ required width {needed:.4f} mil",
@@ -931,13 +1084,123 @@ class TrackAmpacity(PcbRule):
                     ),
                     target=FindingTarget(
                         net_refs=list(members),
-                        measurement=_measurement(
-                            "width", layer["min_width"], [layer_id]
-                        ),
+                        measurement=_measurement("width", layer.min_width, [layer_id]),
                     ),
                 )
             )
         return findings + extra
+
+    def _branch_rows(
+        self,
+        ctx: PcbReviewContext,
+        *,
+        members: list[str],
+        subject: str,
+        primary: str,
+        layer: LayerCopper,
+        layer_name: str,
+        outer: bool,
+        needed: float,
+        amps: float,
+        where: str,
+        load: "_LoadBearing",
+    ) -> list[Finding]:
+        """One UNKNOWN per width class of the layer's undersized segments (#84).
+
+        **What a row claims, and what it refuses to claim.** The conductor carries
+        ``amps`` and the layer carries ``load`` — copper at least
+        :data:`BRANCH_WIDTH_RATIO` times as wide as its narrowest segments and
+        wide enough for that current on its own — so the narrow segments are
+        **named** (width class, count, total length, coordinate span, and every
+        segment's own id, length and endpoints) and **not** judged by the net's
+        whole current. The row says the current 「can be flowing in the wider
+        copper instead」, which is why 「this segment is undersized」 is not a
+        conclusion this rule may draw from a track width and a net-level
+        declaration.
+
+        **Which width classes, and why by width.** The document states each
+        segment's width, and a branch is routed at a design rule: 实板 A's 27
+        sense taps are all 10 mil and ACN's five are all 10 mil. Grouping by the
+        stated width therefore produces one row per branch design rule rather
+        than one per segment (27 rows for one shape would be a wash, which is the
+        same argument the module's 「no subject」 paragraph makes), while still
+        naming every segment — in the evidence, with its own coordinates.
+
+        **The rows are named, so a wrong gate is visible.** This is the state the
+        rule is least sure of, and the severity says so: INFO, because it is an
+        UNKNOWN and not a violation. A reader who disagrees with the gate has the
+        width, the coordinates and the required width in front of them.
+        """
+        findings: list[Finding] = []
+        for width, segments in _width_classes(layer.tracks, needed):
+            total = sum(segment.length for segment in segments)
+            box = _span(segments)
+            longest = max(segments, key=lambda t: (t.length, t.id))
+            # A malformed record can state a zero width; the ratio would divide
+            # by it, and 「no copper at all」 is the honest reading of one.
+            shortfall = (
+                f"the copper there is {needed / width:.1f}x under the standard"
+                if width > 0.0
+                else "the segment states a 0.0 mil width, so there is no copper "
+                "there to carry anything"
+            )
+            findings.append(
+                Finding(
+                    rule_id=self.id,
+                    severity="INFO",
+                    level=self.level,
+                    message=(
+                        f"{subject} carries {amps:g} A ({where}) and its "
+                        f"{'external' if outer else 'internal'} copper on layer "
+                        f"{layer.layer_id} ({layer_name}) has {len(segments)} "
+                        f"segment(s) at {width:.1f} mil — {total:.1f} mil of "
+                        f"copper from ({box[0]:.1f}, {box[1]:.1f}) to "
+                        f"({box[2]:.1f}, "
+                        f"{box[3]:.1f}), the longest being {longest.id!r} of "
+                        f"{longest.length:.1f} mil from ({longest.start.x:.1f}, "
+                        f"{longest.start.y:.1f}) to ({longest.end.x:.1f}, "
+                        f"{longest.end.y:.1f}) — narrower than the {needed:.1f} mil "
+                        f"IPC-2221 needs at ΔT={TEMP_RISE_C:g} °C / "
+                        f"{COPPER_OZ_PER_FT2:g} oz, while the same conductor also "
+                        f"carries {load.describe()}. Which of these segments is the "
+                        "net's current path is not a fact this rule can read: a "
+                        "signal or sense branch off load-bearing copper is not "
+                        "judged by the net's whole current, so this row reports the "
+                        "segments instead of calling them an overload (issue #84). "
+                        "Confirm which segments are in the current path — if one of "
+                        f"them is, {shortfall}, and a contract that states one "
+                        "current for the whole net cannot say which segment it means"
+                    ),
+                    evidence=[
+                        f"net {primary!r}: {where}",
+                        f"layer {layer.layer_id} ({layer_name}): "
+                        f"{len(segments)} segment(s) at {width:.4f} mil, "
+                        f"{total:.2f} mil total, spanning ({box[0]:.1f}, "
+                        f"{box[1]:.1f}) to ({box[2]:.1f}, {box[3]:.1f})",
+                        f"IPC-2221: k={OUTER_K if outer else INNER_K}, "
+                        f"ΔT={TEMP_RISE_C:g} °C, thickness {COPPER_THICKNESS_MIL} mil "
+                        f"→ required width {needed:.4f} mil for {amps:g} A",
+                        load.evidence(),
+                    ]
+                    + [
+                        f"segment {segment.id!r}: {segment.width:.4f} mil, "
+                        f"{segment.length:.2f} mil, ({segment.start.x:.1f}, "
+                        f"{segment.start.y:.1f}) to ({segment.end.x:.1f}, "
+                        f"{segment.end.y:.1f})"
+                        for segment in segments
+                    ]
+                    + (
+                        [f"one conductor: {' ≡ '.join(repr(n) for n in members)}"]
+                        if len(members) > 1
+                        else []
+                    ),
+                    target=FindingTarget(
+                        net_refs=list(members),
+                        measurement=_measurement("width", width, [layer.layer_id]),
+                    ),
+                )
+            )
+        return findings
 
     def _unknown(
         self,
@@ -1018,9 +1281,202 @@ def _conductor_component(
     return component
 
 
+@dataclass
+class _LoadBearing:
+    """Copper of one conductor that could carry its current **instead of** a
+    narrow segment (issue #84).
+
+    ``kind`` is ``"track"`` (a trunk) or ``"pour"``; ``value`` is the width that
+    answers the question, in mils — the track's own width, or the pour's mean
+    width (:attr:`~boardwise.core.measure.LayerCopper.pour_mean_width`); and
+    ``threshold`` is what it had to reach, kept because the message and the
+    evidence both have to state the bar the reading cleared.
+    """
+
+    kind: str
+    value: float
+    layer_id: int
+    threshold: float
+    count: int = 0
+    area: float = 0.0
+    span: float = 0.0
+
+    def describe(self) -> str:
+        """The clause a branch row puts after 「also carries」."""
+        if self.kind == "pour":
+            return (
+                f"{self.count} pour polygon(s) on layer {self.layer_id} whose "
+                f"copper is {self.area:.0f} sq mil over a {self.span:.1f} mil "
+                f"extent ({self.value:.1f} mil mean width)"
+            )
+        return (
+            f"{self.count} track(s) of {self.value:.1f} mil on layer "
+            f"{self.layer_id}"
+        )
+
+    def evidence(self) -> str:
+        """The same reading as a row a reviewer can check against the bar."""
+        bar = (
+            f"the bar is max({BRANCH_WIDTH_RATIO:g} × narrowest, required) = "
+            f"{self.threshold:.4f} mil"
+        )
+        if self.kind == "pour":
+            return (
+                f"load-bearing copper: {self.count} pour polygon(s) on layer "
+                f"{self.layer_id}, {self.area:.0f} sq mil over a {self.span:.1f} "
+                f"mil extent = {self.value:.4f} mil mean width — {bar}"
+            )
+        return (
+            f"load-bearing copper: {self.count} track(s) at "
+            f"{self.value:.4f} mil on layer {self.layer_id} — {bar}"
+        )
+
+
+def _load_bearing(
+    copper: ConductorCopper, *, layer: LayerCopper, needed: float
+) -> _LoadBearing | None:
+    """The conductor's widest copper, when it is wide enough to be the current path.
+
+    The bar (§ issue #84) is 岳's pair: copper qualifies when it is at least
+    :data:`BRANCH_WIDTH_RATIO` times the **judged layer's** narrowest segment
+    (:attr:`~boardwise.core.measure.LayerCopper.min_width`) *and* at least the
+    width the declared current needs on that layer
+    (:func:`required_width_mil`, which is why an inner layer asks for a different
+    number than an outer one). Making the *narrowest* segment part of the bar is
+    what keeps the gate about 「the conductor's copper comes in two widths」 rather
+    than about 「some copper somewhere is wide」: on a net that is uniformly
+    thin there is nothing for the bar to compare against and the row stays an
+    ERROR.
+
+    **The question is asked of the conductor, not of the layer.** Copper on
+    another layer counts — a plane under a thin top-side tap is copper the same
+    net's current can flow in, and the assumption issue #84 removes is
+    「one net's current is the same all along it」, which is a statement about the
+    net, not about a face. **Which layer the winning copper is on is then
+    reported, and the judged layer wins whenever it can**: a reader checking
+    「is the trunk really there」 should be sent to the layer in front of them when
+    that layer's own copper qualifies, so the search takes two passes — the
+    judged layer first, then the remaining layers lowest id first — and the layer
+    id is in the row either way (实板 A's ``ACN`` pours both faces at ~122–123 mil,
+    and the layer-2 row quotes the layer-2 pour rather than the marginally wider
+    one on layer 1).
+
+    Ties and ordering: within one layer the widest candidate wins, equal values
+    keep the *track* over the pour, and the two passes are as above — so the
+    answer is deterministic. Pads and vias are not candidates — they are not
+    judged by this rule at all (留 D) and their numbers are not widths.
+    """
+    threshold = max(BRANCH_WIDTH_RATIO * layer.min_width, needed)
+    # Two passes: the judged layer first (see the docstring), then the rest.
+    order = [layer.layer_id] + [
+        layer_id for layer_id in sorted(copper.layers) if layer_id != layer.layer_id
+    ]
+    seen: set[int] = set()
+    best: _LoadBearing | None = None
+    for layer_id in order:
+        if layer_id in seen:
+            continue
+        seen.add(layer_id)
+        other = copper.layers.get(layer_id)
+        if other is None:
+            continue
+        if other.max_width >= threshold and (
+            best is None or other.max_width > best.value
+        ):
+            best = _LoadBearing(
+                kind="track",
+                value=other.max_width,
+                layer_id=layer_id,
+                threshold=threshold,
+                count=sum(1 for t in other.tracks if t.width >= threshold),
+            )
+        mean = other.pour_mean_width
+        if mean >= threshold and (best is None or mean > best.value):
+            best = _LoadBearing(
+                kind="pour",
+                value=mean,
+                layer_id=layer_id,
+                threshold=threshold,
+                count=other.pour_count,
+                area=other.pour_area,
+                span=other.pour_span,
+            )
+        if best is not None:
+            return best
+    return best
+
+
+def _width_classes(tracks: list, needed: float) -> list[tuple[float, list]]:
+    """The segments narrower than ``needed``, grouped by stated width (#84).
+
+    Grouped by the width the document states (exact float equality, the same
+    reading :attr:`~boardwise.core.measure.LayerCopper.min_width` takes): a
+    branch is routed at a design rule, so one rule width is one group and 27
+    sense taps at 10 mil are one row rather than 27. Groups come out narrowest
+    first and segments keep the board's own order, so the rows are deterministic.
+    A segment exactly at ``needed`` is not undersized — the same ``>=`` epsilon
+    the layer comparison uses.
+    """
+    groups: dict[float, list] = {}
+    for track in tracks:
+        if track.width + 1e-9 >= needed:
+            continue
+        groups.setdefault(track.width, []).append(track)
+    return sorted(groups.items())
+
+
+def _span(tracks: list) -> tuple[float, float, float, float]:
+    """``(min_x, min_y, max_x, max_y)`` over a group of segments' endpoints."""
+    xs: list[float] = []
+    ys: list[float] = []
+    for track in tracks:
+        xs.extend((track.start.x, track.end.x))
+        ys.extend((track.start.y, track.end.y))
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
 # ---------------------------------------------------------------------------
 # pcb-voltage-spacing
 # ---------------------------------------------------------------------------
+
+
+def _gap(
+    board,
+    first: str,
+    second: str,
+    *,
+    ignore_within_component: bool = False,
+) -> ClearanceResult | None:
+    """The closest measurable pair between two nets, read **where they can arc**.
+
+    ``same_layer_only`` (517, the 516-A1 follow-up) is the primary reading:
+    without it the plan-view 0.0 of two nets that cross somewhere buried 516-A1's
+    real-board miss (``HV``↔``GND`` silently at 66.94 mil against a 100 mil
+    band). When there is no
+    same-layer pair at all the reading falls back to the plan-view projection —
+    **only when that projection shares a layer**, which preserves 127b's meaning
+    (a pair whose closest copper is at least a prepreg apart is not judged).
+
+    ``ignore_within_component`` (issue #85) is threaded through to
+    :func:`~boardwise.core.measure.net_clearance`: with it set, a pair of pads
+    belonging to one placement — a gap the part's own selection fixed — is kept
+    out of the reading, so the caller gets the nearest pair a **routing change**
+    could move.
+    """
+    measured = net_clearance(
+        board,
+        first,
+        second,
+        same_layer_only=True,
+        ignore_within_component=ignore_within_component,
+    )
+    if measured is None:
+        projected = net_clearance(
+            board, first, second, ignore_within_component=ignore_within_component
+        )
+        if projected is not None and projected.shares_a_layer:
+            measured = projected
+    return measured
 
 
 class VoltageSpacing(PcbRule):
@@ -1040,7 +1496,9 @@ class VoltageSpacing(PcbRule):
     * the difference is looked up in :data:`VOLTAGE_SPACING_MIL`
       (:func:`required_spacing_mil`);
     * the pair is measured with :func:`~boardwise.core.measure.net_clearance`
-      and **WARN** when the measured gap is under the band's number.
+      and **WARN** when the measured gap is under the band's number — unless the
+      closest pair is one footprint's own pad pitch, which the rule reports
+      **INFO** (issue #85, in full lower down).
 
     **Four states, and none of them is a guess.**
 
@@ -1071,6 +1529,38 @@ class VoltageSpacing(PcbRule):
       as an UNKNOWN either, for the reason the pour case above gives: the
       missing thing is in the *measurement* or in the *design's own wiring*,
       neither of which an engineer can fix by writing a contract entry. 127b.
+
+    **A footprint's own pad pitch is reported, but never as a WARN** (issue #85,
+    岳 2026-10-2x). The closest pair between two nets can be **one component's
+    two pads** — an SOIC pin 1 on ``V`` against pin 2 on ``GND`` — and that
+    distance is the footprint's pad pitch: the part's *selection* fixed it and
+    no routing change can move it, so a WARN there is a work order for something
+    the engineer cannot do. The row keeps the reading and states the reason
+    (「footprint pitch, not a routing item」), and its severity is decided by the
+    gap a layout change *could* close: the nearest pair **outside** that
+    footprint (:func:`~boardwise.core.measure.net_clearance` with
+    ``ignore_within_component`` set). Both numbers go in the message, the
+    evidence and ``target.measurement`` (岳 asked for the same in #85's second
+    reading: 实板 A's ``GND``↔``V`` is 94.5 mil at the footprint's own pads and
+    114.7 mil outside, and the 114.7 already satisfies the 100 mil band).
+
+    * **outside pair measurable and passing** → **INFO**: nothing here for a
+      layout change to fix, and the message says so.
+    * **outside pair measurable and failing** → **WARN**, about that number: the
+      routing item is real even though the closest pair is not.
+    * **no outside pair measurable** (their other copper shares no layer — the
+      127b drop) → **INFO**, saying the external spacing is not asserted. The
+      alternative would let a pair that 127b deliberately drops become a WARN
+      the moment it also happens to be one footprint's own two pads.
+    * **the two pads overlap** (``distance <= 0`` on a shared layer) → still the
+      **WARN** it was: two different-voltage nets whose copper touches are a
+      short, and a short is a defect whatever footprint it is inside.
+
+    A **track against a footprint's pad** is *not* this case — a track belongs to
+    no placement, so no component test can call the pair internal — and it stays
+    the routing item it is. On 实板 A that is 6 of the 10 WARNs: four are same-
+    component pad pairs (downgraded here) and two are a track against a pad of
+    one component (unchanged).
 
     **Why B2 (uncoated external) is the column, and why a 0.0 mil reading is a
     WARN rather than an ERROR**, is written at :data:`VOLTAGE_SPACING_MIL`: the
@@ -1181,7 +1671,7 @@ class VoltageSpacing(PcbRule):
         priced: dict[str, tuple[float, str]],
         conflicts: list[str],
     ) -> Finding | None:
-        """One WARN, one silence, one drop — never anything else."""
+        """One WARN, one INFO, one silence, one drop — never anything else."""
         board = ctx.board
         volts_a, where_a = priced[first]
         volts_b, where_b = priced[second]
@@ -1194,14 +1684,8 @@ class VoltageSpacing(PcbRule):
         # same-layer gap was never looked at. On the real board that was four
         # silent 311 V high-side pairs (``HV``↔``GND`` 66.94 mil, ``HV``↔``U``
         # 62.99, ``HV``↔``V`` 62.99, ``HV``↔``W`` 37.89, all against 100).
-        measured = net_clearance(board, first, second, same_layer_only=True)
-        if measured is None:
-            # No same-layer pair at all: fall back to the projection so the
-            # cross-layer early return below keeps 127b's meaning (a pair whose
-            # closest copper is at least a prepreg apart is not judged).
-            projected = net_clearance(board, first, second)
-            if projected is not None and projected.shares_a_layer:
-                measured = projected
+        # ``_gap`` owns the reading and its two fallbacks; see its docstring.
+        measured = _gap(board, first, second)
         if _same_potential(first, second, volts_a, volts_b, measured):
             # 516 A1 (岳 2026-10-17): 「同电位豁免只保留双地或几何重合」. Two nets
             # are **one node** — and spacing is not the question — in exactly two
@@ -1265,34 +1749,96 @@ class VoltageSpacing(PcbRule):
         if measured.distance + 1e-9 >= needed:
             return None  # margin is silence
         touching = measured.overlapping and measured.distance <= 0.0
+        # issue #85 (岳 2026-10-2x): 「最近对可能是同一颗器件自己的两个焊盘」.
+        # When both elements of the closest pair are pads of **one** placement,
+        # the number is that footprint's own pad pitch — fixed by the part's
+        # selection, moveable by no routing change — so it is not the thing this
+        # rule is for. The pair is still reported (a reader needs the number and
+        # the reason), but the severity is decided by the gap a **layout** change
+        # could close: the nearest pair outside that footprint.
+        #
+        # The `touching` guard is load-bearing, not decoration: two different-
+        # voltage nets whose copper *overlaps* are a short (126c's ``+5V``/
+        # ``GND`` at 0.0 mil is a WARN), and a short is a defect whatever
+        # footprint it is inside.
+        pitch = measured.within_one_footprint and not touching
+        external = (
+            _gap(board, first, second, ignore_within_component=True) if pitch else None
+        )
+        # INFO when the footprint is the whole story: either the external pair
+        # is far enough (`external` passes the band) or there is no external
+        # pair to judge at all (the two nets' other copper shares no layer — the
+        # 127b drop, which must not turn into a WARN just because a pitch pair
+        # exists). WARN whenever a routing item was measured and fails.
+        external_passes = external is not None and external.distance + 1e-9 >= needed
+        severity = "INFO" if pitch and (external_passes or external is None) else "WARN"
         statement = (
             f"share a nominal potential but are not one node, so the swing "
             f"bound max(|{volts_a:g}|,|{volts_b:g}|) = {judged:g} V is judged"
             if same_nominal
             else f"are {judged:g} V apart"
         )
+        if pitch:
+            # 岳's two readings of #85, in one row: the pair is named as a
+            # footprint pitch **and** the nearest external pair is given, so a
+            # reader can see which of the two numbers they are being asked about
+            # — and whether there is anything left to ask.
+            pitch_clause = (
+                f" — but that pair is {measured.component_a}'s own two pads "
+                f"(footprint pitch), which the part's selection fixed and no "
+                f"routing change can move"
+            )
+            if external_passes:
+                pitch_clause += (
+                    f"; the nearest pair **outside that footprint** is "
+                    f"{external.distance:.1f} mil ({external.element_a} / "
+                    f"{external.element_b}), which satisfies the {needed:.1f} mil "
+                    f"band this pair is judged by, so there is nothing here for a "
+                    f"layout change to fix"
+                )
+            elif external is None:
+                pitch_clause += (
+                    "; no pair of these two nets outside that footprint is "
+                    "measurable (their other copper shares no layer), so no "
+                    "external spacing is asserted here"
+                )
+            else:
+                pitch_clause += (
+                    f"; the nearest pair **outside that footprint** is "
+                    f"{external.distance:.1f} mil ({external.element_a} / "
+                    f"{external.element_b}), which is under the {needed:.1f} mil "
+                    f"band — that one is a routing item"
+                )
+        else:
+            pitch_clause = (
+                " — those two nets' copper touch on a shared layer, so this "
+                "is a short, not merely a tight gap"
+                if touching
+                else ""
+            )
         return Finding(
             rule_id=self.id,
-            severity="WARN",
+            severity=severity,
             level=self.level,
             message=(
                 f"net {first!r} ({volts_a:g} V) and net {second!r} ({volts_b:g} V) "
                 f"{statement}: IPC-2221 (B2, uncoated) gives {needed:.1f} mil, "
                 f"and the measured gap is {measured.distance:.1f} mil between "
                 f"{measured.element_a} and {measured.element_b}"
-                + (
-                    " — those two nets' copper touch on a shared layer, so this "
-                    "is a short, not merely a tight gap"
-                    if touching
-                    else ""
-                )
+                + pitch_clause
             ),
             evidence=[
                 f"{first}: {volts_a:g} V — {where_a}",
                 f"{second}: {volts_b:g} V — {where_b}",
                 f"measured {measured.distance:.4f} mil "
                 f"({measured.element_a} / {measured.element_b}), "
-                f"overlapping={measured.overlapping}",
+                f"overlapping={measured.overlapping}"
+                + (
+                    f"; both elements belong to {measured.component_a} "
+                    "(within_one_footprint=True)"
+                    if measured.within_one_footprint
+                    else ""
+                ),
                 f"band {judged:g} V → required {needed:.4f} mil "
                 "(IPC-2221 Table 6-1 column B2)"
                 + (
@@ -1302,10 +1848,25 @@ class VoltageSpacing(PcbRule):
                     else ""
                 ),
             ]
+            + (
+                [
+                    f"the nearest pair **outside {measured.component_a}** "
+                    f"(ignore_within_component=True): "
+                    + (
+                        f"{external.distance:.4f} mil ({external.element_a} / "
+                        f"{external.element_b})"
+                        if external is not None
+                        else "unmeasurable — no same-layer pair and no plan-view "
+                        "projection that shares a layer"
+                    )
+                ]
+                if pitch
+                else []
+            )
             + conflicts,
             target=FindingTarget(
                 net_refs=[first, second],
-                measurement=_measurement("clearance", measured.distance),
+                measurement=_clearance_measurement(measured, external=external),
             ),
         )
 

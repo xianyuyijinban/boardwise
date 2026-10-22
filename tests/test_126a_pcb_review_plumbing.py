@@ -1305,8 +1305,62 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `bridge/protocol.py` 等未提交改动，均不在本配方内。
     # **判决语义**：人签档/机器档的产物逐字节不变（无夹具条目带这两档），
     # 草稿档从「假 WARN / 一行没有」变成「UNKNOWN 或带免责的行」。
-    assert old_digest == "acb185c4"
-    assert recursive == "94153a7f", (
+    # **8586 moved BOTH** — direct acb185c4 -> b6b6f2dd，recursive 94153a7f ->
+    # 3342b109（issue #85 / #86，岳 2026-10-22 提；量在一棵**还合着 #83 等未提交
+    # 改动**的树上，其中 `core/measure.py` 与本配方无关，`rules/` 下只有本批）。
+    # 落点**四个文件**：**直接**文件两个 —— `rules/decap.py`（#86：
+    # `CapCandidate` 加 `value_source`，新增 `recovered_capacitance` /
+    # `recovered_farads` / `value_source_label`，`cap_candidates_on` 在原理图
+    # `Value` 为**空**时按「货架（MPN / C 号）→ MPN 的 EIA 码」补出容值并标注来源）
+    # `rules/pcb/ipc.py`（#85：`pcb-voltage-spacing` 的 `_one_pair` 在最近对
+    # **双侧都是同一颗器件的焊盘**时判成封装脚距、降 INFO 并同时给出排除该器件后的
+    # 最近外部对（`_gap` 走 `net_clearance(ignore_within_component=…)`）；新增
+    # `_clearance_measurement` 把 element_a/b 与 component_a/b 结构化进
+    # `target.measurement`）；`pcb/` 下两个 —— `pcb/distance.py`（`capacitor_role`
+    # 在模型字段读不出时接受恢复值并在 reason 里点名来源；`pcb-decap-distance` 的
+    # 超限行的 evidence 补上「判 IC 的根据 + 每个候选的档位与决定它的值」，与两条空池
+    # INFO 行对齐）、`pcb/regulator.py`（`regulator_role` / `_pool_reason` 走同一个
+    # 共享读数 `_pool_reading`）。
+    # **判决语义**：#85 只在最近对双侧同属一颗器件的焊盘时改严重度（实板A 10 条 WARN
+    # 里 4 条同颗 → INFO，2 条「走线对同颗焊盘」不动；重叠即短路的仍 WARN）；
+    # #86 只在原理图字段**空白**时补值（写了 `DNP` 这种读不出的字面不动）。
+    # 库内夹具实测翻转：毕设FOC PCB1 的 `pcb-decap-distance` **4 条 INFO → 3 条**，
+    # 且出现本板第一条 WARN —— `U11/+5V` 变 WARN（最近 HF 候选 `C30` **561.3 mil**，
+    # 超该轨 300 mil 的稳压器输入档），`U13/+5V` 的假 INFO「网上没有高频去耦电容」
+    # 消失（`C30` 实测 **113.97 mil**，在档内）。根因是 `C30` 的 `Value` 为空、MPN
+    # `CC0805KRX7R9BB104` 的 `104` = 100 nF —— 正是 #86 的形态；两条既有断言因此按
+    # 证据改写（`test_126b_*` 的「four infos and no warn」、`test_127b_*` 的
+    # 「no candidate pool is a high-frequency one」，旧断言的前提就是 #86 修掉的
+    # 那条）。**判决语义的锚**：新建 `tests/test_85_footprint_pitch.py` 与
+    # `tests/test_86_legacy_value.py`（后者含 `value_source` 的四形态不变量）。
+    # 变异验证（cp 备份 + sha256 还原，禁 `git checkout --`）见
+    # `evidence/8586/mutation_log.txt`。
+    # **84 moved the recursive one only** — recursive 3342b109 -> **22eb8d3e**，
+    # direct 仍 `b6b6f2dd`（issue #84，岳 2026-10-22 提；量在**还合着 #83/#85/#86 等
+    # 未提交改动**的树上，`core/measure.py` 不在本配方内）。落点只有
+    # `rules/pcb/ipc.py` 一个文件：`pcb-track-ampacity`
+    # 的 `_one_component` 把每层读数从 `track_width_stats` 换成
+    # `core/measure.conductor_copper`（**分段**分辨率），判定前先问
+    # `_load_bearing` —— 同一导体上另有一段「≥ max(3 × 该层最窄段, 该层所需宽度)」
+    # 的干线或铺铜时，该层过窄的段按**宽度档**逐档出 UNKNOWN 行
+    # （`_branch_rows`：段数 / 总长 / 坐标跨度 / 每段自身端点），不再按最小线宽判
+    # ERROR；`BRANCH_WIDTH_RATIO = 3.0` 是屋规（写进常量 docstring，不进 `source`，
+    # `source` 仍只引 IPC-2221）。`core/measure.py` 的 `LayerCopper` /
+    # `ConductorCopper` / `conductor_copper` 是新增读数，按本配方定义**不进摘要**
+    # （与 131c/131d/131f/527D3 记过的同一条限制一致）。
+    # 本批内摘要还推过两次、均由同一批自己的真实源码变化引起（判层优先的两趟搜索
+    # 与 Severity 段的散文收口），中间值为 a9839df1 / c5b42df1；**只记最终值**，
+    # 中间值不单独断言（同一批内不该出现三组权威数）。
+    # **判决语义**：库内夹具只有 ROBOT 一条有合同，实测 **6 条 ERROR 一条不动** ——
+    # `U+` 最宽 15.0 mil、`W+` 14.0 mil、两网都没有铺铜，而门槛是 53.8（外层）/
+    # 140.0（内层），所以门槛不开（`tests/test_126c_pcb_ipc_rules.py` 与
+    # `tests/test_090/092/127b` 的六条断言原样绿）。真正翻转的是 516 A2 那两条**合成**
+    # 断言：60 mil 干线 + 10 mil 细线的形状正是 #84 判成「支路」的形态，两条按证据
+    # 改写（把宽铜降到门槛以下的 40 mil，保住它们要钉的**连通分量闭包**与 ERROR 通路；
+    # 60/10 的形状改由新建 `tests/test_84_ampacity_branch.py` 按 #84 的口径钉）。
+    # 变异验证（cp 备份 + sha256 还原）见 `evidence/84/mutation_log.txt`。
+    assert old_digest == "b6b6f2dd"
+    assert recursive == "22eb8d3e", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

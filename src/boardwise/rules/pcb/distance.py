@@ -112,7 +112,11 @@ from ...core.parts import resolve_component_facts
 from ...core.pinrole import pin_role
 from ...core.power_domains import infer_net_domains
 from ...core.values import parse_capacitance_farads
-from ..decap import cap_candidates_on
+from ..decap import (
+    cap_candidates_on,
+    recovered_farads,
+    value_source_label,
+)
 from .base import PcbReviewContext, PcbRule
 
 #: How far a decoupling capacitor may sit from the IC it decouples, edge to
@@ -539,6 +543,12 @@ class CapRole:
     wrote down (:data:`CAP_ROLE_UNKNOWN`) is in **neither** pool: a capacitor
     whose value is unreadable is not evidence that it decouples anything, which
     is the same argument :func:`boardwise.rules.decap.decide_required_cap` makes.
+
+    **Issue #86 widened it by exactly one source**: when the schematic's field is
+    blank and the decoupling pool recovered a value from the part's identity
+    (:func:`boardwise.rules.decap.recovered_farads`), that value is used — and
+    ``reason`` names where it came from, because 「declared 100nF」 and
+    「recovered 100nF from the MPN」 are two different claims about a board.
     """
 
     designator: str
@@ -560,11 +570,32 @@ def capacitor_role(candidate: object, model: object) -> CapRole:
     stated plainly rather than rounded into one, because that band is exactly
     where 「is it bulk or is it bypass」 is a question about the loop rather than
     about the part.
+
+    **The board model is still read first** (164b's discipline: the drawing's own
+    declaration decides, and the candidate's echo of it is not consulted while
+    the model has one). What issue #86 added is the second question, asked only
+    when the model's field yields nothing: did the pool **recover** a value for
+    this part from its identity? On 实板 A that is the 100 nF beside ``U1``, whose
+    ``Value`` is empty and whose MPN states ``104`` — without this the part was
+    in neither pool and `pcb-decap-distance` measured the nearest *readable*
+    capacitor at 1146 mil. ``reason`` carries which of the two it was.
     """
     designator = str(getattr(candidate, "designator", "") or "")
     comp = (getattr(model, "components", {}) or {}).get(designator)
     declared = str(getattr(comp, "value", "") or "") if comp is not None else ""
     farads = parse_capacitance_farads(declared) if declared else None
+    basis = f"declared {declared!r}"
+    if farads is None:
+        recovered = recovered_farads(candidate)
+        if recovered is not None:
+            farads = recovered
+            text = str(getattr(candidate, "value", "") or "")
+            source = str(getattr(candidate, "value_source", "") or "")
+            basis = (
+                f"recovered {text!r} from the "
+                f"{value_source_label(source)} — not from the schematic, whose "
+                "field is blank"
+            )
     if farads is None:
         return CapRole(
             designator=designator,
@@ -590,21 +621,21 @@ def capacitor_role(candidate: object, model: object) -> CapRole:
             designator=designator,
             role=CAP_ROLE_BULK,
             farads=farads,
-            reason=f"declared {declared!r} = {farads * 1e6:g} µF >= {BULK_FARADS * 1e6:g} µF — bulk",
+            reason=f"{basis} = {farads * 1e6:g} µF >= {BULK_FARADS * 1e6:g} µF — bulk",
         )
     if farads - _BOUNDARY_FARADS <= HF_FARADS:
         return CapRole(
             designator=designator,
             role=CAP_ROLE_HF,
             farads=farads,
-            reason=f"declared {declared!r} = {farads * 1e6:g} µF <= {HF_FARADS * 1e6:g} µF — high-frequency decoupling",
+            reason=f"{basis} = {farads * 1e6:g} µF <= {HF_FARADS * 1e6:g} µF — high-frequency decoupling",
         )
     return CapRole(
         designator=designator,
         role=CAP_ROLE_UNKNOWN,
         farads=farads,
         reason=(
-            f"declared {declared!r} = {farads * 1e6:g} µF, between the "
+            f"{basis} = {farads * 1e6:g} µF, between the "
             f"{HF_FARADS * 1e6:g} µF high-frequency ceiling and the "
             f"{BULK_FARADS * 1e6:g} µF bulk floor — neither pool"
         ),
@@ -1040,7 +1071,21 @@ class DecapDistance(PcbRule):
         if not measured:
             return []
         nearest, gap = min(measured, key=lambda pair: pair[1])
-        evidence = [f"{designator} @ {net}", f"{nearest} @ {net}", attribution.evidence]
+        evidence = [
+            f"{designator} @ {net}",
+            f"{nearest} @ {net}",
+            attribution.evidence,
+            # Issue #86: the measured row carries the same two statements the
+            # two 「no high-frequency candidate」 INFO rows below carry — the IC
+            # judgement and every candidate's role with the value that decided
+            # it. Without them the one row this rule raises when a pool *is*
+            # high-frequency would be the only row whose verdict a reader
+            # cannot audit, and a role decided on a **recovered** value (an
+            # old-library instance whose ``Value`` is blank) would be quoted
+            # nowhere at all.
+            f"{designator} judged an IC because {why_ic}",
+            *role_evidence,
+        ]
         component_level = component_distance(board, designator, nearest)
         if component_level is not None:
             evidence.append(

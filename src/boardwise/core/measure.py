@@ -50,6 +50,9 @@ __all__ = [
     "WidthStats",
     "track_width_stats",
     "track_width_table",
+    "LayerCopper",
+    "ConductorCopper",
+    "conductor_copper",
     "ComponentDistance",
     "component_distance",
     "pad_corners",
@@ -398,6 +401,168 @@ def track_width_table(board: BoardGeometry) -> dict[str, WidthStats]:
     return table
 
 
+@dataclass
+class LayerCopper:
+    """One copper layer's copper of one conductor, at **segment** resolution.
+
+    :func:`track_width_stats` answers 「how wide is this net's copper on each
+    layer」 with three aggregates — count, minimum, total length. Issue #84 needed
+    the same reading kept at full resolution *and* the copper that is not a
+    track beside it, because the question the ampacity rule now asks is 「is this
+    conductor's narrowest segment the copper that carries its current, or a
+    branch off copper far wider than it」, and neither half of that question can
+    be answered by a minimum: the narrow segments have to be named, and a pour
+    is a legitimate answer to the second half while having no width in the
+    geometry model.
+
+    The four track aggregates are computed here exactly as
+    :func:`track_width_stats` computes them per layer (minimum, sum of lengths,
+    count), so a caller migrating from that function reads the same numbers.
+
+    **The pour reading, and how coarse it is.** ``pour_area`` is the summed
+    shoelace area of the layer's pour polygons (square mils) and ``pour_span``
+    the longest side of their joint bounding box (mils);
+    :attr:`pour_mean_width` is the ratio — the width a track of the same copper
+    area stretched over that extent would have. Exact for an axis-aligned
+    rectangle, an **average** for anything else (an L-shaped pour with 100 mil
+    arms inside a 2000×1500 box reads 175 mil), and blind to a thin neck inside
+    a wide outline. It is therefore a coarse reading by construction, fit for a
+    caller that asks a coarse question and says so in its own message; this
+    module only measures it. The polygons read are the same ones every consumer
+    since 125 reads — :attr:`~boardwise.core.geometry.PourShape.points`, the
+    arcs-as-chords view (issue #88), with a ``POUR`` region the file also carries
+    a ``POURED`` result for skipped (:func:`_poured_supersedes`), the same
+    de-duplication :func:`pour_connectivity` applies.
+    """
+
+    layer_id: int
+    tracks: list[TrackSegment] = field(default_factory=list)
+    #: Pour polygons of this layer: how many, their summed area and the longest
+    #: side of their joint box. Zeroes when the layer carries none.
+    pour_count: int = 0
+    pour_area: float = 0.0
+    pour_span: float = 0.0
+
+    @property
+    def track_count(self) -> int:
+        return len(self.tracks)
+
+    @property
+    def min_width(self) -> float:
+        """The narrowest track's width, or ``0.0`` when there are none."""
+        return min((t.width for t in self.tracks), default=0.0)
+
+    @property
+    def max_width(self) -> float:
+        """The widest track's width, or ``0.0`` when there are none."""
+        return max((t.width for t in self.tracks), default=0.0)
+
+    @property
+    def total_length(self) -> float:
+        """Summed track length (mils).
+
+        Accumulated with ``+=`` in the list's own order rather than with
+        ``sum()``, because CPython 3.12 gave ``sum()`` a compensated summation
+        path for floats: on a long net the two agree only to the last bit
+        (measured on this repository's fixtures: 98.45269394831124 against
+        98.45269394831125 on one FOUR-track net). :func:`track_width_stats`
+        accumulates with ``+=``, so this is the spelling that makes the two
+        readings of one number identical rather than merely close.
+        """
+        total = 0.0
+        for track in self.tracks:
+            total += track.length
+        return total
+
+    @property
+    def pour_mean_width(self) -> float:
+        """``pour_area / pour_span`` — the pour read as a track (see class doc)."""
+        if self.pour_count == 0 or self.pour_span <= 0.0:
+            return 0.0
+        return self.pour_area / self.pour_span
+
+
+@dataclass
+class ConductorCopper:
+    """One conductor's copper, grouped by the copper layer it sits on (#84).
+
+    ``layers`` is keyed by ``layer_id``. A track whose record names no layer has
+    no per-layer home and is counted in :attr:`unlayered_tracks` instead — the
+    same reading :func:`track_width_stats` takes, which keeps such a track in its
+    net-level totals and out of its ``per_layer`` map. A pour with no layer
+    contributes to neither: it is copper whose face the document does not state,
+    and filing it under a guessed layer is what this repository refuses
+    everywhere else.
+    """
+
+    layers: dict[int, LayerCopper] = field(default_factory=dict)
+    #: Tracks whose record names no copper layer (counted, not filed).
+    unlayered_tracks: int = 0
+
+    @property
+    def track_count(self) -> int:
+        return self.unlayered_tracks + sum(
+            layer.track_count for layer in self.layers.values()
+        )
+
+
+def conductor_copper(board: BoardGeometry, nets: Sequence[str]) -> ConductorCopper:
+    """One conductor's copper by layer, at segment resolution (issue #84).
+
+    ``nets`` is the conductor's names — one piece of copper can be exported under
+    two (``IRbus``/``IRBUS``), which is why the ampacity rule hands in the whole
+    connected component rather than the declared name. Tracks are read through
+    :meth:`BoardGeometry.tracks_for_net`, the same door
+    :func:`track_width_stats` uses, and they are **appended in that order**, so
+    the result is deterministic and names its segments the way the board states
+    them.
+
+    Pour polygons come from the same nets, filtered exactly as
+    :func:`_net_shape_records` filters them (the four area kinds, at least two
+    points, a superseded region dropped); see :class:`LayerCopper` for what is
+    read off them and how coarse that reading is.
+    """
+    copper = ConductorCopper()
+    boxes: dict[int, BBox] = {}
+    superseded = _poured_supersedes(board)
+    for name in nets:
+        for track in board.tracks_for_net(name):
+            if track.layer_id is None:
+                copper.unlayered_tracks += 1
+                continue
+            layer = copper.layers.setdefault(
+                track.layer_id, LayerCopper(layer_id=track.layer_id)
+            )
+            layer.tracks.append(track)
+        for pour in board.pours_for_net(name):
+            if pour.kind not in ("fill", "poly", "pour", "poured"):
+                continue
+            if len(pour.points) < 2:
+                continue
+            if pour.kind != "poured" and pour.id in superseded:
+                continue
+            if pour.layer_id is None:
+                continue
+            layer = copper.layers.setdefault(
+                pour.layer_id, LayerCopper(layer_id=pour.layer_id)
+            )
+            layer.pour_count += 1
+            layer.pour_area += pour.area
+            box = pour.bbox
+            if box is None:
+                continue
+            known = boxes.get(pour.layer_id)
+            boxes[pour.layer_id] = box if known is None else BBox(
+                min(known.min_x, box.min_x),
+                min(known.min_y, box.min_y),
+                max(known.max_x, box.max_x),
+                max(known.max_y, box.max_y),
+            )
+    for layer_id, box in boxes.items():
+        copper.layers[layer_id].pour_span = max(box.width, box.height)
+    return copper
+
+
 # ---------------------------------------------------------------------------
 # component / pad distances
 # ---------------------------------------------------------------------------
@@ -705,7 +870,9 @@ class _Shape:
     set of copper layers the copper exists on — more than one for vias and
     through-hole pads. ``is_pour`` marks a filled polygon, the only kind
     whose interior counts as copper (so containment is a valid meeting test
-    for it, via :func:`point_in_polygon`).
+    for it, via :func:`point_in_polygon`). ``component`` names the placement a
+    pad belongs to and is empty for every shape that belongs to none (issue
+    #85) — see :attr:`ClearanceResult.within_one_footprint` for what reads it.
 
     **``bbox`` is the copper's box, not the centreline's** (162a): the vertex
     box inflated by ``radius``, which is the box of the capsule's own body —
@@ -724,7 +891,7 @@ class _Shape:
     property both callers need.
     """
 
-    __slots__ = ("points", "radius", "layers", "label", "bbox", "is_pour")
+    __slots__ = ("points", "radius", "layers", "label", "component", "bbox", "is_pour")
 
     def __init__(
         self,
@@ -734,12 +901,26 @@ class _Shape:
         label: str,
         *,
         is_pour: bool = False,
+        component: str = "",
     ) -> None:
         self.points = points
         self.radius = radius
         self.layers = layers
         self.label = label
         self.is_pour = is_pour
+        #: The designator of the **placed component this element is part of**,
+        #: or ``""`` when it is not part of one (issue #85). Only a pad has
+        #: one: a track, a via and a pour belong to no footprint, so a
+        #: non-empty value here is the one-word form of 「this shape is a pad
+        #: of that placement」. ``PadGeometry.id`` cannot answer this — it is
+        #: the footprint *template* id and repeats across placements, which is
+        #: the same reason :func:`_pad_key` exists.
+        #:
+        #: The consumer is the clearance engine's own 「is this pair one
+        #: footprint's internal pitch?」 question (:attr:`ClearanceResult.
+        #: within_one_footprint`): two pads of one component are a gap the
+        #: part's selection fixed, and no routing change can move them.
+        self.component = component
         box = BBox.from_points(points)
         if box is not None and radius > 0.0:
             box = BBox(
@@ -1000,6 +1181,7 @@ def _net_shape_records(
                     # have been misled.
                     _describe("pad", _pad_key(pad), layers),
                     is_pour=False,
+                    component=pad.component or "",
                 ),
                 0.0,
             )
@@ -1072,8 +1254,16 @@ def _capsule_distance(a: _Shape, b: _Shape, *, connectivity: bool) -> float:
       spot, not an oversight — it is what keeps ``clearances_vs`` from
       degenerating to all-zeros on a poured board.
     """
-    contained = (a.is_pour and any(point_in_polygon(p, b.points) for p in b.points)) or (
-        b.is_pour and any(point_in_polygon(p, a.points) for p in a.points)
+    # Issue #83: both disjuncts used to ask whether a polygon contains **its
+    # own** vertices — ``point_in_polygon(p, b.points) for p in b.points`` —
+    # which is true by construction (a vertex is on two of its own edges), so
+    # every pair with a pour on either side took the branch below and was
+    # decided by a tautology: ``connectivity=False`` answered ``inf`` for
+    # every pour pair, ``connectivity=True`` answered ``0.0`` for every pour
+    # pair. The operands below are the docstring's reading — when ``a`` is the
+    # pour it is **b**'s body that is tested against ``a``'s polygon.
+    contained = (a.is_pour and any(point_in_polygon(p, a.points) for p in b.points)) or (
+        b.is_pour and any(point_in_polygon(p, b.points) for p in a.points)
     )
     if contained:
         return 0.0 if connectivity else math.inf
@@ -1101,7 +1291,11 @@ def _overlapping(a: _Shape, b: _Shape) -> bool:
 
 
 def _best_pair(
-    shapes_a: list[_Shape], shapes_b: list[_Shape], *, same_layer_only: bool = False
+    shapes_a: list[_Shape],
+    shapes_b: list[_Shape],
+    *,
+    same_layer_only: bool = False,
+    ignore_within_component: bool = False,
 ) -> tuple[float, _Shape, _Shape] | None:
     """The closest capsule pair across two lists, via bbox coarse reject.
 
@@ -1123,6 +1317,18 @@ def _best_pair(
     every shape pair, and on a two-layer board almost any pair of nets has one
     such crossing somewhere — which is why a caller asking "how close are these
     two conductors *where they can actually arc*" must ask with this flag set.
+
+    ``ignore_within_component`` (issue #85) drops every pair whose two shapes
+    are **pads of one and the same placement** (``_Shape.component`` equal and
+    non-empty). The distance such a pair reports is the footprint's own pad
+    pitch: its selection fixed it, no routing change can move it, and a rule
+    judging IPC-2221 spacing off it would be asking the engineer to redo
+    something the schematic decided. Asking with this flag set answers the other
+    half of the question — 「and how close does the rest of the copper come?」 —
+    so a rule can report the pitch *and* the number that is a routing item. A
+    track, a via and a pour carry no component, so a pair involving one is
+    always kept: 「走线 against 同颗焊盘」 is routable and is exactly the pair
+    this flag must not silence.
     """
     if not shapes_a or not shapes_b:
         return None
@@ -1131,6 +1337,12 @@ def _best_pair(
     for sa in shapes_a:
         for sb in shapes_b:
             if same_layer_only and not (sa.layers & sb.layers):
+                continue
+            if (
+                ignore_within_component
+                and sa.component
+                and sa.component == sb.component
+            ):
                 continue
             if sa.bbox is None or sb.bbox is None:
                 continue
@@ -1187,15 +1399,41 @@ class ClearanceResult:
     #: pair, whose ``distance`` is a plan-view projection rather than a
     #: surface-to-surface gap (see the class docstring).
     shared_layer_ids: list[int] = field(default_factory=list)
+    #: The **placement each element belongs to**, or ``""`` for an element that
+    #: belongs to none (issue #85). Only a pad has one, so both non-empty means
+    #: both elements are pads — see :attr:`within_one_footprint`. ``element_a``
+    #: alone is a label a reader parses; this is the same claim in a field.
+    component_a: str = ""
+    component_b: str = ""
 
     @property
     def shares_a_layer(self) -> bool:
         """Whether the closest pair's copper can actually meet (same layer)."""
         return bool(self.shared_layer_ids)
 
+    @property
+    def within_one_footprint(self) -> bool:
+        """Are both elements pads of **one and the same** component? (#85)
+
+        When they are, ``distance`` is the footprint's own pad pitch: the part's
+        selection decided it and no routing change can move it, which is why
+        ``pcb-voltage-spacing`` does not WARN on such a pair — unless the two
+        pads' copper actually **touches** (``distance <= 0`` on a shared layer),
+        which is a short and stays the WARN it was. Non-empty on both sides is
+        the whole test — only a pad carries a component
+        (:attr:`_Shape.component`), so a track against a footprint's pad is
+        **not** this case and stays the routing item it is.
+        """
+        return bool(self.component_a) and self.component_a == self.component_b
+
 
 def net_clearance(
-    board: BoardGeometry, net_a: str, net_b: str, *, same_layer_only: bool = False
+    board: BoardGeometry,
+    net_a: str,
+    net_b: str,
+    *,
+    same_layer_only: bool = False,
+    ignore_within_component: bool = False,
 ) -> ClearanceResult | None:
     """Minimum spacing between two nets; ``None`` if either has no copper.
 
@@ -1212,6 +1450,12 @@ def net_clearance(
     board the second question always has some zero-distance crossing somewhere,
     and 516-A1's real-board miss (``HV``↔``GND`` silently at 66.94 mil against a
     100 mil band) was exactly a plan-view 0.0 burying a same-layer gap.
+
+    ``ignore_within_component`` (issue #85) keeps out of the measurement every
+    pair of pads that belong to **one** placement — the part's own pad pitch,
+    which no routing change can move. See :func:`_best_pair` for the reasoning
+    and :attr:`ClearanceResult.within_one_footprint` for how a caller detects it
+    without asking twice.
     """
     geo_a = board.net(net_a)
     geo_b = board.net(net_b)
@@ -1219,7 +1463,12 @@ def net_clearance(
         return None
     shapes_a = _net_shapes(board, geo_a)
     shapes_b = _net_shapes(board, geo_b)
-    best = _best_pair(shapes_a, shapes_b, same_layer_only=same_layer_only)
+    best = _best_pair(
+        shapes_a,
+        shapes_b,
+        same_layer_only=same_layer_only,
+        ignore_within_component=ignore_within_component,
+    )
     if best is None:
         return None
     distance, sa, sb = best
@@ -1233,6 +1482,10 @@ def net_clearance(
         # 127b: the layer intersection is what tells a caller whether the
         # projected distance is a same-layer gap at all.
         shared_layer_ids=sorted(sa.layers & sb.layers),
+        # #85: the same pair said as placements, so a caller can tell a
+        # footprint's own pitch from a routing item without parsing the label.
+        component_a=sa.component,
+        component_b=sb.component,
     )
 
 

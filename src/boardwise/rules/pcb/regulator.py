@@ -107,7 +107,7 @@ from ...core.parts import (
 )
 from ...core.pinrole import pin_role
 from ...core.values import parse_capacitance_farads
-from ..decap import cap_candidates_on
+from ..decap import cap_candidates_on, recovered_farads, value_source_label
 from ..facts import read_default_library
 from .base import PcbReviewContext, PcbRule
 from .distance import _board_models, _mil, _measurement
@@ -225,6 +225,42 @@ def _declared(candidate: object, model: object, schematic: object | None = None)
     return _value_ohms(component, _placed_on(schematic, designator))
 
 
+def _pool_reading(
+    candidate: object, model: object, schematic: object | None = None
+) -> tuple[float | None, str]:
+    """``(farads, basis)`` for one candidate's pool question (issue #86).
+
+    Two questions, in the order 164b's discipline asks them: **what does the
+    drawing declare** (:func:`_declared`, the schematic page's own field first
+    and the PCB document's copy as its fallback), and — only when that yields
+    nothing — **did the decoupling pool recover a value for this part from its
+    identity** (:func:`~boardwise.rules.decap.recovered_farads`).
+
+    The second question is #86. An old-library instance carries ``partId="1"``,
+    an empty ``Value`` and a good MPN, so before this the part was in neither
+    pool and a rail with a 100 nF capacitor 21 mil from its regulator was read as
+    having none. ``basis`` is the sentence a row prints, and it is
+    :func:`_declared`'s own («原理图 X / PCB 文档 Y») **plus** the recovery when
+    one happened, because 「declared 100nF」 and 「recovered 100nF from the MPN」
+    are two different claims about a board.
+    """
+    draw = _declared(candidate, model, schematic)
+    declared = draw.value
+    farads = parse_capacitance_farads(declared) if declared else None
+    if farads is not None:
+        return farads, draw.basis
+    recovered = recovered_farads(candidate)
+    if recovered is None:
+        return None, draw.basis
+    text = str(getattr(candidate, "value", "") or "")
+    source = str(getattr(candidate, "value_source", "") or "")
+    return recovered, (
+        f"{draw.basis}; the schematic states no capacitance, and the decoupling "
+        f"pool recovered {text!r} for it from the {value_source_label(source)} "
+        "(issue #86)"
+    )
+
+
 def regulator_role(
     candidate: object, model: object, schematic: object | None = None
 ) -> str:
@@ -239,9 +275,14 @@ def regulator_role(
     down (the UNKNOWN case: in neither pool, and reported as such rather than
     silently assigned). ``schematic=None`` reads the board model alone, which is
     what a caller with no board link has.
+
+    **A value the pool recovered counts** (issue #86, through
+    :func:`_pool_reading`): the split stays a function of a capacitance, and the
+    capacitance is the one the part's identity states when the drawing's own
+    field is blank. ``""`` keeps its meaning — neither the drawing nor the
+    identity could supply one.
     """
-    declared = _declared(candidate, model, schematic).value
-    farads = parse_capacitance_farads(declared) if declared else None
+    farads, _basis = _pool_reading(candidate, model, schematic)
     if farads is None:
         return ""
     if farads + _BOUNDARY_FARADS >= HF_POOL_FARADS:
@@ -259,25 +300,28 @@ def _pool_reason(
     declarations. That is 164b's whole point — an evidence line that says
     「declared '100nF'」 while reading a field the schematic contradicts is a lie,
     and the fix is for the row to quote the schematic *and* the copy.
+
+    Issue #86 adds one clause to that sentence: when the drawing states nothing
+    and the value came from the part's identity, the basis says so
+    (:func:`_pool_reading`), so the row never presents a recovered number as a
+    declared one.
     """
     designator = str(getattr(candidate, "designator", "") or "")
-    draw = _declared(candidate, model, schematic)
-    declared = draw.value
-    farads = parse_capacitance_farads(declared) if declared else None
+    farads, basis = _pool_reading(candidate, model, schematic)
     if farads is None:
         return (
-            f"candidate {designator}: {draw.basis} — not a readable "
+            f"candidate {designator}: {basis} — not a readable "
             f"capacitance, so UNKNOWN and in neither pool"
         )
     if farads + _BOUNDARY_FARADS >= HF_POOL_FARADS:
         return (
-            f"candidate {designator}: {draw.basis} = "
+            f"candidate {designator}: {basis} = "
             f"{farads * 1e6:g} µF >= {HF_POOL_FARADS * 1e6:g} µF — "
             f"{_POOL_LABELS[POOL_STORAGE]} pool (岳裁定 ③, the middle band is "
             f"assigned to storage, not left undecided)"
         )
     return (
-        f"candidate {designator}: {draw.basis} = "
+        f"candidate {designator}: {basis} = "
         f"{farads * 1e6:g} µF < {HF_POOL_FARADS * 1e6:g} µF — "
         f"{_POOL_LABELS[POOL_HF]} pool"
     )
