@@ -45,16 +45,21 @@ import math
 
 __all__ = [
     "CANVAS_TEXT_UNITS",
+    "DESIGNATOR_GROWTH",
     "FLAG_NAME_ROW",
     "RENDER_TEXT_PX",
     "RENDER_TEXT_SCALE",
     "TEXT_ADVANCE_EM",
     "TEXT_ADVANCE_EM_FALLBACK",
+    "TEXT_ROW_HEIGHT",
     "TEXT_WIRE_PENETRATION",
     "WIRE_NAME_MODEL_EXCEPTION",
     "WIRE_NAME_ROW",
     "flag_name_box",
+    "host_row_box",
+    "pin_rows",
     "render_width",
+    "symbol_rows",
     "wire_name_box",
 ]
 
@@ -117,6 +122,215 @@ def render_width(text: str) -> float:
 #: The height of one row of a wire's net name as the host draws it. The same 10
 #: canvas units every canvas text row occupies (measured 2026-10-10).
 WIRE_NAME_ROW = CANVAS_TEXT_UNITS
+
+#: The height of a placed part's own text row, and the pitch the host stacks its
+#: two rows on when it re-anchors them itself: one number, because the host draws
+#: a row 10 units tall and a pair of rows 10 apart wherever the symbols do not
+#: declare a pitch (531 measured six such pairs on a live landing —
+#: `evidence/531/raw/anchor_landed_before.txt`).
+TEXT_ROW_HEIGHT = CANVAS_TEXT_UNITS
+
+#: How much wider a **designator row** is reserved than the spec id it was
+#: compiled from. The host prints the designator the project's pool **allocated**,
+#: not the spec's id: on the 530F/531 landings on `test`, spec `C5` printed as
+#: `C11`, `R4` as `R19`, `T1` as `T3` — the pool picks the lowest free number in
+#: the project (`addcomponent.allocate_designator`), and a spec's own number is
+#: kept only when it is already free (121c). So a row reserved at
+#: ``render_width("R4")`` is ~4 units short of the ``R19`` the page draws, which
+#: is a real (if small) `text-overlap` in a tight row. The bound observed on both
+#: landings is **one extra character**; a caller that has to be safe against the
+#: pool adds it, and a caller that measures a box the plan already states does
+#: not (the box the plan holds is the row for the text the plan knows).
+DESIGNATOR_GROWTH = render_width("0")
+
+
+def pin_rows(
+    profile,
+    origin: tuple[float, float],
+    pose=None,
+) -> list[tuple[str, str, tuple[float, float, float, float]]]:
+    """``(kind, text, box)`` for every **pin name/number row** the host paints.
+
+    The rows `readability._text_boxes` was blind to until 532: on the flyback's
+    landing the render carried four collisions between a part's own pin text and
+    its own value row (`U5`'s `ANODE` × `3`, the transformer's `2`/`5` ×
+    `EE16_3+3_V02`), and the gate could not see any of them because none of its
+    five kinds of text is a pin's own typography.
+
+    The rule is the **measurement** in `SymbolProfile.pin_text_offsets`
+    (`evidence/532/raw/pin_text_offsets.txt`, taken off 531's own landing): a pin's
+    name and number are drawn at a fixed offset from **that pin's tip**, on the
+    pin's own axis. Let ``sx`` be the sign of the posed tip along x — the direction
+    the pin points — then the row's anchor is ``(tip.x - sx*|dx|, tip.y + dy)``,
+    the **name** grows away from the tip and the **number** grows toward it. Both
+    halves of that were measured, not chosen: on `SOT23-3-TL431` the name row's
+    anchor sits 13.7 from the tip and the number's 9.5, and the two anchors' text
+    runs in opposite directions (the SVG's own ``text-anchor`` is ``start`` for one
+    and ``end`` for the other, per row).
+
+    A symbol that declares no offsets returns nothing, and so does a pin whose tip
+    does not lie on the x axis: `pin_text_offsets` was measured on horizontal pins
+    only, and a vertical pin's rows are unmeasured rather than zero.
+    """
+    offsets = getattr(profile, "pin_text_offsets", None) or {}
+    kinds_of = getattr(profile, "pin_text_kinds", None) or {}
+    if not offsets or not kinds_of:
+        return []
+    from .geometry import transform_point
+
+    rotation = 0.0 if pose is None else float(getattr(pose, "rotation", 0) or 0.0)
+    mirror = False if pose is None else bool(getattr(pose, "mirror", False))
+    out: list[tuple[str, str, tuple[float, float, float, float]]] = []
+    for pin in profile.pins:
+        wanted = kinds_of.get(str(pin.number))
+        if not wanted:
+            continue
+        tip = transform_point(
+            pin.tip[0], pin.tip[1], rotation=rotation, mirror=mirror,
+            ox=origin[0], oy=origin[1],
+        )
+        # The axis the measurement is stated on: the pin's own, after the pose. The
+        # direction is the one from the symbol's origin **out to the tip** — the way
+        # the pin points — taken on its dominant axis in the symbol's own frame
+        # first, so a mirrored part is read by the same rule as an upright one.
+        if abs(pin.tip[0]) >= abs(pin.tip[1]):
+            outward_local = (1.0 if pin.tip[0] > 0 else -1.0, 0.0)
+        else:
+            outward_local = (0.0, 1.0 if pin.tip[1] > 0 else -1.0)
+        if outward_local[1] != 0.0:
+            continue  # the pin is not on the x axis: its rows are unmeasured
+        far = transform_point(
+            pin.tip[0] + outward_local[0], pin.tip[1] + outward_local[1],
+            rotation=rotation, mirror=mirror, ox=origin[0], oy=origin[1],
+        )
+        sx = 1.0 if far[0] > tip[0] else -1.0
+        for kind, key, text, grows_away in (
+            ("pinName", "name", str(pin.name or ""), True),
+            ("pinNumber", "number", str(pin.number or ""), False),
+        ):
+            if key not in wanted or not text:
+                continue
+            offset = offsets.get(key)
+            if offset is None:
+                continue
+            width = render_width(text)
+            left = tip[0] - sx * offset[0]
+            if (grows_away and sx > 0) or (not grows_away and sx < 0):
+                box = (left - width, tip[1] + offset[1],
+                       left, tip[1] + offset[1] + TEXT_ROW_HEIGHT)
+            else:
+                box = (left, tip[1] + offset[1],
+                       left + width, tip[1] + offset[1] + TEXT_ROW_HEIGHT)
+            out.append((kind, text, box))
+    return out
+
+
+def host_row_box(anchor: tuple[float, float], text: str) -> tuple[float, float, float, float]:
+    """The box the host draws one row of a placed part's text in.
+
+    ``anchor`` is the row's **lower-left** corner and the width is the render's
+    own ruler (:func:`render_width`); the measurement behind both is in
+    :func:`symbol_rows`.
+    """
+    width = render_width(text)
+    return (anchor[0], anchor[1], anchor[0] + width, anchor[1] + TEXT_ROW_HEIGHT)
+
+
+def symbol_rows(
+    profile,
+    origin: tuple[float, float],
+    *,
+    reference: str = "",
+    value: str = "",
+    pose=None,
+) -> list[tuple[str, str, tuple[float, float, float, float]]]:
+    """``(kind, text, box)`` for every row the host paints for a placed part.
+
+    **One home for "where a part's own text is drawn"**, because two models of it
+    is what let the island path measure a page nobody sees: the single-module
+    path read the symbols' declared anchors (146/147) while the island path
+    invented a side for every row, and the invented boxes were 50+ units from
+    where the host prints (`evidence/531/report.md` §2).
+
+    The rule is the one `outputs/147/20_text_row_pose.txt` measured and the
+    library's own notes restate: the anchor is the symbol's declared text item
+    offset from the part's **origin in the page frame**, and the row is
+    :func:`render_width` wide by :data:`TEXT_ROW_HEIGHT` tall, anchored at its
+    lower-left corner.
+
+    **531 measured the pose half of that rule, and it is not absent.** 147 read
+    "the host does not turn the row with the pose" off one page; a fresh landing
+    of the island page on `test` (`evidence/531/raw/anchor_landed_before.txt`, 60
+    host text nodes) says upright rows match their declaration to the unit (11/11)
+    while rotated ones do not: `C0603` at rot 90 draws at ``(+15,-5)``/``(+15,-15)``
+    where the declaration says ``(-5,+10)``/``(-5,-20)``; `CAP-SMD-220UF` at rot 90
+    mirrored at ``(-5,+15)`` where it says ``(+15, 0)``; `R0603` at rot 90 at
+    ``(+7, 0)`` where it says ``(-10, +5)``. So a declaration may carry the pose it
+    was measured in (`SymbolText.rotation`/`.mirror`), and this function prefers
+    the entry for the **part's own pose** and falls back to the pose-independent
+    one. Two parts of one symbol in one pose can still differ by a couple of units
+    (`R0603` at rot 270: `R19` measured ``+10``, `R20` ``+8``), so a caller must
+    treat these boxes as the host's *intent* rather than as a ruler — which is
+    exactly why the router ranks them among the legibility keys and why a value
+    that they say is pressed is hidden rather than moved (`_clear_text_rows`).
+
+    A symbol that declares no anchors returns nothing: a box nobody can measure
+    is not a zero-area one, and the caller keeps its own fallback.
+    """
+    declared = getattr(profile, "texts", ())
+    rotation = None if pose is None else _pose_field(pose, "rotation")
+    mirror = None if pose is None else _pose_field(pose, "mirror")
+    chosen: dict[str, object] = {}
+    for kind in ("reference", "value"):
+        entry = _pick_text(declared, kind, rotation, mirror)
+        if entry is not None and entry.x is not None and entry.y is not None:
+            chosen[kind] = entry
+    drawn_value = getattr(profile, "value_row", "") or value
+    # Declaration order, so a plan's `texts` list keeps the order the library
+    # states (reference above value in every profile written so far).
+    out: list[tuple[str, str, tuple[float, float, float, float]]] = []
+    for entry in declared:
+        if chosen.get(entry.kind) is not entry:
+            continue
+        # The string the **host draws**, which is the one whose width the box has
+        # to be: `SymbolProfile.value_row` states it where the host's device name
+        # is not the spec's value (measured, 4 of the flyback's 19 rows).
+        text = reference if entry.kind == "reference" else drawn_value
+        if not text:
+            continue
+        out.append((
+            entry.kind,
+            text,
+            host_row_box((origin[0] + entry.x, origin[1] + entry.y), text),
+        ))
+    return out
+
+
+def _pose_field(pose, name: str):
+    return getattr(pose, name, None)
+
+
+def _pick_text(declared, kind: str, rotation, mirror):
+    """The entry for this row: the part's own pose first, then "any pose".
+
+    A pose-qualified entry wins only on an exact match, and the pose-independent
+    entry is the fallback rather than the last resort: a symbol measured in one
+    pose and drawn in another keeps the declaration 146/147 wrote, which is what
+    every library without 531's measurements still has.
+    """
+    entries = [entry for entry in declared if entry.kind == kind]
+    if rotation is not None or mirror is not None:
+        for entry in entries:
+            if (
+                entry.rotation is not None
+                and abs(float(entry.rotation) - float(rotation or 0.0)) < 1e-9
+                and bool(entry.mirror) == bool(mirror)
+            ):
+                return entry
+    for entry in entries:
+        if entry.rotation is None and entry.mirror is None:
+            return entry
+    return entries[0] if entries else None
 
 #: The one wire whose measured anchor this model does not explain: on the 145e
 #: render FB_SENSE's name sits at the wire's arc-length midpoint, 12.5 units from

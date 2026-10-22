@@ -44,11 +44,40 @@
           "kind": "value",
           "x": -10.0,
           "y": -15.0
+        },
+        {
+          "kind": "reference",
+          "x": 7.0,
+          "y": 0.0,
+          "rotation": 90.0,
+          "mirror": false
+        },
+        {
+          "kind": "value",
+          "x": 7.0,
+          "y": -10.0,
+          "rotation": 90.0,
+          "mirror": false
+        },
+        {
+          "kind": "reference",
+          "x": 10.0,
+          "y": 0.0,
+          "rotation": 270.0,
+          "mirror": false
+        },
+        {
+          "kind": "value",
+          "x": 10.0,
+          "y": -10.0,
+          "rotation": 270.0,
+          "mirror": false
         }
       ],
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "texts re-measured 2026-10-21 on a fresh landing of the island page on `test` (a live `export.render` svg + its own `sch.netlist`; evidence/531/raw/anchor_landed_before.txt, 60 host text nodes of 19 parts): the anchor is the symbol's offset from the part's origin in the page frame for the **upright** pose, which matches this profile's declaration exactly, and the host **re-anchors** a rotated or mirrored part — so a rotated row is stated here with its own pose (SymbolText.rotation/.mirror) rather than being read off the upright declaration. Two parts of one symbol in one pose can still differ by a couple of units (R0603 at rot 270: R19 measured +10, R20 +8), so these boxes are the host's intent, not a ruler. `valueRow` states the string the host actually **draws** for the value row where it is not the spec's value (the host prints the LCSC device's own name, measured off the same landing's `sch.netlist`: 4N60, SS310, TL431, 220uF/25V-SMT, 1nF/1KV)."
       ]
     },
     {
@@ -188,11 +217,26 @@
           "kind": "value",
           "x": -5.0,
           "y": -20.0
+        },
+        {
+          "kind": "reference",
+          "x": 15.0,
+          "y": -5.0,
+          "rotation": 90.0,
+          "mirror": false
+        },
+        {
+          "kind": "value",
+          "x": 15.0,
+          "y": -15.0,
+          "rotation": 90.0,
+          "mirror": false
         }
       ],
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "texts re-measured 2026-10-21 on a fresh landing of the island page on `test` (a live `export.render` svg + its own `sch.netlist`; evidence/531/raw/anchor_landed_before.txt, 60 host text nodes of 19 parts): the anchor is the symbol's offset from the part's origin in the page frame for the **upright** pose, which matches this profile's declaration exactly, and the host **re-anchors** a rotated or mirrored part — so a rotated row is stated here with its own pose (SymbolText.rotation/.mirror) rather than being read off the upright declaration. Two parts of one symbol in one pose can still differ by a couple of units (R0603 at rot 270: R19 measured +10, R20 +8), so these boxes are the host's intent, not a ruler. `valueRow` states the string the host actually **draws** for the value row where it is not the spec's value (the host prints the LCSC device's own name, measured off the same landing's `sch.netlist`: 4N60, SS310, TL431, 220uF/25V-SMT, 1nF/1KV)."
       ]
     },
     {
@@ -229,7 +273,8 @@
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
         "145c: the host resolves LCSC C14663 (100nF 0603) to symbol uuid aaaf5070dfb7f1f1, whose pins escape +-20 - not the +-15 of the C0603 profile, which 118 measured from C100040. That is why C13 (C14663) uses this profile while C10 (C100040) and C6 (C14858) keep C0603: '0603' is a footprint, not one symbol geometry.",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "texts re-measured 2026-10-21 on a fresh landing of the island page on `test` (a live `export.render` svg + its own `sch.netlist`; evidence/531/raw/anchor_landed_before.txt, 60 host text nodes of 19 parts): the anchor is the symbol's offset from the part's origin in the page frame for the **upright** pose, which matches this profile's declaration exactly, and the host **re-anchors** a rotated or mirrored part — so a rotated row is stated here with its own pose (SymbolText.rotation/.mirror) rather than being read off the upright declaration. Two parts of one symbol in one pose can still differ by a couple of units (R0603 at rot 270: R19 measured +10, R20 +8), so these boxes are the host's intent, not a ruler. `valueRow` states the string the host actually **draws** for the value row where it is not the spec's value (the host prints the LCSC device's own name, measured off the same landing's `sch.netlist`: 4N60, SS310, TL431, 220uF/25V-SMT, 1nF/1KV)."
       ],
       "texts": [
         {
@@ -241,6 +286,20 @@
           "kind": "value",
           "x": 15.0,
           "y": -10.0
+        },
+        {
+          "kind": "reference",
+          "x": -10.0,
+          "y": 12.0,
+          "rotation": 0.0,
+          "mirror": true
+        },
+        {
+          "kind": "value",
+          "x": -10.0,
+          "y": -18.0,
+          "rotation": 0.0,
+          "mirror": true
         }
       ]
     },
@@ -320,12 +379,28 @@
           "kind": "value",
           "x": 15.0,
           "y": -10.0
+        },
+        {
+          "kind": "reference",
+          "x": -5.0,
+          "y": 15.0,
+          "rotation": 90.0,
+          "mirror": true
+        },
+        {
+          "kind": "value",
+          "x": -5.0,
+          "y": -20.0,
+          "rotation": 90.0,
+          "mirror": true
         }
       ],
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ]
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "texts re-measured 2026-10-21 on a fresh landing of the island page on `test` (a live `export.render` svg + its own `sch.netlist`; evidence/531/raw/anchor_landed_before.txt, 60 host text nodes of 19 parts): the anchor is the symbol's offset from the part's origin in the page frame for the **upright** pose, which matches this profile's declaration exactly, and the host **re-anchors** a rotated or mirrored part — so a rotated row is stated here with its own pose (SymbolText.rotation/.mirror) rather than being read off the upright declaration. Two parts of one symbol in one pose can still differ by a couple of units (R0603 at rot 270: R19 measured +10, R20 +8), so these boxes are the host's intent, not a ruler. `valueRow` states the string the host actually **draws** for the value row where it is not the spec's value (the host prints the LCSC device's own name, measured off the same landing's `sch.netlist`: 4N60, SS310, TL431, 220uF/25V-SMT, 1nF/1KV)."
+      ],
+      "valueRow": "220uF/25V-SMT"
     },
     {
       "symbolRef": "CAP-TH-1NF-1KV",
@@ -368,12 +443,28 @@
           "kind": "value",
           "x": -10.0,
           "y": -20.0
+        },
+        {
+          "kind": "reference",
+          "x": 15.0,
+          "y": 0.0,
+          "rotation": 90.0,
+          "mirror": false
+        },
+        {
+          "kind": "value",
+          "x": 15.0,
+          "y": -10.0,
+          "rotation": 90.0,
+          "mirror": false
         }
       ],
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ]
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "texts re-measured 2026-10-21 on a fresh landing of the island page on `test` (a live `export.render` svg + its own `sch.netlist`; evidence/531/raw/anchor_landed_before.txt, 60 host text nodes of 19 parts): the anchor is the symbol's offset from the part's origin in the page frame for the **upright** pose, which matches this profile's declaration exactly, and the host **re-anchors** a rotated or mirrored part — so a rotated row is stated here with its own pose (SymbolText.rotation/.mirror) rather than being read off the upright declaration. Two parts of one symbol in one pose can still differ by a couple of units (R0603 at rot 270: R19 measured +10, R20 +8), so these boxes are the host's intent, not a ruler. `valueRow` states the string the host actually **draws** for the value row where it is not the spec's value (the host prints the LCSC device's own name, measured off the same landing's `sch.netlist`: 4N60, SS310, TL431, 220uF/25V-SMT, 1nF/1KV)."
+      ],
+      "valueRow": "1nF/1KV"
     },
     {
       "symbolRef": "DIO-DO41-UF4007",
@@ -416,11 +507,26 @@
           "kind": "value",
           "x": -5.0,
           "y": -20.0
+        },
+        {
+          "kind": "reference",
+          "x": 15.0,
+          "y": -5.0,
+          "rotation": 270.0,
+          "mirror": false
+        },
+        {
+          "kind": "value",
+          "x": 15.0,
+          "y": -15.0,
+          "rotation": 270.0,
+          "mirror": false
         }
       ],
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "texts re-measured 2026-10-21 on a fresh landing of the island page on `test` (a live `export.render` svg + its own `sch.netlist`; evidence/531/raw/anchor_landed_before.txt, 60 host text nodes of 19 parts): the anchor is the symbol's offset from the part's origin in the page frame for the **upright** pose, which matches this profile's declaration exactly, and the host **re-anchors** a rotated or mirrored part — so a rotated row is stated here with its own pose (SymbolText.rotation/.mirror) rather than being read off the upright declaration. Two parts of one symbol in one pose can still differ by a couple of units (R0603 at rot 270: R19 measured +10, R20 +8), so these boxes are the host's intent, not a ruler. `valueRow` states the string the host actually **draws** for the value row where it is not the spec's value (the host prints the LCSC device's own name, measured off the same landing's `sch.netlist`: 4N60, SS310, TL431, 220uF/25V-SMT, 1nF/1KV)."
       ]
     },
     {
@@ -468,8 +574,10 @@
       ],
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ]
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "texts re-measured 2026-10-21 on a fresh landing of the island page on `test` (a live `export.render` svg + its own `sch.netlist`; evidence/531/raw/anchor_landed_before.txt, 60 host text nodes of 19 parts): the anchor is the symbol's offset from the part's origin in the page frame for the **upright** pose, which matches this profile's declaration exactly, and the host **re-anchors** a rotated or mirrored part — so a rotated row is stated here with its own pose (SymbolText.rotation/.mirror) rather than being read off the upright declaration. Two parts of one symbol in one pose can still differ by a couple of units (R0603 at rot 270: R19 measured +10, R20 +8), so these boxes are the host's intent, not a ruler. `valueRow` states the string the host actually **draws** for the value row where it is not the spec's value (the host prints the LCSC device's own name, measured off the same landing's `sch.netlist`: 4N60, SS310, TL431, 220uF/25V-SMT, 1nF/1KV)."
+      ],
+      "valueRow": "SS310"
     },
     {
       "symbolRef": "NMOS-TO251",
@@ -526,8 +634,10 @@
       ],
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ]
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "texts re-measured 2026-10-21 on a fresh landing of the island page on `test` (a live `export.render` svg + its own `sch.netlist`; evidence/531/raw/anchor_landed_before.txt, 60 host text nodes of 19 parts): the anchor is the symbol's offset from the part's origin in the page frame for the **upright** pose, which matches this profile's declaration exactly, and the host **re-anchors** a rotated or mirrored part — so a rotated row is stated here with its own pose (SymbolText.rotation/.mirror) rather than being read off the upright declaration. Two parts of one symbol in one pose can still differ by a couple of units (R0603 at rot 270: R19 measured +10, R20 +8), so these boxes are the host's intent, not a ruler. `valueRow` states the string the host actually **draws** for the value row where it is not the spec's value (the host prints the LCSC device's own name, measured off the same landing's `sch.netlist`: 4N60, SS310, TL431, 220uF/25V-SMT, 1nF/1KV)."
+      ],
+      "valueRow": "4N60"
     },
     {
       "symbolRef": "XFMR-WE-749118105",
@@ -538,10 +648,31 @@
         20.5,
         30.5
       ],
+      "poses": [
+        {
+          "rotation": 0,
+          "mirror": false
+        },
+        {
+          "rotation": 90,
+          "mirror": false
+        },
+        {
+          "rotation": 180,
+          "mirror": false
+        },
+        {
+          "rotation": 270,
+          "mirror": false
+        }
+      ],
+      "poseSource": "declared",
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
+        "poses declared 2026-10-20 (520D): the four rotations, mirror NOT allowed. The winding order is the part, not a pose: primary pins 1/2/3 leave on the LEFT (-40) and secondary pins 4/5/6 on the RIGHT (+40), and 岳's ruling (a) reads the drawing as 'the primary faces the input and the secondary faces the output'. A mirrored pose puts the secondary on the left (-70 on the page at origin -30), so right-of(C11, T1) can never be honoured in it, and the topology search was choosing exactly that pose — measured refusal in evidence/520d/report.md. Restricted by construction instead of left to the search.",
         "pins 2/5 exist on the symbol but are NC per the Wurth datasheet — the spec connects nothing to them",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "pinTexts measured 2026-10-21 on 531's own landing on `test` (a live `export.render` svg + its `sch.geometry` + the apply report that pairs each host designator with the library symbol: evidence/532/probes/12_pin_text.py, evidence/532/raw/pin_text_offsets.txt): a pin's name and number are drawn at a fixed offset from that pin's TIP on the pin's own axis, the name growing away from the tip and the number toward it. The offset is per SYMBOL and not derivable: `SMD-4-PC817` and `XFMR-WE-749118105` have the same pin length (20) and print their numbers at the same |dx| (15) but different dy (-0.505 against -0.915). Horizontal pins only were measured: a vertical pin's rows are unmeasured, and a symbol with no table here prints none this model knows about."
       ],
       "pins": [
         {
@@ -616,7 +747,41 @@
           "x": -20.0,
           "y": -30.0
         }
-      ]
+      ],
+      "pinTexts": {
+        "offsets": {
+          "name": [
+            22.0,
+            -4.915
+          ],
+          "number": [
+            15.0,
+            -0.915
+          ]
+        },
+        "pins": {
+          "1": [
+            "number"
+          ],
+          "2": [
+            "name",
+            "number"
+          ],
+          "3": [
+            "number"
+          ],
+          "4": [
+            "number"
+          ],
+          "5": [
+            "name",
+            "number"
+          ],
+          "6": [
+            "number"
+          ]
+        }
+      }
     },
     {
       "symbolRef": "SOT23-3-TL431",
@@ -673,8 +838,37 @@
       ],
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ]
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "texts re-measured 2026-10-21 on a fresh landing of the island page on `test` (a live `export.render` svg + its own `sch.netlist`; evidence/531/raw/anchor_landed_before.txt, 60 host text nodes of 19 parts): the anchor is the symbol's offset from the part's origin in the page frame for the **upright** pose, which matches this profile's declaration exactly, and the host **re-anchors** a rotated or mirrored part — so a rotated row is stated here with its own pose (SymbolText.rotation/.mirror) rather than being read off the upright declaration. Two parts of one symbol in one pose can still differ by a couple of units (R0603 at rot 270: R19 measured +10, R20 +8), so these boxes are the host's intent, not a ruler. `valueRow` states the string the host actually **draws** for the value row where it is not the spec's value (the host prints the LCSC device's own name, measured off the same landing's `sch.netlist`: 4N60, SS310, TL431, 220uF/25V-SMT, 1nF/1KV).",
+        "pinTexts measured 2026-10-21 on 531's own landing on `test` (a live `export.render` svg + its `sch.geometry` + the apply report that pairs each host designator with the library symbol: evidence/532/probes/12_pin_text.py, evidence/532/raw/pin_text_offsets.txt): a pin's name and number are drawn at a fixed offset from that pin's TIP on the pin's own axis, the name growing away from the tip and the number toward it. The offset is per SYMBOL and not derivable: `SMD-4-PC817` and `XFMR-WE-749118105` have the same pin length (20) and print their numbers at the same |dx| (15) but different dy (-0.505 against -0.915). Horizontal pins only were measured: a vertical pin's rows are unmeasured, and a symbol with no table here prints none this model knows about."
+      ],
+      "valueRow": "TL431",
+      "pinTexts": {
+        "offsets": {
+          "name": [
+            13.7,
+            -5.915
+          ],
+          "number": [
+            9.5,
+            -0.915
+          ]
+        },
+        "pins": {
+          "1": [
+            "name",
+            "number"
+          ],
+          "2": [
+            "name",
+            "number"
+          ],
+          "3": [
+            "name",
+            "number"
+          ]
+        }
+      }
     },
     {
       "symbolRef": "SMD-4-PC817",
@@ -741,8 +935,31 @@
       ],
       "notes": [
         "measured: the host's per-primitive bbox (sch.geometry bboxIds), stroke included, folded back through the pose (147) — outputs/147/12_live_bodies.txt",
-        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder."
-      ]
+        "texts measured 2026-10-10 on outputs/145e/render_P1.svg, re-measured 147 on outputs/147/04_render_before.svg (33 rows of the 19 placed parts, outputs/147/20_text_row_pose.txt): the host draws a placed part's designator/value at the symbol's own text item, and the anchor is that item's offset from the part's ORIGIN IN THE PAGE FRAME - the host does NOT turn the row with the part's pose (R10 at rot 180 is drawn at its unrotated anchor (740,425) where turning predicts (760,415); U5 likewise; C13 at rot 90 mirrored at (435,660) where turning predicts (410,670)). y up; the anchor is the row's lower-left corner and the row is 10 units tall. The offsets repeat for every part sharing a symbolRef. A symbol with no measured row declares none, and the compiler then falls back to its own side ladder.",
+        "pinTexts measured 2026-10-21 on 531's own landing on `test` (a live `export.render` svg + its `sch.geometry` + the apply report that pairs each host designator with the library symbol: evidence/532/probes/12_pin_text.py, evidence/532/raw/pin_text_offsets.txt): a pin's name and number are drawn at a fixed offset from that pin's TIP on the pin's own axis, the name growing away from the tip and the number toward it. The offset is per SYMBOL and not derivable: `SMD-4-PC817` and `XFMR-WE-749118105` have the same pin length (20) and print their numbers at the same |dx| (15) but different dy (-0.505 against -0.915). Horizontal pins only were measured: a vertical pin's rows are unmeasured, and a symbol with no table here prints none this model knows about."
+      ],
+      "pinTexts": {
+        "offsets": {
+          "number": [
+            15.0,
+            -0.505
+          ]
+        },
+        "pins": {
+          "1": [
+            "number"
+          ],
+          "2": [
+            "number"
+          ],
+          "3": [
+            "number"
+          ],
+          "4": [
+            "number"
+          ]
+        }
+      }
     },
     {
       "symbolRef": "PWR-GND",

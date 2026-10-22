@@ -1374,6 +1374,14 @@ def test_same_column_q1_r5_is_solved_by_r5s_rotation_90_not_by_the_origin():
     来自 **113 编的 profile**（R0603 被画成竖直、脚在体轴上）。真实 0603 是横置的，
     `rot0 delta=−20`，能救这条关系的是 `rot90` 而不是 `rot0`。**结论相同、理由换了**，
     这一条钉的是实测的那个理由，免得下一棒照 116 的理由去改代码而改错地方。
+
+    **520A2 重钉**：表里这些数是**从各自原点起算**的 pad x（`pin_x` 现在写
+    `ox=oy=0`）。改动的只是**参照**：原来量的是摆放之后的绝对列，520A2 之后
+    rung 0 已经把 `R5` 横向走了 20 单位（链件可沿横跨方向 walk），那个参照
+    自己含了修复，于是 rot 0 也读到 x=0。几何事实一个字没变（rot 0 差 20、
+    四分之一转归零），变的是它用的是**消费前**的尺子。末尾新增的一条钉住
+    另一个新事实：rung 0 的摆放现在**真的**满足 `same-column`——不是靠位姿，
+    是靠横走。
     """
     from boardwise.core.circuitspec import CircuitSpec
     from boardwise.core.presentationspec import PresentationSpec
@@ -1399,11 +1407,21 @@ def test_same_column_q1_r5_is_solved_by_r5s_rotation_90_not_by_the_origin():
     assert placed is not None, failure
 
     def pin_x(part_id: str, net: str, pose) -> float:
+        """The pad's x **from the part's own origin** — the consumption-free frame.
+
+        520A2 重钉：这一条原来量的是**摆放之后**的绝对列（`ox=placed.origins[…]`）。
+        520A2 让链件沿横跨方向 walk，rung 0 把 `R5` 横向推了 20 单位去满足
+        `same-column`，于是「摆放之后」这个参照已经把修复含在里面：`R5` 在 rot 0
+        下也读到 x=0，本条就红了。量**从自己原点的偏移**才是 118 当年真正在量的
+        那个几何事实——链的自然座位让 `Q1` 与 `R5` 都落在同一列（x=0），所以
+        「各自原点起算的 pad x」与「绝对列」是同一场比较。链件被走掉这件事本身
+        由这条测试末尾那段（rung 0 的违反集合）钉着，不靠这里的参照。
+        """
         token = dc._token_on(circuit, part_id, net)
         pin = dc._pin_of_token(ctx.profile(part_id), token)
         return transform_point(
             pin.tip[0], pin.tip[1], rotation=pose.rotation, mirror=pose.mirror,
-            ox=placed.origins[part_id][0], oy=placed.origins[part_id][1],
+            ox=0.0, oy=0.0,
         )[0]
 
     slack = ctx.budget.grid / 2.0
@@ -1446,4 +1464,25 @@ def test_same_column_q1_r5_is_solved_by_r5s_rotation_90_not_by_the_origin():
         f"the solving poses are {solving}: 118 measured rotation 0 as the one that "
         f"misses (R5 at rot 0 reaches {r_pairs[(0, False)]}, Q1's column is "
         f"{q_at_zero})"
+    )
+
+    # 520A2 的新事实，另钉一条：rung 0 的摆放**现在真的**满足 same-column——
+    # 不是靠位姿（rot 0 差 20 是上面的表），而是靠链件被**横走**。这正是本条
+    # 原来量不到、也是它从「位姿可解」变成「摆放已满足」的地方。这一条抓的是
+    # 「横走回归」：若集合重新非空，链件的横走就没在做事了。
+    broken = {
+        (viol.kind, viol.subject, viol.object)
+        for viol, _points in dc._relation_violations(
+            ctx.circuit, ctx.binding,
+            origin_of=lambda part_id: placed.origins.get(part_id),
+            pin_of=lambda part_id, token: dc._pin_point(
+                ctx, part_id, token, placed.poses, placed.origins),
+            grid=ctx.budget.grid, near_limit=ctx.budget.near_limit,
+            lateral=ctx.lateral(), progress=ctx.progress,
+        )
+    }
+    assert broken == set(), (
+        "rung 0's placement no longer honours every relation: under 520A2 the "
+        "chain walks laterally to satisfy same-column(Q1, R5) without a quarter "
+        f"turn — a non-empty set means that walk regressed: {sorted(broken)}"
     )

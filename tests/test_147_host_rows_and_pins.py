@@ -238,6 +238,88 @@ def test_the_pin_lead_the_router_reserves_and_the_gate_refuses_agree():
     assert walls[1] == (410.0, 399.5, 429.0, 400.5)
 
 
+def _posed_lead(pin, pose, origin=(400.0, 400.0)):
+    """``(tip, inner)`` of one pin's drawn lead, in the page frame."""
+    inward = {
+        "left": (1.0, 0.0), "right": (-1.0, 0.0),
+        "up": (0.0, -1.0), "down": (0.0, 1.0),
+    }[pin.direction]
+    tip = dc._posed(pin.tip, pose, origin)
+    inner = dc._posed(
+        (pin.tip[0] + inward[0] * pin.length, pin.tip[1] + inward[1] * pin.length),
+        pose, origin,
+    )
+    return tip, inner
+
+
+def test_the_lead_is_reserved_at_every_pose_a_symbol_declares():
+    """520G: `_pin_walls` states its direction in the symbol's **own** frame and
+    builds the box in the page's.
+
+    Reading the local direction where the posed one belongs dropped the box for
+    every turned pose, because `inner - tip` then lies along the turned lead and
+    its projection on the unturned direction is zero — so the "shorter than the
+    landing" test took its `continue` and the pin reserved **nothing**. Measured
+    on the 520G tree before the fix: 2 walls at rot 0 and 0 at 90/180/270 for the
+    two-pin profile below, and 0 for all of `XFMR-WE-749118105`'s six pins at the
+    quarter turn it is placed on. A wire could then run the whole length of a
+    turned pin's lead with the obstacle table reporting it clear — the flyback's
+    `SEC_SW` did exactly that along `T1.4` for 15 units, and the gate refused the
+    round for it (`wire-on-pin-line`).
+    """
+    profile = _resistor()
+    for rotation in (0.0, 90.0, 180.0, 270.0):
+        pose = dc.SymbolPose(rotation, False)
+        walls = dc._pin_walls(profile, pose, (400.0, 400.0))
+        assert len(walls) == len(profile.pins), (rotation, walls)
+        for pin, wall in zip(profile.pins, walls):
+            tip, inner = _posed_lead(pin, pose)
+            axis = 0 if abs(tip[1] - inner[1]) <= 1e-9 else 1
+            cross = 1 - axis
+            low, high = sorted((wall[axis], wall[axis + 2]))
+            # The lead's own axis: the box spans from `PIN_LINE_OVERLAP` inside the
+            # tip to the lead's inner end — never past the tip, because a wall that
+            # covers the tip takes the lattice node every wire has to arrive at away
+            # from the search (147 measured that as "the whole HVDC trunk").
+            assert sorted(round(abs(edge - tip[axis]), 6) for edge in (low, high)) == (
+                sorted(round(abs(length), 6) for length in
+                       (PIN_LINE_OVERLAP, abs(inner[axis] - tip[axis])))
+            ), (rotation, wall)
+            # Thickened across the lead only, half a stroke either side.
+            assert abs((wall[cross] + wall[cross + 2]) / 2.0 - tip[cross]) < 1e-9
+            assert abs((wall[cross + 2] - wall[cross]) - dc.PIN_TEXT_WALL) < 1e-9
+            assert not (
+                min(wall[0], wall[2]) < tip[0] < max(wall[0], wall[2])
+                and min(wall[1], wall[3]) < tip[1] < max(wall[1], wall[3])
+            ), (rotation, wall)
+
+
+def test_every_flyback_symbol_reserves_its_leads_at_every_declared_pose():
+    """The library-wide form of the same claim: one box per drawn lead, at every
+    pose the profile declares (the flyback prints on 13 of its 19 parts)."""
+    from boardwise.engines import drawapply
+
+    book = drawapply.load_library(ROOT / "blocklib" / "specs"
+                                  / "flyback_uc3845.library.json")
+    assert len(book) == 19, sorted(book)
+    checked = 0
+    for ref, profile in sorted(book.items()):
+        posed = list(getattr(profile, "poses", ()) or ())
+        if not posed:
+            posed = [dc.SymbolPose(rotation, False)
+                     for rotation in (0.0, 90.0, 180.0, 270.0)]
+        stated = [
+            pin for pin in profile.pins
+            if pin.length is not None
+            and pin.direction in ("left", "right", "up", "down")
+        ]
+        for pose in posed:
+            walls = dc._pin_walls(profile, pose, (0.0, 0.0))
+            assert len(walls) == len(stated), (ref, pose.label(), walls, stated)
+            checked += len(walls)
+    assert checked >= 19 * 2, checked
+
+
 # ----------------------------------------------- 3. text rows and conductors
 
 
@@ -318,6 +400,21 @@ def test_a_ground_flag_prints_no_name_and_a_rail_flag_does():
     assert "powerSymbols[1] name" in names
 
 
+def _sense_label(x: float, y: float) -> LayoutLabel:
+    """The label that makes SENSE a **named** net since 530D.
+
+    岳's ruling A (2026-10-21) takes the net's name off the wire: a wire is landed
+    with a name only when the wire **is** the drawing's label for its net
+    (`core.layoutplan.label_wire_indices`).  These two cases are about the row the
+    host prints, so the nets in them have to be named — and on this host a label
+    is the carrier (`sch.place_netlabel` is unusable, 029).
+    """
+    return LayoutLabel(
+        net="SENSE", text="SENSE", x=x, y=y,
+        bbox=(x, y, x + textmetrics.render_width("SENSE"), y + 10.0),
+    )
+
+
 def test_the_host_draws_a_wires_name_and_the_checker_sees_where():
     """`wire_name_box` as a **finding**: a name row landing on a foreign body."""
     part = LayoutPart(
@@ -330,10 +427,12 @@ def test_the_host_draws_a_wires_name_and_the_checker_sees_where():
     )
     # A run (100,600)-(240,600) reaches both pin tips; the host anchors the name
     # at the run's midpoint (170, 600) and grows it rightward — over P2's drawn
-    # extent (180..200, 595..605).
+    # extent (180..200, 595..605).  SENSE carries a label, so the host does print
+    # this name (530D: an unnamed wire brings no row at all).
     plan = _plan(
         parts=[part],
         segments=[LayoutSegment(net="SENSE", points=[(100.0, 600.0), (240.0, 600.0)])],
+        labels=[_sense_label(240.0, 600.0)],
     )
     kinds = _kinds(plan, circuit)
     assert readability.KIND_TEXT_OVERLAP in kinds
@@ -341,6 +440,33 @@ def test_the_host_draws_a_wires_name_and_the_checker_sees_where():
     row = [box for name, box, _owner, _text in boxes if name == "segments[0]"][0]
     assert row[0] == pytest.approx(170.0)
     assert row[2] == pytest.approx(170.0 + textmetrics.render_width("SENSE"))
+
+
+def test_a_wire_with_no_name_of_its_own_brings_no_row_at_all():
+    """530D's rule, from the other side: unnamed means no text on the canvas.
+
+    The same segment as above with no label — a wire the landing draws without a
+    net name (`drawapply.unnamed_nets`) — and the gate models no row for it.  This
+    is the reading the flyback page's 8 hard violations were: rows over the
+    conductors of nets that had no name of their own.
+    """
+    part = LayoutPart(
+        part_id="P2", symbol_ref=RES, symbol_hash=HASH,
+        x=190.0, y=600.0, rotation=0.0, mirror=False, reference="P2",
+    )
+    circuit = _circuit(
+        SpecNet(id="SENSE", cls="signal", members=["P2.1", "P2.2"]),
+        parts=[SpecPart(id="P2", symbol_ref=RES, value="10k")],
+    )
+    plan = _plan(
+        parts=[part],
+        segments=[LayoutSegment(net="SENSE", points=[(100.0, 600.0), (240.0, 600.0)])],
+    )
+    assert not [
+        name for name, _box, _owner, _text in readability._text_boxes(
+            plan, {RES: _resistor()}
+        ) if name.startswith("segments[")
+    ], "an unnamed wire still models a name row"
 
 
 def test_a_wire_of_the_named_net_is_exempt_from_its_own_name_row():
@@ -353,6 +479,7 @@ def test_a_wire_of_the_named_net_is_exempt_from_its_own_name_row():
     plan = _plan(
         parts=[part],
         segments=[LayoutSegment(net="SENSE", points=[(400.0, 500.0), (520.0, 500.0)])],
+        labels=[_sense_label(520.0, 500.0)],
     )
     assert KIND_TEXT_ON_WIRE not in _kinds(plan, circuit)
 
@@ -425,13 +552,22 @@ def test_the_flag_profiles_carry_the_measured_glyph_not_one_convention_box():
 
 
 def test_a_wire_crossing_a_flags_glyph_or_its_name_is_reported():
-    """岳's second criticism, as a constraint: the pennant printed on its own rail."""
+    """岳's second criticism, as a constraint: the pennant printed on its own rail.
+
+    ``OTHER`` carries a label, because a wire is named only where the drawing states
+    that net with a label (530D, 岳's ruling A) — and this case is about the row the
+    host prints along a named wire crossing the flag's pennant.
+    """
     plan = _plan(
         power_symbols=[
             LayoutPowerSymbol(symbol_ref=FLAG, symbol_hash=HASH, net="HVDC",
                               x=600.0, y=400.0, rotation=0.0),
         ],
         segments=[LayoutSegment(net="OTHER", points=[(600.0, 430.0), (600.0, 370.0)])],
+        labels=[LayoutLabel(
+            net="OTHER", text="OTHER", x=600.0, y=370.0,
+            bbox=(600.0, 370.0, 600.0 + textmetrics.render_width("OTHER"), 380.0),
+        )],
     )
     circuit = _circuit(
         SpecNet(id="OTHER", cls="signal", members=["P1.1"]),

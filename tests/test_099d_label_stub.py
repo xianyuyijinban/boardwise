@@ -209,7 +209,11 @@ def test_the_ch340_page_builds_and_no_stub_touches_another_net():
     assert len(rxd.points) == 2, rxd.points
     anchor, far = rxd.points
     assert far[0] < anchor[0] and far[1] == anchor[1], rxd.points
-    assert anchor[0] - far[0] == LABEL_STUB_LENGTH, rxd.points
+    # **520G 重钉**：RXD 是 15（3×DRAW_GRID），不是 LABEL_STUB_LENGTH（10）。
+    # 阶梯选 15 的理由与 test_145a 的逐字算术同源：10 档的名字行有 6.95 单位
+    # 落在 U1 自己的器体上，15 档才干净。首选档仍是 LABEL_STUB_LENGTH，
+    # 所以「四条一起被推远」照样红。
+    assert anchor[0] - far[0] == 3 * drawapply.DRAW_GRID, rxd.points
 
     foreign = [
         (item.points[index], item.points[index + 1], item.net)

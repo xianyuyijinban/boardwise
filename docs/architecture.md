@@ -172,7 +172,11 @@ on purpose, because the compiler is the part that must work with no editor:
   round's own first reason, so a page the ladder refuses for A and the
   topology search refuses for B shows both, and `summarize_failure_rounds()`
   renders them as report-ready dicts (falling back to the summary failures for
-  a hand-built result).
+  a hand-built result). **A round the compiler never reached has no entry**,
+  so the length is not fixed at three: the widened round is absent whenever
+  the base rungs do not all name the same relation (that agreement is its
+  precondition), and the flyback is such a page — its list is `base` +
+  `topology`.
 * **the landing step** (`engines/drawapply.py`, 054) turns one candidate into a
   `ChangePlan` of kind `draw-module` (`core/changeplan.py`, the kind 054 added,
   after the five M3 slices, and

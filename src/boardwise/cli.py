@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 from .engines.review import (
     BUILTIN_RULES,
@@ -1692,6 +1692,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     draw_apply.add_argument("--force", action="store_true", help=FORCE_HELP)
     draw_apply.add_argument(
+        "--page-box", default=None, metavar="X0,Y0,X1,Y1",
+        help=(
+            "The sheet the drawing is landing on, in canvas units — the override "
+            "for a page whose own attributes could not be read back (533: the "
+            "landing reads them off the live page first and only falls back to "
+            "this). An island-page plan is refused without one of the two."
+        ),
+    )
+    draw_apply.add_argument(
         "--project", default=None, metavar="NAME_OR_UUID",
         help="Which editor window to write to (023 routing hint; the daemon will not guess).",
     )
@@ -1893,6 +1902,140 @@ def build_parser() -> argparse.ArgumentParser:
             "candidates, what was read out of every contract element, and the list of "
             "everything that was not."
         ),
+    )
+
+    draw_islands = draw_sub.add_parser(
+        "islands",
+        help=(
+            "Offline: propose the islands a spec has not declared, and write a "
+            "judged proposal into it (530E)."
+        ),
+        description=(
+            "The mixed-island path (`evidence/523/DESIGN.md` §5, 岳 2026-10-20: "
+            "声明优先 + 未声明部分自动聚类 + AI 语义判断). `propose` reads a "
+            "presentation spec — including one whose `islands[]` names only *some* "
+            "of its parts, which `PresentationSpec` itself refuses to load — clusters "
+            "the parts no island names (锚=≥3 脚器件, 挂共网或 <40, 离所有锚 >120 "
+            "自成岛) and writes one work order per cluster; `apply` reads that "
+            "document back with a `judgement[]` filled in, runs §5.5's six gates and "
+            "writes the partition into `islands[]`. Nothing here reaches the editor, "
+            "and `draw compile` never runs either half: it reads the `islands[]` "
+            "that `apply` wrote and nothing else."
+        ),
+    )
+    islands_sub = draw_islands.add_subparsers(dest="islands_command", required=True)
+
+    islands_propose = islands_sub.add_parser(
+        "propose",
+        help="A presentation spec -> a proposal document (one work order per cluster).",
+        description=(
+            "Read the spec and the circuit, cluster every part no `islands[]` entry "
+            "names, and write `<out>/islands-proposal.json`: the declared islands "
+            "copied verbatim, then one work order per cluster holding only facts "
+            "(library symbol, value, pin count), the cluster's own nets and "
+            "classes, which nets cross to which neighbour, and the evidence the "
+            "clustering acted on — **no coordinates**, because the question is "
+            "semantic. Identical inputs give a byte-identical file. Exit 0 written "
+            "(including the case where the declaration is already complete, which "
+            "gives an empty proposal) / 2 an input could not be read / 5 the "
+            "document states no parts at all."
+        ),
+    )
+    islands_propose.add_argument(
+        "--circuit", required=True, metavar="PATH",
+        help="The CircuitSpec JSON: the netlist decides which parts share a net.",
+    )
+    islands_propose.add_argument(
+        "--presentation", required=True, metavar="PATH",
+        help=(
+            "The PresentationSpec JSON. Read **leniently** here: the modules decide "
+            "which parts this document has, and `islands[]` decides which of them "
+            "are already placed. A document where some part sits in no island is "
+            "exactly the input this command exists for, and `parse_islands`' "
+            "\"every part in exactly one block\" invariant is not touched."
+        ),
+    )
+    islands_propose.add_argument(
+        "--profiles", required=True, metavar="PATH",
+        help="The symbol library JSON (`draw compile --profiles`).",
+    )
+    islands_propose.add_argument(
+        "--intent", default="", metavar="PATH",
+        help=(
+            "The DesignIntent the proposal is proposed against, if there is one. Its "
+            "`blocks[]` ids are listed in the document so a judgement can see what "
+            "would be updated rather than added."
+        ),
+    )
+    islands_propose.add_argument(
+        "-o", "--out", dest="out_path", default=None, metavar="PATH",
+        help=(
+            "Where the proposal goes (default: "
+            f"{DEFAULT_ISLANDS_OUT}/islands-proposal.json)."
+        ),
+    )
+    islands_propose.add_argument(
+        "--json", dest="json_path", metavar="PATH",
+        help="Write the machine-readable run report (the same facts, as a report).",
+    )
+    islands_propose.add_argument(
+        "--print", dest="print_document", action="store_true",
+        help="Print the proposal document to stdout as well as writing it.",
+    )
+
+    islands_apply = islands_sub.add_parser(
+        "apply",
+        help="A judged proposal -> the spec's `islands[]` and the intent's `blocks[]`.",
+        description=(
+            "Read the proposal back through §5.5's six gates — the id one, the "
+            "verdict one, 件守恒 (the only judgement that refuses the whole "
+            "document), the role vocabulary, the reason that must cite a name the "
+            "work order printed, and the rule that nothing crosses a declared "
+            "island — then write the declared islands **verbatim** plus the judged "
+            "partition into `islands[]`, and one `blocks[]` entry per written "
+            "cluster with `provenance = ai_asserted` into the design intent (which "
+            "turns the whole intent document into a draft, on purpose). A judgement "
+            "that fails a gate falls back to the geometric cluster it was given, "
+            "never to a guess (§5.6). Exit 0 written / 2 an input could not be read "
+            "/ 5 the judgement broke 件守恒 and nothing was written."
+        ),
+    )
+    islands_apply.add_argument(
+        "--proposal", required=True, metavar="PATH",
+        help="The proposal document `draw islands propose` wrote, with `judgement[]`.",
+    )
+    islands_apply.add_argument(
+        "--presentation", required=True, metavar="PATH",
+        help=(
+            "The PresentationSpec the proposal was made from. Its declared islands "
+            "are copied into the output verbatim; by default the file is "
+            "**rewritten** in the normal form (see --out-spec)."
+        ),
+    )
+    islands_apply.add_argument(
+        "--out-spec", dest="out_spec", default=None, metavar="PATH",
+        help=(
+            "Write the updated presentation spec here instead of rewriting "
+            "`--presentation`. The document is written through "
+            "`PresentationSpec`, so it comes out in the normal form (key order and "
+            "formatting are the writer's, not the input file's)."
+        ),
+    )
+    islands_apply.add_argument(
+        "--intent", default="", metavar="PATH",
+        help=(
+            "The DesignIntent to merge the judgements into. Without it no intent is "
+            "written, and the judgements live only in the proposal document — which "
+            "is where they are read from next time anyway."
+        ),
+    )
+    islands_apply.add_argument(
+        "--out-intent", dest="out_intent", default=None, metavar="PATH",
+        help="Write the updated intent here instead of rewriting `--intent`.",
+    )
+    islands_apply.add_argument(
+        "--json", dest="json_path", metavar="PATH",
+        help="Write the machine-readable apply report (one row per judgement).",
     )
 
     persist = sub.add_parser(
@@ -9326,6 +9469,140 @@ def _draw_pairs(values: list[str] | None, flag: str) -> dict[str, str]:
     return out
 
 
+def _draw_island_count(args: argparse.Namespace) -> int:
+    """How many layout islands ``--presentation`` declares; ``0`` when unreadable.
+
+    533's own reading of "is this an island page".  `_draw_is_page` answers the
+    neighbouring question (does a *page* document ask for a page compiler) and
+    deliberately does not cover this one: an island page is compiled by
+    `drawcompiler._try_island_variants` on the single-module path, which is the
+    path whose `draw plan`/`draw apply` this guard is about.  An unreadable
+    presentation answers ``0``, so the read error is still reported by
+    :func:`_draw_inputs` in its own words rather than twice.
+    """
+    from .core.presentationspec import PresentationSpec, PresentationSpecError
+
+    try:
+        return len(PresentationSpec.load(args.presentation).effective_islands())
+    except (PresentationSpecError, OSError):
+        return 0
+
+
+def _draw_plan_is_island_page(plan) -> bool:
+    """Does this plan draw an island **page**? (533, read off the plan's notes.)
+
+    A presentation with several islands is packed as one page; `draw plan` marks
+    such a plan with `islandlayout.ISLAND_PAGE_KIND`, the same string the compile
+    result and the layout plan carry, so the three readings cannot drift. The
+    landing needs it because an island page's packing has a title block to clear
+    and a single module's drawing does not — and a plan is a file with no
+    presentation spec in it.
+    """
+    from .engines import islandlayout
+
+    return any(
+        str(note).startswith(islandlayout.ISLAND_PAGE_KIND)
+        for note in getattr(plan.change, "draw_notes", ()) or ()
+    )
+
+
+def _draw_same_box(left, right, *, tolerance: float = 1e-6) -> bool:
+    """Are two boxes the same sheet, to a float's worth of noise?"""
+    return all(abs(a - b) <= tolerance for a, b in zip(left, right))
+
+
+def _draw_live_page_box(
+    args: argparse.Namespace,
+) -> tuple[
+    tuple[float, float, float, float] | None, dict[str, str], str, int
+]:
+    """The sheet the bound page is, read off the editor: ``(box, attrs, why, code)``.
+
+    ``code`` follows the `draw` family's exit vocabulary (016 §4): ``0`` when the
+    box came back, ``3`` when the page's **state cannot be stated** (no daemon),
+    ``5`` when the reading was possible and the page said nothing usable.  The
+    caller must not collapse 3 into 5 — "the editor is not reachable" and "this
+    page states no sheet" are different facts, and only the second one is about
+    the drawing.
+
+    533 §WI-1's measurement, turned into the one read the landing path needed:
+    a live page's declared sheet attributes **are** readable — through
+    `sys.get_document_source`, the active document's own record stream, parsed
+    by the same key list a file parse uses
+    (`parsers.schematic.sheet_attrs_from_text`).  The other candidate channel is
+    empty: `document.current`'s `schematicPage` box comes back `{}` on this host
+    (the info object's data is not behind `getState_*`), and the connector's
+    probe allowlist is closed to read-only actions, so `dmt_Schematic` cannot be
+    called directly from here.
+
+    ``box`` is ``(0, 0, Width, Height)`` — a page's own origin is its
+    bottom-left corner in canvas units.  On failure ``box`` is ``None`` and
+    ``why`` says which leg failed and what the host answered; a caller must
+    refuse rather than invent a page (the 530F deviation-4 / 532 shape was
+    inventing one by omission).
+    """
+    import asyncio
+
+    from .core import pageframe
+    from .parsers import schematic
+
+    BridgeClient, BridgeError, port, token = _open_cli(args)
+
+    async def run():
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except (OSError, BridgeError) as exc:
+            return None, {}, f"daemon not reachable on 127.0.0.1:{port} ({exc})", 3
+        try:
+            async def call(action: str, params: dict):
+                return await client.call(action, params, **_edit_target_kwargs(args))
+
+            listing = await call("doc.list", {})
+            active = _active_document_uuid(listing if isinstance(listing, dict) else {})
+            page = getattr(args, "page", None) or active
+            if not page:
+                return (
+                    None, {},
+                    "no page is focused and --page was not given, so there is no sheet "
+                    "whose title block could be reserved",
+                    5,
+                )
+            if active != page:
+                # `getDocumentSource` reads the **active** document and takes no
+                # uuid (measured arity 0), so the page has to be in front.
+                await call("doc.focus", {"pageUuid": page})
+                listing = await call("doc.list", {})
+                active = _active_document_uuid(listing if isinstance(listing, dict) else {})
+                if active != page:
+                    return (
+                        None, {},
+                        f"the editor would not focus page {page} (it is at "
+                        f"{active or 'nothing'}), so its own source cannot be read",
+                        3,
+                    )
+            payload = await call("sys.get_document_source", {"maxChars": 4_000_000})
+            text = payload.get("data", "") if isinstance(payload, dict) else ""
+            attrs = schematic.sheet_attrs_from_text(text)
+            box = pageframe.page_box_from_sheet_attrs(attrs)
+            if box is None:
+                return (
+                    None, attrs,
+                    f"page {page} states no usable Width/Height (the source read back "
+                    f"{len(text)} char(s) and {len(attrs)} sheet attribute(s): "
+                    f"{', '.join(sorted(attrs)) or 'none'})",
+                    5,
+                )
+            return box, attrs, "", 0
+        except BridgeError as exc:
+            return None, {}, f"the page's own source could not be read ({exc})", 3
+        finally:
+            await client.close()
+
+    return asyncio.run(run())
+
+
 def _draw_inputs(args: argparse.Namespace):
     """``(circuit, presentation, profiles)`` from the three flags, or :class:`_DrawInputError`."""
     from .core.circuitspec import CircuitSpec, CircuitSpecError
@@ -9365,11 +9642,39 @@ def _draw_compile(args: argparse.Namespace, *, page_box, notes: list[str]):
     callers already print it (`draw plan`'s report, `draw compile`'s notes line),
     and a note about a contract that could not be read must be visible where the
     rest of the run's notes are.
+
+    530G: a presentation that declares **several islands** is drawn as a *page*
+    (`drawcompiler.compile` step 5), and a page has a title block in one of its
+    corners — S-01's keep-out.  The block is derived here from the page box this
+    stage was handed, because that box is the only page statement this stage has
+    (`--page-box`; there is no attribute read-back on this path), and it travels
+    on the budget so the packer and the gate are handed one derivation rather than
+    two.  The single-module path is untouched: it draws a module, and this stage
+    states no sheet for a module.
     """
+    from .core import pageframe
     from .engines import drawcompiler
 
     circuit, presentation, profiles = _draw_inputs(args)
     budget = drawcompiler.CompileBudget(page_box=page_box)
+    if page_box is not None and len(presentation.effective_islands()) > 1:
+        keepout = pageframe.title_block_keepouts(page_box)
+        if keepout:
+            budget.keepouts = keepout
+            notes.append(
+                "S-01: reserving the sheet's title block "
+                f"{tuple(round(value, 1) for value in keepout[0])} as a keep-out "
+                "for the island page (derived from the run's sheet box by "
+                "core.pageframe; the block is the sheet symbol's own table, "
+                "anchored to the sheet corner)"
+            )
+            # 533: the same fact, in the one spelling a **later landing** can
+            # read.  `draw apply` runs in its own process against a plan file, so
+            # a protection that lived only in this run's log would be invisible
+            # to it — and a landing that cannot tell a protected drawing from
+            # 532's unprotected one is exactly how the island page landed inside
+            # the title block twice.
+            notes.append(pageframe.keep_out_note(page_box, keepout))
     intent = _intent_source_for_apply(args, "", notes)
     return (
         drawcompiler.compile(circuit, presentation, profiles, budget, intent=intent),
@@ -9469,6 +9774,32 @@ def _draw_rank_lines(result) -> list[str]:
     return lines
 
 
+def _draw_label_fallback_lines(result) -> list[str]:
+    """One line per net this page expresses by a name instead of a wire (520E).
+
+    Printed above the notes and unconditionally when there are any: a drawing that
+    names a net instead of wiring it is a different drawing from the one the
+    obligation asked for, and a reader should not have to grep the note list to
+    find out it happened. The count is the same number ``--json`` carries under
+    ``labelFallbacks``, so the printed line and the machine-readable field cannot
+    drift apart. When nothing was downgraded nothing is printed — an empty heading
+    would read like a silent downgrade of zero nets.
+    """
+    fallbacks = list(getattr(result, "label_fallbacks", []) or [])
+    if not fallbacks:
+        return []
+    out = [
+        f"  labels: {len(fallbacks)} net(s) are expressed by name, not by wire "
+        "(the compiler could not join their pins — 520E):"
+    ]
+    for item in fallbacks:
+        out.append(
+            f"    {item.net} [{', '.join(item.members)}] promised a "
+            f"{item.promised}; the {item.stage} run failed: {item.reason}"
+        )
+    return out
+
+
 def _write_draw_previews(args, result, profiles, page_box) -> list[Path]:
     """One SVG per candidate, into ``--out``/``outputs/054_drawcompile``."""
     from .engines import svgpreview
@@ -9530,6 +9861,8 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
         print("  failures (053 §四's four categories):")
         for line in result.render_failures().splitlines():
             print(f"    {line}")
+    for line in _draw_label_fallback_lines(result):
+        print(line)
     for note in result.notes:
         print(f"  note: {note}")
     written = _write_draw_previews(args, result, profiles, page_box)
@@ -9541,6 +9874,12 @@ def _cmd_draw_compile(args: argparse.Namespace) -> int:
         payload = {
             "command": "compile",
             "ok": bool(result.ok),
+            # 520E: which nets this page expresses by a name instead of a wire,
+            # and why. Its own key rather than a note, because the count is a
+            # thing a caller asks about (岳: 「什么时候打网络标签不是纯算法决定的，
+            # 应该由算法反馈模型决定」) — the page having named nets is a fact about
+            # the drawing, not a remark about it.
+            "labelFallbacks": result.summarize_label_fallbacks(),
             "candidates": [
                 {
                     "index": index,
@@ -9758,6 +10097,46 @@ def _cmd_draw_plan(args: argparse.Namespace) -> int:
     notes: list[str] = []
     try:
         page_box = _draw_page_box(args.page_box)
+    except _DrawInputError as exc:
+        print(f"boardwise draw plan: {exc}", file=sys.stderr)
+        return 5
+    bound_live = bool(args.page or args.project or args.instance)
+    if _draw_island_count(args) > 1 and page_box is None and bound_live:
+        # 533: an island page bound to a live page is packed for a sheet whose
+        # title block has to be kept out of — S-01 — and the sheet is right
+        # there.  Read it, rather than packing a page whose frame nobody stated
+        # and landing it (530F deviation 4 and 532 both did exactly that, and
+        # content came to rest inside the title block).
+        box, attrs, why, code = _draw_live_page_box(args)
+        if box is None:
+            print(
+                "boardwise draw plan: this presentation declares several islands and "
+                f"the run is bound to a live page, but the page's own sheet could not "
+                f"be read: {why}. S-01 makes the title block a keep-out, so a landing "
+                "packed without it would put the drawing inside the title block — "
+                "which is what 530F and 532 measured. Give `--page-box x0,y0,x1,y1` "
+                "to state the sheet, or fix the read above",
+                file=sys.stderr,
+            )
+            return code
+        page_box = box
+        notes.append(
+            "S-01: the sheet was read off the live page, not stated by hand — "
+            f"Width {attrs.get('Width')} x Height {attrs.get('Height')}, Blade Width "
+            f"{attrs.get('Blade Width') or 'unstated'}, Title Block Position "
+            f"{attrs.get('Title Block Position') or 'unstated'} "
+            "(parsers.schematic.sheet_attrs_from_text over "
+            "sys.get_document_source's record stream)"
+        )
+    elif _draw_island_count(args) > 1 and page_box is None:
+        notes.append(
+            "S-01: this island page is compiled **offline** and no --page-box was "
+            "given, so no sheet's title block is reserved (530G §4's stated limit — "
+            "an offline compile has no page to read). The plan records that, and "
+            "`draw apply` refuses to land it on a live page until it is re-planned "
+            "against one"
+        )
+    try:
         result, circuit, presentation, profiles = _draw_compile(
             args, page_box=page_box, notes=notes
         )
@@ -9808,6 +10187,25 @@ def _cmd_draw_plan(args: argparse.Namespace) -> int:
     baseline_findings: list[str] = []
     pool: list[str] = []
 
+    # 533: what the compile reserved for this sheet has to travel **with the
+    # plan**, because `draw apply` is a separate run that sees only the file.
+    # `islandlayout.ISLAND_PAGE_KIND` goes in the same way: a landing has to be
+    # able to tell "an island page, packed for this sheet" from "an island page
+    # nobody protected", and neither fact survives in the plan otherwise.
+    from .core import pageframe
+    from .engines import islandlayout
+
+    plan_notes = [
+        "the layout is 053 stage B's candidate "
+        f"{args.candidate} ({layout.geometry_sha256()[:12]}…)",
+        f"the designator pool is {report['poolSource'] or 'empty (offline)'}",
+    ]
+    if len(presentation.effective_islands()) > 1:
+        plan_notes.append(islandlayout.ISLAND_PAGE_KIND)
+    plan_notes.extend(note for note in notes if str(note).startswith(
+        pageframe.KEEP_OUT_NOTE_PREFIX
+    ))
+
     def build() -> int:
         try:
             plan = drawapply.module_plan(
@@ -9819,11 +10217,7 @@ def _cmd_draw_plan(args: argparse.Namespace) -> int:
                 baseline=baseline,
                 baseline_findings=baseline_findings,
                 keep_names=bool(getattr(args, "keep_names", False)),
-                notes=[
-                    "the layout is 053 stage B's candidate "
-                    f"{args.candidate} ({layout.geometry_sha256()[:12]}…)",
-                    f"the designator pool is {report['poolSource'] or 'empty (offline)'}",
-                ],
+                notes=plan_notes,
             )
         except drawapply.DrawPlanError as exc:
             print(f"boardwise draw plan: {exc}", file=sys.stderr)
@@ -10330,6 +10724,82 @@ async def _draw_apply_flow(
             )
             return done(4, "refused", "focus_inconsistent")
 
+    # ---- 1b. the island page's sheet (S-01), before anything is written ----
+    #
+    # 533. The drawing that started this batch was an island page packed with no
+    # sheet, landed on a page whose title block nobody had reserved, and 32
+    # primitives came to rest inside it (530F deviation 4 did the same a batch
+    # earlier). The compile stage is where the reservation happens and the gate
+    # that proves it is there, so the landing's job is to **not lose that fact**:
+    # a plan that reserved a title block records it (`core.pageframe`'s note in
+    # the plan's own notes), and this leg checks that record against the sheet
+    # the drawing is about to land on. A plan that reserved nothing is refused —
+    # no read-back, no `--page-box`, no heuristic makes an unprotected packing
+    # safe, and a landing cannot re-pack a drawing that is already a file.
+    if _draw_plan_is_island_page(plan):
+        from .core import pageframe
+        from .parsers import schematic
+
+        reserved = pageframe.page_keep_out_from_notes(plan.change.draw_notes)
+        if reserved is None:
+            notes.append(
+                "this plan is an island page that reserved **no** sheet title block "
+                "(no --page-box at compile time, and nothing read off a page), so its "
+                "packing never cleared the title block — S-01's keep-out is what "
+                "530F deviation 4 and 532 both landed inside. Re-run `draw plan` "
+                "against the page (the sheet is then read off it) or with "
+                "--page-box x0,y0,x1,y1; nothing was written"
+            )
+            return done(5, "refused", "island_page_title_block_not_reserved")
+        recorded_box, recorded_rect = reserved
+        stated = _draw_page_box(args.page_box)
+        payload = await call(
+            "sys.get_document_source", {"maxChars": 4_000_000},
+            "read the landing page's own sheet attributes (S-01's keep-out)",
+        )
+        source_text = payload.get("data", "") if isinstance(payload, dict) else ""
+        live_attrs = schematic.sheet_attrs_from_text(source_text)
+        live_box = pageframe.page_box_from_sheet_attrs(live_attrs)
+        sheet = live_box or stated
+        report["titleBlock"] = {
+            "planRecordedPageBox": list(recorded_box),
+            "planRecordedTitleBlock": list(recorded_rect),
+            "liveAttributes": dict(live_attrs),
+            "livePageBox": list(live_box) if live_box else None,
+            "statedPageBox": list(stated) if stated else None,
+            "source": (
+                "the live page's own record stream (sys.get_document_source)"
+                if live_box else ("--page-box" if stated else "none")
+            ),
+        }
+        if sheet is None:
+            notes.append(
+                "this plan reserved a title block for a sheet, but the sheet it is "
+                "landing on could not be established: the live page's own source "
+                f"answered no usable Width/Height ({len(source_text)} char(s) read, "
+                f"{len(live_attrs)} sheet attribute(s): "
+                f"{', '.join(sorted(live_attrs)) or 'none'}) and no --page-box was "
+                "given. S-01 makes the title block a keep-out, and a landing that "
+                "cannot say where it is must not guess — nothing was written"
+            )
+            return done(5, "refused", "landing_sheet_unreadable")
+        if not _draw_same_box(sheet, recorded_box):
+            notes.append(
+                f"the plan was packed for the sheet {recorded_box}, but it is landing "
+                f"on {sheet} — the title block moves with the sheet's width "
+                "(core.pageframe: the block is anchored to the corner and does not "
+                "scale), so the keep-out this plan cleared is not the keep-out on this "
+                "page. Re-plan against this page; nothing was written"
+            )
+            return done(5, "refused", "landing_sheet_mismatch")
+        notes.append(
+            "S-01: the plan's own title-block reservation "
+            f"{tuple(round(value, 1) for value in recorded_rect)} matches the sheet it "
+            f"is landing on ({sheet}; "
+            + ("read off the live page" if live_box else "stated by --page-box")
+            + ")"
+        )
+
     # ---- 2. the guards, before the first write -----------------------------
     geometry = await call("sch.geometry", {}, "read the page before writing")
     if geometry is None:
@@ -10660,6 +11130,109 @@ async def _draw_apply_flow(
             "read-back below is what decides whether they landed"
         )
 
+    # ---- 5c. the values the plan says are **not printed** (532) -----------
+    #
+    # S-21's way out of a text collision, and the half 531 could not reach: the
+    # plan leaves such a row out of its text list, and the host prints it anyway,
+    # because a placed part's designator and value rows are the host's own
+    # annotations. The flag that stops it is the value row's own `valueVisible`,
+    # and `engines/partvisibility.py` states where that record is and which host
+    # channel can write it (`sys.set_document_source` — the only one this
+    # connector exposes; `evidence/532/report.md` §1). The write is **read back**,
+    # like the value write above: "the host said yes" is not the answer a caller
+    # asked for, the document holding the flag is.
+    to_hide = [part.designator for part in parts if not part.value_visible]
+    report["write"]["hiddenValues"] = {
+        "declared": to_hide,
+        "channel": (
+            "sys.set_document_source with the value row's own `valueVisible` set "
+            "false — the row is the placed component's `Name` ATTR record, and no "
+            "connector action addresses an attribute record (`sch."
+            "set_component_attribute` writes the BOM map, `sch.modify_primitive` is "
+            "pose-only by construction)"
+        ),
+        "written": [],
+        "missing": [],
+        "readBack": "",
+    }
+    if to_hide:
+        from .engines import partvisibility
+
+        current = await call(
+            "doc.list", {}, "confirm which page the visibility write lands on",
+        )
+        on_page = _active_document_uuid(current if isinstance(current, dict) else {})
+        if on_page != page:
+            await call("doc.focus", {"pageUuid": page},
+                       "focus the page the visibility write lands on")
+            current = await call("doc.list", {}, "confirm the focused page moved")
+            on_page = _active_document_uuid(current if isinstance(current, dict) else {})
+        if on_page != page:
+            notes.append(
+                f"the plan states {len(to_hide)} value row(s) are not printed "
+                f"({', '.join(to_hide)}) but `sys.set_document_source` reads and "
+                f"rewrites the **active** document only, and the editor is on "
+                f"{on_page or 'nothing'} — the flags were NOT written, and the host "
+                "will print those rows (the same 531 defect, refused rather than "
+                "reported as success)"
+            )
+            report["write"]["hiddenValues"]["readBack"] = "page_not_active"
+        else:
+            source_payload = await call(
+                "sys.get_document_source", {"maxChars": 4_000_000},
+                "read the document whose value rows have to stop being printed",
+            )
+            source = (
+                source_payload.get("data", "")
+                if isinstance(source_payload, dict) else ""
+            )
+            rewritten, hidden, missing = partvisibility.hide_value_rows(source, to_hide)
+            report["write"]["hiddenValues"]["written"] = hidden
+            report["write"]["hiddenValues"]["missing"] = missing
+            if missing:
+                notes.append(
+                    "the document carries no value row for "
+                    f"{', '.join(missing)} — its value is not printed by any record "
+                    "this reader can see, which the render below is what decides"
+                )
+            if rewritten == source:
+                report["write"]["hiddenValues"]["readBack"] = "already"
+                notes.append(
+                    f"the {len(hidden)} value row(s) the plan hides are already "
+                    "`valueVisible: false` on this page — nothing to write"
+                )
+            else:
+                written = await call(
+                    "sys.set_document_source",
+                    {"uuid": page, "source": rewritten, "confirm": True},
+                    "stop the host printing the value rows the plan hides",
+                    writes=True,
+                )
+                report["write"]["calls"] += 1
+                again = await call(
+                    "sys.get_document_source", {"maxChars": 4_000_000},
+                    "read the document back to see whether the flags took",
+                )
+                after = (
+                    again.get("data", "") if isinstance(again, dict) else ""
+                )
+                still = [
+                    designator for designator in hidden
+                    if partvisibility.value_row_visible(after, designator) is not False
+                ]
+                report["write"]["hiddenValues"]["readBack"] = (
+                    "confirmed" if not still else "differs"
+                )
+                report["write"]["hiddenValues"]["answered"] = (
+                    isinstance(written, dict)
+                )
+                if still:
+                    notes.append(
+                        "the visibility write could not be confirmed for "
+                        f"{', '.join(still)} — the plan states those rows are not "
+                        "printed and the render below is what decides whether they are"
+                    )
+
     # ---- 6. protection 3: the pin read-back, before any wire --------------
     placed_geometry = await call(
         "sch.geometry", {}, "read the page again to find the placed parts and their pins"
@@ -10717,20 +11290,23 @@ async def _draw_apply_flow(
     # ---- 7. the wires -----------------------------------------------------
     #
     # The host prints a wire's net name on the canvas, so a wire that carries a name
-    # the drawing *also* states with a flag says it twice — 岳, on the landed page:
-    # 「有了旗标就不要反复标注网络标识了。看着很乱啊」. A net the plan flags is
-    # therefore drawn **unnamed**: the flag names it and the geometry joins them
-    # (his own hand drawing does exactly that — its wires carry no name and its flags
-    # do). A net with no flag keeps its name on the wire, which is what carries it
-    # (057 sec.4's named stub, and 035's "the only thing holding this wire").
-    flagged = drawapply.unnamed_nets(plan)
+    # the drawing states somewhere else says it twice — 岳, on the landed page:
+    # 「有了旗标就不要反复标注网络标识了。看着很乱啊」.  530D lands his ruling A
+    # (`docs/schematic-style-spec.md` §七.5): the name lives on a flag or a label, so
+    # a wire is landed with a name **only when the wire is the label itself** — a
+    # rail flag's own conductor, and an island-internal net's, are drawn unnamed and
+    # the editor holds them under its own auto name, exactly as 岳's board does.
+    # `drawapply.wire_carries_its_name` is the switch, read per wire: a wire lands
+    # with a name exactly when it **is** the label.  069 sec.9's net-level reading
+    # (`unnamed_nets`) is still the one the canvas leg and the discard match by, and
+    # 530D widens it to every wire of a net that is not the label's own.
     executed: list[dict] = []
     for wire in plan.change.draw_wires:
         params: dict = {
             "points": [list(point) for point in wire.points],
             "pageUuid": page,
         }
-        if wire.net and wire.net not in flagged:
+        if drawapply.wire_carries_its_name(wire):
             params["net"] = wire.net
         answered = await call(
             "sch.place_wire", params,
@@ -10738,7 +11314,11 @@ async def _draw_apply_flow(
             + " → ".join(f"({x:g}, {y:g})" for x, y in wire.points)
             + f" ({len(wire.points)} point(s)"
             + (f", from {wire.from_pin}" if wire.from_pin else "")
-            + (")" if "net" in params else ") carrying no name — its flag states it"),
+            + (
+                ")"
+                if "net" in params
+                else ") carrying no name — the drawing states it on a flag or a label"
+            ),
             writes=True,
         )
         report["write"]["calls"] += 1
@@ -11129,6 +11709,14 @@ def _cmd_draw_apply(args: argparse.Namespace) -> int:
         # field through the path below (see `_cmd_draw_apply_page`).
         return _cmd_draw_apply_page(args)
     try:
+        # 533: `--page-box` is the fallback sheet for a landing whose page cannot
+        # be read back, so it is validated here — before the bridge opens and
+        # before anything can be written — rather than deep inside the flow.
+        _draw_page_box(getattr(args, "page_box", None))
+    except _DrawInputError as exc:
+        print(f"boardwise draw apply: {exc}", file=sys.stderr)
+        return 5
+    try:
         plan = ChangePlan.load(args.plan)
     except ChangePlanError as exc:
         print(f"boardwise draw apply: {exc}", file=sys.stderr)
@@ -11333,6 +11921,12 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
         print("  failures (053 §四's four categories, at page scale):")
         for line in result.render_failures().splitlines():
             print(f"    {line}")
+    for name, named in _page_label_fallbacks(result).items():
+        print(
+            f"  labels: module {name}: {len(named)} net(s) are expressed by "
+            "name, not by wire (520E): "
+            + ", ".join(item["net"] for item in named)
+        )
     for note in result.notes:
         print(f"  note: {note}")
     written = _write_page_previews(args, result, profiles, page_box)
@@ -11381,6 +11975,10 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
                 for name, compiled in result.modules.items()
                 if not compiled.ok
             },
+            # 520E, per module: which nets a module's own compile expressed by a
+            # name instead of a wire. The page result is assembled from the
+            # module compiles, so this is where that fact lives for a page.
+            "moduleLabelFallbacks": _page_label_fallbacks(result),
             "modules": {
                 name: {"ok": compiled.ok, "categories": compiled.categories()}
                 for name, compiled in result.modules.items()
@@ -11399,6 +11997,22 @@ def _cmd_draw_compile_page(args: argparse.Namespace) -> int:
         )
         return 5
     return 0
+
+
+def _page_label_fallbacks(result) -> dict[str, list[dict]]:
+    """``{module: [fallback, …]}`` for the modules that named a net (520E).
+
+    The page compiler compiles each module with :func:`drawcompiler.compile`, so
+    the per-module downgrade record is on the module's own ``CompileResult`` and
+    only needs collecting — no module that downgraded nothing gets an entry, so an
+    empty mapping means "no module named a net", not "this was not looked at".
+    """
+    out: dict[str, list[dict]] = {}
+    for name, compiled in getattr(result, "modules", {}).items():
+        summarised = compiled.summarize_label_fallbacks()
+        if summarised:
+            out[name] = summarised
+    return out
 
 
 def _draw_page_notes(page, keep_labels: Sequence[str], keep_notes: Sequence[str]) -> list[str]:
@@ -12720,6 +13334,242 @@ def _cmd_draw_lint(args: argparse.Namespace) -> int:
     return 1 if counts["ERROR"] else 0
 
 
+#: Where `draw islands propose` writes when no `--out` is given.  A directory of
+#: its own rather than beside `outputs/054_drawcompile`: a proposal is not a
+#: drawing, and the two must not be mistaken for each other in a directory listing.
+DEFAULT_ISLANDS_OUT = "outputs/530e_islands"
+
+
+def _cmd_draw_islands(args: argparse.Namespace) -> int:
+    """`draw islands propose|apply` — the mixed-island path (530E).
+
+    Two commands, one module (`engines.islandproposal`), and the split between them
+    is `evidence/523/DESIGN.md` §5.2's whole point: automatic clustering is a
+    **proposal** and a declaration is a **decision**, so there is a file on disk
+    between the two — a file a person can read, an AI can answer, and a reviewer can
+    diff.  Neither half touches the editor, and `draw compile` runs neither.
+    """
+    command = getattr(args, "islands_command", "")
+    if command == "propose":
+        return _cmd_draw_islands_propose(args)
+    if command == "apply":
+        return _cmd_draw_islands_apply(args)
+    print(
+        "draw islands: state `propose` or `apply` (see `boardwise draw islands -h`)",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def _read_json_document(path: str, what: str) -> Any:
+    """A JSON file, or ``None`` after saying why it could not be read."""
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        print(f"draw islands: {what} {path}: {exc}", file=sys.stderr)
+    except ValueError as exc:
+        print(f"draw islands: {what} {path}: is not JSON ({exc})", file=sys.stderr)
+    return None
+
+
+def _cmd_draw_islands_propose(args: argparse.Namespace) -> int:
+    """Spec + circuit + library -> the proposal document (§5.2 step ①).
+
+    Read-only with respect to everything but the one file it writes.  The
+    presentation spec is read **here** rather than through `PresentationSpec.load`,
+    and that is the batch's central consequence: a document whose `islands[]` names
+    only some of its parts is refused by that reader by design (520j's invariant),
+    and it is exactly the document this command exists for.
+    """
+    from .core.circuitspec import CircuitSpec, CircuitSpecError
+    from .core.designintent import DesignIntent, DesignIntentError
+    from .engines import drawapply, islandproposal
+
+    try:
+        circuit = CircuitSpec.load(args.circuit)
+    except (CircuitSpecError, OSError) as exc:
+        print(f"draw islands propose: {exc}", file=sys.stderr)
+        return 2
+    payload = _read_json_document(args.presentation, "presentation")
+    if payload is None:
+        return 2
+    try:
+        book = drawapply.load_library(args.profiles)
+    except (drawapply.DrawPlanError, OSError) as exc:
+        print(f"draw islands propose: {exc}", file=sys.stderr)
+        return 2
+
+    declared_blocks: list[str] = []
+    if getattr(args, "intent", ""):
+        try:
+            intent = DesignIntent.load(args.intent)
+        except (DesignIntentError, OSError) as exc:
+            print(f"draw islands propose: {exc}", file=sys.stderr)
+            return 2
+        declared_blocks = [block.id for block in intent.blocks]
+
+    try:
+        proposal = islandproposal.build_proposal(
+            circuit, payload, book,
+            declared_blocks=declared_blocks, where=str(args.presentation),
+        )
+    except islandproposal.IslandsProposalError as exc:
+        print(f"draw islands propose: {exc}", file=sys.stderr)
+        return 2
+
+    out_path = args.out_path or str(Path(DEFAULT_ISLANDS_OUT) / "islands-proposal.json")
+    islandproposal.write_proposal(proposal.document, out_path)
+
+    report = {
+        "proposalVersion": proposal.document["proposalVersion"],
+        "presentation": str(args.presentation),
+        "circuit": str(args.circuit),
+        "out": out_path,
+        "declared": [island.id for island in proposal.declared.islands],
+        "declaredComplete": proposal.declared.complete,
+        "parts": len(proposal.declared.parts),
+        "clusters": [
+            {
+                "islandId": cluster.island_id,
+                "anchor": cluster.anchor,
+                "parts": list(cluster.parts),
+                "evidence": dict(cluster.evidence),
+            }
+            for cluster in proposal.clusters
+        ],
+        "unresolved": list(proposal.unresolved),
+        "notes": list(proposal.document["notes"]),
+    }
+    print(
+        f"draw islands propose: {len(proposal.clusters)} cluster(s) over "
+        f"{len(proposal.declared.parts)} part(s) "
+        f"({len(proposal.declared.islands)} declared island(s)"
+        + (", the declaration already covers everything" if proposal.declared.complete else "")
+        + ")"
+    )
+    for cluster in proposal.clusters:
+        print(
+            f"  {cluster.island_id}: anchor {cluster.anchor}, "
+            f"{len(cluster.parts)} part(s) — {cluster.evidence['why']}"
+        )
+    for part_id in proposal.unresolved:
+        print(f"  no island proposed for {part_id}: not in the circuit or the library")
+    for note in proposal.document["notes"]:
+        print(f"  note: {note}")
+    print(f"  written: {out_path}")
+    if getattr(args, "json_path", None):
+        Path(args.json_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
+    if getattr(args, "print_document", False):
+        print(islandproposal.render_proposal(proposal.document), end="")
+    if not proposal.declared.parts:
+        print(
+            "draw islands propose: this document names no parts at all, so there is "
+            "no partition to propose",
+            file=sys.stderr,
+        )
+        return 5
+    return 0
+
+
+def _cmd_draw_islands_apply(args: argparse.Namespace) -> int:
+    """A judged proposal -> the spec's `islands[]` (§5.2 step ③), gated.
+
+    The only write in this batch that can change a drawing, so it happens in one
+    place and behind §5.5's six gates.  Nothing is written when gate 3 refuses the
+    judgement: "it never ran" and "it ran and was refused" have to leave the same
+    document behind, or a refused run would still be a change.
+    """
+    from .core.designintent import DesignIntent, DesignIntentError
+    from .engines import islandproposal
+
+    proposal = _read_json_document(args.proposal, "proposal")
+    if proposal is None:
+        return 2
+    if not isinstance(proposal, dict):
+        print(
+            f"draw islands apply: {args.proposal} is not a JSON object",
+            file=sys.stderr,
+        )
+        return 2
+    payload = _read_json_document(args.presentation, "presentation")
+    if payload is None:
+        return 2
+
+    intent = None
+    if getattr(args, "intent", ""):
+        try:
+            intent = DesignIntent.load(args.intent)
+        except (DesignIntentError, OSError) as exc:
+            print(f"draw islands apply: {exc}", file=sys.stderr)
+            return 2
+
+    try:
+        application = islandproposal.apply_proposal(
+            proposal, payload, intent=intent, where=str(args.presentation),
+        )
+    except (islandproposal.IslandsProposalError, ValueError) as exc:
+        print(f"draw islands apply: {exc}", file=sys.stderr)
+        return 2
+
+    report = dict(application.result.report)
+    report["presentation"] = str(args.presentation)
+    report["proposal"] = str(args.proposal)
+    if application.result.written:
+        check = application.result
+        counts: dict[str, int] = {}
+        for item in report["islands"]:
+            counts[str(item["verdict"])] = counts.get(str(item["verdict"]), 0) + 1
+        spec_target = args.out_spec or args.presentation
+        Path(spec_target).write_text(
+            json.dumps(application.payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        report["outSpec"] = spec_target
+        if application.intent is not None:
+            intent_target = args.out_intent or args.intent
+            application.intent.dump(intent_target)
+            report["outIntent"] = intent_target
+            report["intentDraft"] = application.intent.draft
+        print(
+            f"draw islands apply: {len(check.islands)} island(s) written to "
+            f"{spec_target} ("
+            + ", ".join(f"{name}={count}" for name, count in sorted(counts.items()))
+            + ")"
+        )
+        for item in report["islands"]:
+            if item["name"]:
+                print(f"  {item['islandId']} <- {item['fromCluster']}: {item['name']}")
+            else:
+                print(
+                    f"  {item['islandId']} <- {item['fromCluster']}: "
+                    "derived by clustering, unnamed"
+                )
+        for entry in report["entries"]:
+            if entry.get("gate") is not None:
+                print(
+                    f"  fallback [{entry['islandId']}] gate {entry['gate']}: "
+                    f"{entry['why']}"
+                )
+        if application.intent is not None:
+            print(
+                f"  intent: {report['outIntent']} "
+                + ("is a draft (an ai_asserted block)" if report["intentDraft"] else "is stated")
+            )
+    else:
+        print(
+            f"draw islands apply: nothing written — gate {report['gate']}: "
+            f"{report['why']}",
+            file=sys.stderr,
+        )
+    if getattr(args, "json_path", None):
+        Path(args.json_path).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
+    return 0 if application.result.written else 5
+
+
 DRAW_COMMANDS = {
     "compile": _cmd_draw_compile,
     "plan": _cmd_draw_plan,
@@ -12727,6 +13577,7 @@ DRAW_COMMANDS = {
     "discard": _cmd_draw_discard,
     "propose": _cmd_draw_propose,
     "lint": _cmd_draw_lint,
+    "islands": _cmd_draw_islands,
 }
 
 

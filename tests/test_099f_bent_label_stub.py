@@ -167,8 +167,17 @@ def test_the_ch340_page_names_rxd_on_the_label_side_again():
     stubs = {item.net: item.points for item in plan.change.draw_wires if item.purpose}
     assert set(stubs) == {"TXD", "RXD", "D+", "D-"}
 
-    # 四条都是 10 单位直线，**远端比锚点更靠左**——名字都在标签那一侧
+    # 四条都是直线、**远端比锚点更靠左**——名字都在标签那一侧
     for net in ("TXD", "RXD", "D+", "D-"):
         anchor, far = stubs[net]
         assert far[0] < anchor[0] and far[1] == anchor[1], (net, stubs[net])
-        assert anchor[0] - far[0] == drawapply.LABEL_STUB_LENGTH, (net, stubs[net])
+    lengths = {net: stubs[net][0][0] - stubs[net][1][0] for net in stubs}
+    # **520G 重钉**：RXD 是 15（3×DRAW_GRID），不是 LABEL_STUB_LENGTH（10）——
+    # 与 test_145a 的逐字算术同源（10 档的名字行 6.95 单位落在 U1 器体上，
+    # 15 档才干净）。首选档仍是 LABEL_STUB_LENGTH，「四条一起被推远」照样红。
+    assert lengths == {
+        "TXD": drawapply.LABEL_STUB_LENGTH,
+        "D+": drawapply.LABEL_STUB_LENGTH,
+        "D-": drawapply.LABEL_STUB_LENGTH,
+        "RXD": 3 * drawapply.DRAW_GRID,
+    }, lengths

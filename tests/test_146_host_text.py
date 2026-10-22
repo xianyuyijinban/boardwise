@@ -167,10 +167,23 @@ def test_an_odd_point_list_keeps_the_path_reading_the_fixtures_use():
 # ------------------------------- 4. a part's own text, and the name stub
 
 def test_a_symbol_that_declares_its_rows_places_them_where_it_says():
+    """**531 重钉**：这个符号现在也带 pose 行，本测试钉的是**正立那一对**。
+
+    `R0603` 的 profile 在本批之后多了两条量出来的 pose 行（rot 90 / rot 270，
+    `evidence/531/raw/anchor_landed_before.txt`），因为宿主对转过的姿势会**重新锚**
+    文字的锚点。本测试量的是「正立姿势按声明画」，所以它读的是那一对；哪一对是声明、
+    哪一条是哪个姿势，由 `core.textmetrics._pick_text` 的规则保证（`test_531_text_ruler.py`
+    的 `test_a_pose_qualified_row_wins_only_for_its_own_pose` 单独钉住规则本身）。
+    """
     profile = _profile('R0603')
-    assert [(t.kind, t.x, t.y) for t in profile.texts] == [
+    upright = [t for t in profile.texts if t.rotation is None]
+    assert [(t.kind, t.x, t.y) for t in upright] == [
         ('reference', -10.0, 5.0), ('value', -10.0, -15.0),
     ]
+    assert len(profile.texts) > len(upright), (
+        "and the measured pose rows are there too — 531 added them because the host "
+        "re-anchors a rotated part's text"
+    )
     ctx = SimpleNamespace(
         circuit=SimpleNamespace(
             part=lambda part_id: SimpleNamespace(value='75k 1% 0603')

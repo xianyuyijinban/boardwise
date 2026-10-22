@@ -368,10 +368,19 @@ def _stub_export(monkeypatch, *, components=None, findings=None, sequence=None):
 
 
 def _netlist_for(plan: ChangePlan, *, split: str = "") -> dict:
-    """The netlist the plan says the page must show; ``split`` breaks one net in two."""
+    """The netlist the plan says the page must show; ``split`` breaks one net in two.
+
+    Named the way the plan states it where it states one (a flag's own net, or a
+    label's wire's name) — what the editor does with the flag/wire it was given; a
+    net with no stated name is the editor's own auto name (530D, ruling A).
+    """
     live = {"components": {}}
+    stated = drawapply.planned_net_names(plan)
     for index, island in enumerate(sorted({tuple(item.mates) for item in plan.change.islands})):
-        name = f"NET{index + 1}"
+        name = next(
+            (stated[member] for member in sorted(island) if member in stated),
+            f"NET{index + 1}",
+        )
         for position, member in enumerate(island):
             designator, _sep, pin = member.partition(".")
             if split and split in island and position % 2:
@@ -535,24 +544,27 @@ def test_a_page_label_no_wire_reaches_becomes_a_named_stub(tmp_path, capsys):
 # ------------------------------------------------------------ E1: empty page
 
 
-def test_069_a_flagged_nets_wires_are_drawn_unnamed_and_a_signal_keeps_its_name(
+def test_069_a_wire_is_named_only_where_the_wire_is_the_label(
     monkeypatch, tmp_path, capsys
 ):
-    """069 sec.9：有旗网的导线不落网名（旗本身就是名字），无旗信号网照旧。
+    """069 sec.9, as 岳 widened it (530D, ruling A 2026-10-21).
 
     岳 on the landed page: 「有了旗标就不要反复标注网络标识了。看着很乱啊」— the host
-    prints a wire's net name on the canvas, so a rail that the drawing *also* states
-    with a flag was saying it twice. A flagged net's wires are placed **unnamed**
-    (the flag names the net and the geometry joins them — exactly what 岳's own hand
-    drawing looks like to the editor), while a net with no flag keeps its name on the
-    wire, which is the only thing carrying it (057 sec.4's named stub).
+    prints a wire's net name on the canvas, so a net the drawing states elsewhere
+    was saying it twice.  069 made that true of a **flagged** net's wires; ruling A
+    makes it true of every wire that is not itself a name carrier:
+    「名字只住在旗标/标签上」.  So what still lands named is exactly the wire that
+    **is** the label (`drawapply.named_wire_nets`), because on this host a label has
+    no primitive of its own (`sch.place_netlabel` is unusable, 029) — and that is
+    also the set `draw apply`'s live leg reads the names back against.
     """
     editor = _PageEditor()
     code, plan_path, circuit, presentation = _plan_page(monkeypatch, tmp_path, editor)
     assert code == 0
     plan = ChangePlan.load(plan_path)
-    # The editor's own netlist still *names* those nets — the flag is what names
-    # them, which is why dropping the wire's name costs the netlist nothing.
+    # The editor's own netlist still *names* those nets — a flag, or the wire that
+    # is the label, is what names them, which is why the unnamed conductors cost
+    # the netlist nothing.
     editor.netlists = [{"components": {}}, _netlist_for(plan)]
     assert _apply(editor, plan_path, circuit, presentation, tmp_path)[0] == 0
     calls = [params for action, params in editor.writes if action == "sch.place_wire"]
@@ -561,18 +573,19 @@ def test_069_a_flagged_nets_wires_are_drawn_unnamed_and_a_signal_keeps_its_name(
     assert flagged, "premise: this page draws flags"
     named = set()
     for wire, params in zip(plan.change.draw_wires, calls):
-        if wire.net in flagged:
-            assert "net" not in params, (
-                f"{wire.net} carries a flag and must be drawn unnamed, so the host "
-                f"prints its name once: {params}"
-            )
+        if drawapply.is_label_wire(wire):
+            assert params.get("net") == wire.net, (wire.net, params)
+            named.add(wire.net)
             continue
-        assert params.get("net") == wire.net, (wire.net, params)
-        named.add(wire.net)
+        assert "net" not in params, (
+            f"{wire.net} is not a label and must be drawn unnamed — the drawing "
+            f"states its name on a flag, or nowhere at all: {params}"
+        )
     assert "TAP" in named, (
-        "a net with no flag keeps its name on the wire — that is what carries it "
-        f"(057 sec.4); the named nets were {sorted(named)}"
+        "TAP has no flag, so the only thing carrying its name is its label's own "
+        f"wire (057 sec.4); the named nets were {sorted(named)}"
     )
+    assert not (flagged & named), "a flagged net must print its name once, on its flag"
 
 
 def test_e1_an_empty_page_lands_the_whole_page_and_reads_the_shared_nets_back(

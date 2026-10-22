@@ -179,6 +179,8 @@ _JSON_KEYS = (
     "poses",
     "poseSource",
     "texts",
+    "valueRow",
+    "pinTexts",
     "source",
     "notes",
 )
@@ -193,7 +195,7 @@ _PIN_KEYS = (
     "pinType",
     "length",
 )
-_TEXT_KEYS = ("kind", "x", "y", "bbox")
+_TEXT_KEYS = ("kind", "x", "y", "bbox", "rotation", "mirror")
 
 
 class SymbolProfileError(ValueError):
@@ -272,12 +274,28 @@ class SymbolText:
     exposes no ATTR geometry at all, so :func:`from_parsed_symbol` produces no
     texts. A caller that has them fills them; a caller that does not must not
     guess a box, because the readability contract measures overlap against it.
+
+    ``rotation`` / ``mirror`` are 531's addition, and they are a **measurement**,
+    not a mode. 147 read the host as "the anchor is the symbol's offset from the
+    part's origin and the host does not turn the row with the pose"; a fresh
+    landing on `test` says that is only true of the upright pose. On
+    `evidence/531/raw/anchor_landed_before.txt` every **rot-0** row matches its
+    declaration to the unit (11/11) while every rotated one is re-anchored by the
+    host — `C0603` at rot 90 draws its rows at ``(+15, -5)`` / ``(+15, -15)``
+    where the declaration says ``(-5, +10)`` / ``(-5, -20)``, `R0603` at rot 90/270
+    at ``(+7..+10, 0)`` where it says ``(-10, +5)``.  A pose-qualified entry is
+    therefore the row **as measured in that pose**; an entry with neither field
+    is the pose-independent declaration 146/147 wrote, and a lookup prefers the
+    exact pose and falls back to it (:func:`~boardwise.core.textmetrics.symbol_rows`).
     """
 
     kind: str
     x: float | None = None
     y: float | None = None
     bbox: Box | None = None
+    #: The pose this measurement belongs to, or ``None`` for "any pose".
+    rotation: float | None = None
+    mirror: bool | None = None
 
 
 @dataclass
@@ -293,6 +311,50 @@ class SymbolProfile:
     poses: list[SymbolPose] = field(default_factory=lambda: list(DEFAULT_POSES))
     pose_source: str = POSES_SOURCE_DECLARED
     texts: list[SymbolText] = field(default_factory=list)
+    #: The string the host **draws** for this symbol's value row, when it is not
+    #: the part's value (531).
+    #:
+    #: Measured, because it surprised us: `drawapply` writes the spec's value into
+    #: the instance's ``Value``, but the host prints the instance's ``Name`` — the
+    #: **device name** it resolved from the LCSC at placement — and on the landing
+    #: of 2026-10-21 those differ for 4 of the flyback's 19 parts
+    #: (`evidence/531/raw/netlist_after_names.txt`, read straight off
+    #: `sch.netlist`): the spec's ``4N60 (600V 4A NMOS)`` is drawn as ``4N60``,
+    #: ``SS310 (100V 3A schottky)`` as ``SS310``, ``TL431 (SOT-23-3)`` as ``TL431``,
+    #: ``220uF/25V SMD electrolytic`` as ``220uF/25V-SMT`` and ``1nF/1kV`` as
+    #: ``1nF/1KV``. The **box** is what this module's readers measure, so a value
+    #: row reserved at the spec string's width is 30-60 units wider than the paper:
+    #: `220uF/25V SMD electrolytic` measures 88.6 units where the drawn
+    #: `220uF/25V-SMT` measures 52.2, and that phantom 36 units is enough to have
+    #: the gate report a collision no reader can see.
+    #:
+    #: Empty — the default, and every profile written before 531 — means "the host
+    #: draws the part's own value", which is what 15 of the flyback's 19 rows do.
+    value_row: str = ""
+    #: ``"name"``/``"number"`` -> ``(|dx|, dy)``, measured from the pin's own
+    #: **tip** — where the host prints a pin's name and number (532).
+    #:
+    #: Measured off the page 531 landed, against the same page's `sch.geometry`
+    #: (`evidence/532/probes/12_pin_text.py`, the offsets in
+    #: `evidence/532/raw/pin_text_offsets.txt`): a pin's texts are drawn at a fixed
+    #: offset from **its own tip**, on the pin's own axis, and the row is as wide as
+    #: the string. The measured numbers are per **symbol**, and deliberately so:
+    #: `SMD-4-PC817` and `XFMR-WE-749118105` have the same pin length (20) and print
+    #: their numbers at the same ``|dx|`` (15) but at different ``dy`` (−0.505
+    #: against −0.915), so no formula over pin length and font can produce them —
+    #: this is symbol data the file carries and the parser does not expose.
+    #:
+    #: Let ``sx`` be the sign of the pin's tip along x (the direction it points):
+    #: the row's anchor is ``(tip.x − sx·|dx|, tip.y + dy)`` and the text grows
+    #: **away** from the tip for a name and **toward** it for a number. A vertical
+    #: pin is unmeasured and therefore silent — the same honest gap `SymbolText`
+    #: states for a pose nobody measured.
+    pin_text_offsets: dict[str, tuple[float, float]] = field(default_factory=dict)
+    #: Pin number -> which of those rows the host draws for it (532). Per **pin**,
+    #: because that is the shape the measurement has: on the flyback's transformer
+    #: the host prints both the name and the number for pins 2 and 5 (the NC ends,
+    #: whose names are the numbers) and only the number for the other four.
+    pin_text_kinds: dict[str, tuple[str, ...]] = field(default_factory=dict)
     #: Where this profile came from ("parsed-symbol:<uuid>", a file path, …).
     source: str = ""
     notes: list[str] = field(default_factory=list)
@@ -394,15 +456,28 @@ class SymbolProfile:
             ],
             "poses": [pose.to_jsonable() for pose in self.poses],
             "poseSource": self.pose_source,
+            "valueRow": self.value_row,
             "texts": [
                 {
                     "kind": text.kind,
                     "x": text.x,
                     "y": text.y,
                     "bbox": list(text.bbox) if text.bbox else None,
+                    "rotation": text.rotation,
+                    "mirror": text.mirror,
                 }
                 for text in self.texts
             ],
+            "pinTexts": {
+                "offsets": {
+                    kind: list(offset)
+                    for kind, offset in sorted(self.pin_text_offsets.items())
+                },
+                "pins": {
+                    number: list(kinds)
+                    for number, kinds in sorted(self.pin_text_kinds.items())
+                },
+            },
             "source": self.source,
             "notes": list(self.notes),
         }
@@ -434,6 +509,9 @@ class SymbolProfile:
             poses=poses,
             pose_source=str(root.get("poseSource") or POSES_SOURCE_DECLARED),
             texts=texts,
+            value_row=_text(root.get("valueRow"), "$.valueRow"),
+            pin_text_offsets=_pin_text_offsets(root.get("pinTexts")),
+            pin_text_kinds=_pin_text_kinds(root.get("pinTexts")),
             source=_text(root.get("source"), "$.source"),
             notes=_text_list(root.get("notes"), "$.notes"),
         )
@@ -965,6 +1043,62 @@ def _check_pose_source(profile: SymbolProfile) -> None:
         )
 
 
+def _pin_text_offsets(value: Any) -> dict[str, tuple[float, float]]:
+    """``$.pinTexts.offsets`` — ``"name"``/``"number"`` -> ``(|dx|, dy)`` (532).
+
+    Absent, empty, or a kind this build does not know: nothing is read. A row whose
+    offset is unknown is a row nobody measured, and inventing one would put a box
+    on the canvas at a place the host does not print — the exact failure 531
+    removed from the designator/value half.
+    """
+    if value is None:
+        return {}
+    body = _object(value, "$.pinTexts")
+    raw = body.get("offsets")
+    if raw is None:
+        return {}
+    table = _object(raw, "$.pinTexts.offsets")
+    out: dict[str, tuple[float, float]] = {}
+    for kind in ("name", "number"):
+        entry = table.get(kind)
+        if entry is None:
+            continue
+        if not isinstance(entry, list) or len(entry) != 2:
+            raise SymbolProfileError(
+                f"$.pinTexts.offsets.{kind} must be [|dx|, dy] in canvas units, "
+                f"got {entry!r}"
+            )
+        dx = _number(entry[0], f"$.pinTexts.offsets.{kind}[0]")
+        dy = _number(entry[1], f"$.pinTexts.offsets.{kind}[1]")
+        if dx < 0:
+            raise SymbolProfileError(
+                f"$.pinTexts.offsets.{kind}[0] is {dx!r} — the offset is measured "
+                "from the pin's tip along the pin's own axis, so its magnitude is "
+                "what is stated and the side is the pin's direction"
+            )
+        out[kind] = (dx, dy)
+    return out
+
+
+def _pin_text_kinds(value: Any) -> dict[str, tuple[str, ...]]:
+    """``$.pinTexts.pins`` — which rows the host draws, pin by pin (532)."""
+    if value is None:
+        return {}
+    body = _object(value, "$.pinTexts")
+    raw = body.get("pins")
+    if raw is None:
+        return {}
+    table = _object(raw, "$.pinTexts.pins")
+    out: dict[str, tuple[str, ...]] = {}
+    for number, kinds in table.items():
+        if not isinstance(kinds, list):
+            raise SymbolProfileError(
+                f"$.pinTexts.pins.{number} must be a list of kinds, got {kinds!r}"
+            )
+        out[str(number)] = tuple(str(kind) for kind in kinds)
+    return out
+
+
 def _texts_from(value: Any) -> list[SymbolText]:
     if value is None:
         return []
@@ -982,6 +1116,14 @@ def _texts_from(value: Any) -> list[SymbolText]:
             x=None if x is None else _number(x, f"{spot}.x"),
             y=None if y is None else _number(y, f"{spot}.y"),
             bbox=check_box(body.get("bbox"), f"{spot}.bbox"),
+            rotation=(
+                None if body.get("rotation") is None
+                else _number(body["rotation"], f"{spot}.rotation")
+            ),
+            mirror=(
+                None if body.get("mirror") is None
+                else bool(body["mirror"])
+            ),
         ))
     return out
 

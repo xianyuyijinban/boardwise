@@ -158,7 +158,21 @@ def _first_plan(ctx):
                              budget, None)
         found = (None, None)
         if result.ranked:
-            found = (result.ranked[0].plan, result.ranked[0].plan)
+            # **520E 重钉**：`result.ranked[0]` 是**第一个建成**的档，不是编译器
+            # 会交出来的那一张——`compile()` 自己会按 `key` 排序（:860）之后再取
+            # 领头的。520E 之前这两件事碰巧一致，因为排在前面几档根本建不出 plan
+            # （它们死在 `net 'HVDC' … direct-wire obligation`）；现在连不上的网会被
+            # **降级成名字**并照样出一个 plan，于是「第一档」变成了
+            # `spacing=1 pose-variant=0`——一张把 `HVDC`/`SEC_12V` 写成名字的图，
+            # 而本文件量的那些盒子（文字、旗名）在**导线版**的图上才摆得开。
+            #
+            # 本文件的用途是「量这一页的图」，所以取的是**这一页的图**：排序后的
+            # 领头档。实测：领头档与本文件历来量的那张**逐字节相同**
+            # （`geometry_sha256` `57bd38c2d6fcdcf6…`，`spacing=2.2 pose-variant=0`，
+            # 0 条降级），而 520E 新出的 5 张图都排在它后面。换回 `ranked[0]` 会让
+            # 本文件下半段两条形态测试重新变红（变异验证见 `evidence/520e/report.md`）。
+            leader = min(result.ranked, key=lambda item: item.key)
+            found = (leader.plan, leader.plan)
         _PLAN_CACHE[key] = found
         return found
     finally:

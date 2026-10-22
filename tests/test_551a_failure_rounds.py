@@ -22,8 +22,10 @@ rounds）回退到摘要 failures 本身，每个记 ``round="first"``——旧�
    判读、``summarize_failure_rounds`` 的两条路径；
 2. **装配**（单测 `_failure_rounds` 对一个真实 rejected 列表）：每轮一条、按
    轮序、乱序的 rejected 也不影响轮序；
-3. **端到端**（真数据，反激整页）：``failures`` 仍只有旧的那一条（向后兼容钉），
-   ``failure_rounds`` 三轮齐、每轮点名自己那条——**拓扑轮的 rail 拒因在列表里**；
+3. **端到端**（真数据，反激整页）：``failures`` 仍只有**第一条**（向后兼容钉），
+   ``failure_rounds`` **两轮**齐、每轮点名自己那条——**拓扑轮的 rail 拒因在列表里**。
+   （520A2 之前是三轮；加宽轮的前提被那批改动修掉之后它不点火，所以这一页现在
+   只跑 base + topology。见该测试自己的 docstring。）
 4. **CLI 合同**：``draw compile --json-path`` 的载荷带 ``failureRounds``，
    摘要 ``failures`` 键的形状不变。
 """
@@ -37,6 +39,7 @@ import pytest
 
 from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.presentationspec import PresentationSpec
+from boardwise.core.symbolprofile import SymbolProfile
 from boardwise.engines import drawcompiler as dc
 from boardwise.engines.grammar.base import GrammarFailure
 
@@ -167,44 +170,233 @@ def _flyback_library() -> dict:
     return t113._library_from(SPECS / "flyback_uc3845.library.json")
 
 
+def _single_module(spec: PresentationSpec) -> PresentationSpec:
+    """The same document with `islands` taken off — `DESIGN` §9.3's fixture swap.
+
+    551A's subject is the **rounds** a zero-candidate report can name.  Since 520m,
+    a presentation that declares islands compiles through `_try_island_variants`,
+    where neither the ladder nor the widening nor the topology round runs at all
+    (`drawcompiler.compile`'s `if not multi_island:`): the island page has one
+    drawing by construction and no chain to re-pose.  Measuring "which rounds are
+    visible" on that page measures rounds that structurally do not happen.  Taking
+    the declaration off the fixture — and not adding a compiler switch, which would
+    give the product a branch that exists for tests only — puts the document back
+    on the path these assertions are about.
+    """
+    import dataclasses
+    return dataclasses.replace(spec, islands=None)
+
+
+def _flyback_library_real() -> dict:
+    """**产品路径的那把尺子**：`SymbolProfile.from_dict`，与 `draw compile --profiles` 同源。
+
+    520C 抓到过一件事：`test_113._library_from` 是**手搓** `SymbolProfile(...)`，
+    它丢掉了 `$.texts`（19 个 profile 里 13 个有文字锚点）、每颗引脚的 `length`
+    （36/36 都有）**和 `$.poses`**（520D 给 T1 声明的四旋转、不许镜像）。用那把
+    尺子量出来的反激判决跟 `draw compile` **不一样**：手搓尺子下 T1 还有 8 个
+    姿态、拓扑轮死在另一处，真尺子下 T1 只剩 4 个不镜像的旋转。本测试量的是
+    「哪几轮的拒因对读者可见」，那是产品契约，所以这里用真尺子。
+    **手搓 loader 是已知债，另立题。**
+    """
+    payload = json.loads(
+        (SPECS / "flyback_uc3845.library.json").read_text(encoding="utf-8")
+    )
+    return {
+        entry["symbolRef"]: SymbolProfile.from_dict(entry)
+        for entry in payload["profiles"]
+    }
+
+
+
 def test_the_topology_refusal_is_visible_beside_the_ladder_refusal():
     """**551A 的正题**：阶梯被 A 拒、拓扑被 B 拒——两条原因都在列表里。
 
-    反激整页（去锁 presentation，120 后的形态）实测拒因链：阶梯 6 档全被
-    `same-column(Q1, R5)` 拒 → 加宽轮被 `right-of(D3, T1)` 拒 → 拓扑轮被
-    `net 'SEC_12V' … rail drawn as a wire` 拒。旧报告只显示第一条；现在
-    ``failure_rounds`` 三轮齐，且拓扑轮那条**逐字可见**。
+    **520A2 重钉**：反激整页（去锁 presentation，120 后的形态）的拒因链**少了一轮**。
+
+    * **改动前**（551A 写这条时的世界）：三轮——阶梯 6 档全被
+      `same-column(Q1, R5)` 拒 → 加宽轮被 `right-of(D3, T1)` 拒 → 拓扑轮被
+      `net 'SEC_12V' … rail drawn as a wire` 拒。
+    * **改动后（520A2）**：**两轮**——`base`（`net 'HVDC' … direct-wire
+      obligation`）+ `topology`（`net 'SEC_12V' …`）。加宽轮**不再存在**：它的
+      前提「六个基础档的每一条拒绝都点名同一条关系」被本次改动修掉了（现在
+      2 档过关系闸、死在布线，4 档各点名一条不同的关系）。
+    * **再改（520B2，尺子换成真的才量得出来）**：拓扑轮**不再死在旗标层**——
+      rail 席位阶梯放宽成「供电脚优先 → 本网其余脚、就近优先」之后，`SEC_12V`
+      的旗标落在 `R7.1`（lead `((75,140),(45,140),(45,127.5))`，总长 42.5）。
+      但**用真载入器**（`SymbolProfile.from_dict`，与 `draw compile --profiles`
+      同源）量，这一轮死在**关系闸** `right-of(C11, T1)`（"not honoured by
+      the shape of T1's own symbol — T1.6 on net SEC_GND"），可读性闸仍未跑。
+      **手搓 loader 下曾经读到「走到可读性闸、24 条违反」，那是坏尺子的读数**：
+      `test_113._library_from` 手搓 `SymbolProfile(...)`，丢掉 `$.texts`
+      （19 个里 13 个有）和每颗引脚的 `length`（36/36 有）。本测试从 520B2 起
+      改用真尺子，因为「哪几轮的拒因对读者可见」是**产品契约**。
+    * **再改（520D）**：那条关系拒因是**姿态病不是形状病**。拓扑搜索给 T1 选了
+      镜像姿态，副边 4/5/6 从 `(+40,·)` 翻到 `(-40,·)`，T1.6 于是落在 origin
+      左边；而 T1 在**未镜像**的姿态下满足这条关系。520D 把
+      `XFMR-WE-749118105` 的 `poses` 声明成「四旋转、`mirror=false`」——那个
+      姿态**不再被提供**，不是在闸口被拒。**旧数字**：`right-of(C11, T1)` 消失，
+      拓扑轮走到**可读性闸**，`34` 条硬违反
+      （`wire-on-pin-line` 4 + `text-overlap` 29 + `text-on-wire` 1），归口
+      从 `presentation-poor` 变成 `layout-unsat`。`ok`/`candidates`/`rejected`
+      与轮集合都没变（`False`/`0`/`7`，`base`+`topology`）。
+    * **再改（520G）**：`_pin_walls` 把引线方向当符号自己的坐标读，转过姿态的
+      引脚**一条引线都没预留**，于是 `wire-on-pin-line` 有 4 条可拒。520G 换成
+      pose 之后的方向，这一轮从 `4 + 29 + 1` 变成 `26 + 3` = **29** 条，那一类
+      归零（下面既有新条数、也有「一条都不许再有」的不变量两条断言）。
+
+    轮词表本身仍是三轮（`FAILURE_ROUNDS`，由本文件形状层的
+    `test_failure_round_names_are_the_three_search_rounds` 钉着）——这里量的是
+    **这一页实际跑到哪几轮**。旧报告只显示第一条；现在 ``failure_rounds``
+    两轮齐，且拓扑轮那条**逐字可见**。
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
-    presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
+    presentation = _single_module(
+        PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
+    )
     result = dc.compile(
-        circuit, presentation, _flyback_library(),
+        circuit, presentation, _flyback_library_real(),
         dc.CompileBudget(max_candidates=64),
     )
     assert not result.ok and not result.candidates
 
-    # 向后兼容钉：摘要 failures 还是旧的那一条、还是 same-column 那句话。
+    # 向后兼容钉：摘要 failures 还是**第一条**——但第一条又换了一层。
+    # 520A2 那版这里是「走线的直连义务」；**520E 之后那一层不存在了**：
+    # 连不上的直连义务被降级成名字并记账，于是第一条是 `base` 轮的可读性闸
+    # （真载入器下 25 条硬违反），并且带着降级那一句。断言按新事实写，
+    # 同时钉住 520E 自己的账本——「拒绝换了层」与「降级真的被记了」是两件事。
     assert len(result.failures) == 1
-    assert "same-column(Q1, R5)" in result.failures[0].detail
+    assert "the independent readability checker refused" in result.failures[0].detail, (
+        "the summary failures still lead with the **first** refusal; under 520E "
+        f"that refusal is the readability gate — {result.failures[0].detail[:200]}"
+    )
+    assert "the name had nowhere to go either" in result.failures[0].detail, (
+        "a refusal that follows a downgrade owes both halves: "
+        f"{result.failures[0].detail[:400]}"
+    )
+    # **531 重钉**: the account grew a third net, and that is the same fact as this
+    # batch's subject arriving on the *single-module* path.  This fixture strips
+    # `islands`, so it runs `placement.py`, whose `_pin_text_term` measures the rows
+    # the host prints (`textmetrics.symbol_rows`) — and since 531 those rows are the
+    # real ones, including the **pose**-qualified anchors and the strings the host
+    # actually draws (`120uF/25V-SMT` is 52 units where the spec's value string is
+    # 88.6). The router's `occupied` boxes therefore changed, and `FB_SENSE` is a
+    # second link it can no longer join, so 520E's rule names it too.  The rule
+    # itself — 「连不上就降级成名字并记账」 — is unchanged; the drawing underneath it
+    # got more accurate.
+    assert [item.net for item in result.label_fallbacks] == [
+        "HVDC", "SEC_12V", "FB_SENSE",
+    ], (
+        "520E's account: every net the router cannot join is named and "
+        f"recorded: {[f.net for f in result.label_fallbacks]}"
+    )
 
-    # 新的：三轮各一条，拓扑轮的拒因不再是被遮住的那个。
+    # 新的：两轮各一条，拓扑轮的拒因不再是被遮住的那个。
     by_round = {item.round: item.failure for item in result.failure_rounds}
-    assert set(by_round) == {"base", "widened", "topology"}
-    assert "same-column(Q1, R5)" in by_round["base"].detail
-    assert "right-of(D3, T1)" in by_round["widened"].detail
-    assert "'SEC_12V'" in by_round["topology"].detail, (
-        "the topology round's own refusal must be visible beside the ladder's: "
-        f"got {[item.round for item in result.failure_rounds]}"
+    assert set(by_round) == {"base", "topology"}, (
+        "the flyback runs two rounds under 520A2 (the widened round's "
+        "precondition is gone); three rounds again means the widening came back "
+        f"— got {sorted(by_round)}"
+    )
+    # **520E 重钉**：`base` 轮的第一条拒因不再是「布线的直连义务」——那条义务
+    # 连不上时现在被降级成名字并记账，这一轮于是停在**可读性闸**上（真载入器：
+    # 25 条硬违反）。`HVDC` 仍然出现在这条拒因里，但它是**降级名单**里的名字，
+    # 不再是义务被拒的主体——两者都断言，免得「换了层」被读成「HVDC 消失了」。
+    assert "HVDC" in by_round["base"].detail and "SEC_12V" in by_round["base"].detail
+    assert "the independent readability checker refused" in by_round["base"].detail
+    assert "the name had nowhere to go either" in by_round["base"].detail
+    # **520D 重钉（T1 不许镜像）**：拓扑轮**不再死在关系闸**。
+    # 520B2 读到的那条 `right-of(C11, T1)` 是**姿态问题不是形状问题**——
+    # 拓扑搜索给 T1 选了镜像姿态，副边 4/5/6 从 (+40,·) 翻到 (-40,·)，于是
+    # T1.6 落在 origin 左边，而 T1 自己的形状在**未镜像**的姿态下是满足这条
+    # 关系的。520D 把 `XFMR-WE-749118105` 的 `poses` 声明成「四旋转、
+    # mirror=false」（选出来的姿态根本不存在，不是在闸口拒绝），那一轮于是
+    # 走到**可读性闸**：34 条硬违反（`wire-on-pin-line` 4 +
+    # `text-overlap` 29 + `text-on-wire` 1），归口 `layout-unsat`。
+    #
+    # 反向钉：这句 `not in` 就是那条关系拒因**已经不在了**的证据——把
+    # library 的 `poses` 摘回去，它会立刻变红。
+    assert "right-of(C11, T1)" not in by_round["topology"].detail, (
+        "520D declared T1's poses un-mirrored, so the topology search can no "
+        "longer pick the pose that broke right-of(C11, T1); a refusal naming "
+        "that relation again means the mirror came back — got "
+        f"{by_round['topology'].detail[:200]}"
+    )
+    # **520G 重钉（34 → 29）**：`_pin_walls` 把引线方向当成符号自己的坐标读，
+    # 于是**转过姿态的引脚一条引线都没预留**（实测：两条引线的 profile 在
+    # rot 0 出 2 个盒、90/180/270 出 0 个；T1 的六条引线在它被摆的那个四分之一
+    # 转上出 0 个）。520G 把方向换成 pose 之后的那个，那一轮于是从
+    # `wire-on-pin-line` 4 + `text-overlap` 29 + `text-on-wire` 1 变成
+    # `text-overlap` 26 + `text-on-wire` 3，合计 **29**。断言不写成「把 34
+    # 换成 29」就完事：条数之外再钉住那条**不变量**——这一轮的违规里不许再有
+    # 任何一条 `wire-on-pin-line`（把修复回滚，下面两句一起变红）。
+    #
+    # **530F 重钉（29 → 21）**：520D 的裁定 A（导线一律不印网名）之后，
+    # `readability._named_wire_rows` 只给「它就是标签」的那根导线建模名字行，
+    # 于是上一版里由**主机自印的 8 行**贡献的那 8 条读数整批消失：29 − 8 = 21
+    # （530D 在真岛页上量到的同一件事，8 → 1 是那一页的投影）。这不是本条断言
+    # 被放宽：`wire-on-pin-line` 的不变量在上面，这里数的仍是**同一张图**在
+    # 同一层次的同一个读数，只是闸不再为没人会看见的字记账。
+    topology_variant = next(
+        item for item in result.rejected if item.variant == "topology-search"
+    )
+    assert not [
+        line for line in topology_variant.violations if "wire-on-pin-line" in line
+    ], (
+        "520G reserves each pin's drawn lead at every pose, so the topology round "
+        "cannot run a wire along one again; a `wire-on-pin-line` here means the "
+        f"turned poses stopped reserving — got {topology_variant.violations[:3]}"
+    )
+    assert "the independent readability checker refused 27 hard violation" in (
+        by_round["topology"].detail
+    ), (
+        "under 530D's ruling A the topology round reaches the readability gate with "
+        "27 hard violations (520G measured 29, 530F 21, 531 22; **532 +5** because "
+        "the checker now reads a placed part's **pin name and number** as well, and "
+        "this page's own library prints them for three of its symbols); a different "
+        "count means a different page — got "
+        f"{by_round['topology'].detail[:200]}"
+    )
+    assert by_round["topology"].category == dc.FAILURE_LAYOUT_UNSAT, (
+        "GATE_REFUSAL_KINDS maps none of the hard kinds this gate hit, so the "
+        "refusal is layout-unsat — the relation gate's presentation-poor is "
+        f"gone — got {by_round['topology'].category}"
     )
 
     # summarize 是报告的读法：round 名逐条在场。
     summary = result.summarize_failure_rounds()
-    assert [item["round"] for item in summary] == [
-        "base", "widened", "topology",
-    ]
-    assert "same-column(Q1, R5)" in summary[0]["detail"]
-    assert "right-of(D3, T1)" in summary[1]["detail"]
-    assert "'SEC_12V'" in summary[2]["detail"]
+    assert [item["round"] for item in summary] == ["base", "topology"]
+    # 520E: `base`'s detail still names HVDC — as one of the nets the compiler
+    # **named instead of wiring**, which is what the reader needs to know.
+    assert "HVDC" in summary[0]["detail"] and "SEC_12V" in summary[0]["detail"]
+    # 520G: the base round's 25 -> 24 — the one `wire-on-pin-line` (SEC_SW along
+    # `T1.4`) is gone and the other 24 are the same page, so both rounds' counts
+    # move by that one class and no other.
+    #
+    # **530F 重钉（24 → 22 / 29 → 21）**: 520D's ruling A took the net name off the
+    # conductor, so `readability._named_wire_rows` models a name row only for the
+    # wire that **is** the label.  Two of the base round's rows and eight of the
+    # topology round's were rows the host prints over conductors nobody will read
+    # a name on; the counts move by exactly those, and by nothing else (the
+    # `wire-on-pin-line` invariant below still holds in both rounds).
+    # **531 重钉（22 → 23 / 21 → 22）**：两条计数各 +1，因为这一页的**文字行**
+    # 换成了宿主真正画的那一行（`core.textmetrics.symbol_rows`：量出来的 pose 锚点 +
+    # 宿主真画的值字符串）——路由与摆放读的就是这些盒子，所以同一张图的互压读数
+    # 会动。`wire-on-pin-line` 的不变量（上面与下面两条）仍然成立，轮集合也仍然是
+    # `base` + `topology`：变的只有闸数出来的行数，不是哪一层在拒。
+    #
+    # **532 重钉（23 → 29 / 22 → 27）**：`readability` 现在把**引脚名/号**也算进
+    # 它读的文字（`textmetrics.pin_rows`，量出来的每符号表），这份真库里有三个符号
+    # 会印它们（`SOT23-3-TL431`、`XFMR-WE-749118105`、`SMD-4-PC817`），所以同一张
+    # 图多出若干条互压读数。两条不变量一个字没动：`wire-on-pin-line` 仍为 0，
+    # 轮集合仍是 `base` + `topology`，**每一层的拒因还是同一层**——变的是闸数出来
+    # 的行，不是谁在拒。数字逐条在 `evidence/532/raw/`。
+    assert "readability checker refused 29 hard violation" in summary[0]["detail"]
+    assert "readability checker refused 27 hard violation" in summary[1]["detail"]
+    for item in summary:
+        assert "wire-on-pin-line" not in item["detail"], (
+            "520G reserves every pin's lead at every pose; neither round's leading "
+            f"refusal may be that class again — got {item['detail'][:200]}"
+        )
 
 
 def test_a_hand_built_result_json_round_trips_are_report_ready():

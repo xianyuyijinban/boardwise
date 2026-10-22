@@ -3663,19 +3663,26 @@ def test_a_keep_out_over_a_body_is_refused_rather_than_drawn_through():
             )
 
 
-def test_an_obligated_net_that_cannot_be_wired_is_layout_unsat_never_a_label():
-    """A promised net with no route inside the budget: refused, and *measured*.
+def test_an_obligated_net_the_router_cannot_wire_is_named_and_recorded():
+    """**520E 重钉**（名字也换了）：一条画不出来的直连义务不再是整页的判决。
+
+    本测试原来的名字是
+    ``test_an_obligated_net_that_cannot_be_wired_is_layout_unsat_never_a_label``，
+    钉的正是本批被岳推翻的那条策略——「`direct-wire` 义务永不降级成名字」。
+    改名是为了不让测试名继续说反话；它下面第二段（`TAP` 被强制画不出来）就是
+    新策略在**原来那个位置**上的断言。
 
     The case 053 sec.4's `layout-unsat` exists for on the routing side, built by
     trapping one end: a small keep-out is put around a pin of the net the
     `direct-wire` obligation promises, with the pin's own part left outside it.
     Every wire has to land exactly on that tip, so every route enters the
-    reserved region — and the promise forbids answering with a name instead.
+    reserved region.
 
-    What the refusal owes (053 sec.4): the category, the *measured* reason
-    ("could not be joined inside the searched corridor"), the wording of a finite
-    search ("not found inside the budget", never "no solution"), and an action
-    that changes the answer — here the keep-out, or the obligation itself.
+    **201B 的读数仍然成立**：拓扑搜索能把这张图挪出陷阱。**520E 又量了一次**，
+    陷阱在两个建造阶梯档上仍然拦住「TAP 是一根导线」这件事，但拦住它的**不再是
+    直连义务**（那一条现在降级成名字），而是 `dangling-wire-end`——于是
+    `spacing=2.2` 那一档**自己把这块小页画出来了**（改动前只有拓扑搜索画得出，
+    三个阶梯档全拒）。读数：4 档建成 → 3 档（2 拒 + 1 中）。
     """
     scene = scenes()[1]
     health = best_of(scene)[1]
@@ -3709,11 +3716,48 @@ def test_an_obligated_net_that_cannot_be_wired_is_layout_unsat_never_a_label():
     # is recorded as refused, each with its own reason and category, and none of
     # them claims there is no solution. This is a *thirteenth*, standalone case —
     # adding it to `scenes()` would move the table's 9 produced / 3 refused.
-    assert len(result.rejected) == len(dc.CompileBudget().spacing_ladder)
+    #
+    # **520E**: two rungs, not three — the last rung of the ladder now draws the
+    # page (the topology search is not reached), so one of the three variants is
+    # a candidate and not a refusal. Which rungs those are is asserted below.
+    assert [item.variant for item in result.rejected] == [
+        "spacing=1 pose-variant=0", "spacing=1.5 pose-variant=0",
+    ]
     assert all(item.failure is not None for item in result.rejected)
     assert {item.failure.category for item in result.rejected} == {"layout-unsat"}
     assert all(item.reason for item in result.rejected)
     assert sorted(scenes()) == list(range(1, 13))
+
+    # ----------------------------------------------- 520E: the ruling itself
+    # The same scene, with the obligation's own wiring forced to fail (the shape
+    # the trapped keep-out used to produce): the net is **named and accounted
+    # for** instead of the page being refused *for that reason*. On this small
+    # scene the name has nowhere to go either, so the page is still refused —
+    # and that refusal is required to say so.
+    real = dc._connect_net
+
+    def failing(ctx, router, expression, blocked, existing=()):
+        if expression.net == "TAP":
+            return dc._Unrouted(stage="trunk", reason="forced by 520E's re-pin")
+        return real(ctx, router, expression, blocked, existing)
+
+    dc._connect_net = failing
+    try:
+        forced = dc.compile(
+            scene.circuit, scene.presentation, library(),
+            dc.CompileBudget(keepouts=(trap,)),
+        )
+    finally:
+        dc._connect_net = real
+    assert [item.net for item in forced.label_fallbacks] == ["TAP"], (
+        "a direct-wire obligation the router cannot keep must be recorded as a "
+        "downgrade, not turned into a refusal of its own"
+    )
+    assert forced.label_fallbacks[0].promised == "wire"
+    assert "forced by 520E's re-pin" in forced.label_fallbacks[0].reason
+    refused = " ".join(item.detail for item in forced.failures)
+    assert "the name had nowhere to go either" in refused, refused[:400]
+    assert "TAP" in refused
 
 
 def test_every_candidate_carries_the_checkers_own_verdict():

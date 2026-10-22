@@ -217,29 +217,79 @@ def _soft_plan_118(ctx):
 
 
 def test_118_the_page_stops_at_the_same_column_relation_before_any_gate_runs():
-    """**118 挖出来的断点**，钉在这里：真实几何下整页卡在**序关系**上，不是可读性。
+    """**118 挖出来的断点**——**520A2 重钉**：这个断点被修掉了，断点往前挪了一站。
 
-    117 的三条成果（`netlist-partition-mismatch` 与八个 `text-overlap`）量的是
-    **摆放之后**的几何；118 换了实测 profile 之后，页面前提在**更早一站**就没了：
+    118 当年的读法（改动前）：真实几何下整页卡在**序关系**上，不是可读性。
     `same-column(Q1, R5)` 满足不了，`_place` 直接返回 None，**一张 plan 都
-    造不出来**，可读性闸根本没有机会说话。
+    造不出来**，可读性闸根本没有机会说话。它自己写着「若 `same-column` 被修好了，
+    就在这份 docstring 里说出来」。
 
-    所以这一条是 117 那批测试的**前提声明**：它绿的场合，117 的断言量的确实是
-    它声称要量的东西；它红的场合，117 的断言必须自己造 plan（本文件的
-    `_soft_plan` 就是干这个的，而且它**不放松可读性闸**）。
+    **520A2 把它修好了**：链件可沿**横跨链**的方向 walk，rung 0
+    （`spacing=1 pose-variant=0`）于是**过得了关系闸**，`_place` 交出摆放
+    （`R5` 被横向走了 20 单位，`same-column` 成立），拒绝往前移到**布线**层——
+    `net 'HVDC' … direct-wire obligation`。
+
+    所以这一条现在钉的是**反过来的前提**：「`_place` 不再在关系闸上停下」。
+    117 那批测试仍要自己造 plan（本文件的 `_soft_plan`，它**不放松可读性闸**），
+    只是理由换了——不再是关系闸，而是 120 量到的布线层，以及 520A2 之后仍然
+    拦路的那两条（孤岛落子、走廊压线）。
+
+    **520E 又挪了一站**：布线层也过去了。直连义务连不上时，那条网现在被
+    **降级成名字并记账**（岳的裁决，见 `tests/test_520e_label_fallback.py`），
+    于是 rung 0 走到**可读性闸**才被拒——**530D 之后**实测 **11** 条硬违反，
+    全是 `text-overlap`（岳裁定 A 把宿主的网名行从闸里拿掉了，这条腿的 13 条
+    少了 6 条；pre-530D 那条 `netlist-partition-mismatch · FB_SENSE` 与一条
+    `dangling-wire-end` 在**这条 ladder 更后的一次尝试**上，现在的图走不到那里），
+    而拒绝尾部带着降级那一句
+    （`HVDC`、`SEC_12V` 在它之前已经被改成名字）。`_place` 与关系闸**一个字没动**：
+    本测试前两条断言仍原样通过，变的还是「谁拒的」。
     """
     circuit, ctx = _ctx()
-    real_rel = dc._relation_failures
-    dc._relation_failures = real_rel
-    placed, failure = dc._place(ctx, dc._variants(ctx)[0])
-    assert placed is None, (
-        "the page now places cleanly under the measured library: if the "
-        "same-column relation was fixed, say so in this docstring instead of "
-        "leaving 117's helpers in place"
+    variant = dc._variants(ctx)[0]
+    placed, failure = dc._place(ctx, variant)
+    assert placed is not None, (
+        "the page is refused at the relation gate again: under 520A2 the first "
+        "rung passes it, so this is a regression of the chain walk — "
+        f"{failure}"
     )
-    assert failure is not None and "same-column(Q1, R5)" in failure.detail, (
-        f"the page is refused for a different reason now: {failure}"
+    assert dc._relation_failures(ctx, placed) == [], (
+        "rung 0's placement leaves a relation unhonoured again: "
+        f"{[f.detail for f in dc._relation_failures(ctx, placed)]}"
     )
+    built, build_failure, _ = dc._build_candidate(ctx, variant)
+    assert built is None, (
+        "the page now builds a candidate at rung 0: if the routing was solved, "
+        "say so in this docstring instead of leaving the old text"
+    )
+    assert build_failure is not None and (
+        "the independent readability checker refused" in build_failure.detail
+    ), (
+        "the refusal moved again; name the new layer in this docstring rather "
+        f"than leaving the old text: {build_failure}"
+    )
+    # 520E: the layer that moved is *this* batch's, so the new refusal has to
+    # carry the batch's own bookkeeping — the named nets and the sentence that
+    # says the name did not fit either. Without these two, "the refusal moved to
+    # the gate" would be indistinguishable from the gate simply being reached by
+    # an ordinary crowd of wires.
+    # 530D (岳's ruling A) removed the host's name rows from the gate, and with them
+    # six of this drawing's violations: the refusal is now **11** and every one of
+    # them is `text-overlap` — the two electrical findings the pre-530D reading led
+    # with (`netlist-partition-mismatch` on `FB_SENSE`, one `dangling-wire-end`) were
+    # on a *later* attempt of the same ladder, which this drawing no longer reaches.
+    # What the assertion is about is unchanged: the refusal is the **gate's**, and it
+    # says so with its own kind and its own count.
+    assert "the independent readability checker refused 11 hard violation(s)" in (
+        build_failure.detail
+    ), f"the gate's own refusal must be named, with its count: {build_failure.detail[:300]}"
+    assert "text-overlap" in build_failure.detail, (
+        f"the gate's own first kind must be named: {build_failure.detail[:300]}"
+    )
+    assert "the name had nowhere to go either" in build_failure.detail, (
+        "a refusal that follows a downgrade owes both halves: "
+        f"{build_failure.detail[:400]}"
+    )
+    assert "HVDC" in build_failure.detail and "SEC_12V" in build_failure.detail
 
 
 def test_the_cause_is_one_point_where_two_nets_share_a_pin_tip():

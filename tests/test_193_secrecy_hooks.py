@@ -20,6 +20,7 @@ is every clone and every CI run — the list is gitignored by design (186 §D).
 
 from __future__ import annotations
 
+import locale
 import os
 import shutil
 import subprocess
@@ -297,10 +298,54 @@ _skip_without_windows = pytest.mark.skipif(os.name != "nt", reason="install-hook
 _skip_without_git = pytest.mark.skipif(shutil.which("git") is None, reason="git is not on PATH")
 
 
+def _decode(raw: bytes) -> str:
+    """The child's output, decoded by **what it actually is**.
+
+    532 made this explicit, and the measurement is two-sided — which is why the
+    answer is not "always UTF-8" and not "always the code page":
+
+    * `scripts/install-hooks.bat` run under `cmd` writes **cp936** on this machine
+      (measured: its 803 bytes are not valid UTF-8 — ``0xc7`` at offset 781 — and
+      decode cleanly as ``cp936``). It is the console's encoding, not the file's;
+    * `tools/check_repo_hygiene.py` run under git's own pipe writes **UTF-8**, and
+      ``text=True`` (which uses the preferred encoding, cp936 here) turns every
+      Chinese line of it into mojibake — the failure 531 recorded, whose symptom was
+      a `None` `stdout` three lines away from its cause.
+
+    So the decode is chosen by result: UTF-8 first, and the machine's preferred
+    encoding when the UTF-8 pass leaves replacement characters. ``errors="replace"``
+    keeps a half-decodable line readable instead of fatal; the assertions below are
+    what decide whether the text is right.
+    """
+    text = raw.decode("utf-8", "replace")
+    if "\ufffd" in text:
+        try:
+            fallback = raw.decode(locale.getpreferredencoding(False), "replace")
+        except (LookupError, ValueError):
+            return text
+        if "\ufffd" not in fallback:
+            return fallback
+    return text
+
+
+def _decoded(completed: subprocess.CompletedProcess) -> subprocess.CompletedProcess:
+    """A ``CompletedProcess`` whose streams are text — decoded by :func:`_decode`.
+
+    Assigning the attributes rather than passing `encoding=` to `subprocess.run` is
+    the point: the encoding depends on the **result**, and nothing in the call can
+    know it in advance.
+    """
+    if isinstance(completed.stdout, bytes):
+        completed.stdout = _decode(completed.stdout)
+    if isinstance(completed.stderr, bytes):
+        completed.stderr = _decode(completed.stderr)
+    return completed
+
+
 def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *args], cwd=repo, capture_output=True, text=True, check=check
-    )
+    return _decoded(subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, check=check,
+    ))
 
 
 @pytest.fixture
@@ -326,13 +371,20 @@ def hook_repo(tmp_path):
 
 
 def _install(repo: Path) -> subprocess.CompletedProcess:
-    completed = subprocess.run(
+    """Run the installer, decoding its output by what it is (532 — see :func:`_decode`).
+
+    Measured: the batch file's bytes are **cp936** under `cmd` (not UTF-8), so a
+    fixed `encoding="utf-8"` leaves replacement characters in every Chinese line —
+    and `text=True` alone chose the code page, which is right for *this* call and
+    wrong for the gate's. Neither constant is the answer; the decode is chosen by
+    the result.
+    """
+    completed = _decoded(subprocess.run(
         ["cmd", "/c", str(repo / "scripts" / "install-hooks.bat")],
         cwd=repo,
         capture_output=True,
-        text=True,
         stdin=subprocess.DEVNULL,  # the script's final `pause`
-    )
+    ))
     assert completed.returncode == 0, completed.stdout + completed.stderr
     return completed
 

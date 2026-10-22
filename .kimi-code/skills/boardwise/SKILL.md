@@ -247,10 +247,12 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 | 45 | 旗引线/stub 段穿越别网导体 = 缺陷（硬拒） |
 | 46 | delete 超时后宿主后台续删、`delete returned false` 也已删 |
 | 47 | `getDocumentSource()` 不吃参数（只读活动文档）；`modifySchematicPageName` 在 3.2.186 是假动作（179） |
+| 48 | 岛页落图忘了带 sheet（`--page-box`）→ 内容落进标题栏（530F / 532 连踩两次，533 起编译侧自动读图幅、apply 侧拒绝无保护的岛页 plan） |
+| 49 | 页面图幅属性读不出 `getCurrentSchematicPageInfo`（`document.current` 的 `schematicPage` 是 `{}`），但 `sys.get_document_source` 的记录流里有（图纸符号自己的 `Width/Height/Blade Width/Title Block Position`） |
+| 50 | `bridge status` / `--project` 可能看不到「在线但还没报名」的窗口（530A：`--project test` 报 PROJECT_NOT_CONNECTED 但窗口在线；逐窗口 `document.current`/`sys.identity` 核实），用 `--project` 判在线的测试两次全量会差 2 条 |
+| 51 | `sch.geometry` 的 `netflag.Component.name` 是**字形名**（`Ground-PGND`/`Power-5V`），网名在 `Net`/`Name`/`Global Net Name`——当旗标符号读会误判没落上 |
 
-
-宿主声明 ≠ 宿主实现（`sch_ManufactureData.getPngFile` 声明 v3.2.183 却回 `NOT_IMPLEMENTED`，两台实测互证）；
-每一节的第一步都是真机 probe，probe 不通就如实降级，**不许照类型包硬写**。
+宿主声明 ≠ 宿主实现（`sch_ManufactureData.getPngFile` 声明 v3.2.183 却回 `NOT_IMPLEMENTED`，两台实测互证）；每一节的第一步都是真机 probe，probe 不通就如实降级，**不许照类型包硬写**。
 
 ## 7. 红线（开发/测试，改代码也照办）
 
@@ -259,8 +261,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
   `.venv/Scripts/python.exe -m pytest tests/ -q --basetemp=.tmp_pt_home`（`.venv` 是仓库自己的虚拟环境）。
 - **四线全绿才交卷**：pytest / `cd connector && npm test`（= build + `node --test`）/
   `npm run typecheck`（= `tsc --noEmit`；以 `connector/package.json` 实际脚本名为准）/
-  `cd dsh-plugin && npm run typecheck && npm test && npm run build`（045 起；`npm run smoke`
-  要真 daemon + 夹具，属真机验收不进默认线）。
+  `cd dsh-plugin && npm run typecheck && npm test && npm run build`（045 起；`npm run smoke` 要真 daemon + 夹具，属真机验收不进默认线）。
 - **新功能同步 dsh-plugin（045 §7，xianyuyijinban定的长期纪律）**：CLI 命令面变更时检查 dsh-plugin
   工具面要不要跟（跟=工具+bump+重 pack；不跟在交卷记录写明理由）；release 从 v0.4.26 起
   带第三附件 boardwise-dsh tgz；市场上架后 registry 版本同步 PR。漂移哨兵
@@ -274,8 +275,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
   一个缺口/一个文件域；多缺口的大批拆成串行小批（并行会同文件撞车），每批目标半小时内交卷。
   子代理上下文 500k 是 TaskStop 红线，但设计目标是**根本到不了**——上下文越重幻觉越多、
 - **issue 不由我们关**（xianyuyijinban 2026-09-29 定，原话「问题还没确定解决就关掉」）：
-  修复落地后只 comment「待验证」+ 验证步骤/commit hash，**由提出人实测确认后自己关**
-  （或明说「关掉吧」）。代码完成 ≠ 问题解决。
+  修复落地后只 comment「待验证」+ 验证步骤/commit hash，**由提出人实测确认后自己关**（或明说「关掉吧」）。代码完成 ≠ 问题解决。
   返工越多（060 三缺口合一批：41 万 tokens、跑满 2h timeout 被斩，实证）。
 - **删除一律进回收站，禁 `rm` / `unlink` 直删**（xianyuyijinban 2026-09-28 定）——包括临时目录、
   变异备份、废弃产物，没有例外。Git Bash 里用 Windows 原生通道：

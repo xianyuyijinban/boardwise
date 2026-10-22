@@ -146,10 +146,10 @@ def _page_matching(plan: ChangePlan) -> dict:
         (part.designator, part.x, part.y, part.rotation, part.mirror)
         for part in plan.change.draw_parts
     ]
-    flagged = drawapply.unnamed_nets(plan)
+    named = [drawapply.wire_carries_its_name(wire) for wire in plan.change.draw_wires]
     wires = [
-        (f"w-{index}", "" if wire.net in flagged else wire.net, wire.points)
-        for index, wire in enumerate(plan.change.draw_wires)
+        (f"w-{index}", wire.net if carries else "", wire.points)
+        for index, (wire, carries) in enumerate(zip(plan.change.draw_wires, named))
     ]
     netflags = [(flag.net, flag.x, flag.y) for flag in plan.change.draw_flags]
     values = {
@@ -465,12 +465,29 @@ def test_the_postcondition_shape_is_the_one_036_reads(plan: ChangePlan) -> None:
     assert drawapply.all_satisfied({}) is True
 
 
-def test_the_netlist_leg_is_membership_not_names(plan: ChangePlan) -> None:
-    """The editor's auto names are meaningless; which pins are together is not."""
-    live = _live(("R1", {"1": "$57N1", "2": "$57N2"}),
+def test_the_netlist_leg_reads_the_partition_and_a_name_where_the_plan_states_one(
+    plan: ChangePlan,
+) -> None:
+    """035 round 4's principle, and what 530D adds to it.
+
+    **Membership is the fact** — an auto name is renumbered whenever the wiring
+    changes — so the leg compares partitions, and a net the plan leaves unnamed is
+    judged on its partition alone (「同一组脚 ⇔ 同一条网」).  What 530D adds (岳's
+    ruling A) is the **name where the page states one**: since the wire no longer
+    carries a name the plan did not mean to give it, the flag's or the label's name
+    is the only thing that merges a net's islands — so a net the plan names coming
+    back under the editor's own auto name means that name did not land, and is
+    reported rather than waved past as "just a rename".
+    """
+    # The partition is what is judged: every plan-named net under its own name.
+    live = _live(("R1", {"1": "VIN", "2": "TAP"}), ("R2", {"1": "TAP", "2": "GND"}))
+    assert drawapply.postcondition_problems(plan, live=live)["live"] == []
+    # A name the plan states, replaced by the editor's own auto name: reported.
+    auto = _live(("R1", {"1": "$57N1", "2": "$57N2"}),
                  ("R2", {"1": "$57N2", "2": "$57N3"}))
-    state = drawapply.postcondition_problems(plan, live=live)
-    assert state["live"] == [], "two auto-named islands, the same partition"
+    problems = drawapply.postcondition_problems(plan, live=auto)["live"]
+    assert problems and "the plan states this net's name" in problems[0], problems
+    # …and the partition is still the main judgement: a short is caught by name too.
     split = _live(("R1", {"1": "VIN", "2": "TAP"}), ("R2", {"1": "OTHER", "2": "GND"}))
     state = drawapply.postcondition_problems(plan, live=split)
     assert state["live"] and "R1.2" in state["live"][0]

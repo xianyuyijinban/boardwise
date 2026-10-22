@@ -360,3 +360,153 @@ def test_two_identical_runs_drop_the_copy_never_both() -> None:
     assert [wire.points for wire in _wires(plan, "TAP")] == [
         [(-15.0, 0.0), (-60.0, 0.0)]
     ]
+
+# ===================== 3. every pin of a conductor-less net gets its own stub
+
+
+def _four_pin_layout(*, segments) -> LayoutPlan:
+    """Two resistors, four pins tip-to-tip, one label on each pin.
+
+    520E's measured single-module shape: a `direct-wire` obligation the router
+    cannot satisfy is downgraded to "one name per pin", so the net reaches
+    `module_plan` with **no conductor of its own** and four labels — one on each
+    pin. The boxes sit on the side each pin points at, the way the compiler puts
+    them.
+    """
+    return LayoutPlan(
+        source=LayoutSource(circuit_sha256=HASH, presentation_sha256=HASH),
+        parts=[_part("R1", 0.0, 0.0), _part("D3", 200.0, 0.0)],
+        segments=list(segments),
+        labels=[
+            #: R1.1 → (-15, 0), text to the left
+            LayoutLabel(net="RAIL", text="RAIL", bbox=(-45.0, -4.5, -23.0, 4.5),
+                        x=-15.0, y=0.0, part_id="R1"),
+            #: R1.2 → (15, 0), text to the right
+            LayoutLabel(net="RAIL", text="RAIL", bbox=(23.0, -4.5, 45.0, 4.5),
+                        x=15.0, y=0.0, part_id="R1"),
+            #: D3.1 → (185, 0), text to the left
+            LayoutLabel(net="RAIL", text="RAIL", bbox=(155.0, -4.5, 177.0, 4.5),
+                        x=185.0, y=0.0, part_id="D3"),
+            #: D3.2 → (215, 0), text to the right
+            LayoutLabel(net="RAIL", text="RAIL", bbox=(223.0, -4.5, 245.0, 4.5),
+                        x=215.0, y=0.0, part_id="D3"),
+        ],
+    )
+
+
+_RAIL_MEMBERS = ["R1.1", "R1.2", "D3.1", "D3.2"]
+
+
+def _four_pin_plan(*, segments):
+    circuit = _circuit([{"id": "RAIL", "class": "signal",
+                         "members": _RAIL_MEMBERS, "provenance": PROV}])
+    return _load(_four_pin_layout(segments=segments), circuit,
+                 {"R0402": _resistor()})
+
+
+@pytest.fixture()
+def four_pin_bare_plan():
+    """No conductor of RAIL anywhere in the plan, four pins, four labels."""
+    return _four_pin_plan(segments=[])
+
+
+def test_every_pin_of_a_conductor_less_net_gets_its_own_stub(four_pin_bare_plan) -> None:
+    """520f, the defect: four pins, and only the **first** one was named.
+
+    145d asked "does this net have no conductor?" and read `built.wires` — the
+    very list the loop appends each stub to. The first label therefore flipped
+    the answer for the other three: one stub, and three pins left on an unnamed
+    net with nothing drawn on the canvas (520E's own measurement, and a broken
+    netlist for every pin but one).
+    """
+    wires = _wires(four_pin_bare_plan, "RAIL")
+    assert len(wires) == 4, [
+        (wire.from_pin, wire.points) for wire in wires
+    ]
+    assert all("name stub" in wire.purpose for wire in wires), [
+        wire.purpose for wire in wires
+    ]
+    assert [wire.from_pin for wire in wires] == _RAIL_MEMBERS, (
+        "one stub per pin, each starting on that pin's own tip — not four copies "
+        "of the first pin's stub"
+    )
+    assert [wire.points[0] for wire in wires] == [
+        (-15.0, 0.0), (15.0, 0.0), (185.0, 0.0), (215.0, 0.0)
+    ]
+
+
+def test_each_stub_is_recorded_and_carries_the_name_on_its_own_wire(
+    four_pin_bare_plan,
+) -> None:
+    """The book-keeping half: one downgrade per stub, and no stub left unnamed.
+
+    A stub that is drawn without its `downgrades` line is 145c's silent
+    substitution; a stub whose net the plan reports as unnamed is a wire the
+    editor's netlist will not name (029-b). Both are cheap to say and cheap to
+    break, so both are said.
+    """
+    lines = [
+        line for line in four_pin_bare_plan.change.draw_downgrades
+        if "net RAIL" in line
+    ]
+    assert len(lines) == 4, lines
+    assert all("carries the name instead" in line for line in lines), lines
+    assert "RAIL" not in drawapply.unnamed_nets(four_pin_bare_plan)
+
+
+def test_a_conductor_less_net_with_one_pin_still_gets_exactly_one_stub() -> None:
+    """The paired rule at the other end: 145d's own GATE shape must not double.
+
+    A snapshot that said "no conductor" too *eagerly* would draw a second stub
+    over the first, and the plan's own answer to "which pin is this net on"
+    would stop being one wire per pin. The second assertion is the book-keeping
+    half of the same rule: a label that was stubbed takes the stub branch and
+    nothing else, so it must not also be reported as an anchor the plan left
+    alone ("other planned wire(s) of GATE carry the name" would be a lie about a
+    net that has none — 145c's defect, one branch lower).
+    """
+    layout = LayoutPlan(
+        source=LayoutSource(circuit_sha256=HASH, presentation_sha256=HASH),
+        parts=[_part("R1")],
+        segments=[],
+        labels=[LayoutLabel(
+            net="GATE", text="GATE", bbox=(-55.0, -4.5, -23.0, 4.5),
+            x=-15.0, y=0.0, part_id="R1",
+        )],
+    )
+    circuit = _circuit([{"id": "GATE", "class": "signal", "members": ["R1.1"],
+                         "provenance": PROV}])
+    plan = _load(layout, circuit, {"R0402": _resistor()})
+    assert [wire.points for wire in _wires(plan, "GATE")] == [
+        [(-15.0, 0.0), (-25.0, 0.0)]
+    ]
+    lines = [line for line in plan.change.draw_downgrades if "net GATE" in line]
+    assert len(lines) == 1, lines
+    assert "carries the name instead" in lines[0], lines
+    assert "other planned wire(s)" not in lines[0], lines
+
+
+def test_a_net_that_keeps_a_conductor_keeps_the_behaviour_it_had() -> None:
+    """145d's sentence on the shape 520f touches: four labels, one planned run.
+
+    The run reaches R1's two pins and stops; D3's two labels sit off it. The net
+    has a conductor, so it is not `bare` — and 520f leaves it exactly as it was:
+    the run is drawn, nothing is stubbed over it, the two carried anchors say the
+    name is on that wire, and the two the run does not reach keep 145d's own
+    sentence about other planned wires carrying the name. Both halves are
+    asserted, because a snapshot read too *eagerly* would stub the two D3 labels
+    (that is the mutation this test is for) while one read not eagerly enough
+    would stub the whole net four times.
+    """
+    plan = _four_pin_plan(
+        segments=[LayoutSegment(net="RAIL", points=[(-15.0, 0.0), (15.0, 0.0)])]
+    )
+    assert [wire.points for wire in _wires(plan, "RAIL")] == [
+        [(-15.0, 0.0), (15.0, 0.0)]
+    ], "the plan's own run, and nothing stubbed over it"
+    text = " ".join(
+        line for line in plan.change.draw_downgrades if "net RAIL" in line
+    )
+    assert "carries the name instead" not in text, text
+    assert text.count("a planned wire of RAIL runs through that point") == 2, text
+    assert text.count("other planned wire(s) of RAIL carry the name") == 2, text

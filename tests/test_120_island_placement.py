@@ -397,14 +397,23 @@ def test_right_of_c10_u5_wants_a_different_rung_than_same_column_q1_r5():
     | `90+mirror` | `(0, −1)` | 否 |
 
     所以 116 让开是对的（`R5` 档 0 能说它），而实测也对：rung 0 上 `C10` 在 x=80、
-    `U5` 在 x=0，**`right-of` 成立**。但 rung 0 同时被 `same-column(Q1, R5)` 拒，
-    而那条要救的正是 **`R5` 的别的档**（118 实测：R5 转 90° 才把 `SRC` pad 放回 Q1
-    的列）。**两条关系要 `R5` 的两档，而 `variant.pose_index` 是一根档位指针。**
+    `U5` 在 x=0，**`right-of` 成立**。
 
-    这是**结构上的**，不是「再试几档」能解决的：候选空间是「一档 × 一个间距」，
-    不是一个 `pose_index` 管所有件。所以这一条把量写下来——**不假装它被治好了**，
-    也不改 116 的位姿优先（那会让一条从未被画出的图来代答，114 丢过 098 scene 08
-    那个字节）。
+    **改动前（120 写这条时）**：rung 0 同时被 `same-column(Q1, R5)` 拒，而那条
+    要救的正是 **`R5` 的别的档**（118 实测：R5 转 90° 才把 `SRC` pad 放回 Q1
+    的列）。**两条关系要 `R5` 的两档，而 `variant.pose_index` 是一根档位指针。**
+    那是**结构上的**，不是「再试几档」能解决的：候选空间是「一档 × 一个间距」，
+    不是一个 `pose_index` 管所有件。所以当时这一条只把量写下来——不假装它被治好。
+
+    **改动后（520A2 重钉）**：这场竞争**被解掉了，但不是靠位姿**——链件可沿
+    **横跨链**的方向 walk，rung 0 于是把 `R5` 横向挪了 20 单位，`same-column`
+    与 `right-of(C10, U5)` **同时成立**（实测 rung 0 的违反集合是**空集**）。
+    `pose_index` 仍只管一根档位指针，那是事实；变的是「rung 0 必须牺牲其中一条」
+    这个前提没了。所以断言按新事实写：rung 0 的违反集合**为空**——它抓的是
+    「横走回归」（挪不动了，两条关系又开始打架）。
+
+    116 的位姿优先一个字没改（改动它会让一条从未被画出的图来代答，114 丢过
+    098 scene 08 那个字节）。
     """
     dc, _circuit, _presentation, _book, ctx = _page()
     # The probe pad, and which pose says the order's way.
@@ -449,10 +458,18 @@ def test_right_of_c10_u5_wants_a_different_rung_than_same_column_q1_r5():
         "right-of(C10, U5) is broken at rung 0, so it is not competing with "
         "same-column for that rung and this test's account is wrong"
     )
-    assert (dc.SAME_COLUMN, "Q1", "R5") in broken, (
-        "same-column(Q1, R5) holds at rung 0 now, so the two relations are no "
-        "longer competing for it and the widened ladder's rescue has changed "
-        "shape — re-measure"
+    # 520A2 重钉：rung 0 **同时**满足两条关系了。改动前这里断的是
+    # `same-column` **在**违反集合里（两条关系抢 R5 的同一根档位指针）；
+    # 520A2 让链件横走，那条竞争由**平移**而不是位姿解掉——所以现在断的是
+    # 反面。集合非空 = 横走回归，不是「故事要用新数字讲」。
+    assert (dc.SAME_COLUMN, "Q1", "R5") not in broken, (
+        "same-column(Q1, R5) is broken at rung 0 again: under 520A2 the chain "
+        "walks sideways to satisfy it, so the two relations no longer compete "
+        f"for R5's pose — a non-empty set means the walk regressed: {sorted(broken)}"
+    )
+    assert broken == set(), (
+        "rung 0's placement leaves relations unhonoured: under 520A2 it satisfies "
+        f"every relation (the walk, not a pose), so this is a regression: {sorted(broken)}"
     )
 
 

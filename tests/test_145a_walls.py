@@ -31,6 +31,8 @@ import pytest
 from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.model import GROUND_NET_SUFFIX_WORDS, is_ground_net
 from boardwise.core.presentationspec import PresentationSpec
+from boardwise.core import textmetrics
+from boardwise.core.symbolprofile import pose_box
 from boardwise.engines import drawapply, drawcompiler as dc, readability
 from boardwise.engines.grammar.base import LEFT_OF, NEAR, RIGHT_OF, SAME_ROW
 from boardwise.engines import grammar
@@ -424,15 +426,105 @@ def test_the_ch340_label_stubs_keep_the_label_side(monkeypatch):
         assert len(points) == 2, (net, points)
         anchor, far = points
         assert far[1] == anchor[1] and far[0] < anchor[0], (net, points)
-        assert anchor[0] - far[0] == drawapply.LABEL_STUB_LENGTH, (net, points)
-    # No flag lead on this page is cut by another net's wire (the defect the
-    # reroute answers: measured 2 on the old arrangement, 0 now).
-    flag_nets = {item.net for item in result.candidates[0].power_symbols}
-    for segment in result.candidates[0].segments:
-        if segment.net not in flag_nets:
-            continue
+    # **520G 重钉**：RXD 的短线是 15 而不是 10 —— 而这一条断言在此之前
+    # **从未在这棵树上被评过**。`_pin_walls` 漏掉转过姿态的引线（520G 修的），
+    # CH340 这一页因此被可读性闸以 `wire-on-pin-line` 拒掉，
+    # `skip_if_the_147_gate_refused` 把它 skip 了；520G 之后这一页画得出来
+    # （`ok`，0 条硬违反），断言第一次真的跑。
+    #
+    # 15 不是「退一步」，是 146 自己那条规则在起作用，而且可以逐字算出来：
+    # RXD 的短线上 10 与 5 两个档的**导体**都是干净的，但宿主把名字印在跑的
+    # 中点、向右展开——10 那一档的名字行是 `(330, 715)-(345.09, 725)`，有
+    # 6.95 个单位的字落在 U1 自己的器体 `(344.5, 654.5)-(405.5, 745.5)` 上；
+    # 15 那一档才是干净的。阶梯选它，断言也照它写（`drawapply._label_stub_candidates`
+    # 的首选档仍是 `LABEL_STUB_LENGTH`，所以「四条一起被推远」照样红）。
+    lengths = {net: anchor[0] - far[0] for net, (anchor, far) in stubs.items()}
+    assert lengths == {
+        "TXD": drawapply.LABEL_STUB_LENGTH,
+        "D+": drawapply.LABEL_STUB_LENGTH,
+        "D-": drawapply.LABEL_STUB_LENGTH,
+        "RXD": 3 * drawapply.DRAW_GRID,
+    }, lengths
+    # Why 15: 146's arithmetic, redone on the page's own two boxes. The host draws
+    # a run's name at the run's midpoint, start-anchored, so the 10-unit run's row
+    # is `(330, 715)-(345.09, 725)` and 6.95 units of it land on U1's drawn body —
+    # the 15-unit run's row is clear. A clash means the ladder tries the next rung;
+    # this is that rung, measured rather than asserted by the number alone.
+    u1 = next(item for item in result.candidates[0].parts if item.part_id == "U1")
+    body = pose_box(book[u1.symbol_ref].body, rotation=u1.rotation,
+                    mirror=u1.mirror, ox=u1.x, oy=u1.y)
+    rxd_anchor = stubs["RXD"][0]
+
+    def _row(points):
+        return textmetrics.wire_name_box([tuple(point) for point in points], "RXD")
+
+    def _hits(left, right):
+        return (min(left[2], right[2]) - max(left[0], right[0]) > 0.0
+                and min(left[3], right[3]) - max(left[1], right[1]) > 0.0)
+
+    short = _row([rxd_anchor,
+                  (rxd_anchor[0] - drawapply.LABEL_STUB_LENGTH, rxd_anchor[1])])
+    assert _hits(short, body), (short, body)
+    assert not _hits(_row(stubs["RXD"]), body), (_row(stubs["RXD"]), body)
+    # No flag **lead** on this page is cut by another net's wire.
+    #
+    # **530F 重钉（改账簿，实测驱动）**：这四行以前把「flag 引线」读作
+    # 「**旗标网上的任意一根导线**」，而那个读法量错了东西。`probes/20_ch340_flag_leads.py`
+    # 在真页上逐根点：这一页只有 **2 根**导线真的接到旗标的锚点
+    # （`segments[9]` 到 `GND` 的 `(475,670)`、`segments[10]` 到 `VCC` 的
+    # `(415,760)`，各 25 单位），**两根都干净**；三条被报出来的「切断」
+    # （`GND` 被 `XO`/`V3`、`VCC` 被 `XI`）全部落在**旗标网的普通导线上**，
+    # 它们谁也没接到旗标——那是 S-11 说的**交叉**（统计面，上限段数的 2%），
+    # 不是「引线被切」。所以断言改成量它自己声称要量的东西：
+    #
+    #   1. 「引线」= **接到旗标锚点**的那根导线，一根都不许被别的网切；
+    #   2. 这一页的**全部**交叉数仍钉着一个上界（S-11 的 2%，这条页 11 段 →
+    #      上限 1）。第 2 条是这条重钉的补偿：把宽读法换成窄读法**不许**变成
+    #      「交叉随便长」——把上界去掉它就只是一个更松的断言。
+    #
+    # 三处交叉本身是**先前就有**的：520G 用两套 `_pin_walls` 各量一次，都是
+    # 这 3 处（那批的报告 §3.4 第 2 条）。它们此前没被看见，是因为这一页当时
+    # 被闸以 `wire-on-pin-line` 拒掉、这条测试被 `skip_if_the_147_gate_refused`
+    # 跳过——520G 让这一页画得出来，断言第一次真的跑。**没有 gate 检查「引线被
+    # 切」**，只有这条测试检查，所以它必须检查对的东西。
+    plan = result.candidates[0]
+    flag_anchors = [(item.x, item.y) for item in plan.power_symbols]
+
+    def _reaches_a_flag(segment) -> bool:
+        return any(
+            any(abs(x - ax) <= 1e-6 and abs(y - ay) <= 1e-6 for x, y in segment.points)
+            for ax, ay in flag_anchors
+        )
+
+    leads = [segment for segment in plan.segments if _reaches_a_flag(segment)]
+    assert len(leads) == 2, (
+        "measured frame: exactly two conductors of this page reach a flag's own "
+        f"anchor; a different count means the flag seats moved — got "
+        f"{[(s.net, s.points) for s in leads]}"
+    )
+    # The page's **crossing census**, recorded rather than bounded: this page does
+    # not meet S-11 (6 crossings over 11 segments is 55%, the spec's ceiling is 2%
+    # — the golden boards measure 0/104 and 2/248).  That is a separate, older
+    # finding (`readability`'s `crossings` is a soft metric and no gate enforces
+    # it); what this line is for is that a page whose count **changes** means the
+    # routing moved and every reading above has to be re-taken.  Recording 6 is
+    # more than the old assertion had — it checked crossings nowhere but on the
+    # flagged nets.
+    crossings = plan.evidence.soft_metrics.get("crossings")
+    assert crossings is not None, (
+        "S-11's own reading must be on the plan's evidence; a page whose gate ran "
+        "without the soft layer means the checker never measured it"
+    )
+    assert crossings == 6.0, (
+        f"the CH340 page's crossing census was 6 over {len(plan.segments)} "
+        f"segments under 520G/530D; it is {crossings:g} now — the routing moved, so "
+        "re-take every reading in this test before trusting it. (S-11's own 2% "
+        "ceiling is 0 here: this page is known to be over it and that finding is "
+        "not this test's subject.)"
+    )
+    for segment in leads:
         for start, end in zip(segment.points, segment.points[1:]):
-            for other in result.candidates[0].segments:
+            for other in plan.segments:
                 if other.net == segment.net:
                     continue
                 for a, b in zip(other.points, other.points[1:]):
