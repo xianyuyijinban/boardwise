@@ -57,9 +57,16 @@ npm pack                       # 产出 boardwise-dsh-<version>.tgz
 装进 profile（tarball 方式，不进 npm registry）：
 
 ```sh
-dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.2.tgz
+dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
 # headless / desktop 是**不同** profile，各装一次
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.2.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
+```
+
+或从 npm registry 装（**发布后**才可用，见下节 publish 指引）：
+
+```sh
+dsh plugin --profile web add boardwise-dsh
+dsh plugin --profile headless add boardwise-dsh
 ```
 
 包内 `dsh.bundle.patch` 会把本插件插进 profile 的 layer stack（row id `tool-boardwise`）。
@@ -72,6 +79,67 @@ dsh --profile web --dump-config | grep tool-boardwise
 让模型跑一次 `boardwise_doctor`：daemon 在线应看到 `PASS` 行与逐项结论；
 多窗口在线时那 4 项会写「未验证」（daemon 设计上不猜窗口），
 用 `project=` / `instance=` 指定一个窗口即转 PASS。
+
+### DSH STORE 那条命令现在能用了（根 shim）
+
+DSH STORE 的安装命令指向的是**仓库根**：
+
+```sh
+dsh plugin add github:xianyuyijinban/boardwise
+```
+
+**根目录过去没有 `package.json`**，pnpm 只能伪造一份占位清单，把整仓当普通依赖装进去：
+不报错、也**不挂任何 bundle**——于是 0 工具注册，插件看着像「装了但用不了」。
+这是那条命令的历史死因，**不是配置问题**。
+
+仓库根现在补了一份**纯 shim** `package.json`（`"name": "boardwise-dsh"`、版本与插件同步、
+`main` / `types` 指进 `dsh-plugin/lib/`、`dsh.bundle.patch` 指向
+`dsh-plugin/cordis.patch.yml`），装上它就能真正挂上 bundle、注册 4 工具。
+shim **不是** npm 工程：没有 `scripts`、没有 `dependencies`，根目录不跑构建。
+
+**shim 必须提交进 HEAD 才会生效**：pnpm 的 git 依赖物化的是**提交树**，
+工作区里未跟踪的改动一律不进安装结果（实测：根目录新建的未跟踪标记文件在装出来的
+`node_modules/<pkg>/` 里**不出现**）。所以 shim 落盘但没 commit 时，商城那条命令
+**仍然是老样子**（placeholder + `declares no dsh.bundle`）。
+
+- **首选仍是 tarball**（离线、可重现、不依赖 registry），其次 npm（发布后），
+  **商城根命令只作为最后兜底**——它把整仓当依赖拉下来，体积与版本都跟着 git 走。
+
+验证（本机到 github.com:443 不通，离线替身用 `git+file:///E:/boardwise`）：
+
+```sh
+# ① 工作区里的 shim 形状对不对（不依赖 commit，装的是工作区本身）：
+dsh plugin --profile <临时 profile> add file:E:/boardwise
+dsh plugin --profile <临时 profile> list            # 依赖里应见 boardwise-dsh（不是 boardwise）
+dsh --profile <临时 profile> --dump-config | grep tool-boardwise
+# ② shim 提交之后，商城那条路（git）才等价：
+dsh plugin --profile <临时 profile> add git+file:///E:/boardwise
+```
+
+②在 shim 未提交时会打 `dsh: warning: … declares no dsh.bundle`——那是 HEAD 里还没有
+shim 的**正确**警告，不是命令写错了。
+
+### 发布到 npm registry
+
+发布要仓库 owner 的 npm 账号，**本仓库不代发**：
+
+```sh
+npm login                       # 用 owner 账号
+cd dsh-plugin
+npm publish --access public     # 源码：只要 dsh-plugin/，不是仓库根
+```
+
+发布前自查：
+
+```sh
+cd dsh-plugin && npm run check  # typecheck + test + build
+npm pack                        # 产出 boardwise-dsh-<version>.tgz
+tar -tzf boardwise-dsh-<version>.tgz   # 应含 lib/index.js、lib/types/、cordis.patch.yml
+npm publish --dry-run           # 只看文件面，不上传
+```
+
+`package.json` 的 `files` 白名单决定发布内容（`lib` / `src` / `cordis.patch.yml` / `README.md`）；
+`lib/` 已入库（DSH STORE 的固定提交自动化只读 git 树，不跑 `prepare`/`build`）。
 
 ### 已验证的 dsh 版本
 
