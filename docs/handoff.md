@@ -134,6 +134,21 @@ cd dsh-plugin && npm run typecheck && npm test && npm run build
 - `--basetemp` 一个字都不能省（Windows 上否则汇总行被吞、假 exit 1）；并行**只许**
   `-n 4 --dist loadfile`——`-n auto` 打满主机被岳叫停过，`--dist load` 会把同文件的测试对拆到
   不同 worker；多前场并行时各用各的 `.tmp_pt_<批名>`。
+
+**在 dsh 里跑测试**（dsh 的 pwsh 工具给子进程套受限令牌：宿主本身不受限，同一条命令 pwsh
+能过、它拉起的 python 就死——写工作区外一律 `WinError 5`，目录 ACL 是好的，拦在进程令牌）——
+
+- **basetemp 只能落工作区**：python 的 `tempfile.gettempdir()` 被改写为工作区根，写工作区外
+  （`%LOCALAPPDATA%`、`~/.boardwise`）一律 `WinError 5`；`C:\tmp_pt_*` 另有一道墙——C 盘根
+  建目录要管理员权限，非沙箱的普通终端也一样。
+- **`BOARDWISE_HOME=<工作区内路径>`** 可救进程闸的槽文件（默认落 `~/.boardwise`，在 dsh 下
+  写不进去）：`$env:BOARDWISE_HOME = ".tmp_bwhome"`，再跑上面四线里的 pytest。
+- **必红的清单（环境红，不是代码回归）**：`tests/test_193_secrecy_hooks.py` 3 条（git 钩子的
+  `sh.exe` 在 pytest 子进程里建 `\BaseNamedObjects\msys-2.0…` 被拒 `0xC0000022`）、
+  `tests/test_520_parts_hunt.py::test_the_shelf_is_only_written_when_asked`（fetch_detail 假接缝
+  + 要真网络，python 直连外网 SSL 握手超时）。所以 dsh 侧的读数只能裁「有没有新增红」，
+  **发布验收的「全量 0 红」必须在非沙箱终端取**。
+
 - **子代理纪律**：一个任务书只装一个缺口 / 一个文件域，串行小批，每批半小时内交卷
   （两小时黑箱 + 大上下文 = 幻觉与返工，060 实测被 timeout 斩）。整机全量并发槽只有 2
   （`tests/_process_guards.py` 在机器侧兜底，理由见 `AGENTS.md` §子代理纪律）；探针/脚本

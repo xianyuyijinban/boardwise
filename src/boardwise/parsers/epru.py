@@ -470,7 +470,7 @@ def _is_board_shaped_ring(ring: Sequence[Point]) -> bool:
     A ring a stitch produced is **not yet** a board, and this is the invariant
     the two stitching paths of :func:`_stitch_outline` now share. Three ways a
     loop stops being a shape, all of them measured on the 183 audit's probes
-    (``C:\\Users\\xiangyu\\.tmp_hole183\\``, probe3 / probe11):
+    (probe3 / probe11):
 
     * **zero area** — three stroked pieces whose centre lines run
       ``(0,0) -> (2000,0) -> (1000,0)``: the line goes out and comes back, the

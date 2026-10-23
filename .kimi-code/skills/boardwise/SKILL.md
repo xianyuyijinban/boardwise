@@ -259,6 +259,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 - **不动 git**：不 `commit` / `add` / `checkout` / `restore`。任何 git 变更逐次经xianyuyijinban点头。
 - **pytest 必带 `--basetemp=.tmp_pt_home`**：Windows 上否则汇总行被吞、假 exit 1。在**你的 checkout 根目录**跑：
   `.venv/Scripts/python.exe -m pytest tests/ -q --basetemp=.tmp_pt_home`（`.venv` 是仓库自己的虚拟环境）。
+  dsh（pwsh 工具）下 python 子进程写不了工作区外：basetemp 用工作区内路径（`.tmp_pt_*`），「0 红」读数到非沙箱终端取。
 - **四线全绿才交卷**：pytest / `cd connector && npm test`（= build + `node --test`）/
   `npm run typecheck`（= `tsc --noEmit`；以 `connector/package.json` 实际脚本名为准）/
   `cd dsh-plugin && npm run typecheck && npm test && npm run build`（045 起；`npm run smoke` 要真 daemon + 夹具，属真机验收不进默认线）。
@@ -273,10 +274,9 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
   禁进度语气（「今晚」「终于」）；人称一律「本工具/本版本」，不写「我/我们」。
 - **派单纪律：串行小批，不派两小时黑箱**（xianyuyijinban 2026-09-28 定）：一个任务书只装
   一个缺口/一个文件域；多缺口的大批拆成串行小批（并行会同文件撞车），每批目标半小时内交卷。
-  子代理上下文 500k 是 TaskStop 红线，但设计目标是**根本到不了**——上下文越重幻觉越多、
+  子代理上下文 500k 是 TaskStop 红线，但设计目标是**根本到不了**——上下文越重幻觉越多、返工越多（060 三缺口合一批：41 万 tokens、跑满 2h timeout 被斩，实证）。
 - **issue 不由我们关**（xianyuyijinban 2026-09-29 定，原话「问题还没确定解决就关掉」）：
   修复落地后只 comment「待验证」+ 验证步骤/commit hash，**由提出人实测确认后自己关**（或明说「关掉吧」）。代码完成 ≠ 问题解决。
-  返工越多（060 三缺口合一批：41 万 tokens、跑满 2h timeout 被斩，实证）。
 - **删除一律进回收站，禁 `rm` / `unlink` 直删**（xianyuyijinban 2026-09-28 定）——包括临时目录、
   变异备份、废弃产物，没有例外。Git Bash 里用 Windows 原生通道：
 
