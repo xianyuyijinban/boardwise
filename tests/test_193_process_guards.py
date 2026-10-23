@@ -72,11 +72,24 @@ def _child_env(**overrides) -> dict[str, str]:
 
 
 def _pytest_argv(args: list[str], basetemp: Path) -> list[str]:
+    # `--confcutdir tests/`: the guard under test *is* `tests/conftest.py`, so the
+    # child must keep loading it — and with pytest's default boundary (the root,
+    # inferred from `pyproject.toml`) collection first walks the **repo root**:
+    # `Session.collect` opens the root directory and, on Windows, compares every
+    # sibling entry with `samefile_nofollow` (`os.lstat`). A scratch directory
+    # another worker is creating and deleting -- `.tmp_variant_check`, built and
+    # removed by `tests/test_injected_variants.py` -> `make_variants.check()` --
+    # therefore made this child die in collection with `FileNotFoundError`, which
+    # is how `test_broken_slot_file_fails_open` went red under `-n 4 --dist
+    # loadfile`. Cutting at `tests/` keeps `tests/conftest.py` loaded (the guard
+    # still applies) and keeps the child from ever looking at the repo root.
     return [
         sys.executable,
         "-m",
         "pytest",
         *args,
+        "--confcutdir",
+        str(PROBE_DIR.parent),
         "--basetemp",
         str(basetemp),
         "-p",

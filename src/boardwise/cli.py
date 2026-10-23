@@ -16837,7 +16837,18 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
     import json
 
     from boardwise.engines import hunt
-    from boardwise.engines.catalog import urllib_product_fetcher
+
+    # The product fetcher is resolved **through this module's namespace**, not
+    # bound by a local `import` (520 seam; measured red in a sandbox). The local
+    # `from boardwise.engines.catalog import urllib_product_fetcher` shadowed the
+    # name every test patches — `monkeypatch.setattr(cli, "urllib_product_fetcher",
+    # ...)` landed on an attribute this function never read — so `parts hunt` went
+    # to the real endpoint: green on a machine with a network, red without one.
+    # Lookup order keeps cli.py's lazy-import style: `boardwise.engines.catalog` is
+    # still imported on first use, not at CLI startup.
+    fetch_detail = globals().get("urllib_product_fetcher")
+    if fetch_detail is None:
+        from boardwise.engines.catalog import urllib_product_fetcher as fetch_detail
 
     project = Path(args.file)
     try:
@@ -16874,7 +16885,7 @@ def _cmd_parts_hunt(args: argparse.Namespace) -> int:
             return 2
 
     executor = hunt.Executor(
-        fetch_detail=urllib_product_fetcher,
+        fetch_detail=fetch_detail,
         download=_fetch_url,
         pdf_text=_pdf_text,
     )

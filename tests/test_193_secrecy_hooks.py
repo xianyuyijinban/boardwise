@@ -20,6 +20,7 @@ is every clone and every CI run — the list is gitignored by design (186 §D).
 
 from __future__ import annotations
 
+import functools
 import locale
 import os
 import shutil
@@ -298,6 +299,79 @@ _skip_without_windows = pytest.mark.skipif(os.name != "nt", reason="install-hook
 _skip_without_git = pytest.mark.skipif(shutil.which("git") is None, reason="git is not on PATH")
 
 
+def _hook_shell() -> Path | None:
+    """Git's **own** shell — the one every hook actually runs under.
+
+    Git for Windows executes a hook with ``<install>/usr/bin/sh.exe``, and the
+    ``git`` on PATH lives in that same installation (``<install>/cmd/git.exe``),
+    so both are derived from the one :func:`shutil.which` lookup that
+    ``_skip_without_git`` already trusts. A clone where ``sh`` is only some other
+    shell on PATH would not be measuring the hook chain, so ``shutil.which("sh")``
+    is a last resort, not the first choice.
+    """
+    git = shutil.which("git")
+    if git is not None:
+        git_path = Path(git).resolve()
+        for base in (git_path.parent, git_path.parent.parent):
+            candidate = base / "usr" / "bin" / "sh.exe"
+            if candidate.is_file():
+                return candidate
+    found = shutil.which("sh")
+    return Path(found) if found is not None else None
+
+
+@functools.lru_cache(maxsize=1)
+def _msys_hook_shell_problem() -> str | None:
+    """Why git's hook shell cannot start here, or ``None`` when it can.
+
+    Probed **once** per session (``lru_cache``) with ``sh -c true``: no hook, no
+    repository, nothing that could fail for a passing reason. Only Windows is
+    probed — the failure this guards against is MSYS2's own: ``sh.exe`` needs a
+    ``\\BaseNamedObjects\\msys-2.0...`` shared object, and a restricted token
+    (the DSH sandbox is one) refuses ``NtCreateDirectoryObject`` with
+    ``0xC0000022``. Git exits non-zero before the hook script's first line, so
+    the hook chain is untestable **here** — it is not broken.
+
+    A missing ``sh``/``git`` is not a verdict from this probe: "git is not on
+    PATH" belongs to ``_skip_without_git``, and inventing a skip for it would
+    hide the real reason.
+    """
+    if os.name != "nt":
+        return None
+    shell = _hook_shell()
+    if shell is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [str(shell), "-c", "true"], capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return f"本环境 sh 起不来，钩链不可测：{shell} -c true 失败（{error}）"
+    text = (completed.stdout + completed.stderr).decode("utf-8", "replace")
+    if completed.returncode == 0 and "NtCreateDirectoryObject" not in text:
+        return None
+    if "NtCreateDirectoryObject" in text or "0xC0000022" in text:
+        return (
+            "本环境 sh 建不了共享对象，钩链不可测"
+            f"（{shell.name} -c true 退出 {completed.returncode}，"
+            "stderr 含 NtCreateDirectoryObject 0xC0000022）"
+        )
+    return f"本环境 sh 跑不了 sh -c true，钩链不可测（{shell.name} 退出 {completed.returncode}）"
+
+
+def _skip_without_msys_shared_objects(fn):
+    """Skip the tests that drive a **real** git hook chain under this sandbox.
+
+    The decorator is evaluated at import, and the probe is cached, so the three
+    tests share one ``sh -c true``. It skips only when that probe fails — a
+    normal terminal's ``sh`` starts cleanly, so these tests stay live there.
+    """
+    problem = _msys_hook_shell_problem()
+    if problem is not None:
+        return pytest.mark.skip(reason=problem)(fn)
+    return fn
+
+
 def _decode(raw: bytes) -> str:
     """The child's output, decoded by **what it actually is**.
 
@@ -440,6 +514,7 @@ def test_a_custom_pre_commit_is_left_alone(hook_repo):
 
 @_skip_without_windows
 @_skip_without_git
+@_skip_without_msys_shared_objects
 def test_commit_msg_hook_refuses_a_message_with_a_word(hook_repo):
     """The whole chain: core.hooksPath → hook script → the gate, on a real commit.
 
@@ -524,6 +599,7 @@ def _bare_remote_with_a_stranger(tmp_path: Path) -> tuple[Path, str]:
 
 
 @_skip_without_git
+@_skip_without_msys_shared_objects
 def test_pre_push_refuses_a_range_it_cannot_resolve(hook_repo, tmp_path):
     """S3#1: `git rev-list --count` **failing** read as "0 commits to push".
 
@@ -551,6 +627,7 @@ def test_pre_push_refuses_a_range_it_cannot_resolve(hook_repo, tmp_path):
 
 
 @_skip_without_git
+@_skip_without_msys_shared_objects
 def test_pre_push_still_scans_a_range_it_can_resolve(hook_repo, tmp_path):
     """The other direction: the refusal above must not be "refuse everything".
 

@@ -144,10 +144,11 @@ cd dsh-plugin && npm run typecheck && npm test && npm run build
 - **`BOARDWISE_HOME=<工作区内路径>`** 可救进程闸的槽文件（默认落 `~/.boardwise`，在 dsh 下
   写不进去）：`$env:BOARDWISE_HOME = ".tmp_bwhome"`，再跑上面四线里的 pytest。
 - **必红的清单（环境红，不是代码回归）**：`tests/test_193_secrecy_hooks.py` 3 条（git 钩子的
-  `sh.exe` 在 pytest 子进程里建 `\BaseNamedObjects\msys-2.0…` 被拒 `0xC0000022`）、
-  `tests/test_520_parts_hunt.py::test_the_shelf_is_only_written_when_asked`（fetch_detail 假接缝
-  + 要真网络，python 直连外网 SSL 握手超时）。所以 dsh 侧的读数只能裁「有没有新增红」，
-  **发布验收的「全量 0 红」必须在非沙箱终端取**。
+  `sh.exe` 在 pytest 子进程里建 `\BaseNamedObjects\msys-2.0…` 被拒 `0xC0000022`；0.5.21 起
+  这 3 条带探测、在此环境自动转 skip 而不是红）。所以 dsh 侧的读数只能裁「有没有新增红」，
+  **发布验收的「全量 0 红」必须在非沙箱终端取**。（更正：沙箱里 python **有**外网，
+  `urlopen` 可通；2026-10-23 观察到的 LCSC SSL 超时是单站/瞬态，且 0.5.21 起
+  `test_520_parts_hunt` 的 fetch_detail 接缝已修、该用例离线密封，不再依赖网络。）
 
 - **子代理纪律**：一个任务书只装一个缺口 / 一个文件域，串行小批，每批半小时内交卷
   （两小时黑箱 + 大上下文 = 幻觉与返工，060 实测被 timeout 斩）。整机全量并发槽只有 2
