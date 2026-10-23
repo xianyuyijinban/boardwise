@@ -269,6 +269,23 @@ def test_the_compiler_reserves_the_lead_lanes_before_it_routes(monkeypatch):
     The two halves are checked against each other: every reserved cell belongs to
     a net whose lead/stub the plan draws, and every drawn ground flag's lead lies
     on cells that same net reserved.
+
+    **535 重钉（2026-10-23，实测驱动）**：这条断言自 145a 写下以来**从未真正评过**。
+    a04c5c4 上这一页被可读性闸以 `wire-on-pin-line` 拒掉（520G 修的正是
+    `_pin_walls` 漏掉转过姿态引线那一半），`skip_if_the_147_gate_refused` 把它
+    转成了 skip；合并后这一页过得了闸，断言第一次真的跑，于是两处陈读露出来，
+    两处都是 **201A/148 之后的事实**，不是新约束：
+
+    1. `router.reserved` 的属主集合当时写死 `{PGND, SEC_GND, GATE, VFB_NF}`。
+       148 之后同一个 pass 还预留两个**导线式网的旗标**（`_seat_wire_flags`：
+       `HVDC` 27 格、`SEC_12V` 40 格），它们与地/标签的预留是同一件事的两半，
+       「一个旗标可挂多个引脚」之外还得说「旗标自己占的盒子也是墙」；
+    2. 「地网旗引线」当时读作「**地网上的任意一根导线**」。201A 起地是**轨**
+       （`_expression_style` 对 `gnd` 一律 `wire`）：一个地网只有**一根**接到
+       旗标锚点的引线，其余是普通导线——普通导线本来就不在预留格上（530F 在
+       CH340 那页量出同一个宽读法的错，见
+       `test_the_ch340_label_stubs_keep_the_label_side` 的 530F 重钉）。
+       所以这里按 530F 的读法量：**引线 = 接到旗标锚点的那根导线**。
     """
     seen: dict[str, object] = {}
     real = dc._lead_lane_reservations
@@ -282,19 +299,41 @@ def test_the_compiler_reserves_the_lead_lanes_before_it_routes(monkeypatch):
     assert result.ok, [item.detail for item in result.failures]
     reserved = seen["reserved"]
     assert reserved, "the flyback has ten ground pads to flag: nothing was reserved"
-    # The flyback's own labels (GATE, VFB_NF) reserve their stubs too — 145a2.
-    assert set(reserved.values()) <= {"PGND", "SEC_GND", "GATE", "VFB_NF"}, sorted(
-        set(reserved.values())
-    )
+    # The flyback's own labels (GATE, VFB_NF) reserve their stubs too — 145a2 —
+    # and since 148 the two **wire-style** nets' own flags are seated and
+    # reserved here as well (`_seat_wire_flags`).
+    assert set(reserved.values()) <= {
+        "PGND", "SEC_GND", "GATE", "VFB_NF", "HVDC", "SEC_12V",
+    }, sorted(set(reserved.values()))
     assert {"PGND", "SEC_GND"} <= set(reserved.values()), sorted(
         set(reserved.values())
     )
     plan = result.candidates[0]
     drawn = {item.net for item in plan.power_symbols}
     assert drawn == {"PGND", "SEC_GND", "HVDC", "SEC_12V"}, drawn
-    # Every drawn ground flag's lead lies on cells its own net reserved.
-    leads = [seg for seg in plan.segments if seg.net in ("PGND", "SEC_GND")]
-    assert len(leads) >= 10, len(leads)
+    # Both grounds are **conductors** as well as names (201A: a ground is a rail
+    # with exactly one symbol on it, not one flag per pad), so the page really
+    # does carry the wiring the reservation was made for.
+    for net in ("PGND", "SEC_GND"):
+        assert [seg for seg in plan.segments if seg.net == net], net
+    # The lead, read the way 530F reads it: the conductor that reaches the flag's
+    # own anchor. One per ground net — one symbol per ground net (201A sec.1).
+    anchors = [(item.x, item.y) for item in plan.power_symbols]
+
+    def _reaches_a_flag(segment) -> bool:
+        return any(
+            any(abs(x - ax) <= 1e-6 and abs(y - ay) <= 1e-6 for x, y in segment.points)
+            for ax, ay in anchors
+        )
+
+    leads = [
+        segment for segment in plan.segments
+        if segment.net in ("PGND", "SEC_GND") and _reaches_a_flag(segment)
+    ]
+    assert {segment.net for segment in leads} == {"PGND", "SEC_GND"}, (
+        "one lead per ground net, and each of them reaching that net's own flag: "
+        f"{[(s.net, s.points) for s in leads]}"
+    )
     for segment in leads:
         for start, end in zip(segment.points, segment.points[1:]):
             for node in dc._lattice_nodes(_router(), start, end):
@@ -306,17 +345,33 @@ def test_the_compiler_reserves_the_lead_lanes_before_it_routes(monkeypatch):
 
 
 def test_the_delivered_lock_table_compiles_with_every_ground_flag():
-    """The 145a acceptance anchor, as a test: ok, 15→ the compiler's own count, 0
-    hard readability violations.
+    """The 145a acceptance anchor, as a test: ok, the compiler's own count, and a
+    gate reading the delivery policy agrees with.
 
-    The count is the compiler's policy, measured rather than assumed: `PGND` and
-    `SEC_GND` are ground-class nets, each named by a flag at every pin (069
-    sec.1) — **ten** flags. `SEC_12V` is a rail, and the secondary chain's
-    `direct-wire` obligation is stated *before* the class's high-fan-out rule
-    (`_expression_style`), so it is drawn as a wire carrying one rail flag (069
-    sec.7); `HVDC` likewise. That is twelve flags in all — 岳's own page carries
-    exactly one `SEC_12V` flag, so the per-pin count 144 predicted for it was an
-    analysis slip, not a target.
+    **535 重钉（2026-10-23，实测驱动）**：这条断言自 145a 写下以来**从未真正评过**
+    ——a04c5c4 上这页被闸以 `wire-on-pin-line` 拒掉、被
+    `skip_if_the_147_gate_refused` 转成 skip。合并后它第一次真跑，三处陈读同时
+    暴露；这一页的真实读数（`tools/535_plan_probe.py` 在同一份
+    `outputs/144/presentation_144.json` 上量）如下，逐条说清为什么新的对：
+
+    1. **旗标数 12 → 4。** 旧文写的「`PGND`/`SEC_GND` 每脚一旗 = 十面」是
+       **201A 之前的政策**。201A sec.1 之后 `_expression_style` 对 `gnd` 一律返回
+       `wire`：地是**轨**，脚与脚之间是导线，整网由**恰好一个**符号说明
+       （`_gnd_outlet_pin` 取远端），所以 `PGND`/`SEC_GND` 各 **1** 面；
+       `SEC_12V`/`HVDC` 是导线式电源网，各由 069 sec.7 的轨道旗标说明 **1** 面。
+       实测 `{PGND:1, SEC_GND:1, HVDC:1, SEC_12V:1}`。岳的黄金板同样是
+       「一坨连通导线挂一个名字」（S-14），旧的每脚一旗是 201A 明令改掉的画法。
+    2. **闸读数要走投递政策。** 未加容忍的 `readability.check` 在这一页报 **3** 条
+       `pin-text-press`（T1 自己的值行 `EE16_3+3_V02` 压住 T1 自己的脚号/脚名，
+       两者都印在符号自己的偏移上，见 532）；交付闸用的正是
+       `single_module_gate_violations`，它在
+       `ISLAND_GATE_TOLERATED_LIMITS` 的 cap（3）之内把这一类记成
+       `tolerated`、不算硬违反（旧文断言 `not checked.hard_violations` 量的是
+       未过滤的检查器，量错了对象）。所以这里按投递闸自己的读法断言：**没有被拒
+       的行**，且被容忍的行确实是 `pin-text-press` 这一类、条数在 cap 之内。
+    3. **「引线」= 接到旗标锚点的那根导线**（530F 的读法，本文件末尾那条重钉同理）：
+       地网上的其余导线是普通布线，可以合法交叉别的网；被切才算缺陷。实测四条
+       引线全部干净。
     """
     circuit, presentation, book, result = _compile_locked()
     assert result.ok, [item.detail for item in result.failures]
@@ -324,19 +379,34 @@ def test_the_delivered_lock_table_compiles_with_every_ground_flag():
     counts: dict[str, int] = {}
     for symbol in plan.power_symbols:
         counts[symbol.net] = counts.get(symbol.net, 0) + 1
-    assert counts == {"PGND": 5, "SEC_GND": 5, "HVDC": 1, "SEC_12V": 1}, counts
+    assert counts == {"PGND": 1, "SEC_GND": 1, "HVDC": 1, "SEC_12V": 1}, counts
     checked = readability.check(
         plan, circuit, presentation, book, page_box=None,
         grid=dc.CompileBudget().grid,
     )
-    assert not checked.hard_violations, [
-        item.render() for item in checked.hard_violations
-    ]
-    # No flag lead runs through a foreign net's conductor (074's defect).
-    flag_nets = {"PGND", "SEC_GND"}
-    for segment in plan.segments:
-        if segment.net not in flag_nets:
-            continue
+    refusing, tolerated = dc.single_module_gate_violations(checked.hard_violations)
+    assert not refusing, [item.render() for item in refusing]
+    assert {item.kind for item in tolerated} <= {readability.KIND_PIN_TEXT_PRESSED}, (
+        [item.render() for item in tolerated]
+    )
+    cap = dict(dc.ISLAND_GATE_TOLERATED_LIMITS)[readability.KIND_PIN_TEXT_PRESSED]
+    assert len(tolerated) <= cap, (len(tolerated), cap)
+    # No flag **lead** — the conductor reaching a flag's own anchor — runs through
+    # a foreign net's conductor (074's defect).
+    flag_anchors = [(item.x, item.y) for item in plan.power_symbols]
+
+    def _reaches_a_flag(segment) -> bool:
+        return any(
+            any(abs(x - ax) <= 1e-6 and abs(y - ay) <= 1e-6 for x, y in segment.points)
+            for ax, ay in flag_anchors
+        )
+
+    leads = [segment for segment in plan.segments if _reaches_a_flag(segment)]
+    assert len(leads) == len(plan.power_symbols), (
+        "every flag on this page is reached by exactly one conductor, its lead: "
+        f"{[(s.net, s.points) for s in leads]}"
+    )
+    for segment in leads:
         for start, end in zip(segment.points, segment.points[1:]):
             for other in plan.segments:
                 if other.net == segment.net:

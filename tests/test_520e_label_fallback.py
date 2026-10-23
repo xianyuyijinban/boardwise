@@ -239,6 +239,26 @@ def test_a_refusal_after_a_downgrade_says_neither_the_wire_nor_the_name_had_room
     这是 520E 里唯一还能拒整页的形状，所以它必须自己说清楚：先说了长线被放弃、
     再说名字也没地方放。少了后半句，读者会把这条拒绝读成一次普通的拥挤抱怨，
     而恰恰在这种情况下降级最不该是隐形的。
+
+    **535 重钉（2026-10-23，实测驱动）**：这一页最后那句「拒绝保留闸自己的第一行」
+    里的**第一行换了层**，而这一条真正的主语（降级那一句是**追加**、不是替换）
+    没变：
+
+    * **旧读数**（520E 写下这条时）：`GND` 走的是**网络标签**降级，页面继续往下
+      走到可读性闸才被拒，于是拒绝原文是
+      `the independent readability checker refused …`；
+    * **新读数**（第二层修复之后）：`GND` 走 `_label_fallback` 的**旗标**分支
+      （530A：地只能是旗标，不许网络标签），而这一页整张被 keepout 盖住，
+      `GND` 一面旗标都挂不上——`_seat_wire_flags` 的席位阶梯四个方向全被占，
+      于是拒绝原文变成 069 sec.1 那句
+      `net 'GND' is named by a flag of its own on C115.2 …`。
+      这不是「绕过了一条闸」，而是**同一个事实的诚实出口**：这页画不出来，
+      而这一次说清楚画不出来的是**地的那面旗标**——旧路子在页面上留下一堆
+      没有实体相连的网络标签，正是 530A 禁掉的那种画法。
+
+    所以断言钉「拒绝原文在前、降级从句在后」这个**形状**，并且逐字说出这一页
+    现在被哪一层拒（旧文写死 `the independent readability checker refused`，
+    那正是 535 之前的那一层）。
     """
     result = _refusal_forcing_every_net()
 
@@ -253,7 +273,15 @@ def test_a_refusal_after_a_downgrade_says_neither_the_wire_nor_the_name_had_room
     assert "neither the long wire nor the name has a way out" in detail
     # The refusal keeps the gate's own first line, so a reader still sees *why*
     # the drawing was refused — the clause is added to it, not in place of it.
-    assert "the independent readability checker refused" in detail
+    # 535: that first line is the 069 sec.1 flag-seat ladder's own refusal of this
+    # page's ground (see the docstring — the layer moved, the shape did not).
+    assert detail.startswith(
+        f"net '{t088.GND}' is named by a flag of its own"
+    ), detail[:400]
+    assert "069 sec.1" in detail
+    assert detail.index("and the name had nowhere to go either") > detail.index(
+        "069 sec.1"
+    ), "the downgrade clause is appended after the refusal, never instead of it"
 
 
 def test_the_refusal_clause_names_every_downgraded_net_and_keeps_the_verdict():

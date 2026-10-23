@@ -293,12 +293,25 @@ def test_lock_off_the_natural_seat_is_reported_not_bent():
 
 
 def test_label_fallback_is_written_back_and_the_note_holds():
-    """中危 4 (probe_gnd_label_forced): 降级 label 要写回 expressions，
+    """中危 4 (probe_gnd_label_forced): 降级要写回 expressions，
     且「joined by the rail」只许在有轨道时说。
 
-    `_connect_net` is forced to fail for GND only, so the ground falls back to
-    labels; the plan then carries no GND segment, **no GND symbol**, three
-    labels — and no note claiming the pads are joined by a rail.
+    **535 重钉（2026-10-23，实测驱动）**：这一条量的**机制**（写回 + 记账 + 不许
+    声称一根没人画的轨道）一个字没动，变的是被写回去的那个**表达式**——第二层
+    修复让 `GND` 走 `_label_fallback` 的**旗标**分支（530A：地只能是旗标，不许
+    网络标签）。
+
+    * **旧读数**（515A 写下这条时）：地降级成**网络标签**，plan 里没有 GND 导线、
+      **没有 GND 符号**、三个 label；
+    * **新读数**（第二层修复之后，同一份夹具同一份强制失败）：地降级成**旗标**，
+      plan 里是**三面** `PWR-GND`（三颗引脚 `C1.2`/`U1.11`/`U1.4` 各一面），
+      每面由**恰好一根**引线接到自己的引脚，label **零**个。
+
+    谁是诚实的那一半，看 530A 的原文就够了：「GND 还有各类电源标识，不准给我摆
+    网络标签，必须是旗标！」旧的三个 label 正是岳禁掉的画法；新的三面旗标是黄金
+    板上的常态，而且**电气结论不变**——旗标在网表里就是这条网的导体，`GND` 仍读
+    一个结点（下面照旧量）。写回仍然必须发生：不写回，后面的轨道旗标 pass 还在读
+    那根没人画的长线，就会写出「pads are joined by the rail」。
     """
     circuit = t201a.opamp_circuit()
     presentation = t201a.opamp_presentation()
@@ -317,15 +330,44 @@ def test_label_fallback_is_written_back_and_the_note_holds():
         dc._connect_net = real
     assert result.candidates
     plan = result.candidates[0]
-    assert not [s for s in plan.segments if s.net == "GND"]
-    assert not [s for s in plan.power_symbols if s.net == "GND"]
-    assert len([l for l in plan.labels if l.net == "GND"]) == 3
+    flags = [s for s in plan.power_symbols if s.net == "GND"]
+    assert len(flags) == 3, (
+        "one flag per pin of the ground the router could not join (530A): "
+        f"{[(s.symbol_ref, s.x, s.y) for s in plan.power_symbols]}"
+    )
+    assert {s.symbol_ref for s in flags} == {"PWR-GND"}, flags
+    assert [l for l in plan.labels if l.net == "GND"] == [], (
+        "a ground is named by a flag, never by a net label (530A)"
+    )
+    # Each of the three flags is reached by exactly one conductor: its own lead.
+    anchors = [(s.x, s.y) for s in flags]
+
+    def _reaches_a_flag(segment) -> bool:
+        return any(
+            any(abs(x - ax) <= 1e-6 and abs(y - ay) <= 1e-6 for x, y in segment.points)
+            for ax, ay in anchors
+        )
+
+    leads = [s for s in plan.segments if s.net == "GND" and _reaches_a_flag(s)]
+    assert len(leads) == len(flags) == 3, (
+        "three flags, three leads — the ground drawn as three named pins: "
+        f"{[s.points for s in plan.segments if s.net == 'GND']}"
+    )
     for note in result.notes:
         assert "joined by the rail" not in note, note
-    # The labels are conductors in the offline model: the net still reads one node.
+    # The write-back is this test's subject: the downgrade is on the plan, it says
+    # **flag**, and it never claims a rail nobody drew.
+    downgrades = [n for n in plan.notes if n.startswith(dc.DOWNGRADE_NOTE_PREFIX)]
+    assert len(downgrades) == 1, plan.notes
+    assert "**flag** at each of its pins" in downgrades[0], downgrades[0]
+    assert "joined by the rail" not in downgrades[0]
+    # 520E's account is kept beside it: one record, one net, and it says the same.
+    assert [f.net for f in result.label_fallbacks] == ["GND"], result.label_fallbacks
+    assert "**flag**" in result.label_fallbacks[0].gave_up
+    # The flags are conductors in the offline model: the net still reads one node.
     derived = readability.derive_netlist(plan, library)
     groups = {derived.group_of(m) for m in circuit.net("GND").members}
-    assert len(groups) == 1, "the labels are the netlist's conductors"
+    assert len(groups) == 1, "the flags name every pin, so the net is still one node"
 
 
 # ----------------------------------------------------------------- 中危 5

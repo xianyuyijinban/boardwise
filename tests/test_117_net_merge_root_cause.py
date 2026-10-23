@@ -243,6 +243,23 @@ def test_118_the_page_stops_at_the_same_column_relation_before_any_gate_runs():
     而拒绝尾部带着降级那一句
     （`HVDC`、`SEC_12V` 在它之前已经被改成名字）。`_place` 与关系闸**一个字没动**：
     本测试前两条断言仍原样通过，变的还是「谁拒的」。
+
+    **535 再挪一站（2026-10-23，实测驱动）**：第二层修复（530A：地/电源一律旗标）
+    把「连不上的地」从网络标签降级改成**旗标**降级，于是这条腿**不再走到可读性
+    闸**——`SEC_GND` 的旗标一面都挂不上（`_seat_wire_flags` 的席位阶梯四个方向全
+    被占），rung 0 死在 **069 sec.1 的旗标席位阶梯**自己的那句话上：
+
+        net 'SEC_GND' is named by a flag of its own on C11.2 at (25, -160)
+        (069 sec.1), and no lead fits anywhere around that pad …
+        action: enlarge the region, move the neighbouring part that crowds this
+        pad, or move the pad's own run — a pad whose flag nobody could hang is
+        refused rather than drawn on top of the wiring
+
+    旧读数「闸拒 11 条硬违反、全是 `text-overlap`」是**地还走网络标签**时的世界；
+    新读数不是把一条闸放宽，而是**这条腿不再有资格走到那把闸**：530A 之后一条
+    连不上的地只有旗标这一个诚实出口，旗标挂不上就该拒。账本也长了一条：被降级
+    点名的网从 `HVDC`/`SEC_12V` 变成 `HVDC`/`SEC_12V`/`SEC_GND`。
+    `_place` 与关系闸仍然**一个字没动**，前两条断言原样通过——变的还是「谁拒的」。
     """
     circuit, ctx = _ctx()
     variant = dc._variants(ctx)[0]
@@ -262,7 +279,8 @@ def test_118_the_page_stops_at_the_same_column_relation_before_any_gate_runs():
         "say so in this docstring instead of leaving the old text"
     )
     assert build_failure is not None and (
-        "the independent readability checker refused" in build_failure.detail
+        "named by a flag of its own" in build_failure.detail
+        and "069 sec.1" in build_failure.detail
     ), (
         "the refusal moved again; name the new layer in this docstring rather "
         f"than leaving the old text: {build_failure}"
@@ -272,24 +290,23 @@ def test_118_the_page_stops_at_the_same_column_relation_before_any_gate_runs():
     # says the name did not fit either. Without these two, "the refusal moved to
     # the gate" would be indistinguishable from the gate simply being reached by
     # an ordinary crowd of wires.
-    # 530D (岳's ruling A) removed the host's name rows from the gate, and with them
-    # six of this drawing's violations: the refusal is now **11** and every one of
-    # them is `text-overlap` — the two electrical findings the pre-530D reading led
-    # with (`netlist-partition-mismatch` on `FB_SENSE`, one `dangling-wire-end`) were
-    # on a *later* attempt of the same ladder, which this drawing no longer reaches.
-    # What the assertion is about is unchanged: the refusal is the **gate's**, and it
-    # says so with its own kind and its own count.
-    assert "the independent readability checker refused 11 hard violation(s)" in (
-        build_failure.detail
-    ), f"the gate's own refusal must be named, with its count: {build_failure.detail[:300]}"
-    assert "text-overlap" in build_failure.detail, (
-        f"the gate's own first kind must be named: {build_failure.detail[:300]}"
+    #
+    # 535: the refusal is now the **flag-seat ladder's** own, and it says so with
+    # its own subject, its own section reference and its own action — the third
+    # assertion is the honest replacement for the 530D reading's "11 hard
+    # violation(s), all `text-overlap`": that count belonged to a drawing whose
+    # ground was named by net labels, which 530A no longer allows.
+    assert build_failure.subject == "SEC_GND", build_failure.subject
+    assert "a pad whose flag nobody could hang is refused" in build_failure.action, (
+        "the refusal must carry the compiler's own repair, not a bare count: "
+        f"{build_failure.action[:300]}"
     )
     assert "the name had nowhere to go either" in build_failure.detail, (
         "a refusal that follows a downgrade owes both halves: "
         f"{build_failure.detail[:400]}"
     )
-    assert "HVDC" in build_failure.detail and "SEC_12V" in build_failure.detail
+    for net in ("HVDC", "SEC_12V", "SEC_GND"):
+        assert net in build_failure.detail, (net, build_failure.detail[:400])
 
 
 def test_the_cause_is_one_point_where_two_nets_share_a_pin_tip():

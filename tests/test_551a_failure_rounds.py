@@ -261,13 +261,22 @@ def test_the_topology_refusal_is_visible_beside_the_ladder_refusal():
 
     # 向后兼容钉：摘要 failures 还是**第一条**——但第一条又换了一层。
     # 520A2 那版这里是「走线的直连义务」；**520E 之后那一层不存在了**：
-    # 连不上的直连义务被降级成名字并记账，于是第一条是 `base` 轮的可读性闸
-    # （真载入器下 25 条硬违反），并且带着降级那一句。断言按新事实写，
-    # 同时钉住 520E 自己的账本——「拒绝换了层」与「降级真的被记了」是两件事。
+    # 连不上的直连义务被降级成名字并记账，于是第一条是 `base` 轮自己的拒因，
+    # 并且带着降级那一句。断言按新事实写，同时钉住 520E 自己的账本——「拒绝换了
+    # 层」与「降级真的被记了」是两件事。
+    #
+    # **535 重钉（2026-10-23，实测驱动）**：`base` 轮的拒因又换了一层——第二层
+    # 修复（530A：地/电源一律旗标）让连不上的 `SEC_GND` 走**旗标**降级，而这页的
+    # `SEC_GND` 一面旗标都挂不上（`_seat_wire_flags` 的席位阶梯四个方向全被占），
+    # 于是第一条是 **069 sec.1 旗标席位阶梯**自己的那句话（520E 时这里是可读性闸）。
+    # 页面照旧被诚实拒绝，降级从句照旧追加在后——只是拒绝的人换了。
     assert len(result.failures) == 1
-    assert "the independent readability checker refused" in result.failures[0].detail, (
-        "the summary failures still lead with the **first** refusal; under 520E "
-        f"that refusal is the readability gate — {result.failures[0].detail[:200]}"
+    assert "is named by a flag of its own" in result.failures[0].detail and (
+        "069 sec.1" in result.failures[0].detail
+    ), (
+        "the summary failures still lead with the **first** refusal; since 535 "
+        "that refusal is the ground's own flag-seat ladder "
+        f"(069 sec.1) — {result.failures[0].detail[:200]}"
     )
     assert "the name had nowhere to go either" in result.failures[0].detail, (
         "a refusal that follows a downgrade owes both halves: "
@@ -283,8 +292,13 @@ def test_the_topology_refusal_is_visible_beside_the_ladder_refusal():
     # second link it can no longer join, so 520E's rule names it too.  The rule
     # itself — 「连不上就降级成名字并记账」 — is unchanged; the drawing underneath it
     # got more accurate.
+    #
+    # **535 重钉**: 账本再长一条 `SEC_GND`——这一批的题落在**这一页**上的样子：
+    # 530A 之下一条连不上的地只能是旗标，这页的旗标挂不上，于是它既进了降级名单、
+    # 又是整页被拒的那条理由。顺序是 `rejected` 的跑序（`_rejected_label_fallbacks`
+    # 每条网取第一次见到的那一笔），真载入器下 `SEC_GND` 落在 `FB_SENSE` 之前。
     assert [item.net for item in result.label_fallbacks] == [
-        "HVDC", "SEC_12V", "FB_SENSE",
+        "HVDC", "SEC_12V", "SEC_GND", "FB_SENSE",
     ], (
         "520E's account: every net the router cannot join is named and "
         f"recorded: {[f.net for f in result.label_fallbacks]}"
@@ -298,11 +312,21 @@ def test_the_topology_refusal_is_visible_beside_the_ladder_refusal():
         f"— got {sorted(by_round)}"
     )
     # **520E 重钉**：`base` 轮的第一条拒因不再是「布线的直连义务」——那条义务
-    # 连不上时现在被降级成名字并记账，这一轮于是停在**可读性闸**上（真载入器：
-    # 25 条硬违反）。`HVDC` 仍然出现在这条拒因里，但它是**降级名单**里的名字，
-    # 不再是义务被拒的主体——两者都断言，免得「换了层」被读成「HVDC 消失了」。
+    # 连不上时现在被降级成名字并记账，这一轮于是由**下游的闸**来拒（520E 时可读性
+    # 闸，**535 起是地自己的旗标席位阶梯**，见上）。`HVDC` 仍然出现在这条拒因里，
+    # 但它是**降级名单**里的名字，不再是义务被拒的主体——两者都断言，免得「换了层」
+    # 被读成「HVDC 消失了」。
     assert "HVDC" in by_round["base"].detail and "SEC_12V" in by_round["base"].detail
-    assert "the independent readability checker refused" in by_round["base"].detail
+    assert "SEC_GND" in by_round["base"].detail, (
+        "since 535 the ground is one of the nets this page names instead of "
+        f"wiring: {by_round['base'].detail[:300]}"
+    )
+    # **535 重钉**：这一轮不再死在可读性闸上（见上），死在 069 sec.1 的旗标席位
+    # 阶梯自己的那句话上——拒绝仍然是**编译器自己**的，带着它自己的主体与修法。
+    assert "is named by a flag of its own" in by_round["base"].detail, (
+        "535 moved the base round to the ground's own flag-seat ladder — got "
+        f"{by_round['base'].detail[:200]}"
+    )
     assert "the name had nowhere to go either" in by_round["base"].detail
     # **520D 重钉（T1 不许镜像）**：拓扑轮**不再死在关系闸**。
     # 520B2 读到的那条 `right-of(C11, T1)` 是**姿态问题不是形状问题**——
@@ -346,14 +370,19 @@ def test_the_topology_refusal_is_visible_beside_the_ladder_refusal():
         "cannot run a wire along one again; a `wire-on-pin-line` here means the "
         f"turned poses stopped reserving — got {topology_variant.violations[:3]}"
     )
-    assert "the independent readability checker refused 27 hard violation" in (
+    assert "the independent readability checker refused 26 hard violation" in (
         by_round["topology"].detail
     ), (
         "under 530D's ruling A the topology round reaches the readability gate with "
-        "27 hard violations (520G measured 29, 530F 21, 531 22; **532 +5** because "
+        "26 hard violations (520G measured 29, 530F 21, 531 22; **532 +5** because "
         "the checker now reads a placed part's **pin name and number** as well, and "
-        "this page's own library prints them for three of its symbols); a different "
-        "count means a different page — got "
+        "this page's own library prints them for three of its symbols; **535 −1** "
+        "because one of those `pin-text-press` rows is gone from this drawing — the "
+        "535 landing changed the routing under it. A/B measured on this worktree "
+        "with HEAD's `drawcompiler.py`: old 27 = `text-overlap` 24 + "
+        "`pin-text-press` 1 + `text-on-wire` 2, new 26 = `text-overlap` 24 + "
+        "`text-on-wire` 2. Same layer, same leading kind, one row fewer); a "
+        "different count means a different page — got "
         f"{by_round['topology'].detail[:200]}"
     )
     assert by_round["topology"].category == dc.FAILURE_LAYOUT_UNSAT, (
@@ -390,8 +419,19 @@ def test_the_topology_refusal_is_visible_beside_the_ladder_refusal():
     # 图多出若干条互压读数。两条不变量一个字没动：`wire-on-pin-line` 仍为 0，
     # 轮集合仍是 `base` + `topology`，**每一层的拒因还是同一层**——变的是闸数出来
     # 的行，不是谁在拒。数字逐条在 `evidence/532/raw/`。
-    assert "readability checker refused 29 hard violation" in summary[0]["detail"]
-    assert "readability checker refused 27 hard violation" in summary[1]["detail"]
+    #
+    # **535 重钉（29 → base 不再是可读性闸 / 27 → 26）**：`base` 轮换了层（069
+    # sec.1 旗标席位阶梯，上面已逐条说明），所以第一句不再是闸的计数，而是闸的
+    # **那层**自己的主体与句号；`topology` 轮仍在可读性闸上，只是这张图的
+    # `pin-text-press` 少了一条（HEAD 的 `drawcompiler.py` A/B 实测：
+    # 旧 27 = `text-overlap` 24 + `pin-text-press` 1 + `text-on-wire` 2；
+    # 新 26 = `text-overlap` 24 + `text-on-wire` 2）。两条不变量照旧：
+    # `wire-on-pin-line` 仍为 0（下面那句），轮集合仍是 `base` + `topology`。
+    assert "is named by a flag of its own" in summary[0]["detail"], (
+        "the base round's summary row is now the ground's own flag-seat ladder "
+        f"(535) — got {summary[0]['detail'][:200]}"
+    )
+    assert "readability checker refused 26 hard violation" in summary[1]["detail"]
     for item in summary:
         assert "wire-on-pin-line" not in item["detail"], (
             "520G reserves every pin's lead at every pose; neither round's leading "

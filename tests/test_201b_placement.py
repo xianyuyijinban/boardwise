@@ -494,8 +494,23 @@ def test_the_flyback_has_no_candidate_today_which_is_why_this_module_exists():
     `if not multi_island:`）。所以这一条现在把 `islands` **从夹具上剥掉**
     （`_flyback(single_module=True)`），让它回到它声称要量的那条路上。
     **不加编译器开关**：开关等于让产品多一个只为测试存在的分支（§9.3 的原话）。
-    剥岛之后本节的历史读数**逐字成立**：0 候选、停在可读性闸、`HVDC`/`SEC_12V`
-    被降级点名——201B 的病历一个字不用改。
+    剥岛之后本节的历史读数「0 候选、`HVDC`/`SEC_12V` 被降级点名」**逐字成立**；
+    「停在可读性闸」那一句不再成立（见下）。
+
+    **535 重钉（2026-10-23，实测驱动）**：拦路的层**又换了一层**，换成第二层修复
+    （530A：地/电源一律旗标）的诚实后果。旧读数「2 档停在可读性闸（手搓 loader
+    下 13 条硬违反）」是**地还走网络标签降级**时的世界；现在 `SEC_GND` 走的是
+    `_label_fallback` 的**旗标**分支，而这页的 `SEC_GND` 一面旗标都挂不上
+    （`_seat_wire_flags` 的席位阶梯四个方向全被占），于是拒因是 069 sec.1 的旗标
+    席位阶梯自己的那句话：
+
+        net 'SEC_GND' is named by a flag of its own on C11.2 at (25, -160)
+        (069 sec.1), and no lead fits anywhere around that pad …
+
+    这不是「闸被绕过了」——页面**照旧被诚实拒绝**，而且降级账本多了一条：被点名的
+    网从 `HVDC`/`SEC_12V` 变成 `HVDC`/`SEC_12V`/`SEC_GND`。地被迫进降级名单本身
+    就是本批的题：522/530A 之后，一条连不上的地只能是旗标，旗标挂不上就拒，
+    而不是像旧路子那样在页面上留下没有实体相连的网络标签。
 
     所以「0 候选」这个事实没变，变的是**哪一层**把它拒掉。断言按这个新事实写：
     它抓的是「页面又退回关系闸」这种回归，也抓「降级凭空消失」这种回归。
@@ -504,15 +519,28 @@ def test_the_flyback_has_no_candidate_today_which_is_why_this_module_exists():
     assert compiled.ok is False
     assert compiled.candidates == []
     reasons = " ".join(item.detail for item in compiled.failures)
-    assert "the independent readability checker refused" in reasons, (
+    assert "named by a flag of its own" in reasons and "069 sec.1" in reasons, (
         "the page no longer stops at the relation gate; under 520A2 the refusal "
-        "moved one layer forward, to the routing, and under 520E to the "
-        "readability gate — if it moved again, say where in this docstring "
-        f"rather than leaving the old text: {reasons[:300]}"
+        "moved one layer forward, to the routing, under 520E to the readability "
+        "gate, and under 535 to the ground's own flag-seat ladder — if it moved "
+        f"again, say where in this docstring rather than leaving the old text: "
+        f"{reasons[:300]}"
     )
-    assert [item.net for item in compiled.label_fallbacks] == ["HVDC", "SEC_12V"], (
+    assert "SEC_GND" in reasons, (
+        "the layer that decides this page now is the secondary ground's own flag: "
+        f"{reasons[:300]}"
+    )
+    assert "the name had nowhere to go either" in reasons, (
+        "a refusal that follows a downgrade owes both halves: "
+        f"{reasons[:300]}"
+    )
+    assert [item.net for item in compiled.label_fallbacks] == [
+        "HVDC", "SEC_12V", "SEC_GND",
+    ], (
         "520E's own subject: the nets the router could not join are named and "
-        f"recorded, not silently dropped: {[f.net for f in compiled.label_fallbacks]}"
+        "recorded, not silently dropped — and since 535 the unjoinable ground is "
+        f"one of them (530A has no third expression): "
+        f"{[f.net for f in compiled.label_fallbacks]}"
     )
     assert "same-column(Q1, R5)" not in reasons, (
         "the relation the page used to die on is honoured by the placement now; "

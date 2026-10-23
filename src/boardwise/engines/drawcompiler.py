@@ -6302,6 +6302,17 @@ def _label_fallback(
     ``detached``/``pivot``: that pair describes a *wire* split over the body
     (069 sec.2), and there is no wire here to split. Its ``reason`` is rewritten
     so a reader of the plan sees the obligation *and* its failure in one place.
+
+    **Ground nets are the exception (岳's 530A ruling)**: 「GND 还有各类电源标识，
+    不准给我摆网络标签，必须是旗标！」 A ground the router cannot join is named by
+    a **flag at each pin**, never by net labels — a flag needs no wire, so it is
+    the fallback the ground rule already allows, and the golden boards draw
+    exactly that (one flag per nearby group). The ``style="flag"`` consumer
+    places one symbol per pin, and itself degrades to labels when the library
+    carries no flag for the net, so this leg cannot strand a net unnamed. Power
+    rails keep 520E's label fallback: that is the ruling 岳 gave for
+    `HVDC`/`SEC_12V` specifically, and the two rulings conflict there — his call,
+    recorded in the 534 merge report.
     """
     members = tuple(member for member, _point in expression.points)
     reason = (
@@ -6309,6 +6320,43 @@ def _label_fallback(
         f"{expression.reason}) and the wiring could not keep that promise: "
         f"{unrouted.reason}"
     )
+    net = ctx.circuit.net(net_id)
+    cls = net.cls if net is not None else ""
+    if cls == "gnd":
+        gave_up = (
+            "a conductor between its pins — what a reader of this page gets is "
+            "the net's **flag** at each of those pins, not a wire that shows "
+            "them joined (岳's ground rule: grounds are flags, never net "
+            "labels). The netlist still reads them as one node, so the drawing "
+            "is electrically what the spec says; it is the picture that is "
+            "weaker"
+        )
+        note = (
+            DOWNGRADE_NOTE_PREFIX
+            + f"net {net_id}: its expression was promised as a **wire**, and the "
+            f"router could not join its {len(members)} pin(s) — {unrouted.reason}. "
+            "It is expressed by its **flag** at each of its pins instead (岳's "
+            "ground rule: a ground is named by a flag, never by a net label). "
+            f"What this gives up: {gave_up}. "
+            "Why the net was promised a wire in the first place, as the compiler "
+            f"read it: {expression.reason}"
+        )
+        downgraded = _Expression(
+            net=expression.net,
+            style="flag",
+            points=expression.points,
+            reason=reason,
+        )
+        return downgraded, LabelFallback(
+            net=net_id,
+            members=members,
+            promised="wire",
+            role=expression.reason,
+            stage=unrouted.stage,
+            reason=unrouted.reason,
+            gave_up=gave_up,
+            note=note,
+        )
     gave_up = (
         "a conductor between its pins — what a reader of this page gets is the "
         "net's **name** at each of those pins, not a wire that shows them joined. "
@@ -6525,9 +6573,15 @@ def _try_variants(
         findings = check_grammar(
             plan, circuit_spec, presentation_spec, book, budget=budget, intent=intent
         )
+        tolerance_lines = island_gate_tolerance_notes(list(built.tolerated))
         plan.evidence = LayoutEvidence(
             checker=CHECKER_NAME,
-            hard_violations=[
+            # A plan delivered WITH tolerated rows names them in notes, not in
+            # hard_violations — the island page's contract (a delivered page
+            # whose own evidence reads fail is a contradiction), applied to the
+            # single-module path's one tolerated kind (pin-text-press, the
+            # symbol's own artwork — see single_module_gate_violations).
+            hard_violations=[] if built.tolerated else [
                 item.render() for item in built.checked.hard_violations
             ],
             grammar_findings=[item.render() for item in findings],
@@ -6536,7 +6590,10 @@ def _try_variants(
                 key: " | ".join(value)
                 for key, value in built.checked.soft_reasons.items()
             },
-            notes=[f"candidate from {COMPILER_NAME} variant {variant.label}"],
+            notes=[
+                f"candidate from {COMPILER_NAME} variant {variant.label}",
+                *tolerance_lines,
+            ],
         )
         result.ranked.append(_measure(plan, findings, ctx, fallbacks))
 
@@ -6599,6 +6656,14 @@ def _try_variants(
 #: compiles through.  Widening the policy there would change which single-module
 #: pages produce candidates at all — a different batch's question, and one with no
 #: measured residual behind it.
+#:
+#: One clause has since crossed over, on measurement rather than on taste:
+#: `pin-text-press` is a part's own artwork (a pin row against that same part's
+#: own rows), which *no* lever on either path can separate — the escape ladder
+#: moves wire name rows only. The single-module path therefore applies this one
+#: clause through :func:`single_module_gate_violations`, after its own search
+#: has run, with the same cap. `text-on-wire` and `text-overlap` stay
+#: island-scoped exactly as this paragraph says.
 ISLAND_GATE_TOLERATED_LIMITS: tuple[tuple[str, int], ...] = (
     (readability.KIND_TEXT_ON_WIRE, 10),
     (readability.KIND_TEXT_OVERLAP, 1),
@@ -6687,6 +6752,47 @@ def island_gate_tolerance_notes(
         "placed is never among them",
         *[f"tolerated: {item.render()}" for item in tolerated],
     ]
+
+
+def single_module_gate_violations(
+    violations: Sequence[readability.HardViolation],
+) -> tuple[list[readability.HardViolation], list[readability.HardViolation]]:
+    """The island policy's pin-text-press clause, on the path that has no policy.
+
+    :func:`island_gate_violations` is scoped to the island page on purpose (its
+    docstring says why: the single-module path has the name-row escape ladder,
+    and widening the *policy* here is a different batch's question). One kind
+    escapes that reasoning by construction. `pin-text-press` is a part's own pin
+    row against that same part's own rows — both printed at the symbol's own
+    offsets — so it is not answerable by *any* lever this path searches: the
+    pose ladder keeps the pair's relative geometry (both rows ride the same
+    part), and the escape ladder moves wire name rows only. Refusing it meant
+    every drawing carrying a crowded symbol was layout-unsat however the search
+    went; that is what the merged tree's eight reds (145a/175/178, the
+    outputs/-gated landing pages) measured.
+
+    The clause is the island policy's own, for this one kind: the pair must
+    name a host-printed row (the kind's pin half guarantees it, and asking
+    keeps the two paths reading one sentence), and the count is bounded by the
+    same cap — a class over its cap takes every one of its lines with it. All
+    other kinds stay hard here exactly as before; ``text-on-wire`` and
+    ``text-overlap`` have the escape ladder to answer them on this path.
+    """
+    cap = dict(ISLAND_GATE_TOLERATED_LIMITS)[readability.KIND_PIN_TEXT_PRESSED]
+    refusing: list[readability.HardViolation] = []
+    tolerated: list[readability.HardViolation] = []
+    for item in violations:
+        if item.kind != readability.KIND_PIN_TEXT_PRESSED:
+            refusing.append(item)
+            continue
+        named = list(item.objects) if item.objects else [""]
+        if not any(readability.is_host_printed_row(name) for name in named):
+            refusing.append(item)
+            continue
+        tolerated.append(item)
+    if len(tolerated) > cap:
+        return [*refusing, *tolerated], []
+    return refusing, tolerated
 
 
 def _try_island_variants(
@@ -7573,6 +7679,33 @@ def _unenterable_goal(
     )
 
 
+def _no_step_out(router: _Router, point: tuple[float, float]) -> bool:
+    """Can the search take a single step away from this node? (``True`` = it cannot)
+
+    The **start**-node half of :func:`_unenterable_goal`'s proof, read off
+    ``_Router.route`` the same way: ``route`` pushes ``start_node`` and then only
+    ever pushes a neighbour ``other`` after ``not self._in_bounds(other) or
+    wall_at_node(other)`` has let it through (`router.py:480-481`). So a start
+    whose four neighbours are all walls — or out of bounds — can never reach any
+    goal, and the search spends its whole reachable region (the start alone)
+    proving what is already known.
+
+    A pin is in that state when it stands inside the boxes its **own** part is
+    drawn as: `_declared_rows`' text rows overlap the pin the host has already
+    labelled, and `_pin_walls` covers the lead beside it. Measured on the 144 lock
+    table (535): `C13.2` at ``(440, 660)`` has all four neighbours walled and no
+    free elbow — 379 candidate targets, 23 of them refused by the crossing price
+    alone — which is why :func:`_attach` keeps a priced elbow for exactly this
+    case and nowhere else.
+    """
+    node = router.node(point)
+    for step in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        other = (node[0] + step[0], node[1] + step[1])
+        if router._in_bounds(other) and not router._wall(other):
+            return False
+    return True
+
+
 def _connect_net(
     ctx: _Context,
     router: _Router,
@@ -7679,6 +7812,8 @@ def _elbow_route(
     start: tuple[float, float],
     end: tuple[float, float],
     blocked: set[tuple[float, float]],
+    *,
+    crossings: bool = False,
 ) -> list[tuple[float, float]] | None:
     """A one-bend orthogonal path, when one exists — the cheapest wire there is.
 
@@ -7698,6 +7833,13 @@ def _elbow_route(
     two crossings of `SEC_12V` cost 2.0 each, and raising the price to 120 did
     not move the drawn wire at all until this check was added (evidence
     `outputs/175/evidence.md` §1.3).
+
+    ``crossings`` is the other half of that ruling, for the caller that has
+    **already asked the search** and knows it cannot answer at all
+    (:func:`_attach`, on a pin `_no_step_out` calls walled in): the price may then
+    be paid, because the alternative is a net with no conductor. It changes
+    nothing about the free-elbow rule — the default is :data:`False`, and every
+    caller that has a search to spend keeps it.
 
     A **straight** run (the degenerate corner case below) is not gated: there is
     no alternative to weigh, and 074 keeps an ordinary wire's crossing legal
@@ -7725,9 +7867,9 @@ def _elbow_route(
             continue
         if not _vertex_clear(router, corner):
             continue
-        if _run_crosses_a_foreign_wire(router, start, corner):
+        if not crossings and _run_crosses_a_foreign_wire(router, start, corner):
             continue
-        if _run_crosses_a_foreign_wire(router, corner, end):
+        if not crossings and _run_crosses_a_foreign_wire(router, corner, end):
             continue
         return [start, corner, end]
     return None
@@ -7786,14 +7928,42 @@ def _attach(
     The nearest wiring node is tried first, so a branch hangs off the closest point
     of its node (052 sec.5: a branch reads as owned by the node it decouples), and
     the search is only spent when no single-bend path is free.
+
+    **A pin the search cannot step away from is reached by the L that crosses**
+    (535). `_no_step_out` is the start-node half of `_unenterable_goal`'s proof:
+    ``route`` pushes the start and only ever expands a neighbour `_wall` lets
+    through, so a pin whose four lattice neighbours are all walls can never leave
+    its own node however far the search runs. 岳's own page has one — the
+    flyback's `C13.2` at ``(440, 660)`` stands inside its own part's *drawn* value
+    row (``(435, 650)-(473.151, 660)``) and reference row (``(435, 660)-(448.11,
+    670)``), drawn there by the host and modelled by `_declared_rows`, and beside
+    its own pin lead; with the 144 lock table's `SEC_12V` routed across the one
+    corridor an L could use, every one of the 379 candidate elbows was refused and
+    the search could not take a single step, so `SEC_GND` had no conductor at all
+    and the page was refused (`layout-unsat`, 069 sec.1's flag ladder — the
+    regression the merge exposed). A **crossing is a price, not a wall**
+    (:data:`~engines.router.CROSS_COST`, 175/B-1's own ruling, and 074 keeps an
+    ordinary wire's crossing legal): where the search cannot be asked, the L that
+    pays that price is the drawing a reader would make, and refusing it leaves a
+    net with no conductor. So the priced elbow is taken **only** where the search
+    provably cannot move — everywhere else 175/B-1 stands untouched: a *free*
+    elbow may not undercut a search that could have answered.
     """
     targets = _geometry_nodes(router, segments)
     if not targets:
         return None
+    buried = _no_step_out(router, point)
+    priced: list[tuple[float, float]] | None = None
     for target in _nearest_first(point, targets):
         elbow = _elbow_route(router, point, target, blocked)
         if elbow is not None and len(elbow) >= 2:
             return LayoutSegment(net=net_id, points=elbow)
+        if buried and priced is None:
+            candidate = _elbow_route(router, point, target, blocked, crossings=True)
+            if candidate is not None and len(candidate) >= 2:
+                priced = candidate
+    if priced is not None:
+        return LayoutSegment(net=net_id, points=priced)
     # Same guard as the trunk's (:func:`_unenterable_goal`): a pin whose own node
     # is a wall is a pin the search can never arrive at, and asking it costs the
     # whole reachable region to learn.
@@ -7939,10 +8109,18 @@ def _search_bounds(
 
 @dataclass
 class _Built:
-    """A plan that passed the gate, with the gate's own result kept for evidence."""
+    """A plan that passed the gate, with the gate's own result kept for evidence.
+
+    ``tolerated`` carries the host-printed rows the delivery policy accounted
+    for rather than refused (``single_module_gate_violations``) — empty on a
+    plan that cleared the gate outright. The evidence builder moves them from
+    ``hard_violations`` into named notes: a delivered plan whose own evidence
+    reads fail is a contradiction (the island page's contract, applied here).
+    """
 
     plan: LayoutPlan
     checked: readability.CheckResult
+    tolerated: tuple[readability.HardViolation, ...] = ()
 
 
 def _build_candidate(
@@ -8186,6 +8364,28 @@ def _build_one_variant(
                     expressions[net_id] = expression
                     fallbacks.append(fallback)
                     notes.append(fallback.note)
+                elif _net_class(ctx, net_id) == "gnd":
+                    # 530A, 岳's ground rule: 「GND 还有各类电源标识，不准给我摆
+                    # 网络标签，必须是旗标！」 A ground the router cannot join is
+                    # named by a **flag at each pin**, never by net labels — a
+                    # flag needs no wire, so it is the one downgrade the ground
+                    # rule already allows (the golden boards draw exactly that).
+                    # It goes through `_label_fallback` because the *accounting*
+                    # is 520E's either way — which net, why wired was promised,
+                    # why the wire was not drawn — only the drawn expression
+                    # differs. This leg is also what keeps the 530A ruling on the
+                    # single-module path: the 144 lock table's SEC_GND could not
+                    # be wired, and naming it with five labels is the picture 岳
+                    # rejected.
+                    #
+                    # Written back to `expressions` exactly like the 520E leg
+                    # above: the passes after the loop read `expressions[net_id]`.
+                    expression, fallback = _label_fallback(
+                        ctx, net_id, expression, unrouted,
+                    )
+                    expressions[net_id] = expression
+                    fallbacks.append(fallback)
+                    notes.append(fallback.note)
                 elif net_id in flag_downgraded and len(expression.points) > 1:
                     # 143 F1: this net was a flag net the library carries no
                     # symbol for, and it cannot be wired either. A label is the
@@ -8218,23 +8418,27 @@ def _build_one_variant(
                             "with a name and no conductor"
                         ),
                     ), []
-                expression = _Expression(
-                    net=expression.net, style="label", points=expression.points,
-                    reason=(
-                        "the net could not be wired inside the corridor, and no "
-                        "obligation promises it as a wire, so it is named by a "
-                        "label at each of its pins"
-                    ),
-                )
-                # 515A hole 4: written back, like the flag fallback above — the
-                # passes after the loop read `expressions[net_id]`, and a local
-                # rebinding alone let a rail drawn as a *label* still be read as
-                # a wire there: the ground-symbol pass hung one symbol on it and
-                # the note claimed "pads are joined by the rail" about a rail
-                # nobody drew. The net's own expression is now the truth both
-                # passes read.
-                expressions[net_id] = expression
-                notes.append(f"net {net_id}: wired route not found; labelled instead")
+                else:
+                    expression = _Expression(
+                        net=expression.net, style="label", points=expression.points,
+                        reason=(
+                            "the net could not be wired inside the corridor, and no "
+                            "obligation promises it as a wire, so it is named by a "
+                            "label at each of its pins"
+                        ),
+                    )
+                    # 515A hole 4: written back, like the flag fallback above — the
+                    # passes after the loop read `expressions[net_id]`, and a local
+                    # rebinding alone let a rail drawn as a *label* still be read as
+                    # a wire there: the ground-symbol pass hung one symbol on it and
+                    # the note claimed "pads are joined by the rail" about a rail
+                    # nobody drew. The net's own expression is now the truth both
+                    # passes read. (Before the gnd leg above this assignment ran
+                    # unconditionally and *clobbered* the recorded fallbacks' own
+                    # expressions — same "label" style, so invisible until the
+                    # ground leg returned a flag expression and lost it here.)
+                    expressions[net_id] = expression
+                    notes.append(f"net {net_id}: wired route not found; labelled instead")
             else:
                 drawn_segments, why = drawn
                 segments = [
@@ -8531,11 +8735,24 @@ def _build_one_variant(
             "the midpoint of the wire's longest run, so the run is the only lever)"
         )
     if checked.hard_violations:
-        return (
-            None,
-            _gate_failure(ctx, variant, checked.hard_violations),
-            [item.render() for item in checked.hard_violations],
-        )
+        # The island policy's pin-text-press clause applies on this path too:
+        # a part's own pin row against that same part's own rows is the symbol's
+        # artwork, and *no* lever this path searches — not the pose ladder, not
+        # the escape ladder below, which moves wire name rows only — can separate
+        # them. Counting the kind as a refusal made every drawing carrying a
+        # crowded symbol layout-unsat no matter the search (the merged-tree
+        # suite's eight reds, all on outputs/-gated pages the worktree never
+        # ran, were this one sentence). The clause fires only after the search
+        # has refused every variant it built, so a pose that *does* separate
+        # them is still found first.
+        refusing, tolerated = single_module_gate_violations(checked.hard_violations)
+        if refusing:
+            return (
+                None,
+                _gate_failure(ctx, variant, refusing),
+                [item.render() for item in refusing],
+            )
+        return _Built(plan=plan, checked=checked, tolerated=tolerated), None, []
     return _Built(plan=plan, checked=checked), None, []
 
 

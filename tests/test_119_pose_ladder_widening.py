@@ -449,6 +449,16 @@ def test_the_real_flyback_widens_and_still_refuses_honestly():
     （`13` / `14` 条硬违反），另外 4 档仍各点名一条关系——所以「不同因」这个读数
     **没变**，变的是那 2 档的**去处**。加宽依旧不点火，理由依旧成立。
 
+    **535 的读数（2026-10-23，实测驱动）**：那 2 档的**去处又换了一层**。第二层
+    修复（530A：地/电源一律旗标）让连不上的 `SEC_GND` 走**旗标**降级，而这页的
+    `SEC_GND` 一面旗标都挂不上（席位阶梯四个方向全被占），于是 2 档停在 **069
+    sec.1 的旗标席位阶梯**自己的那句话上；降级账本从两条变成**三条**
+    （`HVDC`、`SEC_12V`、`SEC_GND`），真载入器下 `named` 另加 `FB_SENSE`
+    （531 的事）。「6 档、其中 2 档过关系闸、其余 4 档各点名一条关系、加宽不点火」
+    这些读数**一条没变**——变的是那 2 档死在**哪一层**，以及地进了降级名单。
+    这也**不是**把一条闸放宽：这 2 档在 520E 下也是被拒的，535 之后同样被拒，
+    只是拒绝的人从可读性闸换成了「地自己的旗标挂不上」。
+
     前两节量的是「加宽这个机制对不对」；这一条量的是「它对**这一页**现在对不对」。
 
     **530F 重钉（改账簿，按任务书工作项 2）**：反激这份**文档**在 520m 之后声明了
@@ -457,7 +467,7 @@ def test_the_real_flyback_widens_and_still_refuses_honestly():
     没有链可以重新摆姿态——所以「这一页有没有点火」在岛路上问的是一个**没有
     执行者**的问题。这一条于是改成钉**岛路实际形态**：这份文档编译出来是什么，
     以及它**没有**阶梯的痕迹。加宽对这个文档的历史读数（不点火 / 6 档基阶梯 /
-    2 档过关系闸死在可读性闸 / 其余 4 档各点名一条关系）一条都没丢——它们搬到
+    2 档过关系闸死在旗标席位阶梯 / 其余 4 档各点名一条关系）一条都没丢——它们搬到
     紧邻的 `test_the_single_module_flyback_still_shows_the_widening_reading`，
     用**剥掉 islands 的同一份文档**量。病历不许伪造，但也得量在真跑的那条路上。
     """
@@ -512,21 +522,28 @@ def test_the_real_flyback_widens_and_still_refuses_honestly():
     # 3) 单模块那条路（同一个模块、剥掉 islands）仍按老读数跑。
     _assert_single_module_widening_reading(
         circuit, presentation, book,
-        named=("HVDC", "SEC_12V", "FB_SENSE"),
+        named=("HVDC", "SEC_12V", "SEC_GND", "FB_SENSE"),
     )
 
 
+#: 069 sec.1's own words when a ground's flag has nowhere to go.  It is the layer
+#: the rungs that get past the relation gate stop on since 535 (530A: an unjoinable
+#: ground is expressed by a flag, and a pad whose flag nobody could hang is refused
+#: rather than drawn on top of the wiring).
+FLAG_LADDER_PHRASE = "is named by a flag of its own"
+
+
 def _assert_single_module_widening_reading(
-    circuit, presentation, book, *, named: tuple[str, ...] = ("HVDC", "SEC_12V"),
+    circuit, presentation, book, *, named: tuple[str, ...] = ("HVDC", "SEC_12V", "SEC_GND"),
 ) -> None:
     """119 的历史读数，量在**它真正会跑的那条路**上（530F 剥岛夹具）。
 
     Extracted so both the re-pinned test above and the standalone one below read
     the same numbers: the widening's trigger is gone, six base rungs are built, two
-    of them get past the relation gate and die at the readability gate with the
-    downgraded nets beside them, and the other four each name a relation of their
-    own.  Nothing here was re-measured — it is the same page measured where the
-    ladder actually runs.
+    of them get past the relation gate and die at the ground's own flag-seat ladder
+    (:data:`FLAG_LADDER_PHRASE`) with the downgraded nets beside them, and the other
+    four each name a relation of their own.  Nothing here was re-measured — it is the
+    same page measured where the ladder actually runs.
 
     ``named`` is the one number the two callers do **not** share, and 531 is why:
     this test's own hand-made library has no `$.texts`, so nothing about its routing
@@ -536,6 +553,11 @@ def _assert_single_module_widening_reading(
     book it is measuring rather than one expectation being loosened for both — and
     the parameter is called ``named`` rather than ``downgraded`` because the body
     already computes a ``downgraded`` of its own from the rungs' own fallbacks.
+
+    **535 (2026-10-23)**: the rung-level reading moved a layer (the ground's flag
+    ladder, not the readability gate) and both books' ``named`` grew `SEC_GND` —
+    the unjoinable ground, which 530A expresses as a flag and only as a flag.  The
+    numbers are in the callers' own docstrings.
     """
     single = dataclasses.replace(presentation, islands=None)
     result = dc.compile(circuit, single, book, dc.CompileBudget(max_candidates=64))
@@ -569,24 +591,32 @@ def _assert_single_module_widening_reading(
     # 义务——那条义务连不上时被降级成名字了）。所以这里量的是「两档过关系闸、
     # 死在闸上」，且它们就是**记账降级**的那两档：把降级与「过关系闸」绑在一起
     # 才是本批的断言，只数「2 档死在闸上」会漏掉降级悄悄消失这种情况。
-    at_the_gate = [
-        item for item in base
-        if "the independent readability checker refused" in item.reason
+    #
+    # **535 重钉（2026-10-23，实测驱动）**：那两档的**去处又换了一层**——第二层
+    # 修复（530A：地/电源一律旗标）让连不上的 `SEC_GND` 走 `_label_fallback` 的
+    # **旗标**分支，而这页的 `SEC_GND` 一面旗标都挂不上（`_seat_wire_flags` 的
+    # 席位阶梯四个方向全被占），于是两档死在 **069 sec.1 的旗标席位阶梯**自己的
+    # 那句话上。断言的**主语没变**（「过关系闸的那两档 = 记账降级的那两档」），
+    # 换的是「它们死在哪一层」和降级账本上多出来的那条 `SEC_GND`。
+    past_the_relation_gate = [
+        item for item in base if FLAG_LADDER_PHRASE in item.reason
     ]
-    assert len(at_the_gate) == 2, (
-        "520A2 measured two of the six base rungs passing the relation gate; "
-        f"under 520E both die at the readability gate; got {len(at_the_gate)} — "
-        "re-measure before trusting the rest of this test"
+    assert len(past_the_relation_gate) == 2, (
+        "520A2 measured two of the six base rungs passing the relation gate; under "
+        f"535 both die at the ground's own flag-seat ladder; got "
+        f"{len(past_the_relation_gate)} — re-measure before trusting the rest of "
+        "this test"
     )
     assert sorted(
-        {item.variant for item in at_the_gate}
+        {item.variant for item in past_the_relation_gate}
     ) == ["spacing=1 pose-variant=0", "spacing=1.5 pose-variant=0"]
     downgraded = sorted(
-        {fb.net for item in at_the_gate for fb in item.label_fallbacks}
+        {fb.net for item in past_the_relation_gate for fb in item.label_fallbacks}
     )
-    assert downgraded == ["HVDC", "SEC_12V"], (
-        "the two rungs that get past the relation gate are the two the router "
-        f"cannot wire — and 520E names those nets instead: {downgraded}"
+    assert downgraded == ["HVDC", "SEC_12V", "SEC_GND"], (
+        "the two rungs that get past the relation gate are the ones the router "
+        "cannot wire — and 520E names those nets instead, including since 535 the "
+        f"unjoinable ground: {downgraded}"
     )
     relations = {
         dc._refusing_relation(item.failure) for item in base
@@ -600,12 +630,21 @@ def _assert_single_module_widening_reading(
     )
 
     # 3) 页面仍被诚实拒绝，且摘要点名**现在**真正拦路的那一层。
+    #
+    # **535 重钉**：摘要第一条 = 最小档（`spacing=1 pose-variant=0`）的拒因，
+    # 也就是 069 sec.1 旗标席位阶梯那句（520E 时这里是可读性闸）。降级那一句
+    # 仍然**追加**在同一段拒绝里（而且现在点三条网）——这就是本批那两个断言：
+    # 「拒绝换了层」与「降级真的被记了」是两件事。
     assert not result.ok and not result.candidates
     joined = " ".join(item.detail for item in result.failures)
     assert joined, "a refusal with no reason is not a refusal"
-    assert "the independent readability checker refused" in joined, (
-        "the summary must name the layer the page now stops on (520E moved it "
-        f"from the routing to the readability gate): {joined[:300]}"
+    assert FLAG_LADDER_PHRASE in joined and "069 sec.1" in joined, (
+        "the summary must name the layer the page now stops on (535 moved it from "
+        f"the readability gate to the ground's own flag-seat ladder): {joined[:300]}"
+    )
+    assert "the name had nowhere to go either" in joined, (
+        "and the downgrade clause must still be appended to that refusal, not "
+        f"replaced by it: {joined[:400]}"
     )
     assert [item.net for item in result.label_fallbacks] == list(named), (
         "and the page's own account of what it named instead must be visible "
@@ -622,7 +661,10 @@ def test_the_single_module_flyback_still_shows_the_widening_reading():
     adding a compiler switch, which would give the product a branch that exists for
     tests only — is what keeps this measurement a measurement.  The numbers are
     `_assert_single_module_widening_reading`'s; this test exists separately so the
-    reading is still named in `pytest -v` after the re-pin above.
+    reading is still named in `pytest -v` after the re-pin above.  It is the one
+    caller on 119's **hand-made** library (the caller above hands the real book),
+    so its ``named`` is the three-net set — `HVDC`, `SEC_12V` and, since 535, the
+    unjoinable ground `SEC_GND`; the real book adds `FB_SENSE` (531).
     """
     circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
     presentation = PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
