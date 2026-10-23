@@ -8364,28 +8364,6 @@ def _build_one_variant(
                     expressions[net_id] = expression
                     fallbacks.append(fallback)
                     notes.append(fallback.note)
-                elif _net_class(ctx, net_id) == "gnd":
-                    # 530A, 岳's ground rule: 「GND 还有各类电源标识，不准给我摆
-                    # 网络标签，必须是旗标！」 A ground the router cannot join is
-                    # named by a **flag at each pin**, never by net labels — a
-                    # flag needs no wire, so it is the one downgrade the ground
-                    # rule already allows (the golden boards draw exactly that).
-                    # It goes through `_label_fallback` because the *accounting*
-                    # is 520E's either way — which net, why wired was promised,
-                    # why the wire was not drawn — only the drawn expression
-                    # differs. This leg is also what keeps the 530A ruling on the
-                    # single-module path: the 144 lock table's SEC_GND could not
-                    # be wired, and naming it with five labels is the picture 岳
-                    # rejected.
-                    #
-                    # Written back to `expressions` exactly like the 520E leg
-                    # above: the passes after the loop read `expressions[net_id]`.
-                    expression, fallback = _label_fallback(
-                        ctx, net_id, expression, unrouted,
-                    )
-                    expressions[net_id] = expression
-                    fallbacks.append(fallback)
-                    notes.append(fallback.note)
                 elif net_id in flag_downgraded and len(expression.points) > 1:
                     # 143 F1: this net was a flag net the library carries no
                     # symbol for, and it cannot be wired either. A label is the
@@ -8418,6 +8396,35 @@ def _build_one_variant(
                             "with a name and no conductor"
                         ),
                     ), []
+                elif _net_class(ctx, net_id) == "gnd":
+                    # 530A, 岳's ground rule: 「GND 还有各类电源标识，不准给我摆
+                    # 网络标签，必须是旗标！」 A ground the router cannot join is
+                    # named by a **flag at each pin**, never by net labels — a
+                    # flag needs no wire, so it is the one downgrade the ground
+                    # rule already allows (the golden boards draw exactly that).
+                    # It goes through `_label_fallback` because the *accounting*
+                    # is 520E's either way — which net, why wired was promised,
+                    # why the wire was not drawn — only the drawn expression
+                    # differs. This leg is also what keeps the 530A ruling on the
+                    # single-module path: the 144 lock table's SEC_GND could not
+                    # be wired, and naming it with five labels is the picture 岳
+                    # rejected.
+                    #
+                    # Ordered AFTER the 143 F1 refusal on purpose: a ground the
+                    # library carries no flag for cannot take this leg's flags
+                    # either, and 143 F1's refusal ("a multi-pin net is never
+                    # left with a name and no conductor") is the honest answer
+                    # there — the flag-style consumer would silently degrade to
+                    # labels, which is exactly the shape both rules forbid.
+                    #
+                    # Written back to `expressions` exactly like the 520E leg
+                    # above: the passes after the loop read `expressions[net_id]`.
+                    expression, fallback = _label_fallback(
+                        ctx, net_id, expression, unrouted,
+                    )
+                    expressions[net_id] = expression
+                    fallbacks.append(fallback)
+                    notes.append(fallback.note)
                 else:
                     expression = _Expression(
                         net=expression.net, style="label", points=expression.points,
