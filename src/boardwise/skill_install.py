@@ -39,6 +39,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -95,6 +96,23 @@ SKILL_HOME_ENVS: dict[str, str] = {
 
 #: The file name the user-level skill is expected to have.
 SKILL_NAME = "SKILL.md"
+
+#: The harness name a **DeepSeek Harness (dsh)** session's skill is reported under
+#: (537A). Deliberately not in :data:`HARNESSES`: dsh has no user-level skill
+#: directory to write to, so `install-skill` must never treat it as a destination
+#: (see :data:`ADVISORY_HARNESSES`). It is a *doctor* subject, not an install one.
+DSH_HARNESS = "dsh"
+
+#: The markers a dsh session exports into the processes it runs. Either one is
+#: enough to say "this run is inside dsh" — a thin launcher may carry only one —
+#: and both are absent outside dsh, which is the legacy Kimi/Claude path.
+DSH_ENV_VARS: tuple[str, ...] = ("DSH_SESSION_ID", "DSH_HOME")
+
+#: Where a dsh session actually reads the SOP: the **workspace's** own skills root.
+#: dsh scans ``.agents/skills`` of the folder it was opened on (the same root the
+#: repository ships), not ``~/.kimi-code`` or ``~/.claude`` — which is why the
+#: user-level statuses say nothing about a dsh session (537A).
+DSH_SKILL_PARTS: tuple[str, ...] = (".agents", "skills", "boardwise", SKILL_NAME)
 
 # Backup stamps carry a time part (#40): a date-only stamp made two installs on
 # the same day write the same backup name, so the second one silently displaced
@@ -295,6 +313,83 @@ def skill_statuses(source: Path) -> tuple[SkillStatus, ...]:
                 SkillStatus(harness, path, "current" if installed == wanted else "stale")
             )
     return tuple(statuses)
+
+
+def dsh_environment(env: Mapping[str, str] | None = None) -> bool:
+    """Is this process running inside a DeepSeek Harness (dsh) session? (537A)
+
+    Decided from the environment alone, because that is the only signal a CLI
+    started *by* dsh has: ``DSH_SESSION_ID`` and/or ``DSH_HOME`` are exported by
+    the session into every command it runs, and neither exists outside it. Either
+    marker is enough — a launcher that sets only one is still dsh.
+
+    ``env`` is injectable so a test can ask the question without touching the
+    suite's own environment (the suite is often *run* from dsh, so the answer
+    there is not the answer the legacy cases need).
+    """
+    source = os.environ if env is None else env
+    return any(source.get(name) for name in DSH_ENV_VARS)
+
+
+def workspace_skill_path(workspace: Path | None = None) -> Path:
+    """The SKILL.md a dsh session reads from ``workspace`` (default: cwd).
+
+    ``workspace`` is the folder dsh was opened on — its current directory for
+    every command it runs. Named as a helper rather than inlined so doctor's
+    line and its fix can never spell two different paths.
+    """
+    root = Path(workspace) if workspace is not None else Path.cwd()
+    return root.joinpath(*DSH_SKILL_PARTS)
+
+
+def doctor_skill_statuses(
+    source: Path, workspace: Path | None = None
+) -> tuple[SkillStatus, ...]:
+    """Judge the SOP the **current session's** agent reads — doctor's raw material.
+
+    The 061 answer (:func:`skill_statuses`) is about the two user-level skill
+    directories, and it stays exactly that: `install-skill`'s destinations, for
+    the harnesses that read one. A dsh session reads neither — it loads the
+    workspace's ``.agents/skills/boardwise/SKILL.md`` — so asking it about Kimi
+    Code and Claude Code produced two red lines about editors the session does
+    not use (the measured 537A complaint), and a fix telling the reader to install
+    a skill where dsh never looks.
+
+    So this is a *separate* entry point rather than a branch inside
+    :func:`skill_statuses` (537A acceptance 1 and 4): every existing caller of
+    ``skill_statuses`` keeps its tuple of user-level harnesses, whatever session
+    it runs in, and doctor asks this one question instead.
+
+    Under dsh it returns exactly one status, ``harness="dsh"``, whose ``path`` is
+    the workspace copy and whose state is:
+
+    ``current``
+        byte-for-byte the SKILL.md this build carries;
+    ``stale``
+        a different file is there — an older workspace, or a hand edit;
+    ``missing``
+        no workspace copy at all, so dsh has no SOP to load;
+    ``unreadable``
+        something is at the path and could not be read; ``reason`` carries the OS
+        message.
+
+    Outside dsh it is :func:`skill_statuses` unchanged — the legacy two lines.
+    A build that cannot read its own SKILL.md still raises out of
+    :func:`_bundled_bytes`, and doctor turns that into its one skip.
+    """
+    if not dsh_environment():
+        return skill_statuses(source)
+    wanted = _bundled_bytes(source)
+    path = workspace_skill_path(workspace)
+    try:
+        installed = path.read_bytes()
+    except FileNotFoundError:
+        return (SkillStatus(DSH_HARNESS, path, "missing"),)
+    except OSError as exc:
+        return (SkillStatus(DSH_HARNESS, path, "unreadable", reason=str(exc)),)
+    return (
+        SkillStatus(DSH_HARNESS, path, "current" if installed == wanted else "stale"),
+    )
 
 
 def recycle(path: Path) -> str:

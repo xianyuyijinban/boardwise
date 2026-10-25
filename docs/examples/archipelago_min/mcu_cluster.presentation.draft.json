@@ -1,0 +1,78 @@
+{
+  "kind": "boardwise-presentation-spec",
+  "specVersion": 1,
+  "grammarRef": "ic-periphery",
+  "modules": [
+    {
+      "id": "mcu_cluster",
+      "parts": [
+        "U1",
+        "C1",
+        "C2",
+        "Y1",
+        "C3",
+        "C4",
+        "H1"
+      ],
+      "role": "MCU cluster: core, local decoupling, crystal and SWD; child islands are the placement units",
+      "core": "U1"
+    }
+  ],
+  "islands": [
+    {
+      "id": "mcu_core",
+      "parts": [
+        "U1"
+      ],
+      "role": "control",
+      "name": "MCU core",
+      "group": "mcu_cluster",
+      "owner": "U1",
+      "kind": "core"
+    },
+    {
+      "id": "mcu_decoupling",
+      "parts": [
+        "C1",
+        "C2"
+      ],
+      "role": "secondary",
+      "name": "MCU decoupling",
+      "group": "mcu_cluster",
+      "owner": "U1",
+      "kind": "decoupling",
+      "side": "left"
+    },
+    {
+      "id": "mcu_clock",
+      "parts": [
+        "Y1",
+        "C3",
+        "C4"
+      ],
+      "role": "secondary",
+      "name": "MCU clock",
+      "group": "mcu_cluster",
+      "owner": "U1",
+      "kind": "clock",
+      "side": "right"
+    },
+    {
+      "id": "mcu_swd",
+      "parts": [
+        "H1"
+      ],
+      "role": "secondary",
+      "name": "SWD",
+      "group": "mcu_cluster",
+      "owner": "U1",
+      "kind": "programming",
+      "side": "top"
+    }
+  ],
+  "labelPolicy": {
+    "local": "wire",
+    "crossModule": "label",
+    "highFanout": "label"
+  }
+}

@@ -1,0 +1,280 @@
+{
+  "kind": "boardwise-circuit-spec",
+  "specVersion": 1,
+  "parts": [
+    {
+      "id": "U1",
+      "symbolRef": "CH343G-C2844153",
+      "value": "CH343G",
+      "lcsc": "C2844153",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "USB1",
+      "symbolRef": "TYPE-C-31-M-12-C165948",
+      "value": "TYPE-C-31-M-12",
+      "lcsc": "C165948",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "H1",
+      "symbolRef": "2x5P-2.54-C49056209",
+      "value": "2x5P-2.54",
+      "lcsc": "C49056209",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "D1",
+      "symbolRef": "LED0603-RED-C2286",
+      "value": "RED",
+      "lcsc": "C2286",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "R1",
+      "symbolRef": "R0603-5.1k-C23186",
+      "value": "5.1k",
+      "lcsc": "C23186",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "R2",
+      "symbolRef": "R0603-5.1k-C23186",
+      "value": "5.1k",
+      "lcsc": "C23186",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "R3",
+      "symbolRef": "R0603-1k-C21190",
+      "value": "1k",
+      "lcsc": "C21190",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "C1",
+      "symbolRef": "C0603-100nF-C1590",
+      "value": "100nF",
+      "lcsc": "C1590",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "C2",
+      "symbolRef": "C0805-10uF-C15850",
+      "value": "10uF",
+      "lcsc": "C15850",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "C3",
+      "symbolRef": "C0603-100nF-C1590",
+      "value": "100nF",
+      "lcsc": "C1590",
+      "provenance": "engineer_confirmed"
+    }
+  ],
+  "nets": [
+    {
+      "id": "GND",
+      "class": "gnd",
+      "members": [
+        "U1.1",
+        "USB1.A1B12",
+        "USB1.B1A12",
+        "USB1.1",
+        "USB1.2",
+        "USB1.3",
+        "USB1.4",
+        "R1.2",
+        "R2.2",
+        "R3.2",
+        "C1.2",
+        "C2.2",
+        "C3.2",
+        "H1.10"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "+5V",
+      "class": "power",
+      "members": [
+        "USB1.A4B9",
+        "USB1.B4A9",
+        "U1.16",
+        "U1.7",
+        "C1.1",
+        "C2.1",
+        "D1.1"
+      ],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "VCC",
+      "class": "power",
+      "members": ["U1.15", "H1.9"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "D+",
+      "class": "signal",
+      "members": ["USB1.A6", "USB1.B6", "U1.5"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "D-",
+      "class": "signal",
+      "members": ["USB1.A7", "USB1.B7", "U1.6"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "CC1",
+      "class": "signal",
+      "members": ["USB1.A5", "R1.1"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "CC2",
+      "class": "signal",
+      "members": ["USB1.B5", "R2.1"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "TXD",
+      "class": "signal",
+      "members": ["U1.2", "H1.1"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "RXD",
+      "class": "signal",
+      "members": ["U1.3", "H1.2"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "RTS",
+      "class": "signal",
+      "members": ["U1.11", "H1.3"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "CTS",
+      "class": "signal",
+      "members": ["U1.13", "H1.4"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "DTR",
+      "class": "signal",
+      "members": ["U1.10", "H1.5"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "DSR",
+      "class": "signal",
+      "members": ["U1.12", "H1.6"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "DCD",
+      "class": "signal",
+      "members": ["U1.9", "H1.7"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "RI",
+      "class": "signal",
+      "members": ["U1.14", "H1.8"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "V3",
+      "class": "signal",
+      "members": ["U1.4", "C3.1"],
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "LED_A",
+      "class": "signal",
+      "members": ["D1.2", "R3.1"],
+      "provenance": "engineer_confirmed"
+    }
+  ],
+  "nc": [
+    { "pin": "U1.8", "provenance": "engineer_confirmed" },
+    { "pin": "USB1.A8", "provenance": "engineer_confirmed" },
+    { "pin": "USB1.B8", "provenance": "engineer_confirmed" }
+  ],
+  "openInterfaces": [
+    {
+      "net": "+5V",
+      "direction": "input",
+      "role": "USB bus power in (VBUS, 5 V)",
+      "part": "USB1",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "net": "VCC",
+      "direction": "input",
+      "role": "UART-side I/O level rail, brought in from the peer board on the header",
+      "part": "H1",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "net": "TXD",
+      "direction": "output",
+      "role": "UART TX out to the peer board",
+      "part": "H1",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "net": "RXD",
+      "direction": "input",
+      "role": "UART RX in from the peer board",
+      "part": "H1",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "net": "RTS",
+      "direction": "output",
+      "role": "MODEM handshake RTS out to the peer board",
+      "part": "H1",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "net": "CTS",
+      "direction": "input",
+      "role": "MODEM handshake CTS in from the peer board",
+      "part": "H1",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "net": "DTR",
+      "direction": "output",
+      "role": "MODEM handshake DTR out to the peer board",
+      "part": "H1",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "net": "DSR",
+      "direction": "input",
+      "role": "MODEM handshake DSR in from the peer board",
+      "part": "H1",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "net": "DCD",
+      "direction": "input",
+      "role": "MODEM handshake DCD in from the peer board",
+      "part": "H1",
+      "provenance": "engineer_confirmed"
+    },
+    {
+      "net": "RI",
+      "direction": "input",
+      "role": "MODEM handshake RI in from the peer board",
+      "part": "H1",
+      "provenance": "engineer_confirmed"
+    }
+  ]
+}

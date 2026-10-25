@@ -879,6 +879,18 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         result.failures = blockers
         return result
 
+    # 1b. 536: the archipelago contract, read before the grammar is bound. An
+    #     archipelago's islands are its structure, and no later stage can notice
+    #     that an island sits on no net of its owner — the reference pass above
+    #     only asks whether an id exists, not whether the parts a group holds are
+    #     the parts the circuit wires together. A legacy presentation states none
+    #     of the four identity keys and this is a no-op on it (the function's
+    #     first line), so the path it always took keeps its bytes.
+    archipelago = _archipelago_failures(circuit_spec, presentation_spec)
+    if archipelago:
+        result.failures = archipelago
+        return result
+
     # 2. bind; a refusal travels through verbatim. The contract travels with it
     #    (095 A4): the order a decision states is a binding, not a decoration.
     binding = bind_grammar(circuit_spec, presentation_spec, book, intent=intent)
@@ -919,6 +931,11 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
     # none, so this is a no-op on those, and the page compiler's own module view
     # never carries `islands` (`pagecompiler._module_view`) — so a module
     # compiled for a page cannot reach the island path either.
+    # 536: several declared islands take the island path. A single archipelago
+    # island keeps this ordinary layout path (its grammar/placement is the one that
+    # already works); `_build_one_variant` stamps that one declared island on every
+    # part and checks it before the gate. A legacy implicit single island is still
+    # `False` here and keeps its own path, byte for byte.
     multi_island = len(presentation_spec.effective_islands()) > 1
     if multi_island:
         _try_island_variants(ctx, result, seen, circuit_spec, presentation_spec,
@@ -1164,6 +1181,70 @@ def _reference_failures(
             action="fix the locked part id, or drop the lock",
         ))
     return out
+
+
+def _archipelago_failures(
+    circuit_spec: CircuitSpec, presentation_spec: PresentationSpec
+) -> list[GrammarFailure]:
+    """536: why an archipelago cannot be drawn here, if it cannot.
+
+    Legacy is not an error — a presentation that states none of the four identity
+    keys is the 520j reading and this returns ``[]`` before reading anything
+    else, so every document that says nothing about groups keeps the bytes it
+    had. An archipelago, on the other hand, states its structure as groups of
+    child islands, and two readings of it can fail here:
+
+    * **several groups** — a page of groups is assembled by the group assembler,
+      which a later batch owns. This compiler draws **one** drawing, so a
+      multi-group page could only be flattened into that one drawing, and
+      flattening is exactly the silent loss of structure the declaration exists
+      to prevent. Refused, not drawn.
+    * **one group whose islands do not sit on the circuit** — the circuit-reading
+      half of the contract (`core.archipelago.validate_archipelago`): the
+      declared parts are the circuit's parts, every satellite shares a net with
+      its owner, and a `decoupling` / `bulk` island holds supply and no signal.
+      Both documents are closed schemas, so neither can decide a relation
+      *between* them; that is what this stage is for, and it runs before the
+      grammar binds because a binding computed over a partition that contradicts
+      the netlist would be a legal drawing of the wrong grouping.
+    """
+    if not presentation_spec.is_archipelago:
+        return []
+    modules = list(presentation_spec.modules)
+    if len(modules) > 1:
+        return [GrammarFailure(
+            category=FAILURE_PRESENTATION_POOR,
+            subject="islands",
+            detail=(
+                f"the archipelago declares {len(modules)} groups ("
+                + ", ".join(repr(module.id) for module in modules)
+                + ") — a multi-group page is put together by the group assembler, "
+                "which this batch does not implement; drawing it here could only "
+                "flatten the groups into one picture, and the declared group "
+                "structure would silently stop meaning anything"
+            ),
+            action=(
+                "compile one module at a time, or wait for the group assembler — "
+                "flattening the groups is not a cheaper answer, it is a different "
+                "drawing of the same documents"
+            ),
+        )]
+    from boardwise.core.archipelago import ArchipelagoError, validate_archipelago
+
+    try:
+        validate_archipelago(circuit_spec, presentation_spec)
+    except ArchipelagoError as exc:
+        return [GrammarFailure(
+            category=FAILURE_PRESENTATION_POOR,
+            subject="islands",
+            detail=str(exc),
+            action=(
+                "correct the presentation's islands (their parts, `owner`, `kind` "
+                "and `group`) so they describe the circuit's own nets — the "
+                "islands are the drawing's structure, not a note about it (§2.3)"
+            ),
+        )]
+    return []
 
 
 def _library_failures(
@@ -3117,6 +3198,7 @@ def _chain_and_shelf_layout(
 
     counts: dict[tuple[str, tuple[float, float]], int] = {}
     branch_ids = _branch_order(ctx)
+    rungs: dict[str, _BranchRung] = {}
     for part_id in branch_ids:
         lock = ctx.locked(part_id)
         if lock is not None:
@@ -3156,6 +3238,17 @@ def _chain_and_shelf_layout(
             origins[part_id] = root
         else:
             origins[part_id] = (root[0] - shared[0], root[1] - shared[1])
+        rungs[part_id] = _BranchRung(
+            owner=owner,
+            direction=direction,
+            anchor=anchor,
+            base=max(lane, floor),
+            step=step,
+            shared=shared,
+            index=index,
+        )
+
+    _share_one_bay(ctx, origins, poses, boxes, rungs, residue)
 
     _align_branch_lanes(ctx, origins, poses, residue)
 
@@ -3981,6 +4074,231 @@ def _lane_coordinate(
                 return point[index]
     origin = origins.get(part_id)
     return None if origin is None else origin[index]
+
+
+# ------- 534: siblings on distinct pads stagger on their own reach, not lane steps
+
+
+@dataclass(frozen=True)
+class _BranchRung:
+    """What the ladder computed for one branch, kept so the bay pass can re-place it.
+
+    ``base`` is the distance that branch takes **on its own** — the ladder's first
+    rung, floored by the branch's own clearance. It is kept apart from ``step``
+    because the two are different quantities: ``step`` is the ladder's *lane* pitch,
+    and what :func:`_share_one_bay` has to measure between two siblings hanging off
+    different pads is the parts' own reach, not a count of lanes.
+    """
+
+    owner: str
+    direction: tuple[float, float]
+    anchor: tuple[float, float]
+    base: float
+    step: float
+    shared: tuple[float, float] | None
+    index: int = 0
+
+
+#: Two anchors closer than this **along the line** are the same pad. A sibling
+#: group hanging off one tap has no ordering to take from its anchors.
+BAY_SAME_PAD = 1e-6
+
+
+def _projection(box: Box, axis: tuple[float, float]) -> tuple[float, float]:
+    """``(lowest, highest)`` corner of ``box`` measured along ``axis``."""
+    corners = (
+        (box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3]),
+    )
+    values = [_dot(corner, axis) for corner in corners]
+    return (min(values), max(values))
+
+
+def _bay_box(
+    local: Box,
+    base: tuple[float, float],
+    line: tuple[float, float],
+) -> tuple[tuple[float, float], Box]:
+    """A bay member's origin and its box grown by ``GAP``.
+
+    ``line`` is the axis the group's pads already separate the members on; a bay
+    never moves a member along it (see the collision bail in
+    :func:`_share_one_bay`), so it only enters through ``base``.
+    """
+    origin = base
+    box = (
+        local[0] + origin[0],
+        local[1] + origin[1],
+        local[2] + origin[0],
+        local[3] + origin[1],
+    )
+    grown = (box[0] - GAP, box[1] - GAP, box[2] + GAP, box[3] + GAP)
+    return origin, grown
+
+
+def _declared_among(ctx: _Context, members: Sequence[str]) -> bool:
+    """Is any **pitch relation** written between two members of this group?
+
+    :func:`_share_one_bay` collapses a sibling group onto one bay, which makes the
+    members hang side by side in a column (or row) *drawn from their pads*. That is
+    only the grammar's silence being answered: the moment the grammar itself
+    states an order **between two of these siblings**, the spacing between them is
+    that order's distance, and flattening it to one bay is this pass overruling the
+    spec instead of filling in for it.
+
+    Measured, and this is the reason the predicate exists: ch340_serial's
+    ``X1``/``C1`` carry ``adjacent(X1, C1)`` from the crystal's own grammar, and
+    collapsing their bay put X1 at -65 with C1 pushed to -165 — the gate answered
+    ``presentation-poor/X1``, ``adjacent(X1, C1)`` broken. The gate is right and the
+    pass is wrong: 534's CC1/CC2/VBUS group has **no** such relation, which is the
+    distinction this reads.
+
+    Taps count as declared orders too (``horizontal-tap``/``vertical-tap`` name a
+    pad a part hangs off), and so does every other kind in ``CONSTRAINT_KINDS``:
+    the question asked here is only "did the spec speak about these two", never
+    "which kind of thing did it say".
+    """
+    if len(members) < 2:
+        return False
+    inside = set(members)
+    for constraint in ctx.binding.constraints:
+        if constraint.subject in inside and constraint.object in inside:
+            return True
+    return False
+
+
+def _share_one_bay(
+    ctx: _Context,
+    origins: dict[str, tuple[float, float]],
+    poses: Mapping[str, SymbolPose],
+    boxes: Mapping[str, Box],
+    rungs: Mapping[str, _BranchRung],
+    residue: tuple[float, float],
+) -> None:
+    """Stagger a sibling group from **one** rung, each on its own pad.
+
+    The ladder hangs branch *n* of one ``(owner, direction)`` group at
+    ``lane + step*index`` from its own anchor. That ``index`` term is right for a
+    group whose members hang off **one tap**: there the members already coincide
+    along the line, so the count is the only thing keeping them apart
+    (power_entry_xt30's D1/C115/C116 in a row after the connector).
+
+    It is wrong for a group whose members hang off **distinct pads**. Each
+    sibling's wire still ends at its own pad, so pushing sibling *n* another lane
+    out makes that wire travel past the boxes of siblings ``0..n-1``: every wire
+    the group draws grows with a number nobody drew. Measured on the 534 usb_c
+    island, where USB1's CC1/CC2/VBUS pads sit 20-60 apart on one edge: CC2 ran
+    500 for the same two pads CC1 covers in 350, and the island was 494 wide.
+
+    So a distinct-pad group is placed at **one** rung �� ``rungs[part_id].base``,
+    the group's first-rung distance �� from each member's own anchor, and the pads
+    do the separating: what the pads already give in the along-line direction is
+    not charged a second time. Nothing moves along the line; a member whose box
+    still lands on an already-placed sibling is pushed **outward**, along the
+    escape direction, which is the axis the bay has room in.
+
+    What this is not, each tried and measured:
+
+    * a *fine* staircase on the members' own reach (``base + n*fine``) reads 374
+      wide and 2655 total, but it spends a pitch a 20-60 pad gap does not need:
+      the one-rung answer is 369 wide and 2415 total, same island height (300);
+    * moving the members **along the line** spends the room in the other axis:
+      the 534 island went 324 wide but 398 tall with its GND trunk 670 -> 990,
+      and on 053B scene 9 the push took the EN pull-down off the EN pin row
+      (``R2 (-180,-70) -> (-160,-170)``, ``branch.en_branch``), twice: once as an
+      exact minimal push, once with ``span + GAP`` steps.
+
+    Nothing here is measured against the staircase: the pass reads only the pads
+    and leaves the ladder's answer in place whenever it cannot place a bay
+    cleanly, so a group that did not change is not a group that got worse.
+    """
+    groups: dict[tuple[str, tuple[float, float]], list[str]] = {}
+    for part_id in sorted(rungs):
+        rung = rungs[part_id]
+        groups.setdefault((rung.owner, rung.direction), []).append(part_id)
+
+    grid = ctx.budget.grid
+    for (owner, direction), members in sorted(groups.items()):
+        if len(members) < 2:
+            continue
+        if owner not in ctx.chain:
+            # A branch's own anchor moves with its owner's answer, so an owner that
+            # is itself a branch keeps the staircase: there is no fixed pad row to
+            # order the bay against.
+            continue
+        line = (-direction[1], direction[0])
+        along = {part_id: _dot(rungs[part_id].anchor, line) for part_id in members}
+        spread = max(along.values()) - min(along.values())
+        if spread <= BAY_SAME_PAD:
+            continue  # one shared tap: a fan-out, and the ladder is what fans it
+        if spread < ctx.budget.lane:
+            # The pads are closer together than one lane, so the ladder's
+            # ``step * index`` is not a second helping of room the pads already
+            # give — it **is** the room, and the drawing puts something in it (a
+            # flag, a name row, another net's run). 534's CC1/CC2/VBUS anchors span
+            # 80 against a 60 lane and collapse (the win below); the flyback's T1
+            # secondary parts span 40 and do not, which is what keeps
+            # ``flyback_uc3845`` compiling: collapsed at 60/60/60 instead of
+            # 60/120/180, the module lost the room the SEC_GND flag hangs in and
+            # answered ``[layout-unsat] ... no lead fits anywhere around that pad``.
+            # The lane, not ``step``: the corridor is what a flag needs, and that
+            # does not stretch with the variant's spacing.
+            continue
+        if _declared_among(ctx, members):
+            # The grammar wrote down an order **between these siblings**, so the
+            # staircase is that order's own distance and not a count: 534 sec.2.
+            continue
+        # The ladder's own order, not a geometric one: which sibling hangs nearest
+        # the owner is :func:`_branch_order`'s answer (it reads the grammar's
+        # branch ranking), and re-sorting by where the anchors happen to sit moves
+        # the first member off its pin row — measured on 053B scene 9, whose EN
+        # pull-down is branch 0 and must stay on the EN pin's row.
+        order = sorted(
+            members,
+            key=lambda part_id: (rungs[part_id].index, part_id),
+        )
+        before = {part_id: origins[part_id] for part_id in members}
+        placed: list[Box] = []
+        for part_id in order:
+            rung = rungs[part_id]
+            local = boxes[part_id]
+            band = _snap(rung.base, grid, 0.0)
+            for _attempt in range(len(order) + 4):
+                root = (
+                    rung.anchor[0] + direction[0] * band,
+                    rung.anchor[1] + direction[1] * band,
+                )
+                root = _dodge_foreign_pins(
+                    ctx, part_id, ctx.slots[part_id], rung.anchor, root, poses, origins,
+                )
+                base = (
+                    root[0] - (rung.shared[0] if rung.shared else 0.0),
+                    root[1] - (rung.shared[1] if rung.shared else 0.0),
+                )
+                origin, grown = _bay_box(local, base, line)
+                blockers = [other for other in placed if _overlaps(grown, other)]
+                if not blockers:
+                    break
+                # A collision is answered **outward**, along the escape: that axis
+                # is where the bay is free to spend room, and its coordinate is
+                # what the ladder also charges. Pushing along the line instead
+                # would spend the room in the axis the pads already price, moving
+                # the member off its own pad's row — measured on 053B scene 9,
+                # whose EN pull-down left the EN pin row by 100 px under exactly
+                # that push (``R2 (-180, -70) -> (-160, -170)``, failed
+                # ``branch.en_branch``), and on 534, whose island went 324 wide but
+                # 398 tall with the trunk 670 -> 990.
+                clear = max(
+                    _projection(other, direction)[1] - _projection(grown, direction)[0]
+                    for other in blockers
+                )
+                band = _snap(band + max(clear, grid), grid, 0.0)
+            else:
+                # No outward placement clears the row in the attempts allowed: the
+                # group keeps the ladder's answer rather than trading rows for width.
+                origins.update(before)
+                break
+            origins[part_id] = origin
+            placed.append(grown)
 
 
 # ----------------------------------- 116: every bound order, not just the owner's
@@ -6854,10 +7172,51 @@ def _try_island_variants(
             keepouts=tuple(budget.keepouts),
         ),
     )
-    plan = page.plan(source=LayoutSource(
-        circuit_sha256=circuit_spec.sha256(),
-        presentation_sha256=presentation_spec.sha256(),
-    ))
+    # 536: the page's stamped partition has to be the declared one, and this is
+    # the first moment both halves exist — the packer stamps each part with its
+    # block's `group` and island, and the spec states what those must be. The
+    # check sits before the digest and the gate because it is not a readability
+    # finding: a page whose parts are stamped with an island the presentation
+    # never declared is the wrong picture, and grading it for crossings would
+    # only dignify it with a score. Legacy plans are unstamped and the validator
+    # returns untouched on them, so the 520m page keeps the treatment it had.
+    from boardwise.core.archipelago import validate_archipelago_plan
+
+    try:
+        plan = page.plan(source=LayoutSource(
+            circuit_sha256=circuit_spec.sha256(),
+            presentation_sha256=presentation_spec.sha256(),
+        ))
+        validate_archipelago_plan(plan, presentation_spec)
+    except ValueError as exc:
+        # A block/part identity conflict is an input refusal too, not an
+        # uncaught exception from the stamping helper.
+        refused_identity = GrammarFailure(
+            category=FAILURE_PRESENTATION_POOR,
+            subject="islands",
+            detail=(
+                "the packed island page does not carry the declared partition: "
+                f"{exc}"
+            ),
+            action=(
+                "the packer stamps each part from its block, so a mismatch means "
+                "the blocks and the presentation's islands[] disagree — fix the "
+                "declaration (or the island split) rather than the stamps, and "
+                "never re-stamp a part to make the page validate (§2.3)"
+            ),
+        )
+        # Both records, for the same reason the page-box refusal writes both:
+        # `failures` is what the caller reads, `rejected` is what the round's
+        # summary counts, and a refusal that is neither is a refusal without a
+        # reason (053 sec.4).
+        result.failures.append(refused_identity)
+        result.rejected.append(RejectedCandidate(
+            variant=f"island-page ({len(page.blocks)} islands)",
+            reason=refused_identity.detail,
+            violations=[],
+            failure=refused_identity,
+        ))
+        return
     # 530E, `DESIGN` §5.6 L3: an island whose id still says ``auto-`` is a partition
     # that came out of a geometry, and the page is legal all the same — S-14's
     # 「箱数 = 名字数」 is about **net** names, not island titles.  The sentence is
@@ -6956,6 +7315,40 @@ def _try_island_variants(
     # in `refusing` is what the page is refused for; what is left in `tolerated` is
     # what it is **delivered with** and named for, one line each (below).
     refusing, tolerated = island_gate_violations(checked.hard_violations)
+    # 534 R5: the **soft** layer stops being a reading and becomes a floor. Until
+    # 534 a page with 1.32 bends per root, a crossing every twelfth segment and two
+    # statements a unit apart was delivered with `verdict: pass`, because nothing
+    # compared those numbers to the style spec they are derived from. The floor's
+    # numbers are the spec's own (S-09, S-11, S-21) and are stated once, in
+    # :data:`readability.SOFT_FLOOR_BENDS_PER_ROOT` and its neighbours; the golden
+    # board (`flyback_uc3845`, the page S-01..S-21 was read off) passes with zero
+    # breaches, which is the test that the numbers are the spec's and not a lucky
+    # board's.
+    soft_floor = readability.soft_floor_violations(
+        plan, checked.soft_metrics, book,
+    )
+    if soft_floor:
+        result.rejected.append(RejectedCandidate(
+            variant=f"island-page ({len(page.blocks)} islands)",
+            reason=(
+                "the page breaks the style spec's soft floor in "
+                f"{len(soft_floor)} place(s)"
+            ),
+            violations=list(soft_floor),
+            failure=GrammarFailure(
+                category=FAILURE_LAYOUT_UNSAT,
+                subject="islands",
+                detail=(
+                    "the island page is over the style spec's soft floor: "
+                    + "; ".join(soft_floor[:3])
+                ),
+                action=(
+                    "the island has to move the parts or the wires — a wider pitch "
+                    "or a lower bend count is the same lever 530F used"
+                ),
+            ),
+        ))
+        return
     if refusing:
         result.rejected.append(RejectedCandidate(
             variant=f"island-page ({len(page.blocks)} islands)",
@@ -8167,6 +8560,12 @@ def _build_one_variant(
         return None, failure, []
 
     parts: list[LayoutPart] = []
+    archipelago_islands = ctx.presentation.effective_islands()
+    single_archipelago = (
+        ctx.presentation.is_archipelago and len(archipelago_islands) == 1
+    )
+    group = archipelago_islands[0].group if single_archipelago else ""
+    island_id = archipelago_islands[0].id if single_archipelago else ""
     # Two obstacle sets, because they answer two different questions: `occupied`
     # is what *text* must avoid (a part's whole extent, tips included, so a value
     # never prints across its own pins), while `solids` is what a *wire* may not
@@ -8200,6 +8599,10 @@ def _build_one_variant(
             rotation=float(pose.rotation),
             mirror=pose.mirror,
             reference=part_id,
+            # 536: only a single declared archipelago island is stamped here;
+            # several islands are stamped by islandlayout's block/page helper.
+            group=group,
+            island=island_id,
         ))
         occupied.append(_part_box(profile, pose, origin))
         body = _body_box(profile, pose, origin)
@@ -8709,6 +9112,27 @@ def _build_one_variant(
             grid=ctx.budget.grid,
         )
 
+    if single_archipelago:
+        from boardwise.core.archipelago import (
+            ArchipelagoError,
+            validate_archipelago_plan,
+        )
+
+        try:
+            validate_archipelago_plan(plan, ctx.presentation)
+        except ArchipelagoError as exc:
+            return None, GrammarFailure(
+                category=FAILURE_PRESENTATION_POOR,
+                subject="islands",
+                detail=(
+                    "the ordinary single-island plan does not carry the declared "
+                    f"partition: {exc}"
+                ),
+                action=(
+                    "the one declared island owns every part in this plan; fix "
+                    "the partition transfer, never re-stamp a part to make it pass"
+                ),
+            ), []
     checked = grade(plan)
     # 148: a wire's **name row** is drawn by the host at the midpoint of the wire's
     # longest run (`core.textmetrics.wire_name_box`), so where it lands is a

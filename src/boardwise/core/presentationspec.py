@@ -84,6 +84,7 @@ from .islands import (
     declared_part_ids,
     implicit_island,
     parse_islands,
+    validate_archipelago_structure,
 )
 from .symbolprofile import POSE_ROTATIONS
 
@@ -381,6 +382,26 @@ class PresentationSpec:
 
     # ------------------------------------------------------------ derived
 
+    @property
+    def is_archipelago(self) -> bool:
+        """Are these islands the 536 archipelago reading?
+
+        Decided by the islands' own new fields (``group`` / ``owner`` / ``kind`` /
+        ``side``) and nothing else: a list that states any of them is the reading
+        :func:`boardwise.core.islands.parse_islands` accepted as an archipelago,
+        and a list that states none of them is the 520j reading — the implicit
+        single island, or old-style declared islands — exactly as before.
+
+        It is **derived**, not a document key: nothing serialises it, so asking
+        changes no byte of any spec (an old document keeps its digest, and with it
+        every plan compiled from it), and a spec built by hand in memory answers
+        the same way as one read from a file.
+        """
+        return any(
+            island.group or island.owner or island.kind or island.side
+            for island in (self.islands or ())
+        )
+
     def locked_part_ids(self) -> list[str]:
         return [lock.part_id for lock in self.user_locks]
 
@@ -458,7 +479,19 @@ class PresentationSpec:
         follows the same rule for the same reason (520j): a spec that states no
         islands hashes — and therefore compiles — to exactly what it did before
         this key existed.
+
+        An **archipelago** is checked against
+        :func:`boardwise.core.islands.validate_archipelago_structure` first, so a
+        spec that only half-stamps its islands (or mixes the two readings) is
+        refused here rather than written out as JSON its own
+        :meth:`from_dict` would reject. Legacy specs get no new check: their
+        islands are the 520j reading and this batch changes no byte of them.
         """
+        if self.is_archipelago:
+            try:
+                validate_archipelago_structure(self.modules, self.islands or ())
+            except IslandError as exc:
+                raise PresentationSpecError(f"$.{exc}") from exc
         return {
             "kind": PRESENTATION_SPEC_KIND,
             "specVersion": self.spec_version,
@@ -640,11 +673,13 @@ def _module_json(module: PresentationModule) -> dict[str, Any]:
 
 
 def _island_json(island: LayoutIsland) -> dict[str, Any]:
-    """One island, with its role and name written only when it states one.
+    """One island, with its optional fields written only when it states them.
 
-    Same rule as a module's overrides: `role` and `name` are optional, so an
-    island that states neither writes neither and reads back as `""`. (A spec that
-    states no islands at all writes no `islands` key — see
+    Same rule as a module's overrides: `role`, `name` and 536's archipelago keys
+    (`group` / `owner` / `kind` / `side`) are optional, so an island that states
+    none of them writes none of them and reads back as `""` — an old spec's
+    islands stay byte-shaped exactly as before the archipelago fields existed.
+    (A spec that states no islands at all writes no `islands` key — see
     :meth:`PresentationSpec.to_jsonable`.)
     """
     out: dict[str, Any] = {"id": island.id, "parts": list(island.parts)}
@@ -652,6 +687,14 @@ def _island_json(island: LayoutIsland) -> dict[str, Any]:
         out["role"] = island.role
     if island.name:
         out["name"] = island.name
+    if island.group:
+        out["group"] = island.group
+    if island.owner:
+        out["owner"] = island.owner
+    if island.kind:
+        out["kind"] = island.kind
+    if island.side:
+        out["side"] = island.side
     return out
 
 
@@ -662,14 +705,18 @@ def _islands_from(
 
     All of the reading is :func:`boardwise.core.islands.parse_islands`' — this
     function is the boundary that hands it the reference set (the parts the
-    modules name) and translates its refusal into this module's error, so a
-    caller of :meth:`PresentationSpec.load` sees one error type whatever part of
-    the document was wrong. ``None`` means the *implicit* island downstream, and
-    never reaches further than :meth:`PresentationSpec.effective_islands`.
+    modules name), the modules themselves (536's archipelago check reads a child
+    island's group, owner and core off them), and translates its refusal into
+    this module's error, so a caller of :meth:`PresentationSpec.load` sees one
+    error type whatever part of the document was wrong. ``None`` means the
+    *implicit* island downstream, and never reaches further than
+    :meth:`PresentationSpec.effective_islands`.
     """
     try:
         return parse_islands(
-            root.get("islands"), declared_part_ids(m.parts for m in modules)
+            root.get("islands"),
+            declared_part_ids(m.parts for m in modules),
+            modules=modules,
         )
     except IslandError as exc:
         raise PresentationSpecError(f"$.{exc}") from exc

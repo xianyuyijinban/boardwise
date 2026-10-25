@@ -328,7 +328,7 @@ def write_canvases(
     used: set[str] = set()
     for index, (title, board) in enumerate(boards):
         board_marks = tuple(marks[index]) if index < len(marks) else ()
-        name = _unique_canvas_name(
+        name = unique_canvas_name(
             canvas_file_name(title),
             str(keys[index]) if index < len(keys) else "",
             used,
@@ -360,22 +360,27 @@ def write_canvases(
     return images
 
 
-def _unique_canvas_name(name: str, key: str, used: set[str]) -> str:
-    """``name`` 若已被本批用掉，就加后缀让开，直到没被用掉（192A-5）。
+def unique_canvas_name(name: str, key: str, used: set[str]) -> str:
+    """Return ``name`` or a uuid/ordinal-disambiguated name unused in this batch.
 
-    ``key`` 是这块板自己的标识（``boardUuid``）：取后 6 位是因为整条 uuid 会把文件名
-    撑长且前 30 多位全是同一段前缀，而后 6 位正是编辑器自己区分两块板时给人看的那一段。
+    Shared by offline PCB SVG and online schematic PNG/SVG renders (192A/539).
+    ``key`` is the document's own uuid; its last six characters are the short
+    suffix the editor already shows to people.  The extension is preserved, and
+    the first document keeps the historical collision-free file name.
     """
     if name not in used:
         return name
-    stem = name[:-4] if name.endswith(".svg") else name
+    extension = Path(name).suffix
+    stem = name[:-len(extension)] if extension else name
     suffix = key[-6:] if key else ""
-    candidate = f"{stem}-{suffix}.svg" if suffix else f"{stem}-2.svg"
+    candidate = f"{stem}-{suffix}{extension}" if suffix else f"{stem}-2{extension}"
     ordinal = 2
     while candidate in used:
         ordinal += 1
         candidate = (
-            f"{stem}-{suffix}-{ordinal}.svg" if suffix else f"{stem}-{ordinal}.svg"
+            f"{stem}-{suffix}-{ordinal}{extension}"
+            if suffix
+            else f"{stem}-{ordinal}{extension}"
         )
     return candidate
 

@@ -55,6 +55,7 @@ from ..core.power_domains import (
     infer_net_domains,
     ldo_output_pin,
 )
+from ..core.values import mpn_resistance_candidates
 from .base import Finding, FindingTarget, Outcome, OutcomeRule
 from .connectivity import parse_resistance_ohms
 from .unproven import (
@@ -408,6 +409,28 @@ def stamp_machine_trust(
             outcome.message = f"{outcome.message} —— {note}"
 
 
+@dataclass(frozen=True)
+class ResistanceReading:
+    """One resistor's resistance, as every rule that needs it must read it (537F).
+
+    ``ohms`` is the number the arithmetic may divide by, ``display`` is the text a
+    row writes where the old code wrote ``comp.value`` — and ``provenance`` is
+    **empty only when the Value field itself stated the resistance**.
+
+    Why the three travel together: before 537F each reader did its own
+    ``parse_resistance_ohms(comp.value)``, so a leg whose Value field is empty
+    (the shape a real BOM-taken board has: MPN filled, Value not) was skipped by
+    one rule and *counted* by another — the sampling-bias rule said 「没有偏置」,
+    the closure rule said 「拓扑对不上」, and both were looking at the same
+    divider. One reading means the existence question and the arithmetic cannot
+    answer differently.
+    """
+
+    ohms: float
+    display: str
+    provenance: str = ""
+
+
 class FactsRule(OutcomeRule):
     """Base for rules that read the curated shelf.
 
@@ -562,6 +585,82 @@ class FactsRule(OutcomeRule):
         """
         entry, _matched = resolve_component_facts(self.library, comp)
         return entry
+
+    def resistance_reading(self, comp: Component | None) -> ResistanceReading | None:
+        """Is this part a resistor, and how many ohms — **one** reading (537F).
+
+        The existence question and the number are the same answer here on purpose.
+        Four outcomes, in this order, and each is a decision rather than a
+        fall-through:
+
+        1. **The shelf declares a kind.** A declared category other than
+           ``resistor`` (a capacitor, an IC, …) is not a resistor, whatever its
+           Value string happens to parse to — :func:`shelf_declaration`'s own gate,
+           so a candidate or machine-granted category declares nothing and falls
+           through exactly like no entry at all (the read ``_resistor_like``
+           makes; this method does not widen that function, it *is* the reading
+           the bias rules share).
+        2. **A non-empty Value field.** Read by
+           :func:`boardwise.core.values.parse_resistance_ohms` — the board
+           grammar every other rule uses. Only a value that **does not parse**
+           is refused here: it is a value nobody can read, and 537F
+           deliberately does **not** go on to the MPN in that case (a Value
+           field that states something is a statement about the part;
+           overriding it from the part number would be inventing a second
+           answer to a question the board already answered). A value that
+           parses to **zero** is a statement too (a ``0Ω`` link, a jumper) and
+           is returned as read, with ``display`` the field verbatim and an
+           empty ``provenance``. **Positivity is not this layer's question**:
+           「can the arithmetic use this number?」 is asked where the arithmetic
+           happens (:func:`boardwise.rules.archclosure._resistor_legs` skips
+           ``ohms <= 0``), so a 0Ω part stays a resistor for every existence
+           read while never becoming a term in a formula.
+        3. **An empty Value field with exactly one MPN reading.** The MPN is the
+           only place the resistance exists, and it may fill in *only* when the
+           trade's notation yields one unambiguous candidate
+           (:func:`boardwise.core.values.mpn_resistance_candidates`, whose
+           ``anchor`` says what makes the digits a code field). Two candidates is
+           a question, not an answer, and is refused — the same reading 071 §1
+           makes for the BOM comparison. ``provenance`` then carries the MPN, the
+           candidate's own notation text and its anchor, so a row can say where
+           the number came from instead of presenting it as if it had been drawn.
+           The candidate is returned exactly as decoded — this layer adds **no**
+           non-positive filter of its own, for the same reason as case 2: the
+           recovery is a reading, and only the arithmetic may refuse a number it
+           cannot divide by.
+        4. Anything else — empty Value, no MPN, no reading — is ``None``.
+
+        ``display`` is the Value field **verbatim** in case 2, so every message
+        that already quoted ``comp.value`` is byte-for-byte what it was; in case 3
+        it is the recovered resistance written in ohms, which is what a reader can
+        check against the provenance beside it.
+        """
+        if comp is None:
+            return None
+        declared = shelf_declaration(self.entry_for(comp))
+        if declared and declared != "resistor":
+            return None
+        value = comp.value or ""
+        if value.strip():
+            ohms = parse_resistance_ohms(value)
+            if ohms is None:
+                # Unreadable, not "not positive": 0Ω is a reading (case 2 above),
+                # and the arithmetic layer is where a zero leg is refused.
+                return None
+            return ResistanceReading(ohms=ohms, display=value)
+        mpn = (comp.mpn or "").strip()
+        candidates = mpn_resistance_candidates(mpn)
+        if len(candidates) != 1:
+            return None
+        ohms, text, anchor = candidates[0]
+        return ResistanceReading(
+            ohms=ohms,
+            display=f"{ohms:g}Ω",
+            provenance=(
+                f"Value 字段为空，由 MPN {mpn} 恢复：{text}"
+                + (f"（{anchor}）" if anchor else "")
+            ),
+        )
 
     def ics(self, model: DesignModel) -> list[Component]:
         return [

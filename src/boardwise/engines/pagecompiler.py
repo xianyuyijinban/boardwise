@@ -134,6 +134,7 @@ from boardwise.core.presentationspec import (
     main_path_wire,
 )
 from boardwise.core.symbolprofile import (
+    FLAG_GLYPH_KIND_GND,
     Box,
     SymbolPose,
     SymbolProfile,
@@ -142,6 +143,7 @@ from boardwise.core.symbolprofile import (
     flag_glyph_kind,
     pose_box,
 )
+from boardwise.core.textmetrics import flag_name_box
 from boardwise.core.geometry import transform_point
 
 from . import drawcompiler, readability
@@ -515,6 +517,44 @@ def compile_page(
             raise PageCompileError(
                 f"{expected.__name__} expected, got {type(value).__name__}"
             )
+    # 536: an archipelago is a page of groups whose islands are **child
+    # pictures** inside each group, and this compiler carries no island at all
+    # (`_module_view` gives every module one flat view). Compiling an archipelago
+    # here would therefore draw every module as a flat group and lose every
+    # declared child island — the declared document and the drawn page would
+    # disagree while both looked legal, which is the one failure mode the schema
+    # exists to prevent. Refused before the budget is even read: a budget is a
+    # statement about a page this compiler can draw (a sheet, a margin, a frame),
+    # and demanding one for a document that has no island here would answer the
+    # wrong question first. The refusal names both the archipelago and the
+    # islands, so it cannot be mistaken for "no page fits".
+    if presentation_spec.is_archipelago:
+        groups = len(presentation_spec.modules)
+        islands = len(presentation_spec.islands or ())
+        result = PageCompileResult()
+        result.notes.append(
+            f"{PAGE_COMPILER_NAME}: refused an archipelago ({groups} group(s), "
+            f"{islands} island(s)) before reading a budget or a symbol library — "
+            "this compiler draws no island"
+        )
+        result.failures = [GrammarFailure(
+            category=FAILURE_PRESENTATION_POOR,
+            subject="islands",
+            detail=(
+                f"the presentation declares an archipelago ({groups} group(s), "
+                f"{islands} island(s)) — its islands are child pictures inside a "
+                "group, and the ordinary pagecompiler carries no island: it draws "
+                "each module as one flat group, so every declared island would be "
+                "silently dropped"
+            ),
+            action=(
+                "use drawcompiler's supported single-group island path, or stop "
+                "until the island-group assembler exists — a page compiler that "
+                "drops islands is not a cheaper answer, it is a different drawing"
+            ),
+        )]
+        return result
+
     budget = budget or PageCompileBudget()
     _check_budget(budget)
     book = drawcompiler.profile_book(profiles)
@@ -1398,6 +1438,11 @@ def _copy_plan(plan: LayoutPlan) -> LayoutPlan:
                 part_id=item.part_id, symbol_ref=item.symbol_ref,
                 symbol_hash=item.symbol_hash, x=item.x, y=item.y,
                 rotation=item.rotation, mirror=item.mirror, reference=item.reference,
+                # 536: the copy is the module's own drawing, so a part's group and
+                # island travel with it — a page made from a stamped plan must not
+                # be the place where the ownership is dropped.  Nothing is filled
+                # in: an unstamped part copies as unstamped.
+                group=item.group, island=item.island,
             )
             for item in plan.parts
         ],
@@ -1845,12 +1890,32 @@ def _module_frame(plan: LayoutPlan, book: Mapping[str, SymbolProfile], padding: 
     )
 
 
+_RUN_PAD = 0.5
+
+
 def _module_boxes(plan: LayoutPlan, book: Mapping[str, SymbolProfile]) -> list[Box]:
     """The boxes a new label must avoid: what the module's drawing already occupies.
 
     The same set the module compiler keeps for its own text placement (part
     extents, texts, labels, flags), recomputed for a page-added port because the
     page places the label and it must land in a free spot of *this* module.
+
+    Two of these boxes are 534's corrections, both measured on the three-island
+    USB page whose D+/D- port labels landed on top of the connector pair's own
+    sibling stubs (`evidence/534/compile_flow_repro.log`):
+
+    * a wire contributes one box per **run**, not one per polyline. A meander's
+      outer rectangle is mostly empty paper — this page's CC2 walks round the
+      connector's left flank and its rectangle covers the whole west side, so no
+      west candidate could ever pass although the labels fit beside the runs — and
+      a run that is a straight horizontal or vertical line has zero height or
+      width, which :func:`_overlaps` (strict) never lets overlap anything at all.
+      :data:`_RUN_PAD` gives each run its own thickness back.
+    * a rail flag's **name row** is drawn by the host past the glyph, so it is
+      occupied paper as much as the glyph is (once the runs were right, ``+5V``'s
+      name row was what the D+ label still landed on). The measurement is
+      :func:`~boardwise.core.textmetrics.flag_name_box` — the same one the
+      readability checker uses — and a ground flag prints no name at all.
     """
     boxes: list[Box] = []
     for part in plan.parts:
@@ -1864,15 +1929,95 @@ def _module_boxes(plan: LayoutPlan, book: Mapping[str, SymbolProfile]) -> list[B
     )
     for symbol in plan.power_symbols:
         profile = book.get(symbol.symbol_ref)
-        if profile is not None:
-            glyph = _glyph_box(profile, symbol.rotation, (symbol.x, symbol.y))
-            if glyph is not None:
-                boxes.append(glyph)
-    boxes.extend(_bounds(item.points) for item in plan.segments)
+        if profile is None:
+            continue
+        glyph = _glyph_box(profile, symbol.rotation, (symbol.x, symbol.y))
+        if glyph is None:
+            continue
+        boxes.append(glyph)
+        row = _flag_name_row(profile, symbol, glyph)
+        if row is not None:
+            boxes.append(row)
+    for item in plan.segments:
+        boxes.extend(_run_boxes(item.points))
     return boxes
 
 
+def _run_boxes(points: Sequence[tuple[float, float]]) -> list[Box]:
+    """One avoidable box per **run** of a wire, padded by :data:`_RUN_PAD` (534).
+
+    A run is what the host and the reader both treat as a conductor; the polyline
+    around it is the compiler's routing, and a meander's rectangle is not its
+    ink. The padding is what keeps a straight run from being a zero-area box that
+    the strict overlap test can never see.
+    """
+    boxes: list[Box] = []
+    for start, stop in zip(points, points[1:]):
+        boxes.append((
+            min(start[0], stop[0]) - _RUN_PAD,
+            min(start[1], stop[1]) - _RUN_PAD,
+            max(start[0], stop[0]) + _RUN_PAD,
+            max(start[1], stop[1]) + _RUN_PAD,
+        ))
+    return boxes
+
+
+def _flag_name_row(
+    profile: SymbolProfile, symbol: LayoutPowerSymbol, glyph: Box
+) -> Box | None:
+    """The row a rail flag's name is printed in, or ``None`` when it prints none.
+
+    `readability._flag_name_row` is the authority on *which* flags carry a name and
+    :func:`~boardwise.core.textmetrics.flag_name_box` on where the row is; this is
+    the page's copy of the first half only (the page needs the box before the
+    checker ever looks at the sheet).
+    """
+    if not symbol.net or flag_glyph_kind(profile) == FLAG_GLYPH_KIND_GND:
+        return None
+    return flag_name_box(
+        glyph, (symbol.x, symbol.y), symbol.net, axis_up=glyph[3] > symbol.y
+    )
+
+
 # ----------------------------------------------------- stage 4c: the placement
+
+
+def _frame_inset(budget: PageCompileBudget) -> float:
+    """How far a module *frame* is kept from the sheet's edge (534).
+
+    :data:`PAGE_MARGIN` states one thing — the clear space between the drawing and
+    the paper — and a frame is not the drawing: :func:`_module_frame` grows a
+    module's own drawing by ``frame_padding`` on every side, and that padding is
+    the clear space the page keeps *between two modules* (a neighbouring module's
+    flag stem or label box may not land on its neighbour). At the sheet's edge
+    there is no neighbouring module, so the padding is already the margin; the
+    frame may reach that far into it and the visible drawing lands exactly
+    :data:`PAGE_MARGIN` inside the paper.
+
+    534's defect, in the numbers it was found with: measuring the padded frame
+    against ``page ∓ PAGE_MARGIN`` counted the padding twice, so a three-module
+    row drawn 1125.5 units wide was reported as "needs 1205.5" on a 1170-unit page
+    (a constant page+38 at 1300: 1165.5-wide frames asked for a 1205.5 sheet) and
+    every three-island page was refused by arithmetic nothing could satisfy. The
+    room a frame may take in the margin is bounded by its padding, so an
+    over-large padding cannot eat the margin the drawing is promised.
+    """
+    return max(0.0, PAGE_MARGIN - budget.frame_padding)
+
+
+def _page_inner(page: Box, budget: PageCompileBudget) -> Box:
+    """The area a module *frame* may occupy on `page` (534).
+
+    ``page`` shrunk by :func:`_frame_inset` — the margin less the room a frame may
+    take in it — so that a frame anchored at this box's corner draws its module's
+    own geometry exactly :data:`PAGE_MARGIN` inside the paper. It is the same box
+    the keep-out search and the page locks are tested against, so "inside the
+    page" cannot mean two things in one compile.
+    """
+    inset = _frame_inset(budget)
+    return (
+        page[0] + inset, page[1] + inset, page[2] - inset, page[3] - inset,
+    )
 
 
 def _place(
@@ -1915,10 +2060,7 @@ def _place(
     """
     page = budget.page_box
     assert page is not None  # `_check_budget` refuses a page without one
-    inner = (
-        page[0] + PAGE_MARGIN, page[1] + PAGE_MARGIN,
-        page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
-    )
+    inner = _page_inner(page, budget)
     relocate = budget.relocate_around_keepouts and bool(budget.keepouts)
     if not locked:
         offsets, frames, failure, need = _arrange(
@@ -1983,9 +2125,10 @@ def _place(
         offsets.update(free_offsets)
         frames.update(free_frames)
     occupied = _union(frames.values())
+    inset = _frame_inset(budget)
     need = (
-        occupied[2] - occupied[0] + 2 * PAGE_MARGIN,
-        occupied[3] - occupied[1] + 2 * PAGE_MARGIN,
+        occupied[2] - occupied[0] + 2 * inset,
+        occupied[3] - occupied[1] + 2 * inset,
     )
     return offsets, frames, None, need, ""
 
@@ -2025,8 +2168,9 @@ def _arrange(
         ))
     page = budget.page_box
     assert page is not None  # `_check_budget` refuses a page without one
-    left = page[0] + PAGE_MARGIN
-    top = page[3] - PAGE_MARGIN
+    inner = _page_inner(page, budget)
+    left = inner[0]
+    top = inner[3]
     offsets: dict[str, tuple[float, float]] = {}
     frames: dict[str, Box] = {}
     for position, name in enumerate(order):
@@ -2040,15 +2184,12 @@ def _arrange(
         frames[name] = (
             frame[0] + dx, frame[1] + dy, frame[2] + dx, frame[3] + dy,
         )
-    inner = (
-        page[0] + PAGE_MARGIN, page[1] + PAGE_MARGIN,
-        page[2] - PAGE_MARGIN, page[3] - PAGE_MARGIN,
-    )
     offsets, frames = _pull_inside(offsets, frames, inner, budget.grid)
     occupied = _union(frames.values())
+    inset = _frame_inset(budget)
     need = (
-        occupied[2] - occupied[0] + 2 * PAGE_MARGIN,
-        occupied[3] - occupied[1] + 2 * PAGE_MARGIN,
+        occupied[2] - occupied[0] + 2 * inset,
+        occupied[3] - occupied[1] + 2 * inset,
     )
     if (
         occupied[0] < inner[0] - 1e-6 or occupied[1] < inner[1] - 1e-6
@@ -2059,12 +2200,12 @@ def _arrange(
             subject="page",
             detail=(
                 f"the arrangement of {len(order)} module(s) in {columns} column(s) "
-                f"occupies {occupied[2] - occupied[0]:g} x "
-                f"{occupied[3] - occupied[1]:g} canvas units, and the stated page "
-                f"is {page[2] - page[0]:g} x {page[3] - page[1]:g} with a "
-                f"{PAGE_MARGIN:g}-unit margin on each side — the modules are rigid "
-                "bodies and the page is not squeezed: no text is shrunk and no gap "
-                "is narrowed to make it fit"
+                f"draws {occupied[2] - occupied[0] - 2 * budget.frame_padding:g} x "
+                f"{occupied[3] - occupied[1] - 2 * budget.frame_padding:g} canvas "
+                f"units, and the stated page is {page[2] - page[0]:g} x "
+                f"{page[3] - page[1]:g} with a {PAGE_MARGIN:g}-unit margin on each "
+                "side — the modules are rigid bodies and the page is not squeezed: "
+                "no text is shrunk and no gap is narrowed to make it fit"
             ),
             action=(
                 f"enlarge the page to at least {need[0]:g} x {need[1]:g} canvas "
@@ -2157,8 +2298,10 @@ def _locked_frame_failure(
                 (
                     f"the page lock(s) put module {name!r}'s frame at "
                     f"{_box_text(box)}, which leaves the page's usable area "
-                    f"{_box_text(inner)} (a {PAGE_MARGIN:g}-unit margin inside the "
-                    "sheet) — the module is a rigid body and is not cut to fit"
+                    f"{_box_text(inner)} (the sheet less the "
+                    f"{PAGE_MARGIN:g}-unit margin its drawing keeps, into which a "
+                    "frame may reach by its own padding) — the module is a rigid "
+                    "body and is not cut to fit"
                 ),
                 "move the lock point further inside the page, or state a larger page",
             )
@@ -2359,6 +2502,10 @@ def _merge(
                 symbol_ref=part.symbol_ref, symbol_hash=part.symbol_hash,
                 x=part.x + dx, y=part.y + dy, rotation=part.rotation,
                 mirror=part.mirror,
+                # 536: only the pose moves.  A part's group/island is what it was
+                # placed in, so the translation copies it verbatim rather than
+                # re-deriving it from the module the page happened to pack it in.
+                group=part.group, island=part.island,
             ))
         for segment in item.plan.segments:
             drawn.segments.append(LayoutSegment(
@@ -2637,10 +2784,12 @@ def _corridor(
     whole sheet: a filter that had to consider every lattice node of an A4 page
     spends its time proving that a route does not exist, and a route between two
     modules stays in their neighbourhood. The corridor is their two frames grown by
-    :data:`PAGE_SEARCH_MARGIN` and clipped to the page's inner box, so a wire can
-    still detour around a keep-out that sits between the modules — and a wire that
-    would have to leave the neighbourhood is one the page would rather refuse (056
-    sec.3's "the detour obligation is on the wire", read with 053's corridor).
+    :data:`PAGE_SEARCH_MARGIN` and clipped to the sheet less :data:`PAGE_MARGIN` —
+    which is where *drawn* geometry stops, while a module's frame may reach into
+    that margin by its own padding (534) — so a wire can still detour around a
+    keep-out that sits between the modules, and a wire that would have to leave the
+    neighbourhood is one the page would rather refuse (056 sec.3's "the detour
+    obligation is on the wire", read with 053's corridor).
     """
     boxes = [box for name, box in sorted(frames.items()) if name in joined]
     if not boxes:
@@ -2777,6 +2926,16 @@ def _gate(
                 "this arrangement can be drawn"
             ),
         ), [item.render() for item in drawing_check.hard_violations], None, ""
+    # 534 R5: the same floor the island gate refuses on, read here as a **named
+    # breach** rather than a refusal. The reason is which compiler draws the parts:
+    # a page's module interiors come from :func:`drawcompiler._place_chain_and_shelf`,
+    # whose own pitch is ``channel``-driven (`drawcompiler.py:` the chain walk), so
+    # refusing on the page's merged drawing would take every 534-class page out of
+    # production with no drawer able to replace it — the ordering key reads the
+    # breach, the evidence states it, and a reader sees it without opening a probe.
+    soft_floor = readability.soft_floor_violations(
+        page.plan, drawing_check.soft_metrics, ctx.book,
+    )
     findings = _module_findings(ctx, variant)
     page.plan.evidence = LayoutEvidence(
         checker=readability.CHECKER_NAME,
@@ -2794,6 +2953,16 @@ def _gate(
             f"{readability.PAGE_CHECKER_NAME} on the page",
             "the grammar findings are the modules' own, each prefixed with the "
             "module it belongs to: a page has no single grammar to bind",
+            *(
+                [
+                    "style spec soft floor — "
+                    + f"{len(soft_floor)} breach(es), recorded not refused "
+                    "(534 R5; the island gate refuses on the same numbers): "
+                    + "; ".join(soft_floor)
+                ]
+                if soft_floor else
+                ["style spec soft floor (534 R5): no breach"]
+            ),
         ],
     )
     page.page_evidence = LayoutEvidence(
@@ -3210,6 +3379,9 @@ def _extreme_anchor(
     return _round((ranked[0][0], ranked[0][1]))
 
 
+_LABEL_RINGS = (1.0, 2.0, 3.0)
+
+
 def _label_box(
     net_id: str, point: tuple[float, float], preferred: tuple[float, float],
     occupied: Sequence[Box],
@@ -3221,19 +3393,34 @@ def _label_box(
     preferred direction first), written here on the public font metrics because the
     page's avoidance list also holds boxes the module compiler never saw — the
     other ports of this page.
+
+    534 adds the distance ladder :data:`_LABEL_RINGS`. Four directions at one text
+    gap were not enough to be *free*, only enough to be blocked four times: a pin
+    on a large part's edge has its body on three sides within a label's half-box,
+    and the fourth side can hold a tap stub. When every direction at one ring is
+    occupied the old code fell through to a fallback that checked nothing — the
+    box the checker then reported as `[text-overlap]`. Walking the same four
+    directions further out is still the same rule (the anchor does not move, and
+    the name does not stop being the name), and it is the smallest step that makes
+    the fallback unreachable in the geometry 534 found. The fallback stays for the
+    case where even the last ring is full, and the readability gate is what
+    refuses such a page rather than a silent overlap.
     """
-    for direction in _directions(preferred):
-        half_x = drawcompiler.text_width(net_id) / 2.0 + drawcompiler.TEXT_GAP
-        half_y = drawcompiler.TEXT_SIZE / 2.0 + drawcompiler.TEXT_GAP
-        offset = (
-            (direction[0] * half_x, 0.0) if direction[0] != 0.0
-            else (0.0, direction[1] * half_y)
-        )
-        candidate = drawcompiler.font_text_box(
-            net_id, x=point[0] + offset[0], y=point[1] + offset[1]
-        )
-        if all(not _overlaps(candidate, box) for box in occupied):
-            return candidate
+    half_x = drawcompiler.text_width(net_id) / 2.0 + drawcompiler.TEXT_GAP
+    half_y = drawcompiler.TEXT_SIZE / 2.0 + drawcompiler.TEXT_GAP
+    for ring in _LABEL_RINGS:
+        for direction in _directions(preferred):
+            offset = (
+                (direction[0] * half_x, 0.0) if direction[0] != 0.0
+                else (0.0, direction[1] * half_y)
+            )
+            candidate = drawcompiler.font_text_box(
+                net_id,
+                x=point[0] + offset[0] * ring,
+                y=point[1] + offset[1] * ring,
+            )
+            if all(not _overlaps(candidate, box) for box in occupied):
+                return candidate
     return drawcompiler.font_text_box(
         net_id, x=point[0], y=point[1] + drawcompiler.TEXT_SIZE / 2.0 + drawcompiler.TEXT_GAP
     )

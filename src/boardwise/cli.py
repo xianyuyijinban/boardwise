@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import time
 from dataclasses import dataclass
@@ -39,6 +40,8 @@ from .engines.checkup import (
     PAGE_ATTRIBUTION_UNRESOLVED,
     STATE_ACCEPTED,
     STATE_ACCEPTED_STALE,
+    TRIAGE_UNJUDGEABLE,
+    TRIAGE_VERDICT_CHOICES,
     TRIAGE_VERDICTS,
     TRIGGER_FACTS,
     TRIGGER_MARKED,
@@ -52,6 +55,10 @@ from .engines.checkup import (
     conclusion_section,
     declared_passive_exemptions,
     disambiguated_triage_keys,
+    # 537C2: the environment section and its one console line — the report, both
+    # Markdown products and stdout are one derivation, not four.
+    environment_console_line,
+    environment_section,
     finding_chains,
     intent_section,
     layout_review_section,
@@ -71,6 +78,12 @@ from .engines.checkup import (
     render_review_summary,
     reviewed_by_shelf,
     summary_template,
+    # 537B: the one triage predicate pair — the command and the sidecar merge read
+    # the same rule, so 「能不能关掉这条」 has a single answer in the codebase.
+    triage_slot_is_closed,
+    triage_slot_is_manual,
+    triage_slot_text_missing,
+    triage_verdict_is_admissible,
     unknown_parts,
     unreviewed_counts_by_class,
     unreviewed_counts_by_reason,
@@ -80,7 +93,42 @@ from .engines.checkup import (
 # 522: the tier counts, imported on its own line because it arrived with the
 # three-value `facts_trust` and is not part of the 025/184/186 unreviewed family.
 from .engines.checkup import facts_trust_counts, shelf_machine_unconfirmed
+# 537C3a: the six-channel evidence ledger. `evidence_section` builds it from the
+# values `_cmd_checkup` already holds; `default_evidence` is the fallback for a
+# caller that has no canvas reading (a hand-built report, an older re-gate path).
+from .engines.evidence import (
+    CHANNEL_ORDER,
+    CHANNEL_STATUSES,
+    EVIDENCE_SCHEMA,
+    LIVE_EVIDENCE_SCHEMA,
+    default_evidence,
+    evidence_console_line,
+    evidence_section,
+    merge_live_capture,
+    refresh_datasheets,
+)
 from .engines.generate import DEFAULT_NAMING_STRATEGY, NAMING_STRATEGIES
+# 537D1a: the four read-only projections `review-read` serves. Pure functions in
+# their own module — the CLI owns the envelope, the file and the exit codes, and
+# this import is the only place the command touches them.
+from .engines.reviewread import (
+    REVIEW_OUTPUT_SOURCE,
+    REVIEW_READ_SCHEMA,
+    REVIEW_READ_SECTIONS,
+    review_read_section,
+)
+# 537D2a2: the accepted **content** validator for one finalized review
+# (`validate_review_summary`, 537D2a1). It stays a pure engine function — no
+# I/O, no CLI, no editor. `review finalize` is the command that recomputes the
+# report in memory, verifies the cited artifacts, and *then* asks it; nothing
+# here re-implements one of its seven groups. 537D2b1 adds its sibling
+# `synchronize_review_summary_sections`: the two machine sections are re-rendered
+# from the recomputed report through the same renderers, and the human bytes
+# around them are never touched.
+from .engines.reviewfinalize import (
+    synchronize_review_summary_sections,
+    validate_review_summary,
+)
 from .core.changeplan import (
     ADD_COMPONENT_KIND,
     COMPONENT_VALUE_KIND,
@@ -431,6 +479,26 @@ def build_parser() -> argparse.ArgumentParser:
             "nothing in it is not a pass either, and checkup answers 3 for it."
         ),
     )
+    review.add_argument(
+        "--out",
+        dest="out",
+        metavar="DIR",
+        default="",
+        help=(
+            "**Only for `review finalize`** (537D2a2). The review directory to "
+            "validate: `boardwise review finalize --out DIR` recomputes "
+            "`report.json` in memory, verifies the artifacts it cites, folds the "
+            "triage sidecar back in and checks the filled `review-summary.md` — "
+            "and re-syncs `report.json` / `report.md` / `board-report.md` only "
+            "when the delivery validates. On success it also re-renders the "
+            "summary's environment/evidence machine sections from the recomputed "
+            "report; the human content around them is never touched. It then "
+            "signs `finalize.json`, a deterministic CLI delivery receipt "
+            "(`scope: delivery-content`) of the final files and cited evidence — "
+            "not a board pass, and a DSH Session still needs D3. A plain file "
+            "review ignores this flag."
+        ),
+    )
 
     checkup = sub.add_parser(
         "checkup",
@@ -610,7 +678,8 @@ def build_parser() -> argparse.ArgumentParser:
         "triage",
         help=(
             "Record the verdict for one warning of an existing `checkup` report "
-            "(有益/有害/无害 + reason), so a re-run cannot drop it (issue #12)."
+            "(有益/有害/无害 + reason, or needs-manual where the source gave no "
+            "per-item text), so a re-run cannot drop it (issue #12)."
         ),
         description=(
             "xianyuyijinban's step ② as an action: one warning, one verdict, one "
@@ -621,9 +690,16 @@ def build_parser() -> argparse.ArgumentParser:
             "The report's gate is recomputed on the spot: "
             "`completion.warningsPendingTriage` drops, `report.md` is re-rendered "
             "with the verdict in the table. Idempotent per `key`: a second run for "
-            "the same key updates it rather than adding a row. Purely offline — no "
+            "the same key updates it rather than adding a row. **537B: a slot whose "
+            "`text` is empty (the host's ERC totals, no per-item text) cannot be "
+            "closed with the three words** — `有益/有害/无害` answer 「这条警告说的是"
+            "什么」 and need the warning's own text, so the command refuses by name "
+            "and writes nothing; `needs-manual` is the verdict for those, it takes "
+            "the same `--reason`, and the row stays in `warningsPendingTriage` "
+            "(counted apart as `warningsNeedsManual`). Purely offline — no "
             "editor, no daemon. Exit 0 applied / 2 bad input (including a key the "
-            "report does not carry) / 3 no report.json to triage."
+            "report does not carry, or a three-word verdict on a text-less slot) / "
+            "3 no report.json to triage."
         ),
     )
     triage.add_argument(
@@ -648,9 +724,14 @@ def build_parser() -> argparse.ArgumentParser:
     triage.add_argument(
         "--verdict",
         required=True,
-        choices=list(TRIAGE_VERDICTS),
+        choices=list(TRIAGE_VERDICT_CHOICES),
         metavar="VERDICT",
-        help="One of: " + " / ".join(TRIAGE_VERDICTS) + ".",
+        help=(
+            "One of: " + " / ".join(TRIAGE_VERDICTS) + " — or `" + TRIAGE_UNJUDGEABLE
+            + "` for a slot with no per-item text (a host-ERC count): the three words "
+            "need the warning's own text, `" + TRIAGE_UNJUDGEABLE + "` says a human must "
+            "look, and the row stays in `completion.warningsPendingTriage`."
+        ),
     )
     triage.add_argument(
         "--reason",
@@ -670,6 +751,244 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Write the merged result (the slots, the recomputed `completion`, the "
             "conclusion) as JSON. `-` prints it instead."
+        ),
+    )
+
+    triage_batch = sub.add_parser(
+        "triage-batch",
+        help=(
+            "Apply a whole batch of warning verdicts to an existing `checkup` "
+            "report in one atomic step (537D1b1): every row is checked and applied "
+            "in memory first, so one bad row writes nothing at all."
+        ),
+        description=(
+            "The batch form of `boardwise triage`: one JSON file of "
+            "`{key, verdict, reason}` rows is validated **as a whole**, merged into "
+            "`warning_triage[]` of an existing `checkup` report and into the sidecar "
+            "`warning-triage.json` beside it, and only then written — `report.json`, "
+            "the sidecar, `report.md` and `board-report.md` are rewritten once, "
+            "after every row has passed. An unknown key, an empty reason, a word "
+            "outside the vocabulary (`有益` / `有害` / `无害` / `needs-manual`), a "
+            "three-word verdict on a slot with no per-item text, or the same key "
+            "twice in the input refuses the whole batch with exit 2 and leaves every "
+            "file byte-identical. A key the **report** carries twice is a different "
+            "matter: every matching slot is updated and the count is disclosed as "
+            "`duplicateReportKeys`. Exit 0 means the batch was applied, **not** that "
+            "the board passed — the report's own gate is quoted, never re-decided. "
+            "Purely offline: no editor, no daemon. `review-summary.md` is never "
+            "written. Exit 0 applied / 2 unusable input or output path / 3 no "
+            "report.json to triage."
+        ),
+    )
+    triage_batch.add_argument(
+        "--out",
+        required=True,
+        metavar="DIR",
+        help=(
+            "The `checkup --out` directory holding report.json (and the sidecar "
+            "warning-triage.json). Required, like `boardwise triage`: the verdicts "
+            "are written into that report."
+        ),
+    )
+    triage_batch.add_argument(
+        "--input",
+        required=True,
+        metavar="BATCH.json",
+        help=(
+            'The batch as a strict object: {"schema": "boardwise.triage-batch/1", '
+            '"entries": [{"key": "…", "verdict": "…", "reason": "…"}]}. Entries must '
+            "be non-empty, each key may appear once, and every key must exist in "
+            "the report."
+        ),
+    )
+    triage_batch.add_argument(
+        "--json-path",
+        "--json",
+        dest="json_path",
+        nargs="?",
+        const="-",
+        metavar="PATH",
+        help=(
+            "Write the batch result (per-row matched/added/updated, the slots, the "
+            "recomputed `completion`, the conclusion) as JSON. `-` prints it "
+            "instead; with no `--json` the human summary is printed and stdout "
+            "carries no JSON. Protected report files are refused by name."
+        ),
+    )
+
+    review_evidence = sub.add_parser(
+        "review-evidence",
+        help=(
+            "Collect the live schematic/PCB evidence for an existing `checkup` "
+            "report and merge it into that report's evidence ledger (537C3b2)."
+        ),
+        description=(
+            "The 537C fix for a review that read the live schematic, failed to "
+            "read the live PCB and produced no PCB image — with none of it "
+            "disclosed. This command opens the editor through the bridge, runs "
+            "`engines.liveevidence.collect_live_evidence` once (doc.list identity, "
+            "then per-document doc.open → document.current focus proof → "
+            "readback/netlist/geometry/render, focus restored in `finally`), "
+            "writes the whole capture to `<out>/live-evidence.json` with its "
+            "bytes/sha256, and merges it into `<out>/report.json`'s `evidence` "
+            "section through `merge_live_capture` (four live channels replaced, "
+            "archive/datasheets untouched, identity/focus disclosures added). "
+            "`report.json`, `report.md` and `board-report.md` are then re-written "
+            "from that one report reading. It **never** rewrites "
+            "`review-summary.md`: what a human wrote there is not this command's "
+            "to replace. The board-level conclusion (`completion`, `summary`, "
+            "`conclusion`) is not changed — collecting evidence is not judging "
+            "the board. Paths: --project/--instance choose the editor window "
+            "(023), --page/--pcb may be repeated to collect an explicit subset "
+            "(an explicit subset is disclosed as `missing` coverage, never `ok`). "
+            "Purely read-only actions; no design write. Exit codes describe "
+            "**this collection**: 0 = the collector returned ok, the identity was "
+            "verified against the report (`source.project.projectUuid`) and the "
+            "original focus was restored (a channel with nothing to read, e.g. no "
+            "PCB document, is `not-applicable` and does not block) · 1 = the "
+            "collector returned but some direct evidence failed/missing, the "
+            "selection was an explicit subset, the identity was not verified "
+            "(including a report with no project uuid) or the focus was not "
+            "restored · 2 = unusable input (no/broken report, an evidence section "
+            "of another schema, a merge that refuses the capture, a report that "
+            "cannot be written) · 3 = nothing may be stated (no `report.json`, the "
+            "daemon cannot be reached, or `doc.list` itself failed — the capture "
+            "and its failure disclosure still land). 0 is not a board pass: the "
+            "board conclusion stays `report.json`'s `conclusion`."
+        ),
+    )
+    review_evidence.add_argument(
+        "--out",
+        required=True,
+        metavar="DIR",
+        help=(
+            "The `checkup --out` directory holding report.json. Required: the "
+            "capture is merged into that report, so guessing the directory would "
+            "write the evidence into the wrong one."
+        ),
+    )
+    review_evidence.add_argument(
+        "--project",
+        default="",
+        help=(
+            "Which editor window to read, by project name or uuid (023). Needed "
+            "only when several windows are connected and none can be named by "
+            "the daemon's default."
+        ),
+    )
+    review_evidence.add_argument(
+        "--instance",
+        default="",
+        help=(
+            "The same choice spelled as the window key `bridge status` prints — "
+            "the way to reach one window when no project can be read yet."
+        ),
+    )
+    review_evidence.add_argument(
+        "--port", type=int, default=None, help="Daemon port (default 61190)."
+    )
+    review_evidence.add_argument(
+        "--page",
+        action="append",
+        default=None,
+        metavar="UUID",
+        help=(
+            "Collect only this schematic page (repeat for several). Default: every "
+            "document `doc.list` reports. An explicit subset is recorded as "
+            "`missing` coverage, never `ok` — the pages left out were not read."
+        ),
+    )
+    review_evidence.add_argument(
+        "--pcb",
+        action="append",
+        default=None,
+        metavar="UUID",
+        help="Collect only this PCB document (repeat for several). Default: all.",
+    )
+
+    review_read = sub.add_parser(
+        "review-read",
+        help=(
+            "Read one existing `checkup` report as structured JSON — one of the "
+            "questions a review asks (537D1a)."
+        ),
+        description=(
+            "The 537D fix for the review's worst habit: every question about a "
+            "report was answered by a hand-written one-off JSON parser, and a "
+            "missing key read as 「零问题」. This command is the one structured "
+            "read, and it projects — it never re-gates, renders or writes the "
+            "report. `--section` is one of: "
+            + " / ".join(REVIEW_READ_SECTIONS)
+            + ". `verdict` is `report.conclusion` and nothing else (a report "
+            "without it is `status: \"missing\"`; `summary.conclusion` is a "
+            "sentence and is never promoted to a verdict). `findings` carries the "
+            "findings list and the triage ledger with `warningsPendingTriage` / "
+            "`warningsNeedsManual` counted through checkup's own predicates — a "
+            "`needs-manual` row stays pending. `crossView` copies every board's "
+            "`crossView` verbatim (`checked: false`, `suspected` and the candidate "
+            "mappings included) and says `missing` when there is none. `coverage` "
+            "copies the environment/evidence ledgers and names every absent "
+            "section in `missingSections` instead of guessing it. `netlist` "
+            "projects the live capture's own parsed netlist (components, nets, "
+            "pin names) in sorted order, and answers `missing` with a reason "
+            "when the capture did not verify, the live schematic is not `ok`, or "
+            "no netlist artifact was cited; a cited netlist that fails its "
+            "bytes/sha256/UTF-8/parse proof is exit 2. `artifacts` lists every "
+            "file the report's machine fields cite (canvas images, channel "
+            "artifacts, the live capture's own files, then the five standard "
+            "outputs) with `path`/`exists`/`bytesOnDisk`/`bytesMatch`/"
+            "`sha256Matches`/`error` per row, `missingOutputs` for absent "
+            "standard outputs, and a final `status` of ok / missing / "
+            "unavailable; a citation outside `--out` is refused before it is "
+            "read. "
+            "The envelope is `{schema: \"boardwise.review-read/1\", section, "
+            "report: {path, schema}, payload}` — no `ok` field, because a "
+            "successful read is not a passed board. The same input bytes produce "
+            "the same output bytes. Exit codes describe **this read**: 0 projected "
+            "· 2 unusable input (no report object, broken JSON, a projection that "
+            "refuses the report, an output that cannot be written) · 3 no "
+            "`report.json` to read. `--json PATH` may create a new file but never "
+            "overwrites the report or the products beside it (`report.json`, "
+            "`report.md`, `board-report.md`, `review-summary.md`, "
+            "`live-evidence.json`): naming one of those is exit 2 with every byte "
+            "unchanged."
+        ),
+    )
+    review_read.add_argument(
+        "--out",
+        required=True,
+        metavar="DIR",
+        help=(
+            "The `checkup --out` directory holding report.json. Required: guessing "
+            "the directory would answer about a different review."
+        ),
+    )
+    review_read.add_argument(
+        "--section",
+        required=True,
+        choices=list(REVIEW_READ_SECTIONS),
+        metavar="SECTION",
+        help=(
+            "Which question to answer: " + " / ".join(REVIEW_READ_SECTIONS)
+            + ". `verdict` is the board-level answer (`report.conclusion`); "
+            "`findings` the findings + triage ledger; `crossView` the per-board "
+            "cross-view sections; `coverage` the environment/evidence ledger and "
+            "what the report does not carry; `artifacts` every cited file with "
+            "its on-disk verification; `netlist` the live capture's parsed "
+            "netlist (or why there is none)."
+        ),
+    )
+    review_read.add_argument(
+        "--json",
+        dest="json_path",
+        nargs="?",
+        const="-",
+        metavar="PATH",
+        help=(
+            "Write the envelope as UTF-8 pretty JSON (stable bytes) instead of "
+            "printing it. `-` (and a bare `--json`) prints it, which is exactly "
+            "the default. A path inside `--out` naming one of the five protected "
+            "inputs is refused before anything is written."
         ),
     )
 
@@ -765,6 +1084,15 @@ def build_parser() -> argparse.ArgumentParser:
     call.add_argument("--action", required=True, help="Action name from the catalogue.")
     call.add_argument(
         "--params", default="{}", help="Action params as a JSON object literal."
+    )
+    call.add_argument(
+        "--read-only", action="store_true",
+        help=(
+            "Refuse any action whose catalogue risk is not `read`, before the "
+            "daemon is contacted or started: write, create, dangerous and "
+            "unknown names all fail without forwarding anything. The DSH "
+            "boardwise_bridge tool always sets it."
+        ),
     )
     call.add_argument(
         "--project", default=None, metavar="NAME_OR_UUID",
@@ -3527,6 +3855,12 @@ def _board_sections(findings: list) -> list[str]:
 
 
 def _cmd_review(args: argparse.Namespace) -> int:
+    # 537D2a2: `review finalize --out DIR` is a *different* command that lives
+    # under `review` because that is the accepted shape. It is dispatched here,
+    # before anything old runs: no file resolution, no model load, no rule walk,
+    # no daemon. A plain `review <file>` never reaches this branch.
+    if getattr(args, "file", None) == "finalize":
+        return _cmd_review_finalize(args)
     live = bool(getattr(args, "live", False))
     live_notes: list[str] = []
     live_attempts: list[dict] = []
@@ -3746,6 +4080,732 @@ def _cmd_review(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------
+# review finalize (537D2a2): validate one *delivered* review, in memory first
+# --------------------------------------------------------------------------
+
+#: `review finalize`'s exit codes. They describe **this delivery**, not the board:
+#: 0 = the recomputed report, the filled summary and the cited artifacts agree;
+#: 1 = they do not (each row printed); 2 = the input cannot be used (bad JSON, a
+#: non-object, a foreign stored schema id for the report / evidence / live
+#: capture, an unreadable sidecar, a non-list ledger); 3 = there is no
+#: `report.json` to finalize. None of them is a board verdict.
+REVIEW_FINALIZE_OK = 0
+REVIEW_FINALIZE_INVALID = 1
+REVIEW_FINALIZE_BAD_INPUT = 2
+REVIEW_FINALIZE_NO_REPORT = 3
+
+#: What `finalize` says on success, in one place so a reader (or a test) can name
+#: the sentence instead of matching a paragraph. It is deliberately a **delivery**
+#: sentence: `exit 0` is not 「板子通过」 (188B), and the receipt it signs is a
+#: delivery receipt — `report.conclusion` stays the board-level authority.
+REVIEW_FINALIZE_OK_LINE = "finalize validation: ok"
+
+#: The deterministic CLI delivery receipt (537D2b2). It is written **after** the
+#: four outputs have been synced, and every ``bytes`` / ``sha256`` in it is
+#: recomputed from those final files — a declared value in the report is never
+#: trusted as the receipt's value. The envelope is frozen: no timestamp, no
+#: random id, no absolute path and no board-level pass, so the same delivery
+#: finalized twice produces the same bytes.
+REVIEW_FINALIZE_RECEIPT_FILE = "finalize.json"
+REVIEW_FINALIZE_RECEIPT_SCHEMA = "boardwise.review-finalize/1"
+REVIEW_FINALIZE_RECEIPT_SCOPE = "delivery-content"
+REVIEW_FINALIZE_RECEIPT_AUTHORITY = "report.conclusion"
+REVIEW_FINALIZE_RECEIPT_TEMP_SUFFIX = ".tmp"
+
+#: ① the four files every delivery must have before a receipt may be signed. A
+#: missing one is not a content disagreement — the writers should have produced
+#: it — so it fails the receipt stage (exit 2), never a silent smaller list.
+REVIEW_FINALIZE_RECEIPT_REQUIRED = (
+    "report.json",
+    "report.md",
+    "board-report.md",
+    "review-summary.md",
+)
+
+#: ② the optional siblings that are tracked **when they exist** (and go through
+#: the same containment / regular-file checks). ``warning-triage.json`` stays an
+#: audit trail, ``architecture.md`` / ``design-intent.md`` the 044 pair, and
+#: ``live-evidence.json`` may legitimately never exist.
+REVIEW_FINALIZE_RECEIPT_OPTIONAL = (
+    "live-evidence.json",
+    "warning-triage.json",
+    "architecture.md",
+    "design-intent.md",
+)
+
+
+def _finalize_receipt_file_facts(out_dir: Path, target: Path) -> tuple[Path, int, str]:
+    """``(resolved, bytes, sha256)`` for one final file — or ``ValueError``.
+
+    The receipt is signed from the delivery directory, so it may only name a
+    regular file **inside** ``--out``: the path is resolved, containment is
+    proved with the same normcase-folded check ``review-read`` uses (a symlink
+    that points out is refused before anything is opened), and the sha256 is the
+    existing bounded-chunk helper's. A path that cannot be resolved is a refusal,
+    not a guess.
+    """
+    try:
+        absolute = Path(os.path.abspath(str(target)))
+        resolved = absolute.resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(
+            f"{target}: 收据无法解析这个路径（{type(exc).__name__}: {exc}），"
+            "不能证明它在 --out 之内"
+        ) from exc
+    try:
+        root = out_dir.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(
+            f"{out_dir}: 收据无法解析 --out（{type(exc).__name__}: {exc}），"
+            "不能证明文件在里面"
+        ) from exc
+    if not _review_read_within_directory(root, resolved):
+        raise ValueError(f"{target}: 收据只签 --out 之内的文件，这个路径在外面")
+    try:
+        info = resolved.stat()
+    except OSError as exc:
+        raise ValueError(
+            f"{target}: 收据需要的文件读不了（{type(exc).__name__}: {exc}）"
+        ) from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"{target}: 不是普通文件，不能签进收据")
+    try:
+        digest = _review_read_artifact_sha256(resolved)
+    except OSError as exc:
+        raise ValueError(
+            f"{target}: 收据算不了 sha256（{type(exc).__name__}: {exc}）"
+        ) from exc
+    return resolved, int(info.st_size), digest
+
+
+def _finalize_receipt_payload(out_dir: Path, report: dict) -> dict:
+    """The receipt envelope, signed from the **final** on-disk delivery.
+
+    ``report`` must be the report.json that is on disk *now* (the caller re-reads
+    it after the writers ran). The file list is:
+
+    ① the four required outputs; ② the optional siblings that exist; ③ every
+    file the report's machine fields cite — projected through ``review-read``'s
+    own ``artifacts`` section and re-verified by the CLI's file facts **after**
+    the writes. Any row error (missing / outside / not-file / unreadable /
+    declared bytes or sha mismatch) and any unreadable or non-regular path is a
+    refusal: the receipt is never signed over a delivery it could not re-prove.
+
+    Rows are de-duplicated on the **resolved** path (the twice-cited canvas is
+    one file) and sorted by relative POSIX path. The receipt itself is excluded,
+    so finalizing the same directory twice does not sign a different list.
+    """
+    candidates: list[Path] = []
+    for name in REVIEW_FINALIZE_RECEIPT_REQUIRED:
+        path = out_dir / name
+        if not path.is_file():
+            raise ValueError(
+                f"必需交付件 {name} 不在 --out 里（写后复核缺失）——不能签收据"
+            )
+        candidates.append(path)
+    for name in REVIEW_FINALIZE_RECEIPT_OPTIONAL:
+        path = out_dir / name
+        # `exists()` is False for a broken symlink; `is_symlink()` is how that
+        # presence is still refused by the regular-file check instead of being
+        # silently treated as absent.
+        if path.exists() or path.is_symlink():
+            candidates.append(path)
+
+    try:
+        payload = review_read_section(report, "artifacts")
+    except ValueError as exc:
+        raise ValueError(f"写后 artifacts 投影失败（{exc}）") from exc
+    verified = _review_read_artifacts_payload(payload, out_dir)
+    for row in verified.get("artifacts") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("source") == REVIEW_OUTPUT_SOURCE:
+            # The five standard outputs are already handled explicitly above;
+            # `live-evidence.json` is optional and may legitimately be absent.
+            continue
+        if row.get("error"):
+            artifact = row.get("artifact") if isinstance(row.get("artifact"), dict) else {}
+            name = artifact.get("file") or "(no file)"
+            raise ValueError(
+                f"写后复核发现 {row.get('source')} 引用的证据 {name!r} "
+                f"不可签（{row['error']}）"
+            )
+        path_text = row.get("path")
+        if not isinstance(path_text, str) or not path_text:
+            raise ValueError(
+                f"写后复核没有给出 {row.get('source')} 引用文件的 resolved 路径"
+            )
+        candidates.append(Path(path_text))
+
+    receipt_path = out_dir / REVIEW_FINALIZE_RECEIPT_FILE
+    try:
+        excluded = receipt_path.resolve()
+    except (OSError, RuntimeError):
+        excluded = None
+
+    rows_by_key: dict[str, dict] = {}
+    for candidate in candidates:
+        resolved, size, digest = _finalize_receipt_file_facts(out_dir, candidate)
+        if excluded is not None and resolved == excluded:
+            # Never sign the receipt into itself.
+            continue
+        try:
+            relative = resolved.relative_to(out_dir.resolve()).as_posix()
+        except ValueError as exc:  # pragma: no cover - containment proved above
+            raise ValueError(
+                f"{candidate}: 收据算不出相对 --out 的路径（{exc}）"
+            ) from exc
+        key = os.path.normcase(str(resolved))
+        rows_by_key[key] = {
+            "path": relative,
+            "bytes": size,
+            "sha256": digest,
+        }
+
+    files = sorted(rows_by_key.values(), key=lambda row: row["path"])
+    return {
+        "schema": REVIEW_FINALIZE_RECEIPT_SCHEMA,
+        "ok": True,
+        "scope": REVIEW_FINALIZE_RECEIPT_SCOPE,
+        "boardConclusionAuthority": REVIEW_FINALIZE_RECEIPT_AUTHORITY,
+        "files": files,
+    }
+
+
+def _write_finalize_receipt(out_dir: Path, receipt: dict) -> Path:
+    """Write the receipt through a sibling ``.tmp`` + ``os.replace``.
+
+    A crash or a failed rename must never leave a half-read ``finalize.json``:
+    the only path that becomes the receipt is the atomically renamed one. The
+    temporary sibling is deliberately **not** cleaned up with ``unlink``/``rm``
+    (project rule); a failed rename therefore leaves ``finalize.json.tmp`` and
+    **no** ``finalize.json``, which is the honest state.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / REVIEW_FINALIZE_RECEIPT_FILE
+    temp = out_dir / (
+        REVIEW_FINALIZE_RECEIPT_FILE + REVIEW_FINALIZE_RECEIPT_TEMP_SUFFIX
+    )
+    payload = json.dumps(receipt, ensure_ascii=False, indent=2) + "\n"
+    temp.write_bytes(payload.encode("utf-8"))
+    os.replace(temp, path)
+    return path
+
+
+
+def _finalize_append_source_note(report: dict, note: str) -> None:
+    """Add one sentence to ``report.source.notes`` — **exactly once**.
+
+    ``source.notes`` is the report's prose record of what the run did (where a
+    sidecar read failed, which pages were merged, …). Finalize recomputes the
+    same merge note on every run of the same input, so appending blindly would
+    make the file grow each time and break the byte-stability this command
+    promises. Identity is the **exact** sentence: two different counts are two
+    different notes, and a substring match would collapse them.
+    """
+    source = report.get("source")
+    if not isinstance(source, dict):
+        source = {}
+        report["source"] = source
+    notes = source.get("notes")
+    if not isinstance(notes, list):
+        notes = []
+        source["notes"] = notes
+    if note not in notes:
+        notes.append(note)
+
+
+def _finalize_triage_entries(out_dir: Path) -> list[dict]:
+    """The triage sidecar's entries, read through the command's own loader.
+
+    ``_load_triage_entries`` is what ``checkup``/``triage`` use, and its
+    tolerance is right for *them*: a missing file means 「nobody judged anything
+    yet」, and an unreadable one is a note beside a report that must still land.
+    Finalize asks a stricter question — it is about to fold these entries onto
+    this report's slots and then validate the result — so a shape it cannot read
+    is an **input** it must not silently treat as empty (exit 2 at the caller).
+
+    The shape gate is here rather than in the loader because the loader's
+    permissiveness is the other two commands' contract; the entries themselves
+    still come from that one function.
+    """
+    path = Path(out_dir) / WARNING_TRIAGE_FILE
+    if path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"{path}: 分诊侧车读不了（{type(exc).__name__}: {exc}）"
+            ) from exc
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict):
+            rows = payload.get("entries")
+            if rows is None:
+                rows = []
+        else:
+            raise ValueError(
+                f"{path}: 分诊侧车必须是 对象数组 或 {{version, entries}} 对象，"
+                f"实际是 {type(payload).__name__}"
+            )
+        if not isinstance(rows, list) or not all(
+            isinstance(row, dict) for row in rows
+        ):
+            raise ValueError(
+                f"{path}: 分诊侧车的 entries 必须是「一行一个判定」的对象数组"
+            )
+    try:
+        return _load_triage_entries(out_dir)
+    except WarningTriageError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+def _finalize_schema_failure(report: dict) -> str | None:
+    """The first stored schema id that is not this build's, or ``None``.
+
+    Finalize re-gates the report through *this* build's derivations, so a report
+    (or evidence ledger, or live capture) written against another schema cannot
+    be re-gated by guessing what its fields meant — that is **unusable input**,
+    exit 2, checked before any recompute and before any writer.
+
+    Only a section that is actually there is checked: a report with no
+    ``evidence``, or evidence with no ``liveCapture``, keeps the content
+    validator's existing missing/focus semantics. A non-dict ``liveCapture`` is
+    likewise not this gate's business (its existing finalize behaviour is
+    unchanged), and a non-dict/unreadable ``evidence`` is left to the content
+    validator's ``evidence-missing`` path rather than being reclassified here.
+    """
+    stored = report.get("schema")
+    if stored != CHECKUP_SCHEMA:
+        return (
+            f"report.schema 是 {stored!r}，不是本棒的 {CHECKUP_SCHEMA!r} —— "
+            "只 finalize 当前 schema 的 report，不猜别的版本"
+        )
+    evidence = report.get("evidence")
+    if isinstance(evidence, dict) and evidence:
+        stored = evidence.get("schema")
+        if stored != EVIDENCE_SCHEMA:
+            return (
+                f"report.evidence.schema 是 {stored!r}，不是本棒的 "
+                f"{EVIDENCE_SCHEMA!r} —— 证据账本的版本对不上，不能重算"
+            )
+        live_capture = evidence.get("liveCapture")
+        if isinstance(live_capture, dict):
+            stored = live_capture.get("schema")
+            if stored != LIVE_EVIDENCE_SCHEMA:
+                return (
+                    f"report.evidence.liveCapture.schema 是 {stored!r}，不是本棒的 "
+                    f"{LIVE_EVIDENCE_SCHEMA!r} —— 采集记录的版本对不上，不能签发"
+                )
+    return None
+
+
+def _cmd_review_finalize(args: argparse.Namespace) -> int:
+    """``boardwise review finalize --out DIR`` — the 537D2a2 delivery gate.
+
+    An AI (or a human) has run ``boardwise checkup``, filled
+    ``review-summary.md``'s blanks, and is about to hand the directory over.
+    This command asks whether that delivery is *internally consistent* — and it
+    does so the way the next ``checkup`` would, not by trusting what the files
+    say about themselves:
+
+    0. **the stored schema ids, before anything else.** ``report.schema`` must be
+       ``CHECKUP_SCHEMA``; a non-empty ``evidence`` must carry
+       ``EVIDENCE_SCHEMA``; an existing dict ``liveCapture`` must carry
+       ``LIVE_EVIDENCE_SCHEMA``. A foreign id is **unusable input** (exit 2,
+       zero writes) — re-gating another version's fields would be a guess. A
+       missing evidence / liveCapture section is not this gate's: the content
+       validator's existing missing/focus semantics still answer it;
+    1. **only in memory.** A ``deepcopy`` of ``report.json`` is brought up to
+       date: the triage sidecar is folded back onto the slots
+       (``merge_triage_sidecar``, refusals included), ``completion`` and
+       ``summary`` are re-gated (``_apply_warning_triage``, once), the
+       ``datasheets`` channel is refreshed from the sections that own it
+       (``refresh_datasheets``), and ``board_report``/``conclusion`` are derived
+       (``_derive_checkup_report_sections`` — the writer's own two derivations).
+       A stored count, verdict, delivery or one-liner that the sections no longer
+       support is therefore *pre-gated*, not validated;
+    2. **the accepted validator**, ``validate_review_summary`` (537D2a1), over
+       that recomputed report and the summary **with its two machine sections
+       synchronised** (537D2b1: environment/evidence re-rendered from the
+       recomputed report through the shared renderers; every other byte is the
+       human's). Every issue it finds is a failure — including a
+       ``focusRestore.ok`` that is not true and a missing ``environment`` /
+       ``evidence`` section (nothing is guessed in);
+    3. **the artifacts**, through ``review-read``'s own projection
+       (``review_read_section(..., "artifacts")``) plus the CLI's file facts
+       (``_review_read_artifacts_payload``). A cited file that is missing, outside
+       ``--out``, not a regular file, unreadable, or whose declared bytes/sha256
+       do not hold is a named issue. The five **standard outputs** are not
+       citations: ``report.md``/``board-report.md`` are written by *this*
+       command on success and ``live-evidence.json`` may never exist, so their
+       absence is ``missingOutputs`` information. ``archivePcb``'s board-level
+       readings cite no file and never reach that list;
+    4. **zero writes before the gate opens.** No writer is called — and no file
+       is created — until every recompute, derivation and check has produced an
+       empty issue list. A 1/2/3 leaves ``report.json``, ``report.md``,
+       ``board-report.md``, ``review-summary.md``, ``warning-triage.json`` and
+       ``live-evidence.json`` byte-for-byte as they were (absent stays absent),
+       and never creates ``finalize.json``;
+    5. **on success only**, the existing writers re-sync ``report.json``,
+       ``report.md`` and ``board-report.md``, and — only if the text actually
+       differs — ``review-summary.md``'s ``## 审查环境与权限（environment）`` and
+       ``## 证据覆盖（evidence）`` machine sections are written back from the
+       recomputed report. Nothing outside those two headings is rewritten: the
+       conclusion, the findings' analysis/advice, a 2b block, sections 3/4 and
+       the file's CRLF endings stay exactly as the human left them — 只同步
+       environment/evidence 两段机器段，人工内容不改。The sidecar is never
+       written. The board-level answer stays ``report.json``'s ``conclusion``;
+    6. **then, and only then, the CLI delivery receipt.** ``finalize.json``
+       (``schema: boardwise.review-finalize/1``, ``ok: true``,
+       ``scope: delivery-content``, ``boardConclusionAuthority:
+       report.conclusion``) lists ``{path, bytes, sha256}`` for ① the four
+       required outputs, ② the optional ``live-evidence.json`` /
+       ``warning-triage.json`` / ``architecture.md`` / ``design-intent.md`` when
+       they exist, and ③ every evidence file the report's machine fields cite
+       (canvas / channels / liveCapture / captureFile / netlist). It is
+       re-projected **after** the writes through ``review_read_section(...,
+       "artifacts")`` + ``_review_read_artifacts_payload``, and the bytes/sha256
+       are recomputed from the final files — a declared value is never the
+       receipt's value. Paths are relative POSIX, de-duplicated on the resolved
+       path, sorted, and inside ``--out``; the receipt excludes itself. It is
+       written through a sibling ``.tmp`` + ``os.replace``. Any writer failure,
+       post-write re-check failure, hash failure or receipt write failure is
+       exit 2 with **no** ``finalize.json`` — the report files may have been
+       synced in part, and the stderr says so. ``exit 0`` / ``receipt.ok`` mean
+       **the delivery content validated**, not that the board passed
+       （不是板级通过）: the board authority is still ``report.conclusion``, and a
+       DSH Session still needs D3.
+
+    Console: the success line plus pending / needsManual / delivery, the receipt
+    it created (CLI delivery receipt only, DSH still needs D3), and the sentence
+    that this is not a board pass. Failures print one ``{code, path, message}``
+    JSON object per line, and nothing else.
+    """
+    # The old review flags all name a *different* input (a file, the editor, the
+    # newest export, another output path). Accepting one beside `--out` would
+    # mean silently validating one of them, so the mix is refused before any
+    # read — the same exit 2 argparse would give for an unusable combination.
+    # Presence, not truthiness: `--json ""` / `--md ""` is still the caller
+    # giving that flag (the old route reads an empty value as stdout).
+    mixed = [
+        flag
+        for flag, given in (
+            ("--live", bool(getattr(args, "live", False))),
+            ("--latest", getattr(args, "latest", None) is not None),
+            ("--view", getattr(args, "view", None) is not None),
+            ("--json", getattr(args, "json_path", None) is not None),
+            ("--md", getattr(args, "md_path", None) is not None),
+        )
+        if given
+    ]
+    if mixed:
+        print(
+            "boardwise review finalize: 只认 --out DIR —— 它校验的是一份已有交付；"
+            f"不能再给 {' / '.join(mixed)}（它们指向另一份输入/另一个写出口）。",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+
+    out_value = str(getattr(args, "out", "") or "").strip()
+    if not out_value:
+        print(
+            "boardwise review finalize: 需要 --out DIR —— 指向 `boardwise checkup` 写出的"
+            "那份目录（report.json + 已填好的 review-summary.md）。",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+
+    out_dir = Path(out_value).expanduser()
+    report_path = out_dir / "report.json"
+    if not report_path.is_file():
+        print(
+            f"boardwise review finalize: {report_path} 不存在——没有可以 finalize 的报告"
+            "（本命令只校验一份已有交付，不生成报告，也不去别的目录猜）",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_NO_REPORT
+
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(
+            f"boardwise review finalize: {report_path}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+    if not isinstance(report, dict):
+        print(
+            f"boardwise review finalize: {report_path}: 不是一个 report 对象"
+            f"（{type(report).__name__}）",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+
+    # 537D2b1 schema guard: decide the stored schema ids **before** the first
+    # recompute. A foreign version is unusable input (exit 2), not a content
+    # disagreement — re-gating it through this build's derivations would be a
+    # guess about fields that may no longer mean the same thing.
+    schema_failure = _finalize_schema_failure(report)
+    if schema_failure:
+        print(
+            f"boardwise review finalize: {report_path}: {schema_failure}",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+
+    # The machine ledger is the one section the recompute cannot do without: it
+    # is where the sidecar's verdicts land and where `completion` is recounted
+    # from. Missing/not-a-list is **unusable input**, not 「zero warnings」 — the
+    # absence-as-answer mistake this whole batch exists to stop.
+    triage = report.get("warning_triage")
+    if not isinstance(triage, list) or not all(
+        isinstance(slot, dict) for slot in triage
+    ):
+        print(
+            "boardwise review finalize: report.warning_triage 必须是槽位对象数组"
+            f"（实际 {type(triage).__name__}）——没有可重算的机器账，"
+            "不把未知当零",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+    if not isinstance(report.get("summary"), dict):
+        print(
+            "boardwise review finalize: report.summary 必须是 dict"
+            "（exitCode 从这里读，重算要写回去）",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+
+    summary_path = out_dir / "review-summary.md"
+    if not summary_path.is_file():
+        print(
+            f"boardwise review finalize: {summary_path} 不存在——finalize 校验的是"
+            "**已填好**的交付件，缺件不是通过",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+    try:
+        # 537D2b1: bytes -> explicit UTF-8 decode, **not** ``read_text``. The
+        # summary is written back after the sync, and universal-newline reading
+        # would silently normalise every CRLF outside the two machine sections —
+        # the human's bytes. The validator reads either ending (``splitlines``).
+        summary_text = summary_path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        print(
+            f"boardwise review finalize: {summary_path}: 读不了为 UTF-8 文本"
+            f"（{type(exc).__name__}: {exc}）",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+
+    try:
+        entries = _finalize_triage_entries(out_dir)
+    except ValueError as exc:
+        print(f"boardwise review finalize: {exc}", file=sys.stderr)
+        return REVIEW_FINALIZE_BAD_INPUT
+
+    regated = copy.deepcopy(report)
+    try:
+        refused: list[dict] = []
+        slots, merged_count, unmatched_count = merge_triage_sidecar(
+            triage, entries, refused=refused
+        )
+        regated["warning_triage"] = slots
+        # A re-gate, exactly like `boardwise triage`/`need-datasheet`: one call,
+        # and only after the sidecar's verdicts are on the slots — otherwise the
+        # rebuilt `completion` would count the pre-merge ledger.
+        _apply_warning_triage(regated, slots)
+        if isinstance(regated.get("evidence"), dict):
+            regated["evidence"] = refresh_datasheets(
+                regated["evidence"],
+                model_empty=bool(
+                    ((regated.get("completion") or {}).get("coverage") or {}).get(
+                        "modelEmpty"
+                    )
+                ),
+                unreviewed=regated.get("unreviewed_parts") or [],
+                accepted_unknown=regated.get("accepted_unknown") or [],
+                needs_datasheet=regated.get("needs_datasheet") or [],
+            )
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        # The report is structurally unusable for a re-gate (a section of the
+        # wrong shape, a list where a dict is read). Exit 2, no traceback, and
+        # nothing written: the caller sees a sentence, not a stack.
+        print(
+            "boardwise review finalize: 报告结构无法重算"
+            f"（{type(exc).__name__}: {exc}）——本次不写任何文件",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+
+    # The merge notes (and refusals) are part of what this run observed, so they
+    # belong in the report's own prose record — appended to *this* copy only, and
+    # exactly once even when the same input is finalized twice.
+    if merged_count:
+        _finalize_append_source_note(
+            regated,
+            f"侧车 {WARNING_TRIAGE_FILE} 里的 {merged_count} 条分诊结论已并入本次报告"
+            "（按 key 匹配）（`boardwise triage` 写入）",
+        )
+    if refused:
+        _finalize_append_source_note(
+            regated,
+            f"侧车 {WARNING_TRIAGE_FILE} 里有 {len(refused)} 条分诊结论被拒收"
+            f"（无逐条文本的槽位不能用 {TRIAGE_VERDICTS[0]}/{TRIAGE_VERDICTS[1]}/"
+            f"{TRIAGE_VERDICTS[2]} 关闭，需 {TRIAGE_UNJUDGEABLE}；词表外的判决也不算"
+            "分诊）：条目留在侧车当审计轨迹，不删——请改用 "
+            f"`boardwise triage --verdict {TRIAGE_UNJUDGEABLE} --reason …` 重判",
+        )
+    if unmatched_count:
+        _finalize_append_source_note(
+            regated,
+            f"侧车 {WARNING_TRIAGE_FILE} 里另有 {unmatched_count} 条分诊结论没有对应"
+            "槽位（旧警告可能已消失）：条目留在侧车当审计轨迹，不删",
+        )
+
+    derived_errors = _derive_checkup_report_sections(regated)
+    if derived_errors:
+        regated["renderErrors"] = derived_errors
+
+    issues: list[dict] = []
+    # Derivation errors are never signed: a section that could not be derived
+    # would otherwise reach the engineer as a stale copy from an earlier run.
+    # The field is a **list of failures**: a stored value of any other type is a
+    # derivation state this command cannot read, so it is refused rather than
+    # ignored (an empty string / empty dict is the wrong type, not 「no errors」).
+    # `None` and `[]` are the two honest ways of saying there were none.
+    render_errors = regated.get("renderErrors")
+    if render_errors is not None:
+        if not isinstance(render_errors, list):
+            issues.append(
+                {
+                    "code": "render-errors",
+                    "path": "report.renderErrors",
+                    "message": (
+                        "renderErrors 必须是派生失败消息的列表，实际是 "
+                        f"{type(render_errors).__name__} —— 读不懂的派生状态不能签发"
+                    ),
+                }
+            )
+        else:
+            for position, message in enumerate(render_errors):
+                issues.append(
+                    {
+                        "code": "render-errors",
+                        "path": f"report.renderErrors[{position}]",
+                        "message": f"派生节失败，不能签发：{message}",
+                    }
+                )
+
+    # 537D2b1: bring the two machine sections of the *in-memory* delivery up to
+    # the recomputed report before asking the validator. This is the only text
+    # this command may write into review-summary.md, and it is held in memory
+    # until the whole gate below is clean — a 1/2/3 writes no byte of it.
+    final_summary = synchronize_review_summary_sections(regated, summary_text)
+
+    # The accepted content validator (537D2a1). It compares the recomputed
+    # report with that synchronised summary; every byte outside the two machine
+    # headings is still the human's input.
+    issues.extend(validate_review_summary(regated, final_summary))
+
+    # The artifacts, through 537D1a's projection and this CLI's file facts. The
+    # standard outputs are handled by `missingOutputs` (report.md and
+    # board-report.md are written by this very command on success), so a row
+    # that still carries an error is a contradiction — missing, outside,
+    # not-file, unreadable, bytes or sha256 mismatch.
+    try:
+        payload = review_read_section(regated, "artifacts")
+    except ValueError as exc:
+        print(
+            f"boardwise review finalize: {report_path}: artifacts 投影失败（{exc}）",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+    verified = _review_read_artifacts_payload(payload, out_dir)
+    for row in verified.get("artifacts") or []:
+        if not isinstance(row, dict) or not row.get("error"):
+            continue
+        artifact = row.get("artifact") if isinstance(row.get("artifact"), dict) else {}
+        name = artifact.get("file") or "(no file)"
+        issues.append(
+            {
+                "code": f"artifact-{row['error']}",
+                "path": str(row.get("path") or name),
+                "message": (
+                    f"{row.get('source')} 引用的证据文件 {name!r} 校验失败"
+                    f"（{row['error']}）：必须真实存在、在 --out 之内、是普通文件，"
+                    "且声明了 bytes/sha256 时必须吻合"
+                ),
+            }
+        )
+
+    if issues:
+        print(f"finalize validation: failed（{len(issues)} issue）——本目录一个字没写")
+        for issue in issues:
+            print(json.dumps(issue, ensure_ascii=False))
+        return REVIEW_FINALIZE_INVALID
+
+    # ---- the gate is open: only now may anything be written -----------------
+    completion = regated.get("completion") or {}
+    evidence = regated.get("evidence") if isinstance(regated.get("evidence"), dict) else {}
+    delivery = evidence.get("delivery") if isinstance(evidence.get("delivery"), dict) else {}
+    pending = int(completion.get("warningsPendingTriage") or 0)
+    manual = int(completion.get("warningsNeedsManual") or 0)
+    delivery_status = str(delivery.get("status") or "missing")
+
+    # From here on a failure may leave the report files partially synced. The
+    # receipt is the last thing written, and it is only ever the atomically
+    # renamed file: a writer / re-check / hash / rename failure returns exit 2
+    # with **no** finalize.json, never a half receipt.
+    try:
+        _write_checkup_report(out_dir, regated)
+        _write_checkup_markdown(out_dir, regated)
+        _write_board_report(out_dir, regated)
+        # 537D2b1: only the two machine sections can differ, and an already-synced
+        # delivery is not rewritten at all (second run: every file byte-identical).
+        if final_summary != summary_text:
+            summary_path.write_bytes(final_summary.encode("utf-8"))
+        # 537D2b2: sign from the final **on-disk** report (not the in-memory copy
+        # the writers may have derived into), and re-prove the artifacts once
+        # more after the writes. Only a clean answer becomes a receipt.
+        final_report = json.loads(report_path.read_text(encoding="utf-8"))
+        receipt = _finalize_receipt_payload(out_dir, final_report)
+        _write_finalize_receipt(out_dir, receipt)
+    except Exception as exc:  # noqa: BLE001 — honest exit 2, never a traceback
+        print(
+            "boardwise review finalize: 写交付件/签收据时失败"
+            f"（{type(exc).__name__}: {exc}）——report.json / report.md / "
+            "board-report.md / review-summary.md 可能只同步了一部分；"
+            f"本次没有签发 {REVIEW_FINALIZE_RECEIPT_FILE}",
+            file=sys.stderr,
+        )
+        return REVIEW_FINALIZE_BAD_INPUT
+
+    print(REVIEW_FINALIZE_OK_LINE)
+    print(
+        f"  verdict {completion.get('verdict') or '(none)'} · "
+        f"exitCode {regated['summary'].get('exitCode')} · "
+        f"pending {pending} · needsManual {manual} · delivery {delivery_status}"
+    )
+    print(
+        "  wrote report.json / report.md / board-report.md —— "
+        "review-summary.md 只同步 environment/evidence 两段机器段，人工内容不改；"
+        "侧车未写"
+    )
+    print(
+        f"  收据 {REVIEW_FINALIZE_RECEIPT_FILE} 已创建（scope "
+        f"{REVIEW_FINALIZE_RECEIPT_SCOPE}，{len(receipt['files'])} 个文件）—— "
+        "仅 CLI delivery receipt；DSH Session 仍需 D3"
+    )
+    print(
+        "  这不是板级通过：exit 0 只说明交付内容（含所引证据）与重算后的 "
+        "report.json 一致；板级结论仍看 report.conclusion"
+    )
+    return REVIEW_FINALIZE_OK
+
+
+# --------------------------------------------------------------------------
 # checkup (025 batch 2): the data path, with an honest tier ladder
 # --------------------------------------------------------------------------
 
@@ -3891,6 +4951,17 @@ def _checkup_report(
     metadata_value_conflicts: list[dict] | None = None,
     metadata_state_counts: dict[str, int] | None = None,
     shelf_path: str = "",
+    # 537C2: the environment section's input, when a caller already built it.
+    # Keyword-only like everything else; the default reads this checkout's
+    # connector version through `_repo_connector_version()` (tests monkeypatch
+    # that, so an assertion never depends on the machine's installed connector).
+    environment: dict | None = None,
+    # 537C3a: the six-channel evidence ledger, when the caller already built it
+    # from what the run collected. `_cmd_checkup` always does (it holds the real
+    # canvas / pcb_had_documents / coverage.modelEmpty / datasheet inputs); the
+    # default below is the honest fallback for a hand-built report or an older
+    # re-gate path, never a second truth.
+    evidence: dict | None = None,
 ) -> dict:
     """Assemble the report: what was read (batch 2), what was found (batch 3),
     what it means and what the model still has to do (batch 4).
@@ -3943,7 +5014,28 @@ def _checkup_report(
     and are the only rows that move `completion.verdict` (from `incomplete` to
     `complete-with-open-items`, never past it: the part was not judged). Same deal
     as `reviewedByShelf` — a reading of the same walk, always present, no bump.
+
+    537C2 added `environment` — the run's version pair, the fact that this review
+    is read-only (`writeAllowed: false`, scoped to *this review*, not a claim
+    about the daemon's global configuration), the three allowed next steps and
+    the limitations of what was read. Additive and always present, like
+    `reviewedByShelf`: no existing key changes meaning, `source.connectorVersion`
+    stays exactly where it was (the section's running version is that same
+    reading), and the gate (`completion`, `summary.exitCode`, the exit code)
+    never reads it — a disclosure must not move a verdict.
+
+    537C3a added `evidence` — the six-channel coverage ledger
+    (`engines/evidence.py`): what the run collected per channel, the status map
+    derived from those rows, and a `delivery` reading that is `complete` only
+    when every channel is `ok` or `not-applicable`. Same deal as `environment`:
+    always present, additive, and **a reading, not a gate** — `completion` and
+    the exit code never read it, so `partial` delivery cannot be mistaken for a
+    board-level fail. `_cmd_checkup` passes the real values; the default below
+    exists so a hand-built report still gets an honest basic shape.
     """
+    # Read once: the `model` section below and the fallback evidence ledger both
+    # need these counts, and two walks of the same model could disagree.
+    model_section = _checkup_model_section(model)
     body: dict = {
         "schema": CHECKUP_SCHEMA,
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -3954,7 +5046,7 @@ def _checkup_report(
             "attempts": attempts,
             "notes": notes,
         },
-        "model": _checkup_model_section(model),
+        "model": model_section,
         "summary": summary,
         "pending": {},
         "drc": drc,
@@ -4005,6 +5097,29 @@ def _checkup_report(
         # `report["shelfPath"]` on an older report is the reader this key exists
         # for.
         "shelfPath": shelf_path,
+        # 537C2: always present — `writeAllowed=false` and the allowed next steps
+        # are claims every consumer (report.md, review-summary.md, the console,
+        # the model reading the JSON) must be able to read from the report itself
+        # rather than parse out of prose. Additive: the old keys above are
+        # untouched, and `source.connectorVersion` remains the one raw reading the
+        # section mirrors.
+        "environment": environment if environment is not None else environment_section(
+            tier=tier,
+            source=source,
+            expected_connector_version=_repo_connector_version(),
+        ),
+        # 537C3a: the six-channel evidence ledger. Always present — an absent
+        # section would read as "this run collected nothing to disclose", which
+        # is the exact silence the ledger exists to break. `_cmd_checkup` passes
+        # what it really collected; the fallback is for hand-built reports.
+        "evidence": evidence if evidence is not None else default_evidence(
+            tier=tier,
+            model_section=model_section,
+            pcb_review=pcb_review,
+            unreviewed=unreviewed_parts,
+            accepted_unknown=accepted_unknown,
+            needs_datasheet=needs_datasheet,
+        ),
     }
     # Absent, not empty: "the switch is off" and "the switch is on and nobody has
     # scored anything yet" are two different states of the report (039 批② §WI-3).
@@ -4059,6 +5174,38 @@ def _checkup_report(
     return body
 
 
+def _derive_checkup_report_sections(report: dict) -> list[str]:
+    """Derive ``board_report`` + ``conclusion`` in place; return the render errors.
+
+    154 made ``board_report`` a **derived** section (two commands mutate the
+    sections it reads after the report was built) and 185 A made ``conclusion``
+    the report's one answer, derived from that section's verdict. Both are what
+    every written report must carry, so the derivation lives here rather than in
+    the writer — ``review finalize`` runs the *same* two steps on its in-memory
+    copy **before** it decides to write anything (537D2a2), which is what lets a
+    stale derived section be caught instead of signed.
+
+    **Deriving a section must not cost the report (189B ④).** A builder that
+    raises leaves its own key out (no faked ``conclusion``) and is named in the
+    additive ``renderErrors`` list the caller gets back, so the file can still
+    land with every reading the rules produced. The rule walk is not affected:
+    a rule that raises is ``rules_errored`` and already reports.
+    """
+    derived: list[str] = []
+    try:
+        section = board_report_section(report)
+    except Exception as exc:  # noqa: BLE001 — report.json still gets written
+        section = {}
+        derived.append(f"board_report 节派生失败：{type(exc).__name__}: {exc}")
+    report["board_report"] = section
+    try:
+        report["conclusion"] = conclusion_section(report, verdict=section.get("verdict"))
+    except Exception as exc:  # noqa: BLE001 — same promise, one level up
+        report.pop("conclusion", None)
+        derived.append(f"conclusion 节派生失败：{type(exc).__name__}: {exc}")
+    return derived
+
+
 def _write_checkup_report(out_dir: Path, report: dict) -> Path:
     """Write ``report.json`` into ``out_dir`` (created if missing), and say where.
 
@@ -4092,19 +5239,12 @@ def _write_checkup_report(out_dir: Path, report: dict) -> Path:
     additive `renderErrors` list, so the file still lands with every reading the
     rules produced. The rule walk is not affected either way: a rule that raises is
     `rules_errored` and already reports.
+
+    The two derivations themselves are :func:`_derive_checkup_report_sections`,
+    so `review finalize` (537D2a2) can run exactly the same steps in memory and
+    refuse to write when they fail — one implementation, two callers.
     """
-    derived: list[str] = []
-    try:
-        section = board_report_section(report)
-    except Exception as exc:  # noqa: BLE001 — report.json still gets written
-        section = {}
-        derived.append(f"board_report 节派生失败：{type(exc).__name__}: {exc}")
-    report["board_report"] = section
-    try:
-        report["conclusion"] = conclusion_section(report, verdict=section.get("verdict"))
-    except Exception as exc:  # noqa: BLE001 — same promise, one level up
-        report.pop("conclusion", None)
-        derived.append(f"conclusion 节派生失败：{type(exc).__name__}: {exc}")
+    derived = _derive_checkup_report_sections(report)
     if derived:
         report["renderErrors"] = derived
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -4692,7 +5832,24 @@ def _completion_body(
     # have is *not* added again — `unreviewedParts` already counts that part and
     # 058 §二 says the same question is not counted twice (`marked_parts`).
     marked_count = len(marked_parts(needs_datasheet))
-    pending = sum(1 for entry in triage if not (entry.get("verdict") or "").strip())
+    # 537B §3: one predicate decides what is closed (`triage_slot_is_closed`), so a
+    # `needs-manual` row, a row nobody judged, and a row somebody hand-edited to a
+    # word outside the vocabulary all count as pending — `needs-manual` is not a
+    # way to close a warning, it is a way to *name* the debt.
+    pending = sum(1 for entry in triage if not triage_slot_is_closed(entry))
+    # The same rows, under the question a reader has next — 「还有几条要人去看」 —
+    # with enough context to go and look. Built here so `report.md`, the console
+    # and `verdictWhy` all read one list (additive: no key was renamed).
+    manual_review = [
+        {
+            "key": str(entry.get("key") or ""),
+            "source": str(entry.get("source") or ""),
+            "count": entry.get("count"),
+            "reason": str(entry.get("reason") or "").strip(),
+        }
+        for entry in triage
+        if triage_slot_is_manual(entry)
+    ]
     slots = (architecture or {}).get("totals") or {}
     empty = {"total": 0, "filled": 0, "stale": 0}
     architecture_slots = {
@@ -4747,7 +5904,16 @@ def _completion_body(
     if architecture_slots["stale"]:
         why.append(f"{architecture_slots['stale']} 个架构槽位的图纸已变（stale）")
     if pending:
-        why.append(f"{pending} 条 warning 待分诊")
+        # 537B: the count includes the rows only a human can close, and says how
+        # many they are — the same number as `warningsNeedsManual` and the list.
+        why.append(
+            f"{pending} 条 warning 待分诊"
+            + (
+                f"（其中 {len(manual_review)} 条 {TRIAGE_UNJUDGEABLE}：来源只有合计、"
+                "没有逐条文本，需要人工在编辑器面板/画布上看）"
+                if manual_review else ""
+            )
+        )
     if architecture is None:
         why.append("架构骨架未生成（report.json 无 architecture 键）")
     # #30: the coverage failures come last, so every clause the earlier batches
@@ -4837,6 +6003,12 @@ def _completion_body(
         "reviewerMarked": marked_count,
         "needsDatasheetTotal": len(needs_datasheet or []),
         "warningsPendingTriage": pending,
+        # 537B §3: the same pending rows under the next action's name — how many
+        # need a human look, and which ones (key/source/count/reason). Additive:
+        # `warningsPendingTriage` keeps its 063 meaning and **includes** these, so
+        # a `needs-manual` row is a named debt, never a closed one.
+        "warningsNeedsManual": len(manual_review),
+        "manualReviewRequired": manual_review,
         "architectureSlots": architecture_slots,
         "openTodos": open_todos,
         # 191A: the accepted-unknown reading. `acceptedUnknown` is the count the
@@ -5366,6 +6538,21 @@ def _apply_needs_datasheet(report: dict, needs_datasheet: list[dict]) -> dict:
     report["schema"] = CHECKUP_SCHEMA
     report["needs_datasheet"] = needs_datasheet
     report["completion"] = _completion_from_report(report, needs_datasheet=needs_datasheet)
+    # 537C3a: the evidence ledger's `datasheets` channel is derived from this
+    # very section, so a re-gate that added a mark must recompute it — otherwise
+    # the report would say `datasheets: ok` beside `needs_datasheet[]` rows that
+    # say the opposite. Only that channel can move here: nothing was re-read.
+    # A pre-537C3a report has no section and gets none invented.
+    if isinstance(report.get("evidence"), dict):
+        report["evidence"] = refresh_datasheets(
+            report["evidence"],
+            model_empty=bool(
+                ((report.get("completion") or {}).get("coverage") or {}).get("modelEmpty")
+            ),
+            unreviewed=report.get("unreviewed_parts") or [],
+            accepted_unknown=report.get("accepted_unknown") or [],
+            needs_datasheet=needs_datasheet,
+        )
     report["summary"]["exitCode"] = _regate_exit_code(
         report["summary"], report["completion"]["verdict"]
     )
@@ -6562,6 +7749,1265 @@ def _measured_silk_boxes_online(args: argparse.Namespace, source_path: str | Pat
         return {}
 
 
+#: The machine-managed capture `review-evidence` writes beside the report
+#: (537C3b2). Frozen: `report.evidence.liveCapture.captureFile.file` repeats it,
+#: so a copied report still says which bytes the merge was handed.
+LIVE_EVIDENCE_FILE = "live-evidence.json"
+
+#: `review-evidence`'s own exit codes (537C3b2). They describe **this
+#: collection** — complete + identity verified + focus restored is not a board
+#: verdict, and the report's own `completion`/`summary.exitCode` are untouched.
+REVIEW_EVIDENCE_OK = 0
+REVIEW_EVIDENCE_PARTIAL = 1
+REVIEW_EVIDENCE_INVALID = 2
+#: The same 3 the review commands use for "the state cannot be stated": here the
+#: daemon is unreachable, or `doc.list` itself failed, so what is open at all is
+#: unknown (the capture and its failure disclosure still land).
+REVIEW_EVIDENCE_CANNOT_STATE = 3
+
+
+def _review_evidence_expected_project_uuid(report: dict) -> str:
+    """The project uuid the report reviewed, or ``''`` when it cannot say.
+
+    Read from ``source.project.projectUuid`` and nowhere else. A document's
+    ``uuid`` is a page id: comparing it with the focused project would either
+    refuse every honest run or, worse, "verify" the design against one of its own
+    pages. An empty answer is a legal input — the collector then collects but
+    never claims the design was verified, which is exit 1.
+    """
+    if not isinstance(report, dict):
+        return ""
+    source = report.get("source")
+    project = source.get("project") if isinstance(source, dict) else None
+    if not isinstance(project, dict):
+        return ""
+    return str(project.get("projectUuid") or "").strip()
+
+
+def _review_evidence_section_problem(report: object) -> str:
+    """Why this report cannot accept a capture, or ``''`` when it can.
+
+    The cheap structural gate, run **before** the daemon is touched: an unusable
+    report must not cost a navigation, let alone move the engineer's editor.
+    `merge_live_capture` still validates the real merge (and its `ValueError` is
+    exit 2 as well); this only catches the shapes that are obviously wrong — a
+    pre-537C3a report with no ledger, a section of another schema, a missing
+    channel, an illegal status.
+    """
+    if not isinstance(report, dict):
+        return "report.json 不是一个 report 对象"
+    evidence = report.get("evidence")
+    if not isinstance(evidence, dict) or not evidence:
+        return (
+            "report.json 没有 evidence 节（537C3a 之前的报告）：先重跑 "
+            "`boardwise checkup`；本命令不补造覆盖账，也不为它导航"
+        )
+    if evidence.get("schema") != EVIDENCE_SCHEMA:
+        return (
+            f"report.json 的 evidence.schema 是 {evidence.get('schema')!r}，"
+            f"不是 {EVIDENCE_SCHEMA!r}"
+        )
+    channels = evidence.get("channels")
+    if not isinstance(channels, dict):
+        return "report.json 的 evidence.channels 不是 dict"
+    for name in CHANNEL_ORDER:
+        row = channels.get(name)
+        if not isinstance(row, dict):
+            return f"report.json 的 evidence.channels[{name!r}] 缺失或不是 dict"
+        if row.get("status") not in CHANNEL_STATUSES:
+            return (
+                f"report.json 的 evidence.channels[{name!r}].status 非法："
+                f"{row.get('status')!r}；合法状态是 {CHANNEL_STATUSES}"
+            )
+    return ""
+
+
+def _write_live_evidence_capture(out_dir: Path, capture: dict) -> dict:
+    """Write the whole capture as stable pretty JSON; return its fingerprint.
+
+    ``sort_keys=True`` + two-space indent + one trailing newline: the same
+    capture must hash to the same bytes today and tomorrow, because
+    ``captureFile.sha256`` is how a later reader (finalize, a human) asks "is
+    this the file that was merged?". Only ``<out>/live-evidence.json`` is
+    written — no PNG or netlist artifact is ever overwritten (the collector
+    names those uniquely itself).
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    blob = (
+        json.dumps(capture, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    (out_dir / LIVE_EVIDENCE_FILE).write_bytes(blob)
+    return {
+        "file": LIVE_EVIDENCE_FILE,
+        "bytes": len(blob),
+        "sha256": hashlib.sha256(blob).hexdigest(),
+    }
+
+
+def _merge_live_evidence_capture(
+    evidence: dict | None, capture: dict, capture_file: dict
+) -> dict:
+    """The merged evidence section, with the capture's fingerprint inside it.
+
+    ``merge_live_capture`` (537C3b2a) owns the merge; this only adds the pointer
+    to the bytes it was handed, so `report.json` says which file the reading came
+    from without a second copy of the capture. A `ValueError` here — an old or
+    broken section, a capture missing its metadata — is the caller's exit 2: a
+    section that cannot be merged must not be replaced with half a reading.
+    """
+    merged = merge_live_capture(evidence, capture)
+    live_capture = merged.get("liveCapture")
+    if not isinstance(live_capture, dict):
+        raise ValueError("merge_live_capture 没有给出 liveCapture 元数据")
+    live_capture["captureFile"] = dict(capture_file)
+    merged["liveCapture"] = live_capture
+    return merged
+
+
+def _live_capture_listing_failed(capture: dict) -> bool:
+    """Whether the capture's own ``doc.list`` failed (exit 3, not a partial read).
+
+    A capture with no ``doc.list`` step at all is treated the same way: the set
+    of documents is unknown, which is exactly the state this answers 3 for.
+    """
+    for step in capture.get("steps") or []:
+        if isinstance(step, dict) and step.get("action") == "doc.list":
+            return step.get("status") == "failed"
+    return True
+
+
+def _review_evidence_exit_code(capture: dict) -> int:
+    """Map one capture to this command's own exit code.
+
+    ``3`` when the document list itself failed — nothing about the editor's
+    current state can be stated (the same answer the review commands give).
+    ``0`` only when the collector returned ``ok`` **and** the identity was
+    verified against the report; a `not-applicable` channel (a project with no
+    PCB document) is closed and does not block. ``1`` for everything else: a
+    failed/missing direct reading, an explicit subset, an unverified identity
+    (an empty expectation included) or a focus restore that did not prove itself.
+
+    None of these is a board verdict — see the command's own docstring.
+    """
+    if _live_capture_listing_failed(capture):
+        return REVIEW_EVIDENCE_CANNOT_STATE
+    identity = capture.get("identity")
+    verified = isinstance(identity, dict) and (
+        identity.get("verifiedAgainstReport") is True
+    )
+    if capture.get("ok") is True and verified:
+        return REVIEW_EVIDENCE_OK
+    return REVIEW_EVIDENCE_PARTIAL
+
+
+def _live_identity_reason(identity: dict) -> str:
+    """Why the identity was not verified, in the capture's own words."""
+    error = identity.get("error")
+    if isinstance(error, dict) and error.get("message"):
+        return f"{error.get('code')}: {error.get('message')}"
+    problems = [str(row) for row in (identity.get("problems") or []) if row]
+    if problems:
+        return "；".join(problems)
+    if not identity.get("expectedProjectUuid"):
+        return "报告没有 source.project.projectUuid：本次不声称已核实同一设计"
+    return "doc.list 读不出可核实的 focused projectUuid"
+
+
+def _live_identity_verified(capture: dict) -> bool:
+    """Whether **this** capture proved it read the report's own project (537C3b3)."""
+    identity = capture.get("identity")
+    return isinstance(identity, dict) and identity.get("verifiedAgainstReport") is True
+
+
+def _live_schematic_channel(capture: dict) -> dict:
+    """The capture's ``liveSchematic`` row, or ``{}`` when it is not a row."""
+    channels = capture.get("channels")
+    row = channels.get("liveSchematic") if isinstance(channels, dict) else None
+    return row if isinstance(row, dict) else {}
+
+
+def _cross_view_boards(report: dict) -> list[tuple[dict, dict]]:
+    """``[(board, crossView), …]`` for every board that carries a crossView dict.
+
+    A board with no ``crossView`` (or a non-dict one) has nothing to strip or
+    enrich: it is skipped, never repaired. The order is the report's own.
+    """
+    section = report.get("pcb_review") if isinstance(report, dict) else None
+    boards = section.get("boards") if isinstance(section, dict) else None
+    if not isinstance(boards, list):
+        return []
+    return [
+        (board, board["crossView"])
+        for board in boards
+        if isinstance(board, dict) and isinstance(board.get("crossView"), dict)
+    ]
+
+
+def _cross_view_wants_live_mappings(cross_view: dict) -> bool:
+    """Whether this section has a mapping the pure enricher would actually read.
+
+    Only a ``checked: true`` section with a **non-empty list** of mappings makes
+    the model necessary — the pure function returns before it looks at one
+    otherwise, and this is what keeps a report with no mapping from paying for
+    (or failing on) a netlist parse.
+    """
+    mappings = cross_view.get("candidateMappings")
+    return (
+        cross_view.get("checked") is True
+        and isinstance(mappings, list)
+        and bool(mappings)
+    )
+
+
+def _live_netlist_artifacts(capture: dict) -> list[dict]:
+    """Every ``kind=netlist`` / ``channel=liveSchematic`` artifact row, in order.
+
+    537D1a2a splits the filter out of :func:`_live_netlist_artifact` so
+    ``review-read`` can tell **zero** matching rows (a capture that cited no
+    netlist — a missing citation, not an error) from **several** (contradictory
+    evidence, which the selector refuses). The selector's own behaviour is
+    unchanged.
+    """
+    artifacts = capture.get("artifacts")
+    return [
+        row
+        for row in (artifacts if isinstance(artifacts, list) else [])
+        if isinstance(row, dict)
+        and row.get("kind") == "netlist"
+        and row.get("channel") == "liveSchematic"
+    ]
+
+
+def _live_netlist_artifact(capture: dict) -> dict:
+    """The one ``kind=netlist`` / ``channel=liveSchematic`` artifact, or ``ValueError``.
+
+    The capture names every file it wrote; this picks the netlist the live
+    candidates may cite. Exactly one, because the collector reads **one
+    project-level netlist** per run (a second one would leave the choice
+    unstated). The ``file`` must be the bare name the collector generated: an
+    absolute path or a ``..`` segment would let the report point outside
+    ``--out``, so it is refused rather than resolved.
+    """
+    rows = _live_netlist_artifacts(capture)
+    if len(rows) != 1:
+        raise ValueError(
+            "liveSchematic 通道为 ok，但 capture.artifacts 里 kind='netlist' 且 "
+            f"channel='liveSchematic' 的记录有 {len(rows)} 条，必须恰好一条——"
+            "不猜哪份网表属于本次实时读数"
+        )
+    artifact = dict(rows[0])
+    name = artifact.get("file")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("实时候选需要 netlist artifact 的非空 file")
+    if (
+        name != name.strip()
+        or Path(name).is_absolute()
+        or Path(name).anchor
+        or "/" in name
+        or "\\" in name
+        or name in (".", "..")
+    ):
+        raise ValueError(
+            "netlist artifact 的 file 必须是采集器生成的单文件名"
+            f"（不得是绝对路径或含路径分隔符），拿到 {name!r}"
+        )
+    return artifact
+
+
+def _read_live_netlist_model(out_dir: Path, artifact: dict):
+    """Parse the captured netlist into a model, after the bytes prove themselves.
+
+    ``bytes`` **and** ``sha256`` are both mandatory and both checked against the
+    real file: a netlist that is not the one the capture fingerprinted is not
+    evidence, and neither is a guess about a file that is missing, truncated or
+    not UTF-8. Every one of those is a ``ValueError`` with its own reason — the
+    command maps it to exit 2 and leaves the three products unwritten.
+
+    ``netlistType`` rides along from the artifact; its absence means the
+    collector's own default (``EasyEDA``), which is what the parser calibrates.
+    """
+    from .core.candidate import NetlistFormatError, candidate_from_netlist
+
+    name = str(artifact["file"])
+    expected_bytes = artifact.get("bytes")
+    if (
+        isinstance(expected_bytes, bool)
+        or not isinstance(expected_bytes, int)
+        or expected_bytes < 0
+    ):
+        raise ValueError(
+            f"netlist artifact 缺可核对的 bytes 整数（拿到 {expected_bytes!r}）"
+        )
+    expected_sha = artifact.get("sha256")
+    if not isinstance(expected_sha, str) or not expected_sha.strip():
+        raise ValueError("netlist artifact 缺可核对的 sha256")
+    path = out_dir / name
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(
+            f"实时网表 {path} 读不出来（{type(exc).__name__}: {exc}）"
+        ) from exc
+    if len(data) != expected_bytes:
+        raise ValueError(
+            f"实时网表 {path} 的实际字节数 {len(data)} 与 artifact 记录的 "
+            f"{expected_bytes} 不符"
+        )
+    actual_sha = hashlib.sha256(data).hexdigest()
+    if actual_sha != expected_sha.strip():
+        raise ValueError(
+            f"实时网表 {path} 的 sha256 {actual_sha} 与 artifact 记录的 "
+            f"{expected_sha} 不符"
+        )
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"实时网表 {path} 不是合法 UTF-8 文本（{exc}）") from exc
+    netlist_type = str(artifact.get("netlistType") or "EasyEDA")
+    try:
+        return candidate_from_netlist(text, netlist_type)
+    except NetlistFormatError as exc:
+        raise ValueError(
+            f"实时网表 {path} 不能按 {netlist_type} 解析（{exc}）"
+        ) from exc
+
+
+def _enrich_report_cross_view_live_candidates(
+    report: dict, *, capture: dict, out_dir: Path
+) -> dict:
+    """Give every board's ``crossView`` the live half **this** capture supports.
+
+    537C3b3a's :func:`enrich_cross_view_live_candidates` is the only candidate
+    algorithm used here; this is the CLI's narrow call site and its policy:
+
+    * **strip first, every round.** When the identity was not verified, or the
+      ``liveSchematic`` channel is not ``ok``, the pure function is called with
+      ``live_model=None, netlist_artifact=None, identity_verified=False``: the
+      old ``liveSchematicCandidates`` / ``liveCandidateEvidence`` disappear from
+      this round's report (an archive half that echoes an older live reading is
+      exactly the lie 537C3 exists to stop) while the archive five fields stay.
+      No netlist is read, and a missing artifact is **not** an error here — a
+      collection that failed has nothing to cite.
+    * **one parse, only when needed.** The netlist artifact is located and
+      parsed only when the identity is verified, the live schematic is ``ok``,
+      and at least one section has a non-empty ``candidateMappings``. The report
+      is the input, so a run without mappings never risks a parse failure.
+    * **additive only.** It never writes ``status: confirmed``, never touches
+      ``crossView.status`` / ``lonely`` / the archive fields, and never changes
+      ``completion`` / ``summary`` / ``conclusion`` — a live reading is evidence,
+      not a board verdict.
+
+    Returns the counts for the console line (``boards`` touched, mappings with a
+    live half written, mappings stripped, and the live statuses seen).
+    """
+    from .engines.pcbreview import enrich_cross_view_live_candidates
+
+    targets = _cross_view_boards(report)
+    if not targets:
+        return {"boards": 0, "enriched": 0, "stripped": 0, "statuses": {}}
+
+    usable = _live_identity_verified(capture) and (
+        _live_schematic_channel(capture).get("status") == "ok"
+    )
+    needs_model = usable and any(
+        _cross_view_wants_live_mappings(cross_view) for _, cross_view in targets
+    )
+
+    model = None
+    artifact = None
+    if needs_model:
+        artifact = _live_netlist_artifact(capture)
+        model = _read_live_netlist_model(out_dir, artifact)
+
+    # Build every section before assigning any: a failure part-way leaves the
+    # report dict exactly as it was, so even the in-memory copy is not half done.
+    enriched = [
+        (board, enrich_cross_view_live_candidates(
+            cross_view,
+            model,
+            netlist_artifact=artifact,
+            identity_verified=usable,
+        ))
+        for board, cross_view in targets
+    ]
+
+    statuses: dict[str, int] = {}
+    enriched_count = 0
+    stripped_count = 0
+    for board, section in enriched:
+        board["crossView"] = section
+        for mapping in section.get("candidateMappings") or []:
+            if not isinstance(mapping, dict):
+                continue
+            evidence_row = mapping.get("liveCandidateEvidence")
+            if isinstance(evidence_row, dict):
+                status = str(evidence_row.get("status") or "")
+                statuses[status] = statuses.get(status, 0) + 1
+                enriched_count += 1
+            else:
+                stripped_count += 1
+    return {
+        "boards": len(targets),
+        "enriched": enriched_count,
+        "stripped": stripped_count,
+        "statuses": statuses,
+    }
+
+
+def _review_evidence_console_lines(
+    *,
+    capture: dict,
+    capture_file: dict,
+    capture_path: Path,
+    evidence: dict,
+    code: int,
+    live_candidates: dict | None = None,
+) -> list[str]:
+    """stdout for one run: where the capture is, what the identity/focus say.
+
+    Deliberately never prints a board conclusion: the numbers here describe
+    **this collection**, and the board's own answer stays in `report.json`
+    (`conclusion` / `completion`), which this command did not change.
+    """
+    identity = capture.get("identity")
+    identity = identity if isinstance(identity, dict) else {}
+    verified = identity.get("verifiedAgainstReport") is True
+    focus = capture.get("focusRestore")
+    focus = focus if isinstance(focus, dict) else {}
+    if verified:
+        identity_line = "  identity.verifiedAgainstReport: True"
+    else:
+        identity_line = (
+            "  identity.verifiedAgainstReport: False —— "
+            + _live_identity_reason(identity)
+        )
+    focus_line = f"  focusRestore: {focus.get('status')}"
+    if focus.get("originalUuid"):
+        focus_line += f"（originalUuid={focus.get('originalUuid')}）"
+    if code == REVIEW_EVIDENCE_OK:
+        verdict = (
+            "  本次采集退出码 0：采集完整、身份核实、焦点已恢复——这只描述本次"
+            "实时证据采集，不是板级通过；板级结论仍以 report.json 的 "
+            "conclusion / completion 为准（本命令没有改它们的值）"
+        )
+    elif code == REVIEW_EVIDENCE_CANNOT_STATE:
+        verdict = (
+            "  本次采集退出码 3：doc.list 本身失败——没有可陈述的在线状态；"
+            "采集与失败披露已落盘，旧通道没有被伪装成 ok"
+        )
+    else:
+        verdict = (
+            "  本次采集退出码 1：直接证据不全、覆盖不全或身份/焦点未核实——"
+            "这是本次采集的读数，不是板级结论；报告原有的 completion.exitCode 未变"
+        )
+    return [
+        f"live-evidence: {capture_path}（bytes={capture_file['bytes']}, "
+        f"sha256={capture_file['sha256']}）",
+        f"  capture.ok: {capture.get('ok') is True}",
+        identity_line,
+        focus_line,
+        f"  {evidence_console_line(evidence)}",
+        _live_candidates_console_line(live_candidates),
+        verdict,
+    ]
+
+
+def _live_candidates_console_line(live_candidates: dict | None) -> str:
+    """One line saying what happened to the crossView live halves — never a verdict.
+
+    ``missing`` / ``unavailable`` are readings (the live net had no such name, or
+    could not be resolved), not board conclusions; the wording therefore stops at
+    「未确认」 rather than borrowing 「通过」/「已确认」.
+    """
+    if not live_candidates or not live_candidates.get("boards"):
+        return (
+            "  live candidates: 报告没有带 crossView 的 board——本次未补也未剥"
+        )
+    boards = int(live_candidates.get("boards") or 0)
+    enriched = int(live_candidates.get("enriched") or 0)
+    stripped = int(live_candidates.get("stripped") or 0)
+    if enriched:
+        statuses = live_candidates.get("statuses") or {}
+        detail = " / ".join(
+            f"{status or '(无状态)'}={statuses[status]}" for status in sorted(statuses)
+        )
+        return (
+            f"  live candidates: {boards} 个 board 的 crossView 已按实时网表补名"
+            f"（{enriched} 条 mapping：{detail}）；archive 候选与 crossView.status "
+            "未改，crossView 仍是 suspected，不是板级确认"
+        )
+    if stripped:
+        return (
+            f"  live candidates: {boards} 个 board 的 crossView 旧 live 半边已剥离"
+            f"（{stripped} 条 mapping）；本轮无可写 live 候选"
+        )
+    return (
+        f"  live candidates: {boards} 个 board 的 crossView 没有需要补名的 "
+        "candidateMappings——本次未补也未剥"
+    )
+
+
+async def _review_evidence_with_client(
+    client,
+    *,
+    out_dir: Path,
+    report: dict,
+    route_kwargs: dict,
+    page_uuids: list[str] | None,
+    pcb_uuids: list[str] | None,
+) -> int:
+    """The opened-client half: collect → persist → merge → write the products.
+
+    Split from :func:`_cmd_review_evidence` so the async part is testable without
+    a daemon; the command keeps only report reading, open/close and the error
+    mapping. The client is **called**, never opened or closed here — the caller
+    owns that lifetime.
+    """
+    from .engines.liveevidence import collect_live_evidence
+
+    capture_path = out_dir / LIVE_EVIDENCE_FILE
+    try:
+        capture = await collect_live_evidence(
+            client,
+            out_dir=out_dir,
+            route_kwargs=dict(route_kwargs),
+            page_uuids=page_uuids,
+            pcb_uuids=pcb_uuids,
+            expected_project_uuid=_review_evidence_expected_project_uuid(report),
+        )
+    except Exception as exc:  # noqa: BLE001 — the collector promises values
+        print(
+            f"boardwise review-evidence: 采集器抛出异常（{type(exc).__name__}: {exc}）"
+            "——报告一个字没动",
+            file=sys.stderr,
+        )
+        return REVIEW_EVIDENCE_INVALID
+    try:
+        capture_file = _write_live_evidence_capture(out_dir, capture)
+    except (OSError, TypeError, ValueError) as exc:
+        print(
+            f"boardwise review-evidence: 采集结果写不进 {capture_path}"
+            f"（{type(exc).__name__}: {exc}）——报告一个字没动",
+            file=sys.stderr,
+        )
+        return REVIEW_EVIDENCE_INVALID
+    try:
+        evidence = _merge_live_evidence_capture(
+            report.get("evidence"), capture, capture_file
+        )
+    except ValueError as exc:
+        print(
+            f"boardwise review-evidence: 采集结果不能并进报告（{exc}）"
+            f"——报告一个字没动；原始采集在 {capture_path}",
+            file=sys.stderr,
+        )
+        return REVIEW_EVIDENCE_INVALID
+    try:
+        live_candidates = _enrich_report_cross_view_live_candidates(
+            report, capture=capture, out_dir=out_dir
+        )
+    except Exception as exc:  # noqa: BLE001 — helper states its own reasons as ValueError
+        # Nothing below this point has written a report, so the three products
+        # (and the human's review-summary.md) are untouched. The capture is kept:
+        # it names the netlist/PNG artifacts a human can inspect, and it is the
+        # only record of what this run actually read. `report` is still the one
+        # loaded from disk: the merged evidence is assigned only after this
+        # succeeds, so a failed enrichment leaves neither file nor memory half
+        # updated.
+        print(
+            f"boardwise review-evidence: 实时候选处理失败"
+            f"（{type(exc).__name__}: {exc}）——三份报告一个字没动；"
+            f"原始采集在 {capture_path}",
+            file=sys.stderr,
+        )
+        return REVIEW_EVIDENCE_INVALID
+    report["evidence"] = evidence
+    code = _review_evidence_exit_code(capture)
+    console_lines = _review_evidence_console_lines(
+        capture=capture,
+        capture_file=capture_file,
+        capture_path=capture_path,
+        evidence=evidence,
+        code=code,
+        live_candidates=live_candidates,
+    )
+    try:
+        _write_checkup_report(out_dir, report)
+        _write_checkup_markdown(out_dir, report)
+        _write_board_report(out_dir, report)
+    except Exception as exc:  # noqa: BLE001 — a report that cannot be written is exit 2
+        # The ledger line is deliberately *not* printed: it would claim a reading
+        # whose file did not land. The capture itself is on disk, and the bytes it
+        # is, are printed.
+        print(
+            f"live-evidence: {capture_path}"
+            f"（bytes={capture_file['bytes']}, sha256={capture_file['sha256']}）"
+        )
+        print(
+            f"boardwise review-evidence: 报告写出失败（{type(exc).__name__}: {exc}）"
+            f"——采集已落在 {capture_path}，{out_dir} 的 report.json/report.md 可能只写了"
+            "一部分",
+            file=sys.stderr,
+        )
+        return REVIEW_EVIDENCE_INVALID
+    for line in console_lines:
+        print(line)
+    return code
+
+
+def _cmd_review_evidence(args: argparse.Namespace) -> int:
+    """``boardwise review-evidence`` — one live capture, merged into one report.
+
+    537C3b2: 537C3b1's collector had no command and 537C3b2a's merge had no file
+    on disk or report carrying it, so a review could still claim live coverage it
+    never collected. This command is the missing wiring, and it is deliberately
+    narrow:
+
+    * it reads an **existing** report and refuses to invent one (no report is
+      exit 3, before the daemon is touched);
+    * the structural gate runs before connecting — an evidence section of another
+      schema is exit 2 with zero navigation;
+    * the collector runs once, and its whole answer is written to
+      ``<out>/live-evidence.json`` (pretty JSON + newline) with ``bytes`` /
+      ``sha256`` pointed at from ``report.evidence.liveCapture.captureFile``;
+    * ``merge_live_capture`` replaces only the four live channels, so a failed
+      reading is merged as **failed** and the old archive/datasheet rows survive;
+    * ``report.json`` / ``report.md`` / ``board-report.md`` are re-written from
+      that one reading; ``review-summary.md`` is **never** touched (a human's
+      analysis lives there). ``completion`` / ``summary`` keep the board
+      conclusion they already carried, and ``board_report`` / ``conclusion`` are
+      **re-projected through the existing writer** (`_write_checkup_report`)
+      exactly as every re-gate does — same report, same readings, so the verdict
+      and its sentence keep their meaning: collecting evidence is not judging the
+      board;
+    * the client is opened here and closed in `finally`, and a failed open
+      leaves the report byte-identical.
+
+    Exit codes (this collection, never the board): 0 complete + identity verified
+    + focus restored · 1 a failed/missing reading, an explicit subset, an
+    unverified identity or a failed focus restore · 2 unusable input / merge /
+    write failure · 3 no report, daemon unreachable, or ``doc.list`` itself
+    failed (capture and disclosure still land).
+    """
+    import asyncio
+
+    out_dir = Path(args.out)
+    report_path = out_dir / "report.json"
+    if not report_path.is_file():
+        print(
+            f"boardwise review-evidence: {report_path} 不存在——先跑 `boardwise checkup`"
+            "（本命令只把实时采集并进一份已有报告，不生成报告）",
+            file=sys.stderr,
+        )
+        return REVIEW_EVIDENCE_CANNOT_STATE
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(
+            f"boardwise review-evidence: {report_path}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return REVIEW_EVIDENCE_INVALID
+    problem = _review_evidence_section_problem(report)
+    if problem:
+        # Before `_open_cli`: an unusable report must not cost a navigation.
+        print(f"boardwise review-evidence: {report_path}: {problem}", file=sys.stderr)
+        return REVIEW_EVIDENCE_INVALID
+
+    # `_open_cli` does more than import: it resolves the port, may auto-start the
+    # daemon and creates the CLI token. Any of that can fail before a connection
+    # exists, and that is the same "nothing may be stated" as a failed open — an
+    # exit code, never a traceback. `SystemExit` (the missing-`websockets`
+    # install hint) and `KeyboardInterrupt` are `BaseException` on purpose and
+    # are left alone. The error type is not unpacked: every failure here is
+    # mapped the same way, so naming it would only be an unused local.
+    try:
+        BridgeClient, _, port, token = _open_cli(args)
+    except Exception as exc:  # noqa: BLE001 — one answer for every prepare failure
+        print(
+            f"boardwise review-evidence: 桥没准备好（{type(exc).__name__}: {exc}）"
+            f"——报告一个字没动，{out_dir} 没有可陈述的在线状态",
+            file=sys.stderr,
+        )
+        return REVIEW_EVIDENCE_CANNOT_STATE
+    route_kwargs: dict[str, str] = {}
+    if getattr(args, "project", ""):
+        route_kwargs["target_project"] = args.project.strip()
+    if getattr(args, "instance", ""):
+        route_kwargs["target_instance"] = args.instance.strip()
+
+    async def run() -> int:
+        try:
+            client = await BridgeClient.open(
+                _bridge_uri(port), token, "cli", client="boardwise-cli"
+            )
+        except Exception as exc:  # noqa: BLE001 — any open failure is exit 3
+            # Not only `(OSError, BridgeError)`: a port that belongs to some other
+            # process accepts the TCP connection and then fails the WebSocket
+            # handshake (`websockets.InvalidMessage`), which is not an OSError —
+            # and from the user's seat both are one fact, "nothing that talks like
+            # our daemon answered". The report is untouched: the capture never
+            # happened, and pretending otherwise (an empty section, a stale `ok`)
+            # is the exact lie 537C exists to stop. 3 = no statement about the
+            # online state.
+            print(
+                f"boardwise review-evidence: 连不上 daemon（{type(exc).__name__}: {exc}）"
+                f"——报告一个字没动，{out_dir} 没有可陈述的在线状态",
+                file=sys.stderr,
+            )
+            return REVIEW_EVIDENCE_CANNOT_STATE
+        try:
+            return await _review_evidence_with_client(
+                client,
+                out_dir=out_dir,
+                report=report,
+                route_kwargs=route_kwargs,
+                page_uuids=list(getattr(args, "page", None) or []) or None,
+                pcb_uuids=list(getattr(args, "pcb", None) or []) or None,
+            )
+        finally:
+            # The CLI owns the connection — the collector only ever calls it. A
+            # failed close is a note, not a second verdict: the capture and the
+            # report it was merged into are already on disk.
+            try:
+                await client.close()
+            except Exception as exc:  # noqa: BLE001 — cleanup must not eat the answer
+                print(
+                    f"boardwise review-evidence: 关闭连接失败（{type(exc).__name__}: {exc}）"
+                    "——本次采集与报告已落盘",
+                    file=sys.stderr,
+                )
+
+    return asyncio.run(run())
+
+
+#: `review-read`'s own exit codes (537D1a). They describe **this read** and
+#: nothing else: 0 means the section was projected, not that the board passed;
+#: 2 means the input (or the output path) cannot be used, 3 that there is no
+#: `report.json` at all — so nothing about the review can be stated.
+REVIEW_READ_OK = 0
+REVIEW_READ_INVALID = 2
+REVIEW_READ_NO_REPORT = 3
+
+#: The files of a review directory that `review-read` **reads** and therefore may
+#: never write, however `--json` spells the target. The report is the input; the
+#: three products are what a human/reviewer reads afterwards, and
+#: `live-evidence.json` is the machine capture a report cites by hash — a
+#: read-only command that could rewrite any of them would be a way to destroy the
+#: evidence while looking at it.
+REVIEW_READ_PROTECTED_FILES = (
+    "report.json",
+    "report.md",
+    BOARD_REPORT_FILE,
+    REVIEW_SUMMARY_FILE,
+    LIVE_EVIDENCE_FILE,
+)
+
+#: 537D1b1: what `triage-batch --json` may never overwrite. The five
+#: `review-read` inputs are here for the same reason (each is evidence of a
+#: review this command only reads), plus the triage sidecar itself — a command
+#: that could write its own audit trail as a "JSON result" would destroy the
+#: verdicts it was asked to extend. The batch **input** file is protected on top
+#: of this list, checked against the target path by the command.
+TRIAGE_BATCH_PROTECTED_FILES = (*REVIEW_READ_PROTECTED_FILES, WARNING_TRIAGE_FILE)
+
+#: 537D1b1: the strict input object, and the result envelope's own schema. The
+#: version lives in the file so a future batch shape can be refused by name
+#: instead of being half-read by an older CLI.
+TRIAGE_BATCH_SCHEMA = "boardwise.triage-batch/1"
+TRIAGE_BATCH_RESULT_SCHEMA = "boardwise.triage-batch-result/1"
+
+
+def _review_read_protected_paths(report_path: Path) -> set[str]:
+    """The protected inputs, resolved and case-folded, for an alias comparison.
+
+    ``OSError``/``RuntimeError`` from :meth:`Path.resolve` are swallowed per path
+    (a single unresolvable entry must not disable the whole guard); a path that
+    cannot be resolved simply cannot be named by ``--json`` either, or it is the
+    same file by another route and the fallback string comparison catches it.
+    Windows is case-insensitive: two spellings of one file must both be refused,
+    so the keys are ``normcase``-folded.
+    """
+    protect: set[str] = set()
+    directory = report_path.parent
+    for name in REVIEW_READ_PROTECTED_FILES:
+        candidate = directory / name
+        try:
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError):
+            resolved = candidate
+        protect.add(os.path.normcase(str(resolved)))
+    return protect
+
+
+def _review_read_path_is_protected(target: Path, report_path: Path) -> bool:
+    """Whether writing ``target`` would overwrite one of the report's inputs."""
+    try:
+        resolved = target.resolve()
+    except (OSError, RuntimeError):
+        resolved = target
+    protected = _review_read_protected_paths(report_path)
+    if os.path.normcase(str(resolved)) in protected:
+        return True
+    # A target that does not resolve to anything yet can still *be* one of them by
+    # spelling (`out/../out/report.json`) — compare the absolute forms too.
+    try:
+        absolute = Path(os.path.abspath(str(target)))
+    except (OSError, ValueError):
+        return False
+    return os.path.normcase(str(absolute)) in protected
+
+
+def _review_read_live_capture(report: dict) -> dict | None:
+    """``report.evidence.liveCapture`` when it is an object, else ``None``.
+
+    537D1a2a: ``review-read --section netlist`` reads the live capture the
+    report cites. ``None`` covers both a pre-537C report (no evidence section)
+    and a report whose capture is not a record; either way no file may be guessed
+    from the directory listing, so the caller falls through to ``missing``.
+    """
+    evidence = report.get("evidence")
+    capture = evidence.get("liveCapture") if isinstance(evidence, dict) else None
+    return capture if isinstance(capture, dict) else None
+
+
+def _review_read_live_schematic(report: dict) -> dict:
+    """``report.evidence.channels.liveSchematic`` for ``review-read``.
+
+    537D1a2a: the merged report keeps the live channel rows in the evidence
+    ledger — ``liveCapture`` is capture metadata and has no ``channels`` (C3b2a).
+    This reads the merged place; ``_live_schematic_channel`` stays the raw
+    capture shape used by ``review-evidence`` before the merge.
+    """
+    evidence = report.get("evidence")
+    channels = evidence.get("channels") if isinstance(evidence, dict) else None
+    row = channels.get("liveSchematic") if isinstance(channels, dict) else None
+    return row if isinstance(row, dict) else {}
+
+
+#: `review-read --section artifacts` (537D1a2b) is the one section whose answer
+#: is about the **directory**, not only the report: the projection lists the
+#: files the report's machine fields cite, and this CLI step says whether each
+#: one is really there, how many bytes it has, and whether its declared
+#: ``bytes`` / ``sha256`` hold. Everything here is read-only; nothing is
+#: written, followed out of ``--out``, or guessed from a file name.
+#:
+#: The hash is computed in bounded chunks so a huge artifact cannot be pulled
+#: into memory whole: this command runs on a reviewer's machine, not a server.
+REVIEW_READ_ARTIFACT_CHUNK = 1024 * 1024
+
+#: Every row error `review-read --section artifacts` can report. ``missing`` and
+#: ``not-file`` are absences, ``outside-review-directory`` is a refusal (the path
+#: is never touched), and the two mismatches are a citation that does not match
+#: its file. All of them make the payload ``unavailable``: a cited artifact that
+#: cannot be produced is a contradiction, not an absence.
+REVIEW_READ_ARTIFACT_ERRORS = (
+    "missing-file",
+    "missing",
+    "not-file",
+    "unreadable",
+    "outside-review-directory",
+    "bytes-mismatch",
+    "sha256-mismatch",
+)
+
+
+def _review_read_within_directory(root: Path, target: Path) -> bool:
+    """Whether ``target`` is inside ``root`` — lexically, no filesystem access.
+
+    ``Path.is_relative_to`` alone is not enough on Windows: the filesystem is
+    case-insensitive, so ``C:\\OUT\\a.png`` and ``c:\\out\\a.png`` are one file.
+    Both sides are ``normcase``-folded and compared on a separator boundary, so
+    ``out-evil`` is not inside ``out`` and nothing here touches the disk.
+    """
+    root_text = os.path.normcase(str(root))
+    target_text = os.path.normcase(str(target))
+    if target_text == root_text:
+        # `--out` itself is not "inside" it in the strict sense, but it is not an
+        # escape either: it is a directory, which step 4 refuses as `not-file`.
+        return True
+    prefix = root_text if root_text.endswith(os.sep) else root_text + os.sep
+    return target_text.startswith(prefix)
+
+
+def _review_read_artifact_sha256(path: Path) -> str:
+    """The file's sha256, read in bounded chunks — never one unbounded read."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(REVIEW_READ_ARTIFACT_CHUNK)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _review_read_verify_artifact_row(row: dict, out_dir: Path) -> dict:
+    """One ``artifacts`` row with its file facts filled in.
+
+    The order of the checks **is** the guarantee:
+
+    1. a row must name a non-empty ``file`` — otherwise ``missing-file`` and
+       nothing is touched;
+    2. the path is resolved **lexically** first (``abspath``: no disk) against
+       the absolute spelling of ``--out``, so an absolute outside path or a
+       ``..`` escape is refused **before** any ``resolve``/``stat``/``open`` —
+       the refusal must not be the step that reads the file it is refusing;
+    3. only a path that is lexically inside gets ``resolve``d (a symlink inside
+       the directory may still point out) and re-checked; an escape is refused
+       the same way, still without opening it. A ``resolve`` that **cannot
+       complete** cannot prove containment either, so it is refused as
+       ``outside-review-directory`` rather than stat-ed on a lexical guess;
+    4. ``stat`` then decides absent (``missing``) / not a regular file
+       (``not-file``) / present. A directory is never "no bytes";
+    5. ``bytesMatch`` is answered only when the artifact declares a non-bool
+       integer ``bytes``, ``sha256Matches`` only when it declares a non-empty
+       ``sha256``; otherwise both stay ``null`` — 「没有声明」 is not 「验证通过」;
+    6. a mismatch is an ``error`` so the payload cannot come out ``ok``.
+
+    ``exists`` is a real bool for every touched path and ``None`` for one that
+    was refused before touching (``outside-review-directory``).
+    """
+    artifact = row.get("artifact")
+    artifact = copy.deepcopy(artifact) if isinstance(artifact, dict) else {}
+    result: dict = {
+        "source": row.get("source"),
+        "channel": row.get("channel"),
+        "artifact": artifact,
+        "path": None,
+        "exists": None,
+        "bytesOnDisk": None,
+        "bytesMatch": None,
+        "sha256Matches": None,
+        "error": None,
+    }
+    name = artifact.get("file")
+    if not isinstance(name, str) or not name.strip():
+        result["error"] = "missing-file"
+        return result
+
+    target = Path(name)
+    lexical = target if target.is_absolute() else out_dir / target
+    try:
+        absolute = Path(os.path.abspath(str(lexical)))
+    except (OSError, ValueError):
+        result["error"] = "outside-review-directory"
+        return result
+    # The lexical spelling is reported when the path is refused: the reader can
+    # see which citation was rejected without this command asking the disk.
+    result["path"] = str(absolute)
+
+    try:
+        root = out_dir.resolve()
+    except (OSError, RuntimeError):
+        # Containment cannot be stated without the resolved `--out`: fail
+        # closed rather than comparing against a spelling we cannot trust.
+        result["error"] = "outside-review-directory"
+        return result
+    if not _review_read_within_directory(root, absolute):
+        result["error"] = "outside-review-directory"
+        return result
+
+    try:
+        resolved = absolute.resolve()
+    except (OSError, RuntimeError):
+        # 537D1a2b fix: a `resolve()` failure means the symlink containment
+        # **cannot be proven** (a loop, a disappearing link, a permission the
+        # process does not have). The old fallback kept the lexical spelling and
+        # stat-ed it, which answered `exists: true / error: null` for a path
+        # whose containment was never established — an absence of proof read as
+        # a pass. Fail closed: the target is not stat-ed, opened or read.
+        result["error"] = "outside-review-directory"
+        return result
+    if not _review_read_within_directory(root, resolved):
+        result["error"] = "outside-review-directory"
+        return result
+    result["path"] = str(resolved)
+
+    try:
+        info = resolved.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        result["exists"] = False
+        result["error"] = "missing"
+        return result
+    except OSError:
+        result["exists"] = False
+        result["error"] = "unreadable"
+        return result
+    result["exists"] = True
+    if not stat.S_ISREG(info.st_mode):
+        result["error"] = "not-file"
+        return result
+    result["bytesOnDisk"] = int(info.st_size)
+
+    declared_bytes = artifact.get("bytes")
+    has_bytes = isinstance(declared_bytes, int) and not isinstance(declared_bytes, bool)
+    if has_bytes:
+        result["bytesMatch"] = int(info.st_size) == declared_bytes
+    declared_sha = artifact.get("sha256")
+    has_sha = isinstance(declared_sha, str) and bool(declared_sha.strip())
+    if has_sha:
+        try:
+            actual_sha = _review_read_artifact_sha256(resolved)
+        except OSError:
+            result["error"] = "unreadable"
+            return result
+        result["sha256Matches"] = actual_sha == declared_sha.strip()
+    if has_bytes and result["bytesMatch"] is not True:
+        result["error"] = "bytes-mismatch"
+    elif has_sha and result["sha256Matches"] is not True:
+        result["error"] = "sha256-mismatch"
+    return result
+
+
+def _review_read_artifacts_status(rows: Sequence[dict]) -> str:
+    """``unavailable`` / ``missing`` / ``ok`` for the verified artifact rows.
+
+    ``unavailable`` when any row carries an error — an outside/missing/not-file
+    citation, a byte count or a sha256 that does not match. ``missing`` when no
+    file at all exists (nothing could be verified, so nothing may be claimed).
+    ``ok`` otherwise: at least one file is really there and no citation is
+    contradicted.
+
+    The five standard outputs do not make ``unavailable`` on their own: they are
+    routed to ``missingOutputs`` instead, because a report written before
+    ``live-evidence.json`` existed is still an honest report. An *error* on one
+    of them (a ``report.md`` that is a directory) is a real problem and still
+    counts.
+    """
+    if any(row.get("error") for row in rows):
+        return "unavailable"
+    if not any(row.get("exists") is True for row in rows):
+        return "missing"
+    return "ok"
+
+
+def _review_read_artifacts_payload(payload: dict, out_dir: Path) -> dict:
+    """The `artifacts` payload with every row verified against ``out_dir``.
+
+    ``missingOutputs`` names the standard outputs that are not on disk, and only
+    those: a cited evidence file that is missing stays an ``error`` on its own
+    row (it is a contradiction) and is never listed here. The reviewed report's
+    rows keep their order — the evidence chain reads in a fixed sequence, and a
+    consumer must not have to re-sort it.
+    """
+    rows = [
+        _review_read_verify_artifact_row(row, out_dir)
+        for row in (
+            payload.get("artifacts") if isinstance(payload.get("artifacts"), list) else []
+        )
+        if isinstance(row, dict)
+    ]
+    missing_outputs: list[str] = []
+    for row in rows:
+        if row["source"] != REVIEW_OUTPUT_SOURCE:
+            continue
+        if row["error"] == "missing":
+            row["error"] = None
+        if row["exists"] is not True:
+            name = row["artifact"].get("file")
+            if isinstance(name, str) and name:
+                missing_outputs.append(name)
+    return {
+        "status": _review_read_artifacts_status(rows),
+        "artifacts": rows,
+        "missingOutputs": missing_outputs,
+    }
+
+
+def _cmd_review_read(args: argparse.Namespace) -> int:
+    """``boardwise review-read`` — one section of one report, as structured JSON.
+
+    537D1a: the review flow's structured read. Deliberately a **projection**, not
+    a re-gate:
+
+    * the report is loaded, handed to
+      :func:`boardwise.engines.reviewread.review_read_section`, and the payload is
+      wrapped in the frozen envelope ``{schema, section, report: {path, schema},
+      payload}``. Nothing here recomputes a verdict, calls
+      ``_completion_from_report`` / ``conclusion_section``, renders Markdown or
+      writes the report — a read command that re-gated would be a second authority
+      beside ``report.json``;
+    * the envelope has **no** ``ok`` field: exit 0 says the read succeeded, and
+      the board-level answer stays ``payload.conclusion`` (``report.conclusion``);
+    * output is stable UTF-8 pretty JSON + one trailing newline, printed to stdout
+      by default (``--json`` with no value and ``--json -`` are the same thing) or
+      written to ``--json PATH``. The same input bytes give the same output bytes,
+      because 537D3's plugin parses this and a hash of it should mean something;
+    * ``--json PATH`` may create a new file, but naming one of the review
+      directory's five protected inputs — ``report.json``, ``report.md``,
+      ``board-report.md``, ``review-summary.md``, ``live-evidence.json``, by any
+      spelling that resolves to them — is refused **before** the write, exit 2,
+      every byte unchanged. Reading evidence must not be a way to destroy it;
+    * nothing else in the directory is touched, and the report object in memory is
+      never mutated (the projections deep-copy);
+    * ``--section netlist`` (537D1a2a) additionally reads the capture's own
+      netlist file — only when the capture's identity is verified, its
+      ``liveSchematic`` channel is ``ok`` and exactly one ``kind=netlist``
+      artifact exists. The file must match the artifact's bare name, bytes and
+      sha256 and parse as UTF-8; any failure is exit 2 with nothing written, and
+      a capture without a netlist citation is a ``missing`` payload rather than
+      an error. The directory listing is never used to guess a netlist, and
+      ``report.model`` is never promoted to a live one;
+    * ``--section artifacts`` (537D1a2b) is the one section whose answer is about
+      the directory: the pure projection lists the files the report's machine
+      fields cite (canvas images, each channel's artifacts, the live capture's
+      own artifacts and ``captureFile``, then the five standard outputs), and
+      this command fills in ``path`` / ``exists`` / ``bytesOnDisk`` /
+      ``bytesMatch`` / ``sha256Matches`` / ``error`` for each. A relative path
+      is joined to ``--out`` and must still resolve inside it; an absolute
+      outside path or a ``..`` escape is ``outside-review-directory`` **before**
+      it is resolved, stat-ed or opened. Files are hashed in bounded chunks, and
+      a declared ``bytes``/``sha256`` that does not hold is an error — an
+      artifact with no declaration leaves those fields ``null``, which is not a
+      pass. ``missingOutputs`` names only the standard outputs that are not
+      there. Final ``status``: ``unavailable`` if any row has an error, else
+      ``missing`` if no file at all exists, else ``ok``. A standard output that
+      was never written is not an error (a pre-537C report has no
+      ``live-evidence.json``), so it stays in ``missingOutputs``.
+
+    Exit codes are this read's own: 0 projected · 2 unusable input (not JSON, not
+    an object, a projection ``ValueError``, an artifact that fails its own
+    proof, an output that cannot be written or is protected) · 3 no
+    ``report.json``.
+    """
+    out_dir = Path(args.out)
+    report_path = out_dir / "report.json"
+    if not report_path.is_file():
+        print(
+            f"boardwise review-read: {report_path} 不存在——先跑 `boardwise checkup`"
+            "（本命令只读一份已有报告，不生成报告）",
+            file=sys.stderr,
+        )
+        return REVIEW_READ_NO_REPORT
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(
+            f"boardwise review-read: {report_path}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return REVIEW_READ_INVALID
+    if not isinstance(report, dict):
+        # `review_read_section` refuses this too; named here so the message says
+        # what was found rather than only that a projection failed.
+        print(
+            f"boardwise review-read: {report_path}: 不是一个 report 对象"
+            f"（{type(report).__name__}）",
+            file=sys.stderr,
+        )
+        return REVIEW_READ_INVALID
+
+    # 537D1a2a: `--section netlist` is the one projection whose answer needs a
+    # file. The report says which netlist the capture wrote; this is the narrow
+    # gate that decides whether reading it is allowed at all:
+    #
+    # * the identity must be verified and `liveSchematic` must be `ok` — an
+    #   unverified capture may belong to another project, and a failed channel
+    #   has no netlist to cite. Then no file is opened, no artifact is selected,
+    #   and the projection answers `missing` with the evidence reason;
+    # * zero matching artifacts is the same `missing` (a collection that failed
+    #   has nothing to cite), while **several** are contradictory evidence and
+    #   `_live_netlist_artifact` refuses them (exit 2, every byte unchanged);
+    # * exactly one is parsed by `_read_live_netlist_model`, which re-proves the
+    #   bare file name, bytes, sha256, UTF-8 and parser. A file that fails any of
+    #   those is exit 2 — never a silent downgrade to `missing`, because a
+    #   capture that *says* it wrote this netlist and cannot produce it is a
+    #   contradiction, not an absence.
+    #
+    # The five other sections pass no evidence and their behaviour is untouched.
+    live_model = None
+    netlist_artifact = None
+    if args.section == "netlist":
+        capture = _review_read_live_capture(report)
+        if (
+            capture is not None
+            and _live_identity_verified(capture)
+            and _review_read_live_schematic(report).get("status") == "ok"
+            and _live_netlist_artifacts(capture)
+        ):
+            try:
+                netlist_artifact = _live_netlist_artifact(capture)
+                live_model = _read_live_netlist_model(out_dir, netlist_artifact)
+            except ValueError as exc:
+                print(
+                    f"boardwise review-read: {report_path}: {exc}",
+                    file=sys.stderr,
+                )
+                return REVIEW_READ_INVALID
+
+    try:
+        if args.section == "netlist":
+            payload = review_read_section(
+                report,
+                args.section,
+                live_model=live_model,
+                netlist_artifact=netlist_artifact,
+            )
+        else:
+            payload = review_read_section(report, args.section)
+    except ValueError as exc:
+        print(
+            f"boardwise review-read: {report_path}: {exc}",
+            file=sys.stderr,
+        )
+        return REVIEW_READ_INVALID
+
+    # 537D1a2b: `--section artifacts` is the section whose answer is about the
+    # directory. The projection (pure) says which files the report cites; this
+    # step — the only one in the command that stats a cited path — fills in
+    # `path` / `exists` / `bytesOnDisk` / `bytesMatch` / `sha256Matches` /
+    # `error`, names the absent standard outputs in `missingOutputs`, and
+    # replaces the provisional `status` with the file-verified one. A path
+    # outside `--out` is refused before it is resolved, stat-ed or opened.
+    if args.section == "artifacts":
+        payload = _review_read_artifacts_payload(payload, out_dir)
+
+    envelope = {
+        "schema": REVIEW_READ_SCHEMA,
+        "section": args.section,
+        "report": {
+            # The absolute path is the one a later reader (finalize, the plugin,
+            # a human) can open from anywhere; it is deterministic for one input.
+            "path": str(report_path.resolve()),
+            "schema": report.get("schema"),
+        },
+        "payload": payload,
+    }
+    # `ensure_ascii=False` keeps the Chinese the report is written in readable in
+    # the stream the plugin parses; insertion order is fixed above, so equal input
+    # gives equal bytes. One trailing newline, like every JSON this CLI writes.
+    blob = json.dumps(envelope, ensure_ascii=False, indent=2) + "\n"
+
+    target = getattr(args, "json_path", None)
+    if target is None or target == "-":
+        sys.stdout.write(blob)
+        return REVIEW_READ_OK
+
+    target_path = Path(target)
+    if _review_read_path_is_protected(target_path, report_path):
+        print(
+            f"boardwise review-read: 拒绝写入 {target_path}——它是本命令只读的审查输入"
+            f"（{' / '.join(REVIEW_READ_PROTECTED_FILES)}）；报告与四份产物一个字没动",
+            file=sys.stderr,
+        )
+        return REVIEW_READ_INVALID
+    try:
+        # Bytes, not `write_text`: on Windows the text writer translates "\n" to
+        # "\r\n", and then the file form would not be the bytes stdout got — the
+        # same envelope would hash differently depending on where it was read
+        # from. 537D3 hashes this output.
+        target_path.write_bytes(blob.encode("utf-8"))
+    except OSError as exc:
+        print(
+            f"boardwise review-read: 写不进 {target_path}"
+            f"（{type(exc).__name__}: {exc}）",
+            file=sys.stderr,
+        )
+        return REVIEW_READ_INVALID
+    return REVIEW_READ_OK
+
+
 def _cmd_checkup(args: argparse.Namespace) -> int:
     """``boardwise checkup`` — one command, an honest tier ladder, an exit code.
 
@@ -7317,7 +9763,22 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         # here, never a crash — `checkup` is not the command that owns that file.
         stale_triage = []
         notes.append(f"分诊侧车读不了（{exc}）：本次报告的 warning_triage 按未分诊出，文件一个字没动")
-    triage, triage_merged, triage_unmatched = merge_triage_sidecar(triage, stale_triage)
+    triage_refused: list[dict] = []
+    triage, triage_merged, triage_unmatched = merge_triage_sidecar(
+        triage, stale_triage, refused=triage_refused
+    )
+    if triage_refused:
+        # 537B §4: the sidecar used to be a way around the command's own gate — a
+        # hand-written 「有害」 against a text-less slot folded in like any other
+        # verdict (seq 320/435). It is refused now, and the report says how many,
+        # because a silently dropped entry would read like a judgement nobody made.
+        notes.append(
+            f"侧车 {WARNING_TRIAGE_FILE} 里有 {len(triage_refused)} 条分诊结论被拒收"
+            f"（无逐条文本的槽位不能用 {TRIAGE_VERDICTS[0]}/{TRIAGE_VERDICTS[1]}/"
+            f"{TRIAGE_VERDICTS[2]} 关闭，需 {TRIAGE_UNJUDGEABLE}；词表外的判决也不算分诊）："
+            "条目留在侧车当审计轨迹，不删——请改用 "
+            f"`boardwise triage --verdict {TRIAGE_UNJUDGEABLE} --reason …` 重判"
+        )
     if triage_merged:
         notes.append(
             f"侧车 {WARNING_TRIAGE_FILE} 里的 {triage_merged} 条分诊结论已并入本次报告（按 key 匹配）"
@@ -7347,10 +9808,12 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         "summary_template": summary_template(),
         "warning_triage_note": (
             "逐条用 `boardwise triage --out " + str(out_dir) + " --key <key> --verdict "
-            + "|".join(TRIAGE_VERDICTS) + " --reason …` 填"
+            + "|".join(TRIAGE_VERDICT_CHOICES) + " --reason …` 填"
             "（槽位的 key 写在每条 warning_triage[] 里——它是这条警告的身份；写完命令会重算 "
             "completion 并重渲染 report.md）。主机 ERC 的条目没有逐条文本，只能对着计数与画布图判"
-            "（xianyuyijinban的审查三步之②）"
+            f"（xianyuyijinban的审查三步之②）；`text` 为空的槽位不能用三词关闭，"
+            f"只能标 `{TRIAGE_UNJUDGEABLE}`——它仍计待分诊，并单列进 "
+            "completion.manualReviewRequired"
         ),
         "aesthetics": {
             "enabled": aesthetics_on,
@@ -7420,6 +9883,33 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         ),
         **_completion_coverage_gates(completion=completion),
     )
+    # 537C3a: the evidence ledger is built from the values this run **really**
+    # holds — `coverage.modelEmpty` (never inferred from an empty model), the
+    # PCB runner's `pcb_had_documents`, the canvas stage's own items, and the
+    # three datasheet sections. Nothing is parsed out of `notes` prose.
+    # `pcb_had_documents=False` on the per-page/netlist tiers means "nothing was
+    # attempted", and the builder reads those tiers as PCB-existence unknown.
+    model_section = _checkup_model_section(model)
+    # `pcb_had_documents` is only meaningful where an archive was **actually
+    # read**: `--file`, and the online project-file tier that stashed its
+    # archive. Elsewhere it is False because nothing was attempted — pass
+    # `None` so the ledger reads "whether a PCB exists is unknown" (`missing`)
+    # instead of inventing 「没有 PCB」 (`not-applicable`).
+    pcb_documents_read = tier == "file" or bool(
+        tier == "project-file" and online_artifacts.get("pcbArchive")
+    )
+    evidence_ledger = evidence_section(
+        tier=tier,
+        model_empty=bool(coverage.get("modelEmpty")),
+        model_components=model_section.get("components"),
+        model_nets=model_section.get("nets"),
+        pcb_had_documents=pcb_had_documents if pcb_documents_read else None,
+        pcb_review=pcb_review,
+        canvas=canvas,
+        unreviewed=unreviewed,
+        accepted_unknown=accepted_rows,
+        needs_datasheet=needs_datasheet,
+    )
     report = _checkup_report(
         tier=tier, source=source, model=model, attempts=attempts, notes=notes,
         drc=drc, findings=findings, summary=summary, modules=modules, slots=slots,
@@ -7442,6 +9932,7 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         pcb_review=pcb_review,
         accepted_unknown=accepted_rows,
         shelf_path=shelf_path,
+        evidence=evidence_ledger,
     )
     # issue #69 条 1（机器侧）: the chains are built **before** anything is written,
     # so `report.json`, `report.md` and `review-summary.md` all carry the same rows
@@ -7561,6 +10052,19 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         + (f" {a.get('ms')} ms" if a.get("ms") is not None else "")
         for a in attempts
     ))
+    # 537C2: one console line for the same `environment` section `report.json`,
+    # `report.md` and `review-summary.md` carry — expected/running/status, the
+    # read-only fact and the allowed next-step ids, so the terminal reader does
+    # not have to open a file to learn whether this review compared versions.
+    environment_line = environment_console_line(report.get("environment"))
+    if environment_line:
+        print(f"  {environment_line}")
+    # 537C3a: one console line for the same `evidence` section the three files
+    # carry — the delivery status and every open channel, read from the section
+    # (never a hard-coded 「partial」).
+    evidence_line = evidence_console_line(report.get("evidence"))
+    if evidence_line:
+        print(f"  {evidence_line}")
     # 报告头部 ERROR 区：先说要紧的，再看清单。
     if summary["errors"]:
         print(f"  errors: {summary['errorCount']}"
@@ -7605,13 +10109,21 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     )
     # 063: the same line for the verdict channel — how many warnings still owe a
     # judgement, what the sidecar contributed, and the command that fixes both.
-    pending_triage = sum(1 for entry in triage if not (entry.get("verdict") or "").strip())
+    pending_triage = sum(1 for entry in triage if not triage_slot_is_closed(entry))
+    manual_triage = sum(1 for entry in triage if triage_slot_is_manual(entry))
     print(
-        f"  warning_triage: {len(triage)} 条（待分诊 {pending_triage}）"
+        f"  warning_triage: {len(triage)} 条（待分诊 {pending_triage}"
+        # 537B: `needs-manual` rows are pending, not closed — the console says the
+        # two numbers the report carries and points at the command that writes it.
+        + (f"，其中 {TRIAGE_UNJUDGEABLE} {manual_triage}" if manual_triage else "")
+        + "）"
         + (f"，侧车 {WARNING_TRIAGE_FILE} 已并入 {triage_merged} 条" if triage_merged else "")
         + (f"，另 {triage_unmatched} 条没匹配上（留在侧车）" if triage_unmatched else "")
+        + (f"，拒收 {len(triage_refused)} 条无文本误判（见 notes）"
+           if triage_refused else "")
         + (f" —— 逐条用 `boardwise triage --out {out_dir} --key <key> --verdict "
-           + "|".join(TRIAGE_VERDICTS) + " --reason …` 填" if pending_triage else "")
+           + "|".join(TRIAGE_VERDICT_CHOICES) + " --reason …` 填（无逐条文本的槽位只能标 "
+           + TRIAGE_UNJUDGEABLE + "）" if pending_triage else "")
     )
     print(f"  report: {report_path}")
     print(f"  report.md: {report_md_path}")
@@ -7907,9 +10419,10 @@ def _cmd_triage(args: argparse.Namespace) -> int:
     ``key``: judging the same warning again updates it instead of adding a row.
 
     Exit codes: **0** applied · **2** unusable input (an unreadable report or
-    sidecar, an empty `--reason`, or a ``--key`` the report does not carry — a
-    typo must not be silently recorded against nothing) · **3** there is no
-    ``report.json`` to triage (run `boardwise checkup` first).
+    sidecar, an empty `--reason`, a three-word verdict on a slot with no per-item
+    text — 537B §2, or a ``--key`` the report does not carry — a typo must not be
+    silently recorded against nothing) · **3** there is no ``report.json`` to
+    triage (run `boardwise checkup` first).
     """
     import json
 
@@ -7970,7 +10483,7 @@ def _cmd_triage(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
         else:
-            pending = [slot for slot in triage if not (slot.get("verdict") or "").strip()]
+            pending = [slot for slot in triage if not triage_slot_is_closed(slot)]
             if pending:
                 print(f"  当前待分诊的 key（{len(pending)} 条）：", file=sys.stderr)
                 for slot in pending:
@@ -7980,6 +10493,32 @@ def _cmd_triage(args: argparse.Namespace) -> int:
                     "  当前没有待分诊的 key（每条都已判过；要改判就重复执行已判的 key）",
                     file=sys.stderr,
                 )
+        return 2
+
+    # 537B §2: the same predicate the sidecar merge asks — a slot with no per-item
+    # text (`host-erc`'s totals; textUnavailable says why) cannot be closed with a
+    # three-word verdict. Refused **before anything is written**, so the report and
+    # the audit trail are untouched; the way out is named in the message.
+    blocked = next(
+        (slot for slot in matched if not triage_verdict_is_admissible(slot, verdict)),
+        None,
+    )
+    if blocked is not None:
+        if triage_slot_text_missing(blocked):
+            print(
+                f"boardwise triage: key = {key} 的槽位没有逐条文本（slot.text 为空）——"
+                f"{TRIAGE_VERDICTS[0]}/{TRIAGE_VERDICTS[1]}/{TRIAGE_VERDICTS[2]} "
+                "要对着这条警告自己的文本下才成立，一条计数不是一条警告；"
+                f"这种槽位只能标 `{TRIAGE_UNJUDGEABLE} --reason …`（它仍计 "
+                "warningsPendingTriage，并把这条单列进 manualReviewRequired 留给人工看）",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"boardwise triage: `{verdict}` 不在可写的词表里"
+                f"（{' / '.join(TRIAGE_VERDICT_CHOICES)}）——不写成判决",
+                file=sys.stderr,
+            )
         return 2
 
     # Every row carrying this key is the same warning by construction (that is
@@ -8056,6 +10595,492 @@ def _cmd_triage(args: argparse.Namespace) -> int:
     return 0
 
 
+class TriageBatchInputError(Exception):
+    """The batch input cannot be used as written (schema, shape, or one row)."""
+
+
+def _load_triage_batch(path: Path) -> list[dict]:
+    """Read and validate ``{"schema": …, "entries": [...]}`` — raise on any refusal.
+
+    Every rule a row must satisfy lives here rather than beside the writers,
+    because a batch is refused **as a whole**: the only way to guarantee "one bad
+    row writes nothing" is to finish reading and checking the file before the
+    report is even touched. The error names the row index, so a caller can fix
+    the file instead of bisecting it.
+
+    Strictness is the contract (537D1b1 §2): the top level is an object with the
+    exact schema, `entries` is a non-empty list of objects, `key`/`reason` are
+    non-empty after trimming, the verdict is a member of the existing vocabulary,
+    and the same key appears at most once — a repeat would let input order decide
+    which verdict wins, which is a fake idempotence rather than idempotence.
+    """
+    import json
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise TriageBatchInputError(
+            f"{path}: 批次文件读不了（{type(exc).__name__}: {exc}）"
+        ) from exc
+    try:
+        payload = json.loads(text)
+    except ValueError as exc:
+        raise TriageBatchInputError(f"{path}: 不是合法 JSON（{exc}）") from exc
+    if not isinstance(payload, dict):
+        raise TriageBatchInputError(
+            f'{path}: 顶层必须是对象 {{"schema": "{TRIAGE_BATCH_SCHEMA}", '
+            f'"entries": [...]}}，不是 {type(payload).__name__}'
+        )
+    schema = payload.get("schema")
+    if schema != TRIAGE_BATCH_SCHEMA:
+        raise TriageBatchInputError(
+            f"{path}: schema 必须是 {TRIAGE_BATCH_SCHEMA!r}（读到 {schema!r}）"
+        )
+    entries = payload.get("entries")
+    if not isinstance(entries, list):
+        raise TriageBatchInputError(
+            f"{path}: entries 必须是数组（读到 {type(entries).__name__}）"
+        )
+    if not entries:
+        raise TriageBatchInputError(
+            f"{path}: entries 不能为空——一批零行不是一次批量判决"
+        )
+    rows: list[dict] = []
+    seen: dict[str, int] = {}
+    for index, raw in enumerate(entries, 1):
+        if not isinstance(raw, dict):
+            raise TriageBatchInputError(
+                f"{path}: 第 {index} 行不是对象（{type(raw).__name__}）——"
+                "每行都要 {key, verdict, reason}"
+            )
+        raw_key = raw.get("key")
+        raw_reason = raw.get("reason")
+        raw_verdict = raw.get("verdict")
+        # JSON strings, not "whatever `str()` makes of it" (main review, 537D1b1):
+        # a `reason` of `{"not": "text"}` is not a reason, and coercing it wrote
+        # `"{'not': 'text'}"` into the report with exit 0. The type is the
+        # contract, so it is checked per field before trimming.
+        if not isinstance(raw_key, str):
+            raise TriageBatchInputError(
+                f"{path}: 第 {index} 行的 key 必须是 JSON 字符串"
+                f"（读到 {type(raw_key).__name__}）"
+            )
+        if not isinstance(raw_reason, str):
+            raise TriageBatchInputError(
+                f"{path}: 第 {index} 行的 reason 必须是 JSON 字符串"
+                f"（读到 {type(raw_reason).__name__}）——不把对象/数组/数字转成文本"
+            )
+        if not isinstance(raw_verdict, str):
+            raise TriageBatchInputError(
+                f"{path}: 第 {index} 行的 verdict 必须是 JSON 字符串"
+                f"（读到 {type(raw_verdict).__name__}）"
+            )
+        key = raw_key.strip()
+        reason = raw_reason.strip()
+        verdict = raw_verdict.strip()
+        if not key:
+            raise TriageBatchInputError(f"{path}: 第 {index} 行的 key 是空的")
+        if not reason:
+            raise TriageBatchInputError(
+                f"{path}: 第 {index} 行的 reason 是空的——写清判成这个 verdict 的依据；"
+                "缺了它下一个人只能把同一条警告重判一遍"
+            )
+        if verdict not in TRIAGE_VERDICT_CHOICES:
+            raise TriageBatchInputError(
+                f"{path}: 第 {index} 行的 verdict = {raw.get('verdict')!r} "
+                f"不在词表里（{' / '.join(TRIAGE_VERDICT_CHOICES)}）——"
+                "不写成判决，整批也不写"
+            )
+        if key in seen:
+            raise TriageBatchInputError(
+                f"{path}: 第 {seen[key]} 行与第 {index} 行是重复的输入 key = {key}"
+                "——同一批里一行只许出现一次，否则先后顺序会决定哪条判决生效"
+                "（伪幂等，不是幂等）"
+            )
+        seen[key] = index
+        rows.append({"key": key, "verdict": verdict, "reason": reason})
+    return rows
+
+
+def _triage_batch_protected_paths(report_path: Path, input_path: Path) -> set[str]:
+    """Resolved + case-folded spellings of everything this command only reads.
+
+    Same construction as :func:`_review_read_protected_paths` (537D1a), one list
+    wider: the triage sidecar, and the batch input itself. Two spellings of one
+    file must both be refused, so the keys are ``normcase``-folded and both the
+    resolved and the absolute form are kept (a target that does not resolve yet
+    can still *be* one of them by spelling).
+    """
+    candidates = [report_path.parent / name for name in TRIAGE_BATCH_PROTECTED_FILES]
+    candidates.append(Path(input_path))
+    protect: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError):
+            resolved = candidate
+        protect.add(os.path.normcase(str(resolved)))
+        try:
+            protect.add(os.path.normcase(os.path.abspath(str(candidate))))
+        except (OSError, ValueError):
+            pass
+    return protect
+
+
+def _triage_batch_output_problem(
+    target: Path, report_path: Path, input_path: Path
+) -> str:
+    """Why writing ``target`` is not allowed, or ``""`` when it is fine."""
+    if target.is_dir():
+        return f"{target} 是一个目录，不是文件"
+    try:
+        resolved = target.resolve()
+    except (OSError, RuntimeError):
+        resolved = target
+    spellings = {os.path.normcase(str(resolved))}
+    try:
+        spellings.add(os.path.normcase(os.path.abspath(str(target))))
+    except (OSError, ValueError):
+        pass
+    if spellings & _triage_batch_protected_paths(report_path, input_path):
+        return (
+            "它是本命令只读的审查输入/产物（"
+            + " / ".join(TRIAGE_BATCH_PROTECTED_FILES)
+            + "）或批次输入本身"
+        )
+    return ""
+
+
+def _print_triage_pending_keys(triage: list[dict]) -> None:
+    """List the keys a caller could have named — the same shape `triage` prints."""
+    if not any(str(slot.get("key") or "") for slot in triage):
+        print(
+            "  报告里的槽位没有 key（本命令要 063 之后生成的 report.json）："
+            "先重跑 `boardwise checkup`",
+            file=sys.stderr,
+        )
+        return
+    pending = [slot for slot in triage if not triage_slot_is_closed(slot)]
+    if pending:
+        print(f"  当前待分诊的 key（{len(pending)} 条）：", file=sys.stderr)
+        for slot in pending:
+            print(f"    {slot.get('key')}", file=sys.stderr)
+    else:
+        print(
+            "  当前没有待分诊的 key（每条都已判过；要改判就重复执行已判的 key）",
+            file=sys.stderr,
+        )
+
+
+def _triage_batch_lines(
+    report: dict,
+    triage: list[dict],
+    entries: list[dict],
+    applied: list[dict],
+    duplicate_keys: list[str],
+) -> list[str]:
+    """The human summary: what the batch did, and where the gate now stands.
+
+    Quoted from the report, never re-decided: the `exitCode:` line is the
+    **board's**, and the sentence after it says so — this command's own 0 means
+    the batch was applied, not that anything passed.
+    """
+    added = sum(int(row.get("added") or 0) for row in applied)
+    updated = sum(int(row.get("updated") or 0) for row in applied)
+    judged = sum(1 for slot in triage if triage_slot_is_closed(slot))
+    manual = sum(1 for slot in triage if triage_slot_is_manual(slot))
+    completion = report.get("completion") or {}
+    why = "；".join(completion.get("verdictWhy") or []) or (
+        "无 ERROR、无未审、无 stale、无待分诊、无覆盖缺口"
+    )
+    lines = [f"  batch: {len(applied)} 条判决已应用（新增 {added} / 更新 {updated} 条）"]
+    if duplicate_keys:
+        lines.append(
+            "  duplicateReportKeys: "
+            + " / ".join(duplicate_keys)
+            + "（报告里这些 key 对应多个槽位，本次判定写进了全部匹配槽位）"
+        )
+    lines += [
+        f"  warning_triage: 已分诊 {judged}/{len(triage)} 条"
+        f"（待分诊 {len(triage) - judged}）"
+        + (f"，其中 {TRIAGE_UNJUDGEABLE} {manual} 条需人工复核" if manual else "")
+        + f"，侧车 {WARNING_TRIAGE_FILE} {len(entries)} 条",
+        f"  conclusion: {report.get('summary', {}).get('conclusion', '')}",
+        f"  completion: {completion.get('verdict')}（{why}）",
+        f"  exitCode: {_recorded_exit_code(report)}"
+        "（报告记录的**板态**退出码，随 verdict 重算；本命令自己的退出码是 0——"
+        "它只表示这批判决已应用，**不是板子通过**）",
+        f"  report: {report.get('schema')} 已重算并写回；report.md / board-report.md "
+        "已重渲染；review-summary.md 未动",
+    ]
+    return lines
+
+
+def _cmd_triage_batch(args: argparse.Namespace) -> int:
+    """``boardwise triage-batch`` — many warnings, one atomic write (537D1b1).
+
+    The same judgement the single-row `boardwise triage` records, but for a whole
+    batch: the input file is read and **every** row is checked and applied in
+    memory before the first writer runs, so a bad row anywhere (unknown key,
+    empty reason, a word outside the vocabulary, a three-word verdict on a slot
+    with no per-item text, a duplicate input key) leaves `report.json`,
+    `warning-triage.json`, `report.md` and `board-report.md` byte-identical — not
+    "row 1 was fine, row 2 was not".
+
+    One pass, one re-gate: each row goes through :func:`_merge_triage_entry` and
+    :func:`triage_verdict_is_admissible` (the predicate the single-row command
+    and the sidecar merge already share), :func:`_apply_warning_triage` rebuilds
+    `completion`/`conclusion` **once** after all rows, and the existing four
+    writers land the files. `review-summary.md` is the model's own skeleton and is
+    never written here.
+
+    Exit codes: **0** the batch was applied (not a board pass) · **2** unusable
+    input, sidecar or output path (including a `--json` target that is one of the
+    protected report files or the input itself) · **3** no `report.json`.
+
+    Output: with no `--json` the human summary is printed and stdout carries no
+    JSON; `--json -` writes only the JSON envelope to stdout; `--json PATH` writes
+    exactly those bytes to the file (`write_bytes`, so Windows does not turn them
+    into CRLF) and leaves stdout empty.
+    """
+    import json
+
+    out_dir = Path(args.out)
+    report_path = out_dir / "report.json"
+    input_path = Path(args.input)
+    if not report_path.is_file():
+        print(
+            f"boardwise triage-batch: {report_path} 不存在——先跑 `boardwise checkup`"
+            "（本命令只把判决并进一份已有报告，不生成报告）",
+            file=sys.stderr,
+        )
+        return TRIAGE_NO_REPORT
+
+    try:
+        rows = _load_triage_batch(input_path)
+    except TriageBatchInputError as exc:
+        print(f"boardwise triage-batch: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        entries = _load_triage_entries(out_dir)
+    except WarningTriageError as exc:
+        print(f"boardwise triage-batch: {exc}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as exc:
+        print(
+            f"boardwise triage-batch: {report_path}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
+    if not isinstance(report, dict):
+        print(f"boardwise triage-batch: {report_path} 不是一个 report 对象", file=sys.stderr)
+        return 2
+
+    # The output path is chosen before any writer runs: an illegal one must
+    # leave every byte alone, and the JSON file is derived from the files the
+    # writers land, so the target can be named (and refused) up front.
+    target = getattr(args, "json_path", None)
+    target_path = Path(target) if target not in (None, "", "-") else None
+    if target_path is not None:
+        problem = _triage_batch_output_problem(target_path, report_path, input_path)
+        if problem:
+            print(
+                f"boardwise triage-batch: 拒绝写入 {target_path}——{problem}；"
+                "报告与四份产物一个字没动",
+                file=sys.stderr,
+            )
+            return 2
+
+    # A report whose `warning_triage` is not a list of objects cannot be
+    # triaged, and `[dict(slot) ...]` would raise on it (`ValueError`/`TypeError`
+    # is not an answer). Absence stays "no slots yet" — a pre-063 report is
+    # refused per row with the 「没有 key」 hint, exactly as before.
+    raw_triage = report.get("warning_triage")
+    if raw_triage is None:
+        raw_triage = []
+    if not isinstance(raw_triage, list):
+        print(
+            f"boardwise triage-batch: {report_path}: warning_triage 必须是数组"
+            f"（读到 {type(raw_triage).__name__}）——整批不写（一行都不写）",
+            file=sys.stderr,
+        )
+        return 2
+    for slot_index, slot in enumerate(raw_triage):
+        if not isinstance(slot, dict):
+            print(
+                f"boardwise triage-batch: {report_path}: warning_triage"
+                f"[{slot_index}] 必须是对象（读到 {type(slot).__name__}）"
+                "——整批不写（一行都不写）",
+                file=sys.stderr,
+            )
+            return 2
+
+    triage = [dict(slot) for slot in raw_triage]
+    sidecar_entries = [dict(entry) for entry in entries]
+    key_counts: dict[str, int] = {}
+    for slot in triage:
+        slot_key = str(slot.get("key") or "")
+        if slot_key:
+            key_counts[slot_key] = key_counts.get(slot_key, 0) + 1
+
+    applied: list[dict] = []
+    batch_keys: list[str] = []
+    for index, row in enumerate(rows, 1):
+        key, verdict, reason = row["key"], row["verdict"], row["reason"]
+        matched = [slot for slot in triage if str(slot.get("key") or "") == key]
+        if not matched:
+            print(
+                f"boardwise triage-batch: 第 {index} 行：报告里没有 key = {key} 的槽位"
+                "——整批不写（一行都不写）",
+                file=sys.stderr,
+            )
+            _print_triage_pending_keys(triage)
+            return 2
+        # The one admissibility predicate, asked before anything is written. A
+        # verdict outside the vocabulary is already refused by the reader; what
+        # is left here is 537B's text-less slot, and the message names the way
+        # out (`needs-manual`) like the single-row command does.
+        blocked = next(
+            (
+                slot
+                for slot in matched
+                if not triage_verdict_is_admissible(slot, verdict)
+            ),
+            None,
+        )
+        if blocked is not None:
+            print(
+                f"boardwise triage-batch: 第 {index} 行：key = {key} 的槽位"
+                "不能这样判——整批不写（一行都不写）",
+                file=sys.stderr,
+            )
+            if triage_slot_text_missing(blocked):
+                print(
+                    "  这个槽位没有逐条文本（slot.text 为空）——"
+                    f"{TRIAGE_VERDICTS[0]}/{TRIAGE_VERDICTS[1]}/{TRIAGE_VERDICTS[2]} "
+                    "要对着这条警告自己的文本下才成立，一条计数不是一条警告；"
+                    f"这种槽位只能标 `{TRIAGE_UNJUDGEABLE} --reason …`（它仍计 "
+                    "warningsPendingTriage，并把这条单列进 manualReviewRequired "
+                    "留给人工看）",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"  `{verdict}` 不在可写的词表里"
+                    f"（{' / '.join(TRIAGE_VERDICT_CHOICES)}）——不写成判决",
+                    file=sys.stderr,
+                )
+            return 2
+
+        # Every slot carrying this key is the same warning by construction, so
+        # all of them are judged, in both places — the count is disclosed below
+        # when the report itself carries the key more than once (070's shape).
+        for slot in matched:
+            slot["verdict"] = verdict
+            slot["reason"] = reason
+        first = matched[0]
+        sidecar_entries, added, updated = _merge_triage_entry(
+            sidecar_entries,
+            key=key,
+            verdict=verdict,
+            reason=reason,
+            source=str(first.get("source") or ""),
+            text=str(first.get("text") or ""),
+        )
+        applied.append(
+            {
+                "key": key,
+                "verdict": verdict,
+                "reason": reason,
+                "matched": len(matched),
+                "added": added,
+                "updated": updated,
+            }
+        )
+        batch_keys.append(key)
+
+    duplicate_keys = [key for key in batch_keys if key_counts.get(key, 0) > 1]
+    for key in duplicate_keys:
+        print(
+            f"boardwise triage-batch: 注意 key = {key} 在报告里出现 "
+            f"{key_counts[key]} 次（070 起 checkup 生成的槽位不会共用 key；"
+            "这份报告是旧版或手改的）：本次判定写进了全部匹配槽位，"
+            "要分开判定请重跑 `boardwise checkup` 取新 key",
+            file=sys.stderr,
+        )
+
+    # All rows applied in memory, nothing written yet: one re-gate for the whole
+    # batch, then the same four writers the single-row command uses. A verdict
+    # judges a warning; it never re-runs the review.
+    #
+    # The re-gate reads the report's own sections, so a report whose `summary`
+    # (or another section it needs) is missing or the wrong type would raise —
+    # a traceback is not a CLI answer. The catch is deliberately narrow and
+    # wraps **only** the in-memory re-gate: a `KeyError`/`TypeError`/`ValueError`/
+    # `AttributeError` here means this report cannot carry a verdict, so the
+    # batch is refused as bad input before any writer. Writer failures are not
+    # in scope of this catch.
+    try:
+        _apply_warning_triage(report, triage)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        print(
+            f"boardwise triage-batch: {report_path}: 这份报告的结构不能重新过闸"
+            f"（{type(exc).__name__}: {exc}）——整批不写（一行都不写）",
+            file=sys.stderr,
+        )
+        return 2
+    sidecar_path = _write_triage_entries(out_dir, sidecar_entries)
+    written_report_path = _write_checkup_report(out_dir, report)
+    report_md_path = _write_checkup_markdown(out_dir, report)
+    board_report_path = _write_board_report(out_dir, report)
+
+    payload = json.dumps(
+        {
+            "schema": TRIAGE_BATCH_RESULT_SCHEMA,
+            "applied": applied,
+            "added": sum(int(row["added"]) for row in applied),
+            "updated": sum(int(row["updated"]) for row in applied),
+            "duplicateReportKeys": duplicate_keys,
+            "warning_triage": triage,
+            "completion": report["completion"],
+            # 188B 低2: the five-field conclusion section under its own name; the
+            # narrow `summary.conclusion` sentence stays `conclusion`.
+            "conclusionSection": report.get("conclusion") or conclusion_section(report),
+            "conclusion": report["summary"].get("conclusion", ""),
+            "report": str(written_report_path),
+            "sidecar": str(sidecar_path),
+            "reportMd": str(report_md_path),
+            "boardReport": str(board_report_path),
+        },
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n"
+
+    if target is None:
+        for line in _triage_batch_lines(
+            report, triage, sidecar_entries, applied, duplicate_keys
+        ):
+            print(line)
+        return 0
+    if target in ("", "-"):
+        sys.stdout.write(payload)
+        return 0
+    try:
+        # Bytes, not `write_text`: on Windows the text writer translates "\n" to
+        # "\r\n", and then the file form would not be the bytes `--json -` got.
+        target_path.write_bytes(payload.encode("utf-8"))
+    except OSError as exc:
+        print(
+            f"boardwise triage-batch: 写不进 {target_path}"
+            f"（{type(exc).__name__}: {exc}）——报告与侧车已经写入，JSON 结果没写出来",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
 def _triage_lines(
     report: dict,
     triage: list[dict],
@@ -8081,14 +11106,19 @@ def _triage_lines(
         state = "已存在，已更新"
     else:
         state = f"已存在，已更新（另新增 {added} 条）"
-    judged = sum(1 for slot in triage if (slot.get("verdict") or "").strip())
+    judged = sum(1 for slot in triage if triage_slot_is_closed(slot))
+    manual = sum(1 for slot in triage if triage_slot_is_manual(slot))
     completion = report.get("completion") or {}
     why = "；".join(completion.get("verdictWhy") or []) or "无 ERROR、无未审、无 stale、无待分诊、无覆盖缺口"
     return [
         f"  key: {key}（{matched} 条槽位）",
         f"  verdict: {state}（新增 {added} / 更新 {updated} 条）",
-        f"  warning_triage: 已分诊 {judged}/{len(triage)} 条（待分诊 {len(triage) - judged}），"
-        f"侧车 {WARNING_TRIAGE_FILE} {len(entries)} 条",
+        f"  warning_triage: 已分诊 {judged}/{len(triage)} 条（待分诊 {len(triage) - judged}）"
+        # 537B: `judged` counts only the rows the predicate closes, so a
+        # `needs-manual` row shows up as pending **and** is named here — the same
+        # two numbers the report's `completion` and `report.md` carry.
+        + (f"，其中 {TRIAGE_UNJUDGEABLE} {manual} 条需人工复核" if manual else "")
+        + f"，侧车 {WARNING_TRIAGE_FILE} {len(entries)} 条",
         f"  conclusion: {report.get('summary', {}).get('conclusion', '')}",
         f"  completion: {completion.get('verdict')}（{why}）",
         f"  exitCode: {_recorded_exit_code(report)}"
@@ -8212,6 +11242,7 @@ def _render_canvas_images(args: argparse.Namespace, out_dir: Path, *, notes: lis
                      if d.get("type") == "page" and d.get("uuid")]
             out_dir.mkdir(parents=True, exist_ok=True)
             images: list[dict] = []
+            used_names: set[str] = set()
             for uuid, name in pages:
                 try:
                     await client.call("doc.open", {"uuid": uuid}, **route_kwargs)
@@ -8224,7 +11255,8 @@ def _render_canvas_images(args: argparse.Namespace, out_dir: Path, *, notes: lis
                     continue
                 images.append(
                     await _render_one_canvas_image(
-                        client, uuid, name, out_dir, route_kwargs, BridgeError
+                        client, uuid, name, out_dir, route_kwargs, BridgeError,
+                        used_names=used_names,
                     )
                 )
             return images
@@ -8257,8 +11289,10 @@ CANVAS_PNG_TIMEOUT_MS = 10_000
 CANVAS_FALLBACK_CODES = ("TIMEOUT",)
 
 
-async def _render_one_canvas_image(client, page_uuid: str, name: str, out_dir: Path,
-                                   route_kwargs: dict, bridge_error) -> dict:
+async def _render_one_canvas_image(
+    client, page_uuid: str, name: str, out_dir: Path,
+    route_kwargs: dict, bridge_error, *, used_names: set[str],
+) -> dict:
     """One page → one image file, PNG first and SVG as the measured fallback.
 
     031 (issue #5): on 3.2.149 `format=png` timed out three times while
@@ -8272,14 +11306,19 @@ async def _render_one_canvas_image(client, page_uuid: str, name: str, out_dir: P
     import base64
     import hashlib
 
+    from .engines.canvasrender import unique_canvas_name
+
     entry: dict = {"page": name or page_uuid, "pageUuid": page_uuid}
     stem = _file_stem(name or page_uuid)
+    # Two schematics can both have a page named P1.  Allocate the report/file
+    # name from the batch-wide set, not from the page title alone (539).
+    relative = unique_canvas_name(f"canvas-{stem}.png", page_uuid, used_names)
     png_error = ""
     payload = None
     try:
         payload = await client.call(
             "export.render",
-            {"format": "png", "scope": "page", "fileName": f"canvas-{stem}.png",
+            {"format": "png", "scope": "page", "fileName": relative,
              "timeoutMs": CANVAS_PNG_TIMEOUT_MS},
             **route_kwargs,
         )
@@ -8289,10 +11328,11 @@ async def _render_one_canvas_image(client, page_uuid: str, name: str, out_dir: P
             return entry
         png_error = f"{exc.code}: {exc.message}"
     if payload is None:
+        relative = unique_canvas_name(f"canvas-{stem}.svg", page_uuid, used_names)
         try:
             payload = await client.call(
                 "export.render",
-                {"format": "svg", "scope": "page", "fileName": f"canvas-{stem}.svg"},
+                {"format": "svg", "scope": "page", "fileName": relative},
                 **route_kwargs,
             )
         except bridge_error as exc:
@@ -8314,7 +11354,7 @@ async def _render_one_canvas_image(client, page_uuid: str, name: str, out_dir: P
         entry["error"] = f"render 回的是 {payload.get('format')}，不是 {label}（不落盘）"
         return entry
     blob = base64.b64decode(payload["data"])
-    relative = f"canvas-{stem}.{extension}"
+    used_names.add(relative)
     (out_dir / relative).write_bytes(blob)
     entry.update({
         "file": relative,
@@ -12071,6 +15111,11 @@ def _draw_plan_from_page(
     """
     from .engines import drawapply
 
+    # 536 §2.3: the partition is checked before the page's plan is handed over —
+    # asked here too, not only inside `module_plan`, because the builder is the
+    # one call a page document makes, and a contradiction between its identities
+    # and the presentation's must be refused rather than built around.
+    drawapply.validate_layout_partition(page.plan, presentation)
     return drawapply.module_plan(
         page.plan, circuit, presentation, profiles,
         candidate_index=candidate,
@@ -12448,6 +15493,24 @@ def _cmd_draw_apply_page(args: argparse.Namespace) -> int:
         "notes": [],
         "final": "",
     }
+    # 536 §2.3: the page document's stamped partition is the presentation's
+    # declared one. Asked before the stale-source check and before the bridge is
+    # even opened: a plan that names a part as belonging to an island the spec
+    # does not draw is a contradiction between two documents, not a page state,
+    # so nothing is connected, read or written.
+    try:
+        drawapply.validate_layout_partition(page.plan, presentation)
+    except drawapply.DrawPlanError as exc:
+        report["guards"]["checked"]["archipelagoPartition"] = True
+        report["guards"]["problems"].append(str(exc))
+        report["exitCode"] = 4
+        report["outcome"] = "refused"
+        report["reason"] = "archipelago_partition"
+        report["notes"].append(
+            "岛群分区与声明不符（页文档 parts 的 group/island 不是 presentation 声明的"
+            "那一份，536 §2.3）：没有连接编辑器、没有写"
+        )
+        return _render_draw_apply(report, args)
     stale = [
         f"{label}: the page document was compiled against {stated[:12]}… and the file "
         f"now hashes to {current[:12]}… — recompile the page"
@@ -20052,6 +23115,43 @@ async def _await_running_connector_version(
     return version if state == RELOAD_VERIFIED else None
 
 
+#: The CLI-level tag `bridge call --read-only` refuses with (537A). Deliberately
+#: **not** a daemon ``ErrorCodes`` member: no frame exists when this is printed,
+#: which is the whole guarantee — a refused action never reaches the wire.
+READ_ONLY_VIOLATION = "READ_ONLY_VIOLATION"
+
+
+def _read_only_refusal(action: str) -> str | None:
+    """The line `bridge call --read-only` prints, or ``None`` when the call may go.
+
+    The risk comes from the protocol catalogue (:func:`action_spec`), never from
+    a second list kept here: a table of "allowed actions" would rot the day an
+    entry is added or re-tiered, and the gate's only claim is 「what the catalogue
+    says」. Only ``risk == "read"`` passes.
+
+    An unknown name is refused as well. It has no risk, so it cannot be
+    *certified* read, and forwarding it would be the blind pass-through this
+    flag exists to remove. (Without the flag the old path stands: the daemon
+    answers ``UNKNOWN_ACTION``.)
+    """
+    from .bridge.protocol import action_spec
+
+    spec = action_spec(action)
+    if spec is None:
+        return (
+            f"boardwise bridge call: {action} refused [{READ_ONLY_VIOLATION}] "
+            "risk=unknown; it is not in the action catalogue, so --read-only "
+            "cannot certify it as read. Nothing was forwarded."
+        )
+    if spec.risk == "read":
+        return None
+    return (
+        f"boardwise bridge call: {action} refused [{READ_ONLY_VIOLATION}] "
+        f"risk={spec.risk}; --read-only permits risk=read only. "
+        "Nothing was forwarded."
+    )
+
+
 def _cmd_bridge_call(args: argparse.Namespace) -> int:
     """Generic action probe (006): one call, the raw payload, exit 0/1/2.
 
@@ -20076,11 +23176,28 @@ def _cmd_bridge_call(args: argparse.Namespace) -> int:
     sibling top-level field ``targetInstance``; when both flags are given the
     daemon prefers the instance, and the caller is told which window answered by
     the response's own `context`.
+
+    `--read-only` (537A) is the gate a *delegated* caller needs: the daemon
+    grades risk but does not refuse a `write` on its own, so a model tool that
+    promises read-only has to be held to the catalogue *before* anything is
+    forwarded. It is checked at the very top — ahead of ``_open_cli``, and
+    therefore ahead of the daemon auto-start and the socket — because "refused"
+    must not cost a connection, and an unknown action must not become one
+    either. Callers that do not pass the flag keep the old behaviour exactly,
+    including the daemon's own ``UNKNOWN_ACTION`` answer.
     """
     import asyncio
     import json
 
     from .bridge.protocol import ErrorCodes
+
+    if args.read_only:
+        refusal = _read_only_refusal(args.action)
+        if refusal is not None:
+            print(refusal, file=sys.stderr)
+            # 2, like bad --params: the invocation itself cannot be used, and
+            # nothing happened — least of all a bridge call.
+            return 2
 
     BridgeClient, BridgeError, port, token = _open_cli(args)
     try:
@@ -27322,11 +30439,13 @@ class DoctorProbe:
     #: The roots the offline scan looked under — for its skip message, so the
     #: reader learns *where* doctor looked instead of just that it found nothing.
     offline_editor_roots: tuple[str, ...] = ()
-    #: What `skill_install.skill_statuses()` found for each agent harness
-    #: (`skill_install.SkillStatus`, 061): one entry per harness, read offline
-    #: from the two user-level skill directories. Empty when the build could not
-    #: read its own SKILL.md — "not gathered" and "no harness installed" are
-    #: different answers, and the empty tuple means the former.
+    #: What `skill_install.doctor_skill_statuses()` found for the agent this
+    #: session's harness reads the SOP with (061, 537A): one entry per subject,
+    #: read offline. Outside dsh that is the two user-level skill directories;
+    #: inside dsh it is the workspace's `.agents/skills/boardwise/SKILL.md`, one
+    #: entry. Empty when the build could not read its own SKILL.md — "not
+    #: gathered" and "no harness installed" are different answers, and the empty
+    #: tuple means the former.
     skill_statuses: tuple = ()
     #: The in-repo connector version (`connector/package.json`, the string the
     #: bundle announces — 528A-b), '' when neither manifest is readable.
@@ -27402,8 +30521,35 @@ def _editor_floor_label(*, offline: bool) -> str:
 
 
 def _skill_label(harness: str) -> str:
-    """One skill line's label: which harness, and what is being judged."""
+    """One skill line's label: which harness, and what is being judged.
+
+    A dsh session is judged on its **workspace** copy (537A), so the label names
+    that path instead of reading as another user-level install — the sentence the
+    reader sees is where the file is, not which command to run.
+    """
+    from . import skill_install
+
+    if harness == skill_install.DSH_HARNESS:
+        return (
+            "审查 SOP（SKILL.md）在 dsh 工作区的 .agents/skills/boardwise "
+            "且与本构建逐字节一致"
+        )
     return f"审查 SOP（SKILL.md）已装进 {harness} 且与本构建一致"
+
+
+def _dsh_skill_fix(status) -> str:
+    """The dsh fix: the workspace copy, never a Kimi/Claude install (537A).
+
+    dsh loads its skill from the workspace it was opened on (``.agents/skills``),
+    so there is no user-level directory for it and no install command to run.
+    Sending a dsh user to `install-skill` was the measured complaint: the report
+    asked for two installations the session never reads.
+    """
+    return (
+        "dsh 扫的是**工作区**的 .agents/skills/boardwise/SKILL.md，不是用户级 skill "
+        f"目录，所以这一项没有安装命令可跑：把本构建带的 SKILL.md 逐字节放到 {status.path} "
+        "（仓库里那份就是权威，和本构建带的那份由 tests/test_doc_claims.py 盯着同步）"
+    )
 
 
 def _skill_checks(statuses: tuple) -> list[DoctorCheck]:
@@ -27411,8 +30557,8 @@ def _skill_checks(statuses: tuple) -> list[DoctorCheck]:
 
     061's whole point. `install-skill` used to write only Kimi Code's directory,
     so a Claude Code user got the toolchain *without its SOP* and nothing said so.
-    The states come from `skill_install.skill_statuses()`, which is offline and
-    read-only, and they are told apart by what the reader should do:
+    The states come from `skill_install.doctor_skill_statuses()`, which is offline
+    and read-only, and they are told apart by what the reader should do:
 
     * ``harness-absent`` — **skip**: the harness is not on this machine, so there
       is nothing to conclude. A red line for an editor nobody runs is the false
@@ -27424,6 +30570,13 @@ def _skill_checks(statuses: tuple) -> list[DoctorCheck]:
       the path and cannot be read, which is a fact about this machine rather
       than a guess, and the fix starts with looking at it;
     * ``current`` — green.
+
+    Which files are judged is the session's business (537A): outside dsh the two
+    user-level harnesses, inside dsh the workspace's own ``.agents`` copy — and
+    then there is exactly **one** ``skill-dsh`` line, because an unrelated
+    harness line is not a fact about the session doctor is reporting on. That
+    also makes the total nine instead of ten; the count follows the question, it
+    is not padded back to the old number.
 
     An empty tuple means the *build* could not say what its own SKILL.md is
     (`resources.skill_md()` raised, or the file is unreadable/empty), so nothing
@@ -27448,6 +30601,7 @@ def _skill_checks(statuses: tuple) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     for status in statuses:
         name = f"skill-{status.harness}"
+        dsh = status.harness == skill_install.DSH_HARNESS
         if status.state == "harness-absent":
             checks.append(
                 DoctorCheck(
@@ -27463,12 +30617,15 @@ def _skill_checks(statuses: tuple) -> list[DoctorCheck]:
             )
             continue
         if status.state == "current":
+            detail = f"{status.path} 与本构建带的 SKILL.md 逐字节一致"
+            if dsh:
+                detail += "（dsh 扫的是工作区，没有用户级副本要装）"
             checks.append(
                 DoctorCheck(
                     name=name,
                     label=_skill_label(status.harness),
                     ok=True,
-                    detail=f"{status.path} 与本构建带的 SKILL.md 逐字节一致",
+                    detail=detail,
                 )
             )
             continue
@@ -27480,8 +30637,12 @@ def _skill_checks(statuses: tuple) -> list[DoctorCheck]:
                     ok=False,
                     detail=f"{status.path} 读不出来：{status.reason}",
                     fix=(
-                        "先看上面的 OS 原因（权限、文件被占用、路径上是个目录），"
-                        "再跑 `boardwise install-skill` 重装这一份"
+                        _dsh_skill_fix(status)
+                        if dsh
+                        else (
+                            "先看上面的 OS 原因（权限、文件被占用、路径上是个目录），"
+                            "再跑 `boardwise install-skill` 重装这一份"
+                        )
                     ),
                 )
             )
@@ -27492,6 +30653,11 @@ def _skill_checks(statuses: tuple) -> list[DoctorCheck]:
                 "—— 本构建带的才是权威（`install-skill` 会把旧的那份备份成 "
                 "SKILL.md.bak-<年月日-时分秒>）"
             )
+            if dsh:
+                detail = (
+                    f"{status.path} 是旧版/异版：与本构建带的 SKILL.md 不一致"
+                    "—— 工作区这份才是 dsh 读的，本构建带的才是权威"
+                )
         else:  # "missing"
             detail = f"{status.path} 没有这个文件——{status.harness} 读不到审查 SOP"
         checks.append(
@@ -27500,7 +30666,7 @@ def _skill_checks(statuses: tuple) -> list[DoctorCheck]:
                 label=_skill_label(status.harness),
                 ok=False,
                 detail=detail,
-                fix="boardwise install-skill",
+                fix=_dsh_skill_fix(status) if dsh else "boardwise install-skill",
             )
         )
     return checks
@@ -27933,14 +31099,17 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     if scan.install is not None:
         probe.offline_editor_path = str(scan.install.path)
         probe.offline_editor_version = scan.install.version
-    # The second offline answer, gathered here for the same reason (061): the two
-    # user-level skill directories are files on this disk, and "did the install
-    # path everyone is told to run actually put the SOP where my agent looks?" is
-    # decidable before a socket exists. A build that cannot read its own SKILL.md
-    # leaves the field empty, and the doctor line for it is a skip — the bundle
-    # being broken is not a second thing to blame the user for.
+    # The second offline answer, gathered here for the same reason (061): the agent
+    # skill this session's agent actually reads is a file on this disk, and "does
+    # that file hold the SOP this build ships?" is decidable before a socket
+    # exists. Which file that is depends on the session (537A): dsh reads the
+    # workspace's `.agents/skills/boardwise/SKILL.md`, everyone else the two
+    # user-level directories — `doctor_skill_statuses` owns that choice, so the
+    # two answers cannot drift apart here. A build that cannot read its own
+    # SKILL.md leaves the field empty, and the doctor line for it is a skip — the
+    # bundle being broken is not a second thing to blame the user for.
     try:
-        probe.skill_statuses = skill_install.skill_statuses(resources.skill_md())
+        probe.skill_statuses = skill_install.doctor_skill_statuses(resources.skill_md())
     except RuntimeError:
         pass
 
@@ -28253,6 +31422,7 @@ DOCTOR_STEP_HINTS: dict[str, int] = {
     "editor-install": 1,     # 第 1 步 · 安装立创 EDA Pro
     "skill-kimi": 0,         # 第 0 步 · 不用 Python 的装法（含 install-skill）
     "skill-claude": 0,
+    "skill-dsh": 0,          # 537A · 工作区自带，不装（同上：无编号章节）
     "skill": 0,
     "daemon": 3,             # 第 3 步 · 启动 daemon
     "connector": 2,          # 第 2 步 · 装 boardwise 扩展（.eext）
@@ -28499,6 +31669,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_need_datasheet(args)
     if args.command == "triage":
         return _cmd_triage(args)
+    if args.command == "triage-batch":
+        return _cmd_triage_batch(args)
+    if args.command == "review-evidence":
+        return _cmd_review_evidence(args)
+    if args.command == "review-read":
+        return _cmd_review_read(args)
     if args.command == "edit":
         return EDIT_COMMANDS[args.edit_command](args)
     if args.command == "doctor":

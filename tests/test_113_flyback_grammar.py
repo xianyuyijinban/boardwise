@@ -1163,13 +1163,27 @@ def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
         "every island's own placement must be on the record, so 'which island "
         f"moved' is answerable: {notes[-600:]}"
     )
-    # **530F**：岛路的拒绝措辞是 `the island page was refused by the readability
-    # checker`，并且它点名对象。旧文字钉的是单模块那一层的措辞
-    # （`the independent readability checker refused`），那条路这份文档已经不走。
-    assert "the island page was refused by the readability checker" in joined, (
-        "the refusal must name the layer that now refuses the page: since 520m the "
-        "flyback document compiles through the island path, whose gate reports in "
-        f"its own words — got: {joined[:400]}"
+    # **534 收尾（账簿改、病历不改）**：岛闸现在是**两层串联**。先把它量到的软指标
+    # （S-09 弯/根、S-11 交叉占比、S-21 文字净距）跟 spec 自己的地板比
+    # （`drawcompiler.py:7211` `soft_floor_violations`；534 R5 把软指标从「读数」
+    # 变成「地板」），软底线一破就带着**规格条款与实测数字**拒绝，不再往下走硬闸；
+    # 硬闸那句 `the island page was refused by the readability checker`
+    # （`drawcompiler.py:7242`）只在软底线放行之后才会出现。
+    # 这份手搓库（`_library_from`：没有 text anchors、没有 declared poses）量出来的
+    # 正是 45 段里 2 个交叉 = 4.44%，超过 2%（本板允许 1 个），所以这一页现在是被
+    # 软底线拦下的，拒绝语换成了那一句。
+    # 530F 钉的**硬闸**措辞一个字没丢——它由
+    # `tests/test_530f_gate_tolerance.py:284` 钉在一条真的会走到硬闸的页上；软底线
+    # 这一层由 `tests/test_534_soft_floor.py` 钉着。这里仍按本条的本意钉
+    # 「拒绝点名：哪一层、哪一条规格、量到什么」。
+    assert "the island page is over the style spec's soft floor" in joined, (
+        "the refusal must name the layer that now refuses the page: since 534 R5 the "
+        "island page is measured against the style-spec floor before the hard gate, "
+        f"and that layer reports in its own words — got: {joined[:400]}"
+    )
+    assert "S-11" in joined and "crossing(s) in" in joined, (
+        "the refusal must name the spec clause it walked into and what it measured "
+        f"there, not merely that something is off — got: {joined[:400]}"
     )
     # **531 重钉**: the kinds this asserts moved, and both the reason and the
     # consequence are this batch's subject. `_library_from` — this test's own
@@ -1201,9 +1215,14 @@ def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
     #       拒因才是可读性（11 条 `text-overlap`，**没有一条是电学的**）。电学拒因
     #       只在**岛路**上出现，而岛路在 HEAD 上不存在——它属于 520m 以来的岛路
     #       本身，不属于 531 的文字量尺。
-    assert "[" in joined and "]" in joined, (
-        "a refusal owes its objects, not just a count — the island gate names the "
-        f"kind and the two things that collide: {joined[:400]}"
+    # **534 收尾**：`[kind] objects[...]` 那种「点名相撞的两件东西」的措辞属于软底线
+    # **下面**的硬闸（`drawcompiler.py:7242`），这一页走不到那儿，所以这里改钉同一层
+    # 欠下的另一半账：拒绝必须给出它被量的**上限**，读者才知道超了多少。对象级措辞
+    # 仍由 `tests/test_530f_gate_tolerance.py:284` 钉着，不是放弃这条要求。
+    assert "the style spec allows 2%" in joined, (
+        "the soft-floor refusal owes the limit it was measured against, so a reader "
+        "can see how far over the page is — got: "
+        f"{joined[:400]}"
     )
     assert placed.label_fallbacks == [], (
         "the island path names no net by downgrading a wire obligation: the "

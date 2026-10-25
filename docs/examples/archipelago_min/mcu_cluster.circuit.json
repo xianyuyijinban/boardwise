@@ -1,0 +1,112 @@
+{
+  "kind": "boardwise-circuit-spec",
+  "specVersion": 1,
+  "parts": [
+    {
+      "id": "U1",
+      "symbolRef": "GENERIC-MCU-6",
+      "value": "MCU_CORE",
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "C1",
+      "symbolRef": "GENERIC-C-2",
+      "value": "100nF",
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "C2",
+      "symbolRef": "GENERIC-C-2",
+      "value": "100nF",
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "Y1",
+      "symbolRef": "GENERIC-XTAL-2",
+      "value": "8MHz",
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "C3",
+      "symbolRef": "GENERIC-C-2",
+      "value": "12pF",
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "C4",
+      "symbolRef": "GENERIC-C-2",
+      "value": "12pF",
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "H1",
+      "symbolRef": "GENERIC-HEADER-4",
+      "value": "SWD_1x4",
+      "provenance": "ai_asserted"
+    }
+  ],
+  "nets": [
+    {
+      "id": "VDD",
+      "class": "power",
+      "members": [
+        "U1.1",
+        "C1.1",
+        "C2.1",
+        "H1.1"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "GND",
+      "class": "gnd",
+      "members": [
+        "U1.2",
+        "C1.2",
+        "C2.2",
+        "C3.2",
+        "C4.2",
+        "H1.4"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "SWDIO",
+      "class": "signal",
+      "members": [
+        "U1.3",
+        "H1.2"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "SWCLK",
+      "class": "signal",
+      "members": [
+        "U1.4",
+        "H1.3"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "OSC_IN",
+      "class": "signal",
+      "members": [
+        "U1.5",
+        "Y1.1",
+        "C3.1"
+      ],
+      "provenance": "ai_asserted"
+    },
+    {
+      "id": "OSC_OUT",
+      "class": "signal",
+      "members": [
+        "U1.6",
+        "Y1.2",
+        "C4.1"
+      ],
+      "provenance": "ai_asserted"
+    }
+  ]
+}

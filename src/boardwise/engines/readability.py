@@ -227,6 +227,7 @@ __all__ = [
     "DerivedNetlist",
     "HardViolation",
     "ReadabilityError",
+    "ReadabilityScope",
     "check",
     "check_page",
     "derive_netlist",
@@ -411,10 +412,43 @@ class HardViolation:
         return f"[{self.kind}] {' + '.join(self.objects)}: {self.evidence}"
 
 
+@dataclass(frozen=True)
+class ReadabilityScope:
+    """The parts one drawing claims to be a picture of, and nothing else (538A).
+
+    A **block-level** scope, not a relaxation of the whole page: an island's local
+    plan is judged against the whole specification, so every declared member whose
+    part this island does not place looks unconnected — the measured LDO two-island
+    split reports 4 and 3 such findings.  Passing a scope says *which* parts this
+    drawing is allowed to be silent about, and the silence is then not a finding.
+
+    What it may **not** do, and why the field is a part set rather than a flag:
+
+    * a part the scope names is still checked — a missing in-scope part is a find;
+    * an out-of-scope part that was drawn anyway is still checked by every rule,
+      because it is *in* the picture and its pins owe their connections;
+    * the two branches that consult it are exactly "the item sits on a part this
+      plan does not place" — ``_check_required_pins``' ``placed_part is None`` and
+      ``_check_locks``' ``part is None``.  Nothing else reads it: the netlist
+      partition and NC checks are unchanged, and the whole page is checked by
+      passing no scope at all.
+    """
+
+    #: The part ids this drawing draws. Never empty — an empty scope would allow
+    #: every omission on the page, which is not a scope but a hole in the checker.
+    parts: frozenset[str]
+    #: Lock frames this drawing can actually judge.  The defaults preserve the
+    #: whole-page / ordinary scoped-check behaviour.  An independent island turns
+    #: page locks off because their coordinates are absolute page positions; a
+    #: multi-island block also turns module locks off because a block is not
+    #: necessarily the module drawing.  Unknown lock parts are still reported.
+    check_page_locks: bool = True
+    check_module_locks: bool = True
+
+
 @dataclass
 class CheckResult:
     """What one check found: findings and raw metrics, never a score."""
-
     hard_violations: list[HardViolation] = field(default_factory=list)
     #: Empty in this batch unless a `grammar_checker` was injected; the values
     #: are whatever that checker returned, stored verbatim.
@@ -740,6 +774,7 @@ def check(
     page_box: Box | None = None,
     keepouts: Sequence[Box] = (),
     grid: float = DEFAULT_GRID,
+    scope: ReadabilityScope | None = None,
 ) -> CheckResult:
     """Run the hard constraints and measure the soft metrics.
 
@@ -767,6 +802,18 @@ def check(
     ``grid`` is the lattice the alignment metric treats as "the same column or
     row" (:data:`DEFAULT_GRID` = :data:`boardwise.engines.layout.GRID`).
 
+    ``scope`` (538A) is the optional, explicit set of parts this drawing is a
+    picture of — an island's local plan. ``None`` (the default) is the whole page
+    and changes nothing. When given, it suppresses a declared net member or user
+    lock whose **part is not placed** only when that declared part is outside the
+    scope. An in-scope part the plan fails to place is still reported, an
+    out-of-scope part that was drawn anyway is checked by every rule as before,
+    and the netlist / NC checks never consult it.  Its two lock-frame switches
+    default to True; they let a block caller say that page or module coordinates
+    are outside its frame, never that an unknown lock part may be ignored.  There
+    is deliberately no "allow missing parts" switch for a whole page: a scope
+    names parts, and an empty one is refused.
+
     Nothing here mutates an input, and the result is deterministic: violations
     come out in :data:`HARD_KINDS` order, and inside one constraint in the
     document order of the object that names them.
@@ -784,6 +831,25 @@ def check(
         raise ReadabilityError(
             f"grid must be a positive number of canvas units, got {grid!r}"
         )
+    if scope is not None:
+        if not isinstance(scope, ReadabilityScope):
+            raise ReadabilityError(
+                "scope must be a ReadabilityScope or None, got "
+                f"{type(scope).__name__} — the whole page is checked by passing no "
+                "scope at all"
+            )
+        if not scope.parts:
+            raise ReadabilityError(
+                "scope names no part — an empty scope would let every omission on "
+                "the page pass, which is not a scope but a hole in the checker"
+            )
+        for name in ("check_page_locks", "check_module_locks"):
+            if not isinstance(getattr(scope, name), bool):
+                raise ReadabilityError(
+                    f"scope.{name} must be bool, got "
+                    f"{type(getattr(scope, name)).__name__}"
+                )
+    window = frozenset(scope.parts) if scope is not None else None
     page = check_box(page_box, "page_box", ReadabilityError)
     keep = []
     for index, item in enumerate(keepouts):
@@ -810,9 +876,13 @@ def check(
     violations.extend(
         _check_page(layout_plan, placed, page, keep, profile_map)
     )
-    violations.extend(_check_locks(presentation_spec, layout_plan))
+    violations.extend(
+        _check_locks(presentation_spec, layout_plan, circuit_spec, scope=scope)
+    )
     violations.extend(_check_nc(circuit_spec, net, profile_map))
-    violations.extend(_check_required_pins(circuit_spec, net, placed, profile_map))
+    violations.extend(
+        _check_required_pins(circuit_spec, net, placed, profile_map, scope=window)
+    )
 
     findings: list[Any] = []
     if grammar_checker is not None:
@@ -1843,19 +1913,52 @@ def _check_page(
 
 
 def _check_locks(
-    presentation_spec: PresentationSpec, layout_plan: LayoutPlan
+    presentation_spec: PresentationSpec,
+    layout_plan: LayoutPlan,
+    circuit_spec: CircuitSpec,
+    *,
+    scope: ReadabilityScope | None = None,
 ) -> list[HardViolation]:
     """Constraint 7: a lock the engineer set is honoured or reported, never bent.
 
     052 sec.6 and 053 sec.5 scenario 12: "报告冲突+可选动作，不静默忽略锁定".
     Coordinates compare exactly (to :data:`TOL`): a lock is a decision, so a
     plan that snapped it to the grid differs from the lock and says so.
+
+    538A/539: scope can omit a **declared** lock part only when that part is both
+    outside the drawing and unplaced.  A lock naming no circuit part is always a
+    finding.  Page/module frame switches say which coordinate frames this plan
+    can judge; they never make an unknown lock part acceptable.
     """
     out: list[HardViolation] = []
     for lock in presentation_spec.user_locks:
         part = layout_plan.part(lock.part_id)
         name = f"presentationSpec.userLocks[{lock.part_id}]"
+        if circuit_spec.part(lock.part_id) is None:
+            if scope is None:
+                evidence = (
+                    f"the engineer locked {lock.part_id} at "
+                    f"({lock.x:g}, {lock.y:g}, {lock.rotation:g}°) but the plan "
+                    "does not place that part at all"
+                )
+            else:
+                evidence = (
+                    f"the engineer locked {lock.part_id}, but the circuit "
+                    "declares no such part; scope cannot make an unknown lock "
+                    "disappear"
+                )
+            out.append(HardViolation(
+                KIND_USER_LOCK_VIOLATED, (name,), evidence,
+            ))
+            continue
+        if scope is not None:
+            if lock.is_page and not scope.check_page_locks:
+                continue
+            if not lock.is_page and not scope.check_module_locks:
+                continue
         if part is None:
+            if scope is not None and lock.part_id not in scope.parts:
+                continue
             out.append(HardViolation(
                 KIND_USER_LOCK_VIOLATED,
                 (name,),
@@ -1935,6 +2038,7 @@ def _check_nc(
 def _check_required_pins(
     circuit_spec: CircuitSpec, net: DerivedNetlist, placed: list[_PlacedPart],
     profile_map: Mapping[str, SymbolProfile],
+    *, scope: frozenset[str] | None = None,
 ) -> list[HardViolation]:
     """Constraint 9: every pin a spec net names is actually connected to something.
 
@@ -1949,6 +2053,12 @@ def _check_required_pins(
     not placed, or the symbol profile has no such pin — is reported with that
     reason, because a declared connection the drawing cannot even show is the
     strongest failure of the eleven.
+
+    538A: with an explicit ``scope`` (a local island plan), the one branch that
+    reports "the part is not placed" is skipped for parts **outside** the scope —
+    they are the other island's business. Everything else is unchanged: an
+    in-scope part that is missing is still reported, and a part whose symbol lacks
+    the pin is a finding whether or not it is in scope.
     """
     out: list[HardViolation] = []
     by_id = {part.part_id: part for part in placed}
@@ -1966,6 +2076,14 @@ def _check_required_pins(
             key = _canonical_pin(circuit_spec, profile_map, pin)
             if key not in net.pin_points:
                 if placed_part is None:
+                    # 538A: a local (island) plan is graded against the whole
+                    # spec, so a member whose part this drawing never claims to
+                    # draw is not an omission of *this* drawing. The skip is exactly
+                    # "outside the scope and not placed"; an in-scope part that is
+                    # missing is still reported, and an outside part that was drawn
+                    # has a tip (so it never reaches this branch) and is checked.
+                    if scope is not None and part_id not in scope:
+                        continue
                     why = f"part {part_id} is not placed in the plan"
                 else:
                     why = (
@@ -2100,6 +2218,136 @@ def _crossings(
                     continue
                 break
     return out
+
+
+#: **534 R5** — the style spec's soft numbers, as a floor instead of a reading.
+#:
+#: Until 534 the soft layer only *recorded*: `evidence/534/quality/REPORT.md`
+#: measured a page whose `crossings` was 4 (8.6 % of its segments) and whose
+#: `bends` averaged **1.32 per root** — three times the flyback's 0.43 — and the
+#: compiler still called it `pass`, because nothing compared those numbers to
+#: anything. These constants are the comparison, and every one of them is read off
+#: `docs/schematic-style-spec.md` rather than off a lucky board:
+#:
+#: * **S-09** 「弯路目标 ≤1 弯/根，单根上限 2 弯」 — both halves, because a page can
+#:   hold its average with one wire that wanders.
+#: * **S-11** 「交叉上限 = 导线段数的 2%」 — the denominator is the **segments the
+#:   drawing is made of**, i.e. every polyline edge, not every root: the flyback's
+#:   one crossing sits in a 39-root page whose edges number in the dozens, and 2 %
+#:   of *roots* would refuse the golden board over arithmetic. A page is never
+#:   refused for its **first** crossing (`max(1, …)`) — a single crossing inside a
+#:   dense drawing is not the defect S-11 describes, and the golden board has one.
+#: * **S-21** 「文字不撞」 — a floor of :data:`SOFT_FLOOR_TEXT_GAP` canvas units,
+#:   measured between **different statements**: a part's designator and its own
+#:   value are one statement (S-20 puts them above/below the same body), and their
+#:   edge-to-edge zero is the metric's own base case, not a collision.
+#:
+#: `unaligned_part_pairs` is deliberately **not** gated: S-01..S-21 state no number
+#: for it, and the golden flyback leaves 135 of its 171 module pairs off any common
+#: line — a floor taken from the spec would refuse the board the spec was derived
+#: from. It stays a recorded reading (see the batch's report).
+SOFT_FLOOR_BENDS_PER_ROOT = 1.0
+SOFT_FLOOR_BENDS_MAX = 2.0
+SOFT_FLOOR_CROSSING_SHARE = 0.02
+SOFT_FLOOR_TEXT_GAP = 2.0
+
+
+def soft_floor_violations(
+    layout_plan: LayoutPlan,
+    soft_metrics: Mapping[str, float],
+    profile_map: Mapping[str, SymbolProfile],
+) -> list[str]:
+    """Where a finished plan breaks the spec's soft numbers, or ``[]`` (534 R5).
+
+    One sentence per breach, in the same shape as the hard violations' lines, so
+    a refusal can print it verbatim. A metric that could not be measured
+    (:data:`UNMEASURED`) is skipped rather than read as zero — "nobody measured
+    this" is not "this is perfect".
+    """
+    out: list[str] = []
+    segments = list(getattr(layout_plan, "segments", ()))
+    roots = len(segments)
+    edges = sum(max(0, len(list(seg.points)) - 1) for seg in segments)
+
+    crossings = soft_metrics.get("crossings", UNMEASURED)
+    if crossings >= 0.0 and edges:
+        allowed = max(1.0, math.ceil(SOFT_FLOOR_CROSSING_SHARE * edges))
+        if crossings > allowed:
+            out.append(
+                f"S-11: {crossings:g} crossing(s) in {edges} wire segment(s) "
+                f"({crossings / edges:.2%}) — the style spec allows "
+                f"{SOFT_FLOOR_CROSSING_SHARE:.0%} ({allowed:g} here)"
+            )
+
+    if roots:
+        per_root = [_bend_count(list(seg.points)) for seg in segments]
+        total = sum(per_root)
+        mean = total / roots
+        worst = max(per_root) if per_root else 0
+        if mean > SOFT_FLOOR_BENDS_PER_ROOT:
+            out.append(
+                f"S-09: {total} bend(s) over {roots} wire(s) = {mean:.2f} per root, "
+                f"target is <= {SOFT_FLOOR_BENDS_PER_ROOT:g} per root"
+            )
+        if worst > SOFT_FLOOR_BENDS_MAX:
+            out.append(
+                f"S-09: one wire has {worst} bends, the spec's hard ceiling is "
+                f"{SOFT_FLOOR_BENDS_MAX:g}"
+            )
+
+    gap = _interpart_text_gap(layout_plan, profile_map)
+    if gap is not None and gap < SOFT_FLOOR_TEXT_GAP:
+        out.append(
+            f"S-21: two text statements are {gap:g} units apart, the style spec "
+            f"keeps them at >= {SOFT_FLOOR_TEXT_GAP:g}"
+        )
+    return out
+
+
+def _interpart_text_gap(
+    layout_plan: LayoutPlan,
+    profile_map: Mapping[str, SymbolProfile],
+) -> float | None:
+    """The smallest gap between two **different** statements' rows (534 R5).
+
+    :func:`_min_text_gap` is the reported metric and keeps the part's own rows in
+    its base case (they are why it reads 0 on a healthy page). The floor asks the
+    other question — do two *statements* collide — so the same box set is walked
+    with one more exclusion: both boxes owned by the same non-empty part id.
+    """
+    boxes = _text_boxes(layout_plan, profile_map)
+    if len(boxes) < 2:
+        return None
+    best: float | None = None
+    for left in range(len(boxes)):
+        for right in range(left + 1, len(boxes)):
+            name_a, box_a, part_a, text_a = boxes[left]
+            name_b, box_b, part_b, text_b = boxes[right]
+            if part_a and part_a == part_b:
+                continue
+            # The same net named twice at one place is **one** statement: a
+            # `LayoutLabel` stands on the pin it names and the host prints that
+            # wire's own name in the band beside it, so the flyback's `VFB_NF`
+            # label touches its `VFB_NF` wire row at 0 units on a page the style
+            # spec calls healthy (measured, 534 R5). Identity of the *text* is
+            # what says so; two different statements never carry the same words.
+            if text_a and text_a == text_b:
+                continue
+            # A row the **editor** draws is outside the compiler's reach — the same
+            # clause `drawcompiler.island_gate_violations` applies to its tolerated
+            # kinds. The flyback's `R9` designator touches the `LED_A` row the host
+            # prints beside that wire on a page the spec calls healthy, and no
+            # lever on this path can separate them, so a floor that counted them
+            # would be refusing the golden board over its library.
+            if is_host_printed_row(name_a) or is_host_printed_row(name_b):
+                continue
+            if name_a in {item[0] for item in boxes if _own_flag_name(item[0], boxes)}:
+                if name_b == f"{name_a} name":
+                    continue
+            gap = _box_gap(box_a, box_b)
+            if best is None or gap < best:
+                best = gap
+    return best
 
 
 def _bend_count(points: list[tuple[float, float]]) -> int:

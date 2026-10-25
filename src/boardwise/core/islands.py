@@ -11,11 +11,11 @@ same thing.** A *net-island* is a set of pins one net joins (the sense
 one place, one local wiring picture, its own ground. The design doc's §2 names
 the split, and this module only implements the second:
 
-* **the carrier is a new `islands[]` key** on the presentation spec, read by
-  the layout layer and by nothing else. `PresentationSpec.modules` keeps its
-  meaning (a grammar-binding scope) and is not reused for this — 113's
-  five-module split was refused precisely because a fragment is not a whole
-  flyback, and that refusal is not re-opened here.
+* **the carrier is an `islands[]` key** on the presentation spec, read by
+  the layout layer and by nothing else. In the original 520j reading,
+  `PresentationSpec.modules` keeps its grammar-binding meaning and is not reused
+  for this. The opt-in 536 archipelago reading is different: it explicitly makes
+  each declared island a child of one module, without changing the legacy path.
 * **the default is one implicit island holding everything.** A spec that says
   no `islands` behaves exactly as it did before this key existed — same
   published JSON, same digest, same plan, byte for byte. Multi-island layout is
@@ -47,6 +47,9 @@ from typing import Any, Iterable, Sequence
 from .circuitspec import CircuitSpec
 
 __all__ = [
+    "ARCHIPELAGO_KEYS",
+    "ARCHIPELAGO_KINDS",
+    "ARCHIPELAGO_SIDES",
     "IMPLICIT_ISLAND_ID",
     "ISLAND_ROLE_BRIDGE",
     "ISLAND_ROLES",
@@ -58,6 +61,7 @@ __all__ = [
     "island_of_part",
     "part_island_map",
     "parse_islands",
+    "validate_archipelago_structure",
 ]
 
 #: The island roles this build knows. 岳's ruling of 2026-10-20 (design doc §7.1)
@@ -84,10 +88,34 @@ ISLAND_ROLE_BRIDGE = "bridge"
 #: and one that writes this id would be describing the default as a decision.
 IMPLICIT_ISLAND_ID = "all"
 
+#: The four keys 536 puts on an **archipelago** island (`docs/drawing-archipelago-route.md`
+#: §2.2): which group it is a child of, which part it hangs off, what it is for, and
+#: (optionally) the side of its group it is drawn on.  A list that states any of them
+#: on any entry is read as an archipelago, and then every entry has to state the
+#: first three — the two readings do not mix (see :func:`parse_islands`).
+ARCHIPELAGO_KEYS: tuple[str, ...] = ("group", "owner", "kind", "side")
+
+#: The closed vocabulary of a child island's ``kind`` (§2.2).  Closed for the same
+#: reason :data:`ISLAND_ROLES` is: the kind is what a later assembler arranges the
+#: island *by* (a decoupling island is placed against its owner's rail, a clock
+#: island beside its pins), and a word this build does not know is a promise about
+#: placement nobody can keep.
+ARCHIPELAGO_KINDS: tuple[str, ...] = (
+    "core", "decoupling", "bulk", "clock", "programming",
+)
+
+#: The sides a child island may be stated on (§2.2).  Same four the spec's
+#: `sidePreferences` name, and optional: omitted means "no island-level
+#: preference", which is not the same as "the default" and is not written as one.
+ARCHIPELAGO_SIDES: tuple[str, ...] = ("left", "right", "top", "bottom")
+
 #: The keys one `islands[]` entry may state.  ``name`` is 530F's addition and is
 #: optional like ``role``: the judge names what it accepts, and an island nothing
-#: named writes nothing (see :class:`LayoutIsland`).
-_ISLAND_KEYS = ("id", "parts", "role", "name")
+#: named writes nothing (see :class:`LayoutIsland`).  The four archipelago keys are
+#: 536's addition and are optional in the *schema* (an old island states none of
+#: them) but mandatory *as a set* once any entry states one — refusal rather than
+#: filling-in, because a group or an owner nobody stated is not a default.
+_ISLAND_KEYS = ("id", "parts", "role", "name", *ARCHIPELAGO_KEYS)
 
 
 class IslandError(ValueError):
@@ -123,12 +151,26 @@ class LayoutIsland:
     nothing in the layout reads it, S-14 counts **net** names and not island
     titles, and a document that states none reads back exactly as it did before
     the field existed.
+
+    ``group`` / ``owner`` / ``kind`` / ``side`` are 536's archipelago fields, all
+    optional and all ``""`` for "not stated" (see :data:`ARCHIPELAGO_KEYS`).  They
+    describe an island as a **child of a group** rather than as a block of the
+    page: ``group`` is the module whose drawing it is a piece of, ``owner`` the
+    part of that module's core island its picture hangs off, ``kind`` what the
+    piece is for, and ``side`` where on its group it is drawn.  A list that states
+    any of them is read as an archipelago and checked by
+    :func:`validate_archipelago_structure`; a list that states none of them is the
+    520j reading, byte for byte, and none of these fields is ever inferred.
     """
 
     id: str
     parts: list[str] = field(default_factory=list)
     role: str = ""
     name: str = ""
+    group: str = ""
+    owner: str = ""
+    kind: str = ""
+    side: str = ""
 
     @property
     def is_bridge(self) -> bool:
@@ -215,7 +257,11 @@ def cross_island_nets(
 
 
 def parse_islands(
-    value: Any, declared: Sequence[str], where: str = "islands"
+    value: Any,
+    declared: Sequence[str],
+    where: str = "islands",
+    *,
+    modules: Sequence[Any] | None = None,
 ) -> list[LayoutIsland] | None:
     """Read an `islands` list, or ``None`` when the document states none.
 
@@ -237,6 +283,17 @@ def parse_islands(
     A present-but-empty list is refused too: the way to say "one block" is to
     say nothing (that is the implicit island), and `[]` in a document carrying
     parts would otherwise be an undeclared second reading of the same thing.
+
+    **Archipelago islands (536).** A list is read as an archipelago when any raw
+    entry states one of :data:`ARCHIPELAGO_KEYS` — the document itself says which
+    reading it is, and the two do not mix: in that mode every entry states
+    ``group``, ``owner`` and ``kind`` (``side`` is optional), and
+    :func:`validate_archipelago_structure` decides the group-level facts (one
+    module per part, islands ⊆ their group, one core island per group, owner in
+    the core island, …). ``modules`` is what that check needs, and it is
+    **keyword-only** so the legacy call sites (and the legacy reading) are
+    untouched: with no archipelago key present this function does exactly what it
+    did before 536, whatever was or was not passed.
     """
     if value is None:
         return None
@@ -252,6 +309,11 @@ def parse_islands(
             "(omit the key: the default is the single implicit island); an "
             "empty list would place every part of this spec in no island"
         )
+
+    archipelago = any(
+        isinstance(item, dict) and any(key in item for key in ARCHIPELAGO_KEYS)
+        for item in value
+    )
 
     islands: list[LayoutIsland] = []
     seen_ids: set[str] = set()
@@ -289,12 +351,36 @@ def parse_islands(
                     "parts (its modules' part ids), and one naming anything else "
                     "is a statement about another document"
                 )
+        group = owner = kind = side = ""
+        if archipelago:
+            group, owner, kind, side = _archipelago_fields(body, spot, where)
         islands.append(LayoutIsland(
             id=island_id,
             parts=parts,
             role=_role(body.get("role"), f"{spot}.role"),
             name=_text(body.get("name"), f"{spot}.name"),
+            group=group,
+            owner=owner,
+            kind=kind,
+            side=side,
         ))
+
+    if archipelago:
+        # The group-level reading. `modules` is None only for a caller that does
+        # not hold a spec (this module stays importable on its own); such a
+        # caller cannot have decided that an archipelago is what it wants, and
+        # guessing the groups from the islands' own `group` fields would drop the
+        # half of §2.3 that says the module's parts *are* its child islands.
+        if modules is None:
+            raise IslandError(
+                f"{where} is an archipelago (an entry states "
+                f"{', '.join(ARCHIPELAGO_KEYS)}) but no modules were passed — a "
+                "child island's group, owner and core are facts about the "
+                "modules, so this list cannot be checked on the islands alone: "
+                "pass modules= to read it"
+            )
+        validate_archipelago_structure(modules, islands, where=where)
+        return islands
 
     owner = part_island_map(islands)
     claimed = [part for part in declared if part in owner]
@@ -318,12 +404,356 @@ def parse_islands(
     return islands
 
 
+# --------------------------------------------------------------- archipelago
+#
+# 536's second reading: a list of *child islands*, each one a piece of a module's
+# drawing. The schema half (`group`/`owner`/`kind`/`side`) is parsed above; the
+# half below is the **structure** — the facts that no single entry can decide,
+# because they are relations between entries and between an entry and its group.
+# It is public (`__all__`) because `core.archipelago` reuses it: the parser asks
+# it once at the document boundary, and the assembler asks the same function
+# again on the islands it is actually about to lay out, so there is one reading
+# and not two that can drift apart.
+
+
+def validate_archipelago_structure(
+    modules: Sequence[Any], islands: Sequence[Any], where: str = "islands"
+) -> None:
+    """Refuse an archipelago whose island/group structure is not the §2.3 one.
+
+    ``modules`` and ``islands`` are read **structurally**, not by type: an object
+    with ``id`` / ``parts`` / ``core`` attributes (a
+    :class:`boardwise.core.presentationspec.PresentationModule`) or a mapping with
+    the same keys (a decoded document) both work.  That keeps this module free of
+    the spec module (importing it back would be a cycle) and lets the later
+    assembler pass either.
+
+    The hard rules, all decided from the two documents alone:
+
+    * **one module per part, one island per part** — including a repeat *inside*
+      one entry's own ``parts``: a designator written twice is still two answers
+      about where it goes;
+    * **an island id is never** :data:`IMPLICIT_ISLAND_ID` — that id belongs to
+      the island a spec states by saying nothing, so a declared island writing it
+      describes the default as a decision (the parser refuses it as well, so a
+      spec built in memory is held to the same rule);
+    * **an island's group is a module** and **its parts are that module's parts**
+      (islands ⊆ group): an island holding another group's part is a statement
+      about somebody else's drawing;
+    * **a module's parts are exactly its child islands' union**, without repeats:
+      the island is the placement unit, so the group's part list and its child
+      islands cannot disagree;
+    * **exactly one ``kind: core`` island per group**, and the module's ``core``
+      part is in it: the core island is what the group is arranged around, and
+      "which one" is a decision, not a scan;
+    * **every island's ``owner`` is in its group's core island** — a satellite
+      hangs off the core part, so an owner outside it names a connection picture
+      that does not exist;
+    * **``kind`` and ``side`` are closed vocabularies** (:data:`ARCHIPELAGO_KINDS`
+      / :data:`ARCHIPELAGO_SIDES`), and ``side`` may be omitted.
+
+    Not decided here: whether a satellite *shares a net* with its owner, whether a
+    decoupling island holds a signal net, and whether the netlist is one a
+    grammar can draw.  Those are readings of the circuit, and the circuit is not
+    an argument of this function (`core.archipelago` asks them where it holds
+    both documents).
+    """
+    module_parts: dict[str, list[str]] = {}
+    module_core: dict[str, str] = {}
+    modules_of_part: dict[str, list[str]] = {}
+    for module in modules:
+        module_id = str(_field(module, "id") or "").strip()
+        if not module_id:
+            raise IslandError(
+                f"{where}: a module states no id — an island's group is named by "
+                "a module id, so a module without one cannot be a group"
+            )
+        if module_id in module_parts:
+            raise IslandError(
+                f"{where}: more than one module is named {module_id!r} — a group "
+                "is one module, and two under one name make 'island.group' name "
+                "two different documents"
+            )
+        parts = [str(part) for part in (_field(module, "parts", ()) or ())]
+        if not parts:
+            raise IslandError(
+                f"{where}: module {module_id!r} names no parts — its child "
+                "islands are a partition of its parts, and a group with none has "
+                "nothing to place"
+            )
+        repeated = _repeats(parts)
+        if repeated:
+            raise IslandError(
+                f"{where}: module {module_id!r}.parts repeats part(s) "
+                f"{', '.join(repeated)} — a part sits in exactly one place inside "
+                "its group, and a repeat is a second answer in one list"
+            )
+        for part_id in parts:
+            modules_of_part.setdefault(part_id, []).append(module_id)
+        module_parts[module_id] = parts
+        module_core[module_id] = str(_field(module, "core") or "").strip()
+
+    for part_id, holders in modules_of_part.items():
+        if len(holders) > 1:
+            raise IslandError(
+                f"{where}: part {part_id!r} is claimed by more than one module "
+                f"({', '.join(holders)}) — every part sits in exactly one group, "
+                "and the layout has no way to ask which group was meant"
+            )
+
+    island_parts: dict[str, list[str]] = {}
+    island_group: dict[str, str] = {}
+    island_owner: dict[str, str] = {}
+    island_kind: dict[str, str] = {}
+    islands_of_part: dict[str, list[str]] = {}
+    for island in islands:
+        island_id = str(_field(island, "id") or "").strip()
+        if not island_id:
+            raise IslandError(f"{where}: an island states no id")
+        if island_id == IMPLICIT_ISLAND_ID:
+            raise IslandError(
+                f"{where}: island id {island_id!r} is the id of the implicit "
+                "island a spec states by saying nothing — writing it down "
+                "describes the default as if it were a decision, so a declared "
+                "island takes an id of its own (the parser refuses this too; a "
+                "hand-written spec reaches this check without it)"
+            )
+        if island_id in island_parts:
+            raise IslandError(
+                f"{where}: island id {island_id!r} is used twice — an island id is "
+                "how everything downstream names one block"
+            )
+        parts = [str(part) for part in (_field(island, "parts", ()) or ())]
+        if not parts:
+            raise IslandError(
+                f"{where}: island {island_id!r} has no parts — an island with no "
+                "parts is a caption, not a placement unit"
+            )
+        repeated = _repeats(parts)
+        if repeated:
+            raise IslandError(
+                f"{where}: island {island_id!r}.parts repeats part(s) "
+                f"{', '.join(repeated)} — one island names a part once: a repeat "
+                "inside one island is still two answers about where it sits"
+            )
+        group = str(_field(island, "group") or "").strip()
+        if not group:
+            raise IslandError(
+                f"{where}: island {island_id!r} states no group — an archipelago "
+                "island is a child of a module's drawing, and the group is which "
+                "module that is (state group, owner and kind; side is optional)"
+            )
+        if group not in module_parts:
+            raise IslandError(
+                f"{where}: island {island_id!r} states group {group!r}, which is "
+                f"not a module (the groups are {', '.join(module_parts) or 'none'}) "
+                "— an island groups a module's parts, and a group that does not "
+                "exist places nothing"
+            )
+        owner = str(_field(island, "owner") or "").strip()
+        if not owner:
+            raise IslandError(
+                f"{where}: island {island_id!r} states no owner — the owner is the "
+                "core part this island's picture hangs off (state group, owner and "
+                "kind; side is optional)"
+            )
+        kind = str(_field(island, "kind") or "").strip()
+        if kind not in ARCHIPELAGO_KINDS:
+            raise IslandError(
+                f"{where}: island {island_id!r} states kind {kind!r}; one child "
+                f"island's kind is one of {', '.join(ARCHIPELAGO_KINDS)} — the kind "
+                "is what the island is placed *as*, so an unknown one is a promise "
+                "nobody keeps"
+            )
+        side = str(_field(island, "side") or "").strip()
+        if side and side not in ARCHIPELAGO_SIDES:
+            raise IslandError(
+                f"{where}: island {island_id!r} states side {side!r}; one of "
+                f"{', '.join(ARCHIPELAGO_SIDES)}, or omit it — omitting means 'no "
+                "island-level side preference', which is not a fifth side"
+            )
+        foreign = [part_id for part_id in parts if part_id not in module_parts[group]]
+        if foreign:
+            raise IslandError(
+                f"{where}: island {island_id!r} holds part(s) "
+                f"{', '.join(foreign)} that module {group!r} does not claim "
+                f"({', '.join(module_parts[group])}) — an island is a partition of "
+                "its own group, and a part from outside it is a statement about "
+                "another group's drawing"
+            )
+        for part_id in parts:
+            islands_of_part.setdefault(part_id, []).append(island_id)
+        island_parts[island_id] = parts
+        island_group[island_id] = group
+        island_owner[island_id] = owner
+        island_kind[island_id] = kind
+
+    for part_id, holders in islands_of_part.items():
+        if len(holders) > 1:
+            raise IslandError(
+                f"{where}: part {part_id!r} appears in more than one island "
+                f"({', '.join(holders)}) — every part sits in exactly one island, "
+                "and two answers about where it goes is a question the layout "
+                "cannot ask back"
+            )
+
+    for module_id, parts in module_parts.items():
+        kids = [
+            island_id for island_id in island_parts
+            if island_group[island_id] == module_id
+        ]
+        if not kids:
+            raise IslandError(
+                f"{where}: module {module_id!r} has no child island — a group the "
+                "page arranges is laid out as its child islands, so a module with "
+                "no child island would be a group with nowhere to go"
+            )
+        union = [part_id for island_id in kids for part_id in island_parts[island_id]]
+        repeated = _repeats(union)
+        if repeated:
+            # Already caught as 'more than one island'; kept so this rule reads as
+            # the module-level statement §2.3 makes (the union has no repeats).
+            raise IslandError(
+                f"{where}: module {module_id!r}: its child islands repeat part(s) "
+                f"{', '.join(repeated)} — the union of a group's child islands is "
+                "a partition, not a bag"
+            )
+        unplaced = [part_id for part_id in parts if part_id not in set(union)]
+        if unplaced:
+            raise IslandError(
+                f"{where}: module {module_id!r}.parts holds part(s) "
+                f"{', '.join(unplaced)} that no child island places — the child "
+                "islands' union is the module's part list, verbatim; a part left "
+                "out would be laid out against the partition with nobody having "
+                "said where"
+            )
+        cores = [island_id for island_id in kids if island_kind[island_id] == "core"]
+        if len(cores) != 1:
+            raise IslandError(
+                f"{where}: module {module_id!r} has {len(cores)} core island(s) "
+                f"({', '.join(cores) or 'none'}); exactly one child island of a "
+                "group is kind 'core' — the core island holds the part the group "
+                "is arranged around"
+            )
+        core_island = cores[0]
+        core_parts = island_parts[core_island]
+        core_part = module_core[module_id]
+        if not core_part:
+            raise IslandError(
+                f"{where}: module {module_id!r} states no core — a group is laid "
+                f"out around one part, and its core island {core_island!r} holds "
+                "it (state core on the module)"
+            )
+        if core_part not in core_parts:
+            raise IslandError(
+                f"{where}: module {module_id!r}.core {core_part!r} is not in its "
+                f"core island {core_island!r} — the core island holds the part its "
+                "group is arranged around, so the two statements must agree"
+            )
+        for island_id in kids:
+            if island_owner[island_id] not in core_parts:
+                raise IslandError(
+                    f"{where}: island {island_id!r} states owner "
+                    f"{island_owner[island_id]!r}, which is not in the core island "
+                    f"{core_island!r} of group {module_id!r} — an island's owner is "
+                    "the core part its connection picture hangs off, and an owner "
+                    "outside the core island names a picture that does not exist"
+                )
+
+
 # ------------------------------------------------------------------ helpers
 #
 # Small local readers rather than imports from `presentationspec`: the islands
 # are parsed by that module's boundary, so importing it back would be a cycle.
 # The refusals keep the same shape and the same word ("path names itself") so a
 # reader of one module's errors can read the other's.
+
+
+def _field(item: Any, name: str, default: Any = "") -> Any:
+    """One field of a module or island, read from a mapping or an object.
+
+    See :func:`validate_archipelago_structure`: the structure check is reused by
+    `core.archipelago`, which may hold decoded documents or dataclasses.
+    """
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
+def _repeats(items: Sequence[str]) -> list[str]:
+    """The values that occur more than once, in first-repeat order."""
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for item in items:
+        if item in seen and item not in repeated:
+            repeated.append(item)
+        seen.add(item)
+    return repeated
+
+
+def _side(value: Any, where: str) -> str:
+    """An island's stated side, or ``""`` for "not stated"."""
+    if value is None or value == "":
+        return ""
+    side = _text(value, where, required=True)
+    if side not in ARCHIPELAGO_SIDES:
+        raise IslandError(
+            f"{where} is {side!r}; one of {', '.join(ARCHIPELAGO_SIDES)}, or omit "
+            "it — an island states the side of its group it is drawn on, and "
+            "omitting it means no preference rather than a default"
+        )
+    return side
+
+
+def _kind(value: Any, where: str) -> str:
+    """An island's stated kind, which the archipelago reading requires."""
+    if value is None or value == "":
+        raise IslandError(
+            f"{where} is required and missing — an archipelago island states "
+            f"group, owner and kind (side is optional), and the kind is one of "
+            f"{', '.join(ARCHIPELAGO_KINDS)}"
+        )
+    kind = _text(value, where, required=True)
+    if kind not in ARCHIPELAGO_KINDS:
+        raise IslandError(
+            f"{where} is {kind!r}; one child island's kind is one of "
+            f"{', '.join(ARCHIPELAGO_KINDS)} — the kind is what the island is "
+            "placed *as*, so an unknown one is a promise nobody keeps"
+        )
+    return kind
+
+
+def _archipelago_fields(
+    body: dict[str, Any], spot: str, where: str
+) -> tuple[str, str, str, str]:
+    """The four archipelago keys of one raw entry: group, owner, kind, side.
+
+    Called only in the archipelago reading. A raw entry that states *none* of the
+    four is the mixed case and is refused as such: the document chose the
+    archipelago reading by stating one elsewhere, so an old-style entry here is
+    an island with no group, owner or kind, and inventing them would be the
+    parser deciding the partition.
+    """
+    if not any(key in body for key in ARCHIPELAGO_KEYS):
+        raise IslandError(
+            f"{spot} states none of {', '.join(ARCHIPELAGO_KEYS)} — {where} is read "
+            "as an archipelago because another entry states one of them, and a "
+            "document does not mix the two readings: state group, owner and kind "
+            "on every island (side is optional), or state none of the four anywhere"
+        )
+    missing = [key for key in ("group", "owner", "kind") if key not in body]
+    if missing:
+        raise IslandError(
+            f"{spot}.{missing[0]} is required and missing — an archipelago island "
+            "states group (its module), owner (the core part its picture hangs off) "
+            "and kind (what it is for), and none of the three has a default that "
+            "would not be the parser deciding the partition"
+        )
+    group = _text(body.get("group"), f"{spot}.group", required=True)
+    owner = _text(body.get("owner"), f"{spot}.owner", required=True)
+    kind = _kind(body.get("kind"), f"{spot}.kind")
+    side = _side(body.get("side"), f"{spot}.side")
+    return group, owner, kind, side
 
 
 def _role(value: Any, where: str) -> str:

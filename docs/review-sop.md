@@ -211,39 +211,77 @@ verdict 至少是 `complete-with-open-items`；别的缺口还在时它仍是 `i
 最后 `summary_template` —— 按模板**原样留槽**填四段（结论先行 / 错误与归因 / 警告提醒 /
 建议动作），把上面的结论写进去，别重述 `report.json` 的全部内容。
 
-**⓹ 收尾死一步：补全 `review-summary.md`，然后当面把结论讲给工程师**
+**⓹ 收尾死一步：补全 `review-summary.md`（537E：结构化读取 → 分诊 → 覆盖补全 → 填总结 → finalize → 顺序交付）**
 
-上面四步做完**不算交付**。交付有两个动作，缺一不可：
+上面四步做完**不算交付**。收尾按下面六步走，**顺序不许换、不许跳步**：
 
-1. **补全 `review-summary.md`**（留档）。`checkup` 在 `--out` 里留了一份骨架：
-   每条 finding 一行，**定位链**（工程 → 板 → 页 → 器件/网）已经按机器账预填好，
-   「分析」「建议」两栏空着等你。收尾时：
+1. **结构化读取**：用 DSH 的 `boardwise_review_read`（命令行形态
+   `boardwise review-read --out <目录> --section <节>`）读**完整的 JSON 文件**；
+   **不许解析 `runBoardwise` 截断后的 stdout**——半截 JSON「解析成功」比失败更危险
+   （缺的节读成空、空的读成通过）。它只是投影：`verdict` 就取 `report.conclusion`，
+   不重新判板，也不拿 `summary.conclusion` 升格成结论。
+2. **分诊**：无逐条文本的槽位（主机 ERC 只有 host-wide 合计，§6 坑 27）只能标
+   `needs-manual`，它**仍然算 pending**；**不许**用 有益/有害/无害 三词把无细节项关掉
+   （537B）。批量 `boardwise triage-batch --out <目录> --input <batch.json>`、单条
+   `boardwise triage`，判决都要带理由；`needs-manual` 在
+   `completion.warningsPendingTriage` 与 `warningsNeedsManual` 里同时计数，不许把这两个
+   数读成 0，也不许拿「pending=0」当板子干净。
+3. **environment / evidence 覆盖补全**：`environment`（运行/期望 connector 版本与限制）
+   和 `evidence.channels` 的 `liveSchematic` / `archivePcb` / `livePcb` /
+   `schematicImage` / `pcbImage` / `datasheets` **live 与 archive 分开记**；状态只用
+   `ok / failed / missing / unavailable / not-applicable`，**未采集与失败不合并**、
+   **无 PCB 文档与未读 PCB 不合并**；`partial` **只描述证据/交付覆盖**，不等于板子通过
+   也不等于不通过（537C）。缺 live 通道就补采集（`boardwise review-evidence`）或如实记
+   `missing`，**不许拿归档冒充 live**。
+4. **人工填 `review-summary.md`**（留档）。`checkup` 在 `--out` 里留了一份骨架：每条
+   finding 一行，**定位链**（工程 → 板 → 页 → 器件/网）已按机器账预填，「分析」「建议」
+   两栏等你。收尾时：
    - **逐行填「分析」**：这条为什么是问题、根因在哪（设计意图不符 / 选型 / 布局 / 网表与实物不一致）。
    - **逐行填「建议」**：怎么改，或怎么确认；带不动的写「需要工程师确认 X」。
-   - **第 1 节填连接状态**（§3.0 那一句，原样抄过去）。
-   - **第 3 节填 `needs_datasheet` 的待确认项**（清单非空时这一节不许空着写「通过」）。
-   - **第 4 节填下一步**，按优先级编号，要工程师照着做得动。
-2. **在对话里把结论讲出来**（2026-10-15 起，岳的口径：审查结果由 AI 发给工程师，
-   不是让工程师打开文件夹自己看）。工程师不翻文件就能拿到全部结论：
-   - verdict 一句话（能不能投板/为什么不能）；
-   - 每条 ERROR 逐条点名（位号 + 什么病 + 怎么改）；
-   - WARN 给出你的分诊建议（哪条有益/有害/无害，理由一句）；
-   - 缺手册几颗、都是谁、要工程师去拿什么；
-   - 报告目录路径**一句话带过**（留档索引），不许把"去看 report.md"当交付。
+   - **第 1 节填连接状态**（§3.0 那一句原样抄）、**第 3 节填 `needs_datasheet` 的待确认项**
+     （清单非空时这一节不许空着写「通过」）、**第 4 节填下一步**（按优先级编号，工程师照着做得动）。
+   - **定位链不许另编**：机器账与骨架同一次推导（`report.json` 的 `location_chains` 节），
+     改字不改位置；链上「未标注」的那一环是**要回答的问题**，不是绕过去的借口。
+   - 这个文件**每次 checkup 覆盖**，所以填完的内容必须同时落在对话里（第 6 步）。
+5. **`boardwise review finalize --out <目录>`**：在内存里重算 completion / summary /
+   覆盖 / 分诊，核验报告引用的交付件；**输入与内容校验（schema、分诊、覆盖、交付件、
+   禁用措辞）全在写盘之前**——这一类的 1/2/3 是本目录一个字没写就退出。内存校验全过
+   才调用写口：同步 `review-summary.md` 的 environment/evidence 两个机器段（人工内容
+   一字不改）、重写 `report.json` / `report.md` / `board-report.md`。**写口本身出错、
+   写后复核或哈希失败可能留下部分已同步的产物**——此时退出 2，**不签发新收据、不得
+   交付**，并如实说明目录可能只同步了一部分（`tests/test_537d_finalize_cli.py` 的
+   `failures and exceptions` 就是这条契约）。收据 `finalize.json`
+   （`boardwise.review-finalize/1`，`scope: delivery-content`，
+   `boardConclusionAuthority: report.conclusion`）用 sibling `.tmp` + 原子替换**最后写**；
+   旧收据在内容变动后即失效，不能当授权。
+   - **DSH 路径**：只有 `boardwise_review_finalize` **成功之后**，当前 Session 的 receipt
+     才会写进 projection；`present` **必须等它成功**，**不能与 finalize 并行**（并行时
+     Session 里还没有记录，present 直接拒）。**手写 `finalize.json` 没有 Session 特权**
+     ——闸只认当前 Session 里真实 finalize 工具写入的记录，不读文件当授权。
+   - **不要声称当前运行中的 DSH 已重启或已加载新闸**：源码/独立进程验收 ≠ 运行进程生效
+     （537D3），没有重启证据就如实说「闸在源码里、本会话未验证」。
+6. **顺序交付**：先文件、后当面讲。`present` 是**文件交付动作**，排在 finalize 成功之后
+   （见第 5 步），**不替代对话里的结论**。
 
-**定位链已经在那儿了，不许自己另编一遍**——机器账那份和骨架那份是同一次推导（`report.json`
-的 `location_chains` 节），你改字不改位置；链上写着「未标注」的那一环是你**要回答的问题**
-（这一档没读到页？该 finding 不指名器件？），不是让你绕过去的借口。
+**权威边界（537D 写死）**：`finalize.ok` / 退出 0 **只表示 delivery-content 校验通过，
+不是板级通过**；板级结论的唯一权威是 `report.conclusion`。`partial` / `needs-manual` /
+`open-items` **在披露一致时可以交付**——**不许**为了过 finalize 去编造证据、补一句「通过」，
+或强行关闭未决项。**模型记忆不是数据手册证据**：手上没有 PDF / 已核验 facts 时禁用
+「已与手册核对」类措辞，`web_search` 失败或没核到就写「资料未取得 / 待确认」，不得把
+「手册已核」写上去。**archive 不等于 live**，归档读数不能当在线证据。环境限制与证据缺口
+要保留披露，不许在总结里被抹平。
 
-**边界（两头都堵）**：这个文件**每次 checkup 覆盖**，所以填完的内容必须同时落在对话里——
-只甩文件路径让工程师自己翻，他什么结论都没拿到（2026-10-15 岳的反馈）；
-只写在聊天窗口里不留档，窗口一关工程师同样什么都没拿到（issue #69）。
-**文件留档 + 当面讲全，缺一个都不算交付。**
+**交付的两个动作，缺一不可**：文件留档（上面的目录）+ **当面把结论讲给工程师**
+（2026-10-15 岳的口径：审查结果由 AI 发给工程师，不是让工程师打开文件夹自己看）。
+对话里给全：verdict 一句话（能不能投板/为什么不能）→ 每条 ERROR 点名（位号 + 什么病 +
+怎么改）→ WARN 分诊建议（有益/有害/无害/needs-manual，理由一句）→ 缺手册几颗、都是谁、
+要工程师去拿什么 → 报告目录路径**一句话带过**。只甩文件路径让工程师自己翻 = 什么都没
+拿到（2026-10-15 岳的反馈）；只写在聊天窗口里不留档 = 窗口一关同样什么都没了
+（issue #69）。**文件留档 + 当面讲全，缺一个都不算交付。**
 
-**不要重算工具已经算过的东西**：DRC 计数与 PCB 逐条在 `drc` 段、模块划分在 `modules` 段、
-规则 findings 在 `findings` 段（`summary` 里的 `ref` 指回它们）。模型只补四件事：
-**填警告分诊、查不熟的器件、看画布、写总结**。总结写完按上面第 2 条**当面讲给工程师**，
-`report.md`（含图）与整个 `--out` 目录作留档索引一句话带过。
+**不要重算工具已经算过的东西**：DRC 计数与 PCB 逐条在 `drc` 段、模块划分在
+`modules` 段、规则 findings 在 `findings` 段；模型只补四件事——**填警告分诊、查不熟
+的器件、看画布、写总结**。
 
 ### 3.1b 架构走查（044 起的强制环节，不是可选阅读）
 

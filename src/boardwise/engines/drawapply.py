@@ -64,6 +64,7 @@ from ..core.changeplan import (
     PlanTarget,
     resolve_on_page,
 )
+from ..core.archipelago import ArchipelagoError, validate_archipelago_plan
 from ..core.circuitspec import CircuitSpec
 from ..core.geometry import transform_point
 from ..core import textmetrics
@@ -116,6 +117,7 @@ __all__ = [
     "postcondition_problems",
     "profile_table",
     "source_digest",
+    "validate_layout_partition",
     "value_problems",
 ]
 
@@ -871,6 +873,28 @@ def net_name_problems(layout: LayoutPlan) -> list[str]:
     return problems
 
 
+def validate_layout_partition(
+    layout: LayoutPlan, presentation: PresentationSpec
+) -> None:
+    """Refuse a layout whose stamped partition is not the declared one (536 §2.3).
+
+    The reading itself is `core.archipelago.validate_archipelago_plan` — one
+    function, asked at every place a `LayoutPlan` becomes executable, so the
+    compiler's plan, a page document's plan and an ordinary module plan cannot
+    disagree about what the island document says. A legacy presentation states
+    none of the four island keys and passes untouched: nothing here runs for it.
+
+    Only the *translation* is this layer's job. An `ArchipelagoError` is a
+    refusal to draw, so it becomes the `DrawPlanError` every caller of this
+    module already turns into a named refusal, with the cause kept for anyone
+    reading a traceback.
+    """
+    try:
+        validate_archipelago_plan(layout, presentation)
+    except ArchipelagoError as exc:
+        raise DrawPlanError("archipelago plan partition: " + str(exc)) from exc
+
+
 def module_plan(
     layout: LayoutPlan,
     circuit: CircuitSpec,
@@ -940,6 +964,12 @@ def module_plan(
             "the layout carries no source digests — a plan that cannot say which specs "
             "it was compiled from cannot be judged stale (053 sec.2)"
         )
+    # 536 §2.3: an archipelago plan's stamped partition is the declared one, and
+    # this is checked here — after the type/parts/source-digest checks and before
+    # any net name, library device or `ChangePlan` is built from the layout — so
+    # the refusal names the partition rather than a downstream symptom of it.
+    # Legacy passes inside the core check and nothing changes for it.
+    validate_layout_partition(layout, presentation)
     # 143 F5: the drawing's own names, read before anything is built from them.
     # A segment's `net` is not read by either judge the compiler runs
     # (`readability.derive_netlist` states netlist names from labels/symbols by

@@ -59,9 +59,9 @@ from ..core.partkind import (
 from ..core.pintable import port_pin_of
 from ..core.power_domains import infer_net_domains
 from ..core.values import parse_capacitance_farads, parse_resistance_ohms
-from .archclosure import _power_class, _resistor_like
+from .archclosure import _power_class
 from .base import Finding, FindingTarget
-from .facts import FactsRule
+from .facts import FactsRule, ResistanceReading
 
 LEVEL = "L1-connectivity"
 
@@ -107,6 +107,19 @@ def _port_pin(name: str | None) -> str:
 
 def _is_opamp_input_name(name: str | None) -> bool:
     return bool(_OPAMP_INPUT.match((name or "").replace(" ", "").upper()))
+
+
+def _leg_text(designator: str, reading: ResistanceReading) -> str:
+    """``R10（1k）`` — one resistor as these sentences write it (537F).
+
+    The Value field verbatim when the field stated the resistance, so every
+    message that already quoted ``comp.value`` keeps its exact text. A leg whose
+    resistance came from its MPN carries that source in the same parentheses:
+    the number is then checkable («which MPN, which notation»), instead of
+    arriving as if it had been drawn on the page.
+    """
+    note = f"；{reading.provenance}" if reading.provenance else ""
+    return f"{designator}（{reading.display}{note}）"
 
 
 class _Reach:
@@ -347,21 +360,26 @@ class SamplingBias(FactsRule):
 
         「一只到 power-class 轨 + 一只到地」的配对（``arch-sense-bias-closure``
         定价的那种形态）。判据共用 :func:`_power_class`，所以"什么是 power-class
-        轨"在这条规则和那条规则里是同一个定义。
+        轨"在这条规则和那条规则里是同一个定义；"什么算电阻、几欧"也共用
+        :meth:`FactsRule.resistance_reading`（537F），两边不能一边认一边不认。
         """
         to_rail = ""
         to_ground = ""
         for comp, far in self._foreign_parts(model, net, shunt=""):
-            if not _resistor_like(self, comp):
+            # 537F: the shared reading, not a local parse of `comp.value` — a leg
+            # whose resistance is stated by its MPN counts here exactly as it
+            # counts in `arch-sense-bias-closure`'s arithmetic, and a leg nobody
+            # can read does not count in either.
+            reading = self.resistance_reading(comp)
+            if reading is None:
                 continue
+            shown = _leg_text(comp.designator, reading)
             if far and is_ground_net(far):
-                to_ground = to_ground or f"{comp.designator}（{comp.value}）→ {far}"
+                to_ground = to_ground or f"{shown}→ {far}"
             else:
                 because = _power_class(guesses, far)
                 if because:
-                    to_rail = to_rail or (
-                        f"{comp.designator}（{comp.value}）→ {far}（{because}）"
-                    )
+                    to_rail = to_rail or f"{shown}→ {far}（{because}）"
         if to_rail and to_ground:
             return f"分压中点：{to_rail} + {to_ground}"
         return ""
@@ -374,22 +392,21 @@ class SamplingBias(FactsRule):
         远端只落到地/别的信号网的电阻是负载/串阻，不是偏置，不算。
         """
         for comp, far in self._foreign_parts(model, sense, shunt=shunt):
-            if not _resistor_like(self, comp):
+            reading = self.resistance_reading(comp)
+            if reading is None:
                 continue
+            shown = _leg_text(comp.designator, reading)
             if not far or is_ground_net(far):
                 continue
             because = _power_class(guesses, far)
             if because:
                 return (
-                    f"{comp.designator}（{comp.value}）从 {sense} 接到 {far}"
+                    f"{shown}从 {sense} 接到 {far}"
                     f"（power-class 轨，依据：{because}）"
                 )
             mid = self._divider_mid(model, guesses, far)
             if mid:
-                return (
-                    f"{comp.designator}（{comp.value}）从 {sense} 接到分压中点 {far}"
-                    f"（{mid}）"
-                )
+                return f"{shown}从 {sense} 接到分压中点 {far}（{mid}）"
         return ""
 
     def _filter(self, model: DesignModel, sense: str, *, shunt: str) -> str:

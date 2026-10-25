@@ -36,6 +36,7 @@ from boardwise import cli
 from boardwise.core import designintent as di
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.core.parts import PartEntry, PartLibrary
+from boardwise.core.power_domains import infer_net_domains
 from boardwise.engines.review import BUILTIN_RULES, INTENT_RULES, run_review
 from boardwise.parsers.schematic import build_project_model
 from boardwise.rules.archclosure import (
@@ -44,8 +45,10 @@ from boardwise.rules.archclosure import (
     MARGIN_GRADE,
     WAIVER_GRADE,
     ArchSenseBiasClosure,
+    _resistor_legs,
 )
 from boardwise.rules.i18n import RULE_NAMES_ZH
+from boardwise.rules.sensebias import SamplingBias
 from boardwise.rules.unproven import NET_MEMBERSHIP_RULES, UNPROVEN_BY_NAME
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -875,3 +878,185 @@ def test_a_draft_contracts_warn_needs_force_and_is_named_when_released(
     )
     assert "sch.doc.save" in [action for action, _params in editor.writes]
     assert any("--force" in note and "forcedWarns" in note for note in report["notes"])
+
+
+# ---------------------------------------------------------------------------
+# 537F: an empty Value is read from the part's own MPN — one reading, both sides
+# ---------------------------------------------------------------------------
+
+#: 厚声's ordering rule states 1 kΩ as ``1001`` (three significant figures, then
+#: a digit exponent) in front of the taping tail. ``core.values``'s resistor
+#: decoder reads it **once**, anchored on the tolerance letter — the anchor
+#: 071 §1 C spells :data:`boardwise.core.values.ANCHOR_E96_LETTER`. The measured
+#: project's divider legs carry this MPN and **no Value at all**, so the MPN is
+#: the only place their 1 kΩ can come from.
+RECOVERED_MPN = "0603WAF1001T5E"
+RECOVERED_TEXT = "1001 (numeric-exponent field)"
+RECOVERED_ANCHOR = "值码带相邻容差字母"
+
+
+def _mpn_only_divider(**kwargs) -> DesignModel:
+    """F1's topology with R10/R16's Value **empty** and their MPN stating 1 kΩ.
+
+    537F's shape: a divider whose legs carry the MPN a real BOM writes and no
+    Value, so every reading that starts at ``comp.value`` sees nothing — the
+    sampling rule read the chain as 「没有偏置」 and the closure rule read the
+    topology as one it could not price.
+    """
+    model = _bias_board(**kwargs)
+    for ref in ("R10", "R16"):
+        comp = model.components[ref]
+        comp.value = ""
+        comp.mpn = RECOVERED_MPN
+    return model
+
+
+def _arch_rule(intent=None, shelf: PartLibrary = SHELF) -> ArchSenseBiasClosure:
+    return ArchSenseBiasClosure(library=shelf, intent=intent)
+
+
+def _sense_pair(model: DesignModel, shelf: PartLibrary = SHELF) -> tuple[str, str]:
+    """``(divider mid-sentence, bias sentence)`` — the two readings 537F widens."""
+    rule = SamplingBias(library=shelf)
+    guesses = infer_net_domains(model, rule.library)
+    return (
+        rule._divider_mid(model, guesses, "VCC/2"),
+        rule._bias(model, guesses, "U+", shunt="R4"),
+    )
+
+
+def test_the_shared_reading_recovers_one_mpn_candidate_and_says_where_from():
+    """``(ohms, display, provenance)`` — the MPN sentence only for a recovery."""
+    model = _mpn_only_divider()
+    reading = _arch_rule().resistance_reading(model.components["R10"])
+    assert reading is not None
+    assert reading.ohms == 1000.0
+    assert reading.display == "1000Ω", "the text a row writes for a recovered leg"
+    for expected in (RECOVERED_MPN, RECOVERED_TEXT, RECOVERED_ANCHOR):
+        assert expected in reading.provenance
+
+
+def test_a_value_read_from_the_value_field_keeps_its_text_and_carries_nothing():
+    """The direct reading is the one that already existed: same text, no source."""
+    model = _bias_board()
+    reading = _arch_rule().resistance_reading(model.components["R10"])
+    assert (reading.ohms, reading.display, reading.provenance) == (1000.0, "1k", "")
+
+
+def test_the_sampling_bias_rule_sees_the_recovered_divider_and_does_not_say_missing():
+    model = _mpn_only_divider()
+    divider, bias = _sense_pair(model)
+    assert divider and "分压中点" in divider
+    assert "R10（1000Ω" in divider and "R16（1000Ω" in divider
+    assert bias and "接到分压中点" in bias
+    for sentence in (divider, bias):
+        for expected in (RECOVERED_MPN, RECOVERED_TEXT, RECOVERED_ANCHOR):
+            assert expected in sentence, sentence
+    findings = SamplingBias(library=SHELF).check(model)
+    assert [finding.severity for finding in findings] == ["INFO"], (
+        "a bias exists (and no filter) — the INFO row, never the WARN that says "
+        "there is no bias at all"
+    )
+    assert "量不到偏置电压" not in findings[0].message
+    assert "偏置" in findings[0].message
+    assert any(RECOVERED_MPN in item for item in findings[0].evidence)
+
+
+def test_the_closure_prices_the_recovered_divider_with_f1s_arithmetic():
+    model = _mpn_only_divider()
+    (outcome, severity, target) = _only(model, _intent(_chain()))
+    assert severity == "ERROR" and outcome.state == "VIOLATION"
+    assert "R_th = 10500Ω" in outcome.message
+    assert "R_th = (R_up‖R_dn) + Rs = 500Ω + 10000Ω = 10500Ω" in outcome.message
+    assert "1.65V × 0.1Ω/(10500Ω + 0.1Ω) ≈ 15.7µV" in outcome.message
+    evidence = "\n".join(outcome.evidence)
+    assert "偏置源：" in evidence
+    assert "分压 R10（1kΩ）@'VCC' / R16（1kΩ）@GND" in evidence
+    for expected in (RECOVERED_MPN, RECOVERED_TEXT, RECOVERED_ANCHOR):
+        assert expected in evidence, expected
+    assert target is not None and target.net_refs == ["U+"]
+
+
+def test_a_non_empty_value_that_cannot_be_read_is_not_recovered_from_the_mpn():
+    """Only an **empty** Value may fall back to the MPN; leftovers are refusals."""
+    model = _mpn_only_divider()
+    model.components["R10"].value = "??"
+    assert _arch_rule().resistance_reading(model.components["R10"]) is None
+    assert _sense_pair(model) == ("", "")
+    (outcome, _severity, _target) = _only(model, _intent(_chain()))
+    assert outcome.state == "UNKNOWN"
+    assert "拓扑对不上" in outcome.message
+
+
+def test_two_mpn_candidates_are_never_recovered(monkeypatch):
+    """Two legitimate readings of one MPN is a question, not an answer (071 §1)."""
+    import boardwise.rules.facts as facts_module
+
+    monkeypatch.setattr(
+        facts_module,
+        "mpn_resistance_candidates",
+        lambda mpn: [
+            (1000.0, RECOVERED_TEXT, RECOVERED_ANCHOR),
+            (2200.0, "2201 (numeric-exponent field)", RECOVERED_ANCHOR),
+        ],
+    )
+    model = _mpn_only_divider()
+    assert _arch_rule().resistance_reading(model.components["R10"]) is None
+    assert _sense_pair(model) == ("", "")
+
+
+def test_a_shelf_that_declares_a_capacitor_blocks_recovery():
+    """The shelf's own category wins over a number a string happens to contain."""
+    shelf = PartLibrary(parts=[
+        _ldo_entry(), _opamp_entry(), _opamp_entry("OPAMPX"),
+        PartEntry(key="capacitor.mlcc", mpn=RECOVERED_MPN, lcsc="C900001",
+                  category="capacitor"),
+    ])
+    model = _mpn_only_divider()
+    assert _arch_rule(shelf=shelf).resistance_reading(model.components["R10"]) is None
+    assert _sense_pair(model, shelf) == ("", "")
+    (outcome, _severity, _target) = _only(model, _intent(_chain()), shelf)
+    assert outcome.state == "UNKNOWN"
+    assert "拓扑对不上" in outcome.message
+
+
+def test_a_non_empty_zero_ohm_value_stays_a_resistor_and_never_enters_arithmetic():
+    """537F: the shared reading refuses an **unreadable** Value, never a zero one.
+
+    ``0Ω`` is a statement the board makes (a link, a jumper), so the reading hands
+    back the number with the field's own text and no provenance — 「is it
+    positive?」 is the arithmetic's question and must not be answered in the
+    existence read, or a board that draws a 0Ω bias leg falls back to 「没有偏置」
+    exactly as it did before 537F. Both consumers therefore keep the answer they
+    had: the sampling-bias rule still sees the bias, the closure rule still
+    refuses to divide by the leg (its ``ohms <= 0`` guard) instead of pricing it.
+    """
+    model = _bias_board(r_up="0Ω")
+    reading = _arch_rule().resistance_reading(model.components["R10"])
+    assert reading is not None, "a non-empty Value that parses is a statement"
+    assert (reading.ohms, reading.display, reading.provenance) == (0.0, "0Ω", "")
+
+    rule = _arch_rule()
+    divider, bias = _sense_pair(model)
+    assert "R10（0Ω" in divider and "分压中点" in divider, (
+        "the sampling rule's existence path still counts the 0Ω leg"
+    )
+    assert bias and "接到分压中点" in bias
+    findings = SamplingBias(library=SHELF).check(model)
+    assert [finding.severity for finding in findings] == ["INFO"], (
+        "a bias exists — never the WARN that says there is no bias at all"
+    )
+    assert "量不到偏置电压" not in findings[0].message
+
+    guesses = infer_net_domains(model, rule.library)
+    legs = _resistor_legs(model, guesses, rule, "VCC/2")
+    assert "R10" not in [leg.designator for leg in legs]
+    assert legs and all(leg.ohms > 0 for leg in legs), (
+        "a non-positive leg never reaches the arithmetic"
+    )
+    (outcome, _severity, _target) = _only(model, _intent(_chain()))
+    assert outcome.state == "UNKNOWN", (
+        "without a positive R_up the topology cannot be priced — refusing is the "
+        "arithmetic layer's answer to a 0Ω leg, not a divide by it"
+    )
+    assert "R_th" not in outcome.message

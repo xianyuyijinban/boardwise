@@ -1,33 +1,59 @@
 /**
  * boardwise tools for the DeepSeek Harness (task 045).
  *
- * Four thin tools over the local boardwise CLI: checkup / arch / doctor run the
+ * Eight thin tools over the local boardwise CLI: checkup / arch / doctor run the
  * review harness itself, bridge is the escape hatch into the connector's action
- * catalogue. No review logic lives here — arguments are passed through, stdout
- * and the exit code come back, and the report files the CLI wrote are named for
- * the model (task 045 §1: "any idea of recomputing this in TS is refused").
+ * catalogue, review_read projects one report section to canonical JSON,
+ * review_evidence collects live schematic/PCB evidence, triage_batch applies
+ * warning verdicts atomically, and review_finalize (537D3a) validates one
+ * delivery and records its receipt in the current Session. No review logic lives
+ * here — arguments are passed through, stdout / exit codes / the CLI's `--json`
+ * files come back, and the report files the CLI wrote are named for the model
+ * (task 045 §1: "any idea of recomputing this in TS is refused").
  */
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { OUT_DIR_PREFIX, STDERR_HEAD_BYTES, STDERR_TAIL_BYTES, STDOUT_HEAD_BYTES, STDOUT_TAIL_BYTES, runBoardwise, } from './cli.js';
+import { OUT_DIR_PREFIX } from './cli.js';
+import { registerReviewDelivery } from './review-delivery.js';
+import { registerReviewFinalize } from './review-finalize.js';
+import { STRUCTURED_OUTPUT, TEXT_OUTPUT, describeValue, executeCli, requireOut, runStructuredCli, text, } from './transport.js';
 /** Cordis plugin name; the row id in `cordis.patch.yml` is `tool-boardwise`. */
 export const name = 'boardwise-dsh';
-/** This plugin only contributes tools. */
-export const inject = ['tools'];
+/**
+ * This plugin contributes tools, one host-only Session projection (537D3a) and
+ * the `present` delivery gate (537D3b). All four services are required:
+ * `sessionProjections` gives a finalize receipt somewhere to be recorded and
+ * the gate somewhere to read it; `fs` and `workingDirectory` let that gate
+ * resolve and re-hash a delivery through the harness rather than `node:fs`.
+ * The plugin must not load without them rather than pretend.
+ */
+export const inject = ['tools', 'sessionProjections', 'fs', 'workingDirectory'];
 const CHECKUP_TIMEOUT_MS = 600_000;
 const ARCH_TIMEOUT_MS = 120_000;
 const DOCTOR_TIMEOUT_MS = 60_000;
 const BRIDGE_TIMEOUT_MS = 120_000;
-/** How much of a killed run's stdout rides along in the error. */
-const FAILURE_TAIL_CHARS = 2000;
-/** The output contract every tool here shares: one text block. */
-const TEXT_OUTPUT = {
-    schema: { type: 'string' },
-    render: (_args, value) => [{ type: 'text', text: value }],
-};
+const REVIEW_READ_TIMEOUT_MS = 120_000;
+const REVIEW_EVIDENCE_TIMEOUT_MS = 600_000;
+const TRIAGE_BATCH_TIMEOUT_MS = 120_000;
+/** 537D1a: the transport envelope `review-read --json` writes, in full, to a file. */
+const REVIEW_READ_SCHEMA = 'boardwise.review-read/1';
+/** The six sections the Python projection serves; the enum is the transport list. */
+const REVIEW_READ_SECTIONS = [
+    'verdict',
+    'findings',
+    'crossView',
+    'coverage',
+    'artifacts',
+    'netlist',
+];
+/** 537D1b1: the strict input object Python validates as a whole, and its result. */
+const TRIAGE_BATCH_SCHEMA = 'boardwise.triage-batch/1';
+const TRIAGE_BATCH_RESULT_SCHEMA = 'boardwise.triage-batch-result/1';
+/** mkdtemp prefix for the plugin's own transport files (`--json` targets). */
+const TRANSPORT_DIR_PREFIX = 'boardwise-dsh-';
 export function apply(ctx) {
     ctx.tools.register(defineTool({
         name: 'boardwise_checkup',
@@ -174,9 +200,10 @@ export function apply(ctx) {
             'and diagnosis that no higher-level tool covers (e.g. sys.probe, sys.identity, doc.list, sch.readback, ' +
             'export.render). `action` is the catalogue name and `params` a JSON object literal; project= / instance= route ' +
             'the call to one editor window when several are connected (without them the daemon answers WINDOW_UNSPECIFIED ' +
-            'rather than guessing). Use read-only actions: write actions change the design the user has open, and those ' +
-            'belong in the boardwise CLI under its own identity discipline, not behind a model tool. ' +
-            'Daemon tokens are never printed.',
+            'rather than guessing). Every call is made with `--read-only`, so the CLI refuses — before contacting the ' +
+            'editor — any action whose catalogue risk is not `read` (doc.focus and every other write, create or dangerous ' +
+            'tier, and unknown names). Designs are changed with the boardwise CLI under its own identity discipline, never ' +
+            'through this tool. Daemon tokens are never printed.',
         parameters: {
             action: {
                 type: 'string',
@@ -204,7 +231,11 @@ export function apply(ctx) {
             if (action === '')
                 throw new Error(`${tool}: action is required (a name from the connector catalogue)`);
             const params = requireJsonObject(tool, text(args.params));
-            const argv = ['bridge', 'call', '--action', action, '--params', params];
+            // `--read-only` is the 537A hard gate: the CLI refuses a non-read action
+            // (write / create / dangerous / unknown) before it reaches for the daemon
+            // or the editor. It is pinned in argv on every call, not left to the
+            // prompt: the tool's own promise must be enforced by the command it runs.
+            const argv = ['bridge', 'call', '--read-only', '--action', action, '--params', params];
             if (text(args.project) !== '')
                 argv.push('--project', text(args.project));
             if (text(args.instance) !== '')
@@ -213,76 +244,225 @@ export function apply(ctx) {
         },
         timeoutMs: BRIDGE_TIMEOUT_MS,
     }));
+    ctx.tools.register(defineTool({
+        name: 'boardwise_review_read',
+        description: 'Read one section of an existing boardwise `checkup` report as structured JSON — the one supported ' +
+            'answer to "what does the report say", instead of hand-written JSON parsing. `section` is one of ' +
+            'verdict (report.conclusion, the only board-level answer), findings (findings + the triage ledger), ' +
+            'crossView, coverage, artifacts (every cited file with exists/bytes/sha256 status) or netlist ' +
+            '(the live capture\'s own netlist, only when its identity and liveSchematic are proven). ' +
+            'The CLI writes the whole envelope `{schema: "boardwise.review-read/1", section, report: {path, schema}, ' +
+            'payload}` to a private temp file via `--json`, and this tool returns that parsed object and renders it as ' +
+            'complete pretty JSON. There is no `ok` field: a successful read is not a passed board, and the verdict ' +
+            'stays `payload.conclusion`. Exit 0 = projected; 2 = unusable input/output path; 3 = no report.json. ' +
+            'A non-zero exit, a missing/unreadable file or a wrong schema/section is an error — never a partial or ' +
+            'stdout-derived answer (dsh truncates stdout at 32 KiB).',
+        parameters: {
+            out: {
+                type: 'string',
+                required: true,
+                description: 'The `checkup --out` directory holding report.json. Read-only; nothing is written there.',
+            },
+            section: {
+                type: 'string',
+                required: true,
+                enum: REVIEW_READ_SECTIONS,
+                description: 'Which question to answer: verdict / findings / crossView / coverage / artifacts / netlist.',
+            },
+        },
+        output: STRUCTURED_OUTPUT,
+        execute: async (args, exec) => {
+            const tool = 'boardwise_review_read';
+            const out = requireOut(tool, text(args.out));
+            const section = text(args.section);
+            const target = join(await transportDir(tool), 'review-read.json');
+            const argv = ['review-read', '--out', out, '--section', section, '--json', target];
+            const envelope = await runStructuredCli(tool, argv, REVIEW_READ_TIMEOUT_MS, exec, target);
+            requireField(tool, envelope, 'schema', REVIEW_READ_SCHEMA);
+            requireField(tool, envelope, 'section', section);
+            requireObjectField(tool, envelope, 'report');
+            requirePresentField(tool, envelope, 'payload');
+            return envelope;
+        },
+        timeoutMs: REVIEW_READ_TIMEOUT_MS,
+    }));
+    ctx.tools.register(defineTool({
+        name: 'boardwise_review_evidence',
+        description: 'Collect the live schematic/PCB evidence for an existing boardwise `checkup` report through the local ' +
+            'bridge, merge it into that report\'s evidence ledger, and return the CLI\'s formatted result. Read-only: ' +
+            'it opens documents, proves focus, reads back/netlists/geometries/renders, and restores the original focus; ' +
+            'it never writes the design. `--out` is the existing `checkup --out` directory (report.json is required), ' +
+            'project=/instance= choose the editor window, and page=/pcb= may be repeated to collect an explicit subset ' +
+            '(an explicit subset is disclosed as missing coverage, never ok). Files written: report.json, report.md, ' +
+            'board-report.md and live-evidence.json. Exit codes describe this collection, not the board: 0 = collector ok, ' +
+            'identity verified, focus restored; 1 = some direct evidence failed/missing, an explicit subset, identity ' +
+            'unverified or focus not restored; 2 = unusable input/merge; 3 = nothing may be stated (no report.json, no ' +
+            'daemon, doc.list failed). The board conclusion still comes from report.json via boardwise_review_read.',
+        parameters: {
+            out: {
+                type: 'string',
+                required: true,
+                description: 'The existing `checkup --out` directory holding report.json (the capture is merged into it).',
+            },
+            project: {
+                type: 'string',
+                description: 'Which editor window to read, by project name or uuid.',
+            },
+            instance: {
+                type: 'string',
+                description: 'The same choice spelled as the window key `bridge status` prints.',
+            },
+            page: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Collect only this schematic page (repeat for several). Default: every document doc.list reports.',
+            },
+            pcb: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Collect only this PCB document (repeat for several). Default: all.',
+            },
+        },
+        output: TEXT_OUTPUT,
+        execute: async (args, exec) => {
+            const tool = 'boardwise_review_evidence';
+            const out = requireOut(tool, text(args.out));
+            const argv = ['review-evidence', '--out', out];
+            if (text(args.project) !== '')
+                argv.push('--project', text(args.project));
+            if (text(args.instance) !== '')
+                argv.push('--instance', text(args.instance));
+            for (const page of stringList(args.page))
+                argv.push('--page', page);
+            for (const pcb of stringList(args.pcb))
+                argv.push('--pcb', pcb);
+            return await executeCli(tool, argv, REVIEW_EVIDENCE_TIMEOUT_MS, exec, [
+                { label: 'report.json', path: join(out, 'report.json') },
+                { label: 'report.md', path: join(out, 'report.md') },
+                { label: 'board-report.md', path: join(out, 'board-report.md') },
+                { label: 'live-evidence.json', path: join(out, 'live-evidence.json') },
+            ]);
+        },
+        timeoutMs: REVIEW_EVIDENCE_TIMEOUT_MS,
+    }));
+    ctx.tools.register(defineTool({
+        name: 'boardwise_triage_batch',
+        description: 'Apply a whole batch of warning verdicts to an existing `checkup` report in one atomic step. Each entry is ' +
+            'exactly {key, verdict, reason}; the plugin writes the versioned batch ' +
+            '`{schema: "boardwise.triage-batch/1", entries}` to its own temp file and passes it to ' +
+            '`boardwise triage-batch --input ... --json ...`. Python validates the **whole** batch before the first ' +
+            'writer: an unknown key, an empty reason, a word outside the vocabulary, a three-word verdict on a slot with ' +
+            'no per-item text, or the same key twice refuses everything with exit 2 and leaves every file byte-identical. ' +
+            'The plugin makes none of those judgements itself — needs-manual, admissibility and pending counts are ' +
+            'Python\'s, and verdict is deliberately not an enum here. On exit 0 the parsed ' +
+            '`boardwise.triage-batch-result/1` object is returned and rendered as complete pretty JSON; exit 0 means the ' +
+            'batch was applied, not that the board passed (the report\'s own gate is quoted, never re-decided). ' +
+            'Exit 2 = unusable input or output path; 3 = no report.json to triage. An invalid batch or preflight ' +
+            'failure writes nothing; a later JSON-output I/O failure can leave the report/sidecar already written and ' +
+            'follows the CLI\'s own disclosure.',
+        parameters: {
+            out: {
+                type: 'string',
+                required: true,
+                description: 'The `checkup --out` directory holding report.json (the verdicts are written into that report).',
+            },
+            entries: {
+                type: 'array',
+                required: true,
+                items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                        key: { type: 'string', required: true, description: 'The warning slot key from the report.' },
+                        verdict: {
+                            type: 'string',
+                            required: true,
+                            description: 'The judgement word, exactly as the Python side spells it (including needs-manual). ' +
+                                'Not an enum here: admissibility is decided by the CLI.',
+                        },
+                        reason: {
+                            type: 'string',
+                            required: true,
+                            description: 'Why that verdict. Written verbatim to the batch; Python trims and validates it.',
+                        },
+                    },
+                },
+                description: 'The batch rows. Empty is not refused here — the CLI decides and exits 2.',
+            },
+        },
+        output: STRUCTURED_OUTPUT,
+        execute: async (args, exec) => {
+            const tool = 'boardwise_triage_batch';
+            const out = requireOut(tool, text(args.out));
+            const dir = await transportDir(tool);
+            const inputPath = join(dir, 'triage-batch.json');
+            const resultPath = join(dir, 'triage-batch-result.json');
+            // UTF-8 and the entries as given: Python owns trimming, validation and
+            // the atomic whole-batch refusal. Nothing is pre-judged here.
+            const batch = { schema: TRIAGE_BATCH_SCHEMA, entries: args.entries };
+            try {
+                await writeFile(inputPath, `${JSON.stringify(batch, null, 2)}\n`, 'utf8');
+            }
+            catch (error) {
+                throw new Error(`${tool}: cannot write the batch input ${inputPath}: ${error.message}`);
+            }
+            const argv = ['triage-batch', '--out', out, '--input', inputPath, '--json', resultPath];
+            const result = await runStructuredCli(tool, argv, TRIAGE_BATCH_TIMEOUT_MS, exec, resultPath);
+            requireField(tool, result, 'schema', TRIAGE_BATCH_RESULT_SCHEMA);
+            const applied = result['applied'];
+            if (!Array.isArray(applied)) {
+                throw new Error(`${tool}: the --json result has no \`applied\` array (read ${describeValue(applied)}); ` +
+                    'refusing to report a batch that cannot name what it applied.');
+            }
+            return result;
+        },
+        timeoutMs: TRIAGE_BATCH_TIMEOUT_MS,
+    }));
+    // 537D3a: the eighth tool, appended after triage_batch. It also registers the
+    // host-only `boardwiseReviewFinalized` Session projection this tool writes to
+    // and the delivery gate (537D3b) reads.
+    registerReviewFinalize(ctx);
+    // 537D3b: mount the `present` gate on the root context. It stays optional for
+    // the older light fake contexts (no `fs` / `workingDirectory`), while the
+    // plugin's production `inject` above guarantees every service it needs.
+    registerReviewDelivery(ctx);
 }
-/**
- * Run the CLI and format the outcome for the model.
- *
- * A non-zero exit is a **result**, not a failure (checkup and doctor report
- * through it). Only two things throw: a run that was killed before it answered
- * (deadline or cancellation), and a child the OS refused to start.
- */
-async function executeCli(tool, argv, timeoutMs, exec, artifacts = []) {
-    const result = await runBoardwise({ argv, timeoutMs, signal: exec.signal });
-    if (result.timedOut || result.aborted) {
-        const how = result.timedOut ? `did not finish within ${timeoutMs}ms` : 'was cancelled';
-        throw new Error(`${tool}: the boardwise CLI ${how} and was killed, so its output is incomplete. ` +
-            `command: ${result.commandLine}. Last stdout: ${tailOf(result.stdout) || '(none)'}`);
+/** Create the plugin's own temp directory for one `--json` transport file. */
+async function transportDir(tool) {
+    try {
+        return await mkdtemp(join(tmpdir(), TRANSPORT_DIR_PREFIX));
     }
-    const notes = await Promise.all(artifacts.map(async (artifact) => ({
-        ...artifact,
-        exists: await isFile(artifact.path),
-    })));
-    return formatOutcome(tool, result, notes);
-}
-function formatOutcome(tool, result, artifacts) {
-    const lines = [
-        `${tool}: exit ${result.code === null ? 'none (killed)' : result.code} (cli: ${result.cli.via})`,
-        `command: ${result.commandLine}`,
-    ];
-    if (artifacts.length > 0) {
-        lines.push('artifacts:');
-        for (const artifact of artifacts) {
-            lines.push(`  ${artifact.label}: ${artifact.path} [${artifact.exists ? 'present' : 'MISSING'}]`);
-        }
+    catch (error) {
+        throw new Error(`${tool}: cannot create a private temp directory: ${error.message}`);
     }
-    lines.push('--- stdout ---', result.stdout.trimEnd() || '(empty)');
-    if (result.stdoutTruncated) {
-        lines.push(`(stdout truncated: ${result.stdoutBytes} bytes total, head ${STDOUT_HEAD_BYTES} + tail ${STDOUT_TAIL_BYTES} kept)`);
+}
+/** A repeated flag's values: strings only, trimmed, empty entries ignored. */
+function stringList(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value.map(item => text(item)).filter(item => item !== '');
+}
+/** Transport check: one envelope field must be exactly the expected string. */
+function requireField(tool, value, field, expected) {
+    const actual = value[field];
+    if (actual !== expected) {
+        throw new Error(`${tool}: the --json result has ${field} ${describeValue(actual)}, not ${JSON.stringify(expected)}; ` +
+            'the file is not the answer this call asked for.');
     }
-    if (result.stderr.trim() !== '')
-        lines.push('--- stderr ---', result.stderr.trimEnd());
-    // S4#2: the marker names the stream it belongs to. It used to be written for
-    // `stdout || stderr`, so a run whose stderr was the stream that got cut was
-    // reported as "stdout truncated" — and a reader looking for what was dropped
-    // would go to the wrong block, or conclude stdout had lost bytes it still had.
-    if (result.stderrTruncated) {
-        lines.push(`(stderr truncated: ${result.stderrBytes} bytes total, head ${STDERR_HEAD_BYTES} + tail ${STDERR_TAIL_BYTES} kept)`);
+}
+/** Transport check: one envelope field must be an object. */
+function requireObjectField(tool, value, field) {
+    const actual = value[field];
+    if (actual === null || typeof actual !== 'object' || Array.isArray(actual)) {
+        throw new Error(`${tool}: the --json result has no \`${field}\` object (read ${describeValue(actual)}); ` +
+            'refusing to report an envelope without it.');
     }
-    const hint = pythonHint(result);
-    if (hint !== null)
-        lines.push(`hint: ${hint}`);
-    return lines.join('\n');
 }
-/**
- * The Python fallback can land on an interpreter that has no boardwise
- * installed; without this line the raw ModuleNotFoundError is the only clue.
- */
-function pythonHint(result) {
-    if (result.cli.via !== 'python' || result.code === 0)
-        return null;
-    if (!/No module named ['"]?boardwise/i.test(result.stderr))
-        return null;
-    return (`the interpreter found on PATH (${result.cli.command}) has no boardwise installed: ` +
-        'set BOARDWISE_EXE to one that has it, e.g. <boardwise repo>/.venv/Scripts/python.exe');
-}
-/** Last {@link FAILURE_TAIL_CHARS} characters of a partial run. */
-function tailOf(value) {
-    const trimmed = value.trim();
-    return trimmed.length <= FAILURE_TAIL_CHARS ? trimmed : `...${trimmed.slice(-FAILURE_TAIL_CHARS)}`;
-}
-/** A parameter that arrived as a non-empty, trimmed string, else `''`. */
-function text(value) {
-    return typeof value === 'string' ? value.trim() : '';
+/** Transport check: one envelope field must be present (any JSON value). */
+function requirePresentField(tool, value, field) {
+    if (!(field in value)) {
+        throw new Error(`${tool}: the --json result has no \`${field}\` field; refusing to report a partial envelope.`);
+    }
 }
 /** Refuse a path boardwise could only fail on, before anything is spawned. */
 function requireExistingFile(tool, file) {
@@ -318,13 +498,5 @@ async function ensureDirectory(tool, dir) {
     }
     catch (error) {
         throw new Error(`${tool}: cannot create directory ${dir}: ${error.message}`);
-    }
-}
-async function isFile(path) {
-    try {
-        return (await stat(path)).isFile();
-    }
-    catch {
-        return false;
     }
 }

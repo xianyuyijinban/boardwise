@@ -1,0 +1,738 @@
+{
+  "profiles": [
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "CH343G-C2844153",
+      "title": "CH343G USB-serial bridge, SOP-16 (LCSC C2844153), measured on the live editor",
+      "body": [
+        -35.5,
+        -45.5,
+        35.5,
+        45.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "GND",
+          "tip": [
+            -45,
+            35
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "TXD",
+          "tip": [
+            -45,
+            25
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "3",
+          "name": "RXD",
+          "tip": [
+            -45,
+            15
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "4",
+          "name": "V3",
+          "tip": [
+            -45,
+            5
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "5",
+          "name": "UD+",
+          "tip": [
+            -45,
+            -5
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "6",
+          "name": "UD-",
+          "tip": [
+            -45,
+            -15
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "7",
+          "name": "VBUS",
+          "tip": [
+            -45,
+            -25
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "8",
+          "name": "ACT#",
+          "tip": [
+            -45,
+            -35
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "9",
+          "name": "DCD",
+          "tip": [
+            45,
+            -35
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "10",
+          "name": "DTR",
+          "tip": [
+            45,
+            -25
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "11",
+          "name": "RTS",
+          "tip": [
+            45,
+            -15
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "12",
+          "name": "DSR",
+          "tip": [
+            45,
+            -5
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "13",
+          "name": "CTS",
+          "tip": [
+            45,
+            5
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "14",
+          "name": "RI",
+          "tip": [
+            45,
+            15
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "15",
+          "name": "VIO",
+          "tip": [
+            45,
+            25
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "16",
+          "name": "VDD5",
+          "tip": [
+            45,
+            35
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C2844153 CH343G placed at (130, 180) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 16 pins and its own geometry gave the body box [-35.5, -45.5, 35.5, 45.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C2844153.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "TYPE-C-31-M-12-C165948",
+      "title": "USB Type-C receptacle 16P, SMD (LCSC C165948), measured on the live editor",
+      "body": [
+        -25.5,
+        -65.5,
+        25.5,
+        65.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "EH",
+          "tip": [
+            35,
+            -55
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "EH",
+          "tip": [
+            35,
+            -45
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "3",
+          "name": "EH",
+          "tip": [
+            35,
+            -35
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "4",
+          "name": "EH",
+          "tip": [
+            35,
+            -25
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A5",
+          "name": "CC1",
+          "tip": [
+            -35,
+            25
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A6",
+          "name": "DP1",
+          "tip": [
+            -35,
+            5
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A7",
+          "name": "DN1",
+          "tip": [
+            -35,
+            -5
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A8",
+          "name": "SBU1",
+          "tip": [
+            -35,
+            -25
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B5",
+          "name": "CC2",
+          "tip": [
+            -35,
+            -35
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B6",
+          "name": "DP2",
+          "tip": [
+            -35,
+            -15
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B7",
+          "name": "DN2",
+          "tip": [
+            -35,
+            15
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B8",
+          "name": "SBU2",
+          "tip": [
+            -35,
+            35
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A4B9",
+          "name": "VBUS",
+          "tip": [
+            -35,
+            45
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B4A9",
+          "name": "VBUS",
+          "tip": [
+            -35,
+            -45
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "A1B12",
+          "name": "GND",
+          "tip": [
+            -35,
+            55
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "B1A12",
+          "name": "GND",
+          "tip": [
+            -35,
+            -55
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C165948 TYPE-C-31-M-12 placed at (430, 180) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 16 pins and its own geometry gave the body box [-25.5, -65.5, 25.5, 65.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C165948.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "2x5P-2.54-C49056209",
+      "title": "2x5 2.54 mm pin header, THT (LCSC C49056209), measured on the live editor",
+      "body": [
+        -20.5,
+        -30.5,
+        10.5,
+        30.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -30,
+            20
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20,
+            20
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "3",
+          "name": "3",
+          "tip": [
+            -30,
+            10
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "4",
+          "name": "4",
+          "tip": [
+            20,
+            10
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "5",
+          "name": "5",
+          "tip": [
+            -30,
+            0
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "6",
+          "name": "6",
+          "tip": [
+            20,
+            0
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "7",
+          "name": "7",
+          "tip": [
+            -30,
+            -10
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "8",
+          "name": "8",
+          "tip": [
+            20,
+            -10
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "9",
+          "name": "9",
+          "tip": [
+            -30,
+            -20
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "10",
+          "name": "10",
+          "tip": [
+            20,
+            -20
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C49056209 2x5P-2.54 placed at (730, 180) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 10 pins and its own geometry gave the body box [-20.5, -30.5, 10.5, 30.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C49056209.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "LED0603-RED-C2286",
+      "title": "red LED 0603 (LCSC C2286), measured on the live editor",
+      "body": [
+        -15.5,
+        -8.5,
+        5.5,
+        17.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "A",
+          "tip": [
+            20,
+            0
+          ],
+          "direction": "right",
+          "length": 15,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "K",
+          "tip": [
+            -20,
+            0
+          ],
+          "direction": "left",
+          "length": 15,
+          "pinType": null
+        }
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C2286 LED-0603-RED placed at (1030, 180) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 2 pins and its own geometry gave the body box [-15.5, -8.5, 5.5, 17.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C2286.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "R0603-5.1k-C23186",
+      "title": "5.1 kOhm resistor 0603 (LCSC C23186), measured on the live editor",
+      "body": [
+        -10.5,
+        -4.5,
+        10.5,
+        4.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20,
+            0
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20,
+            0
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C23186 R0603-5.1k placed at (130, 620) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 2 pins and its own geometry gave the body box [-10.5, -4.5, 10.5, 4.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C23186.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "R0603-1k-C21190",
+      "title": "1 kOhm resistor 0603 (LCSC C21190), measured on the live editor",
+      "body": [
+        -10.5,
+        -4.5,
+        10.5,
+        4.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20,
+            0
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20,
+            0
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C21190 R0603-1k placed at (430, 620) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 2 pins and its own geometry gave the body box [-10.5, -4.5, 10.5, 4.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C21190.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "C0805-10uF-C15850",
+      "title": "10 uF capacitor 0805 (LCSC C15850), measured on the live editor",
+      "body": [
+        -10.5,
+        -8.5,
+        10.5,
+        8.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -20,
+            0
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            20,
+            0
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C15850 C0805-10uF placed at (730, 620) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 2 pins and its own geometry gave the body box [-10.5, -8.5, 10.5, 8.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C15850.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "C0603-100nF-C1590",
+      "title": "100 nF capacitor 0603 (LCSC C1590), measured on the live editor",
+      "body": [
+        -5.5,
+        -8.5,
+        5.5,
+        8.5
+      ],
+      "pins": [
+        {
+          "number": "1",
+          "name": "1",
+          "tip": [
+            -15,
+            0
+          ],
+          "direction": "left",
+          "length": 10,
+          "pinType": null
+        },
+        {
+          "number": "2",
+          "name": "2",
+          "tip": [
+            15,
+            0
+          ],
+          "direction": "right",
+          "length": 10,
+          "pinType": null
+        }
+      ],
+      "source": "measured 2026-10-23 (16:06:43 +08:00) on the live editor: C1590 C0603-100nF placed at (1030, 620) rotation 0 on probe page a49f56119597d6d5 (P2) of /test; sch.component_pins answered all 2 pins and its own geometry gave the body box [-5.5, -8.5, 5.5, 8.5] in symbol-local coordinates (tip = component_pins.X/Y minus the component origin; host canvas y is UP). pinType is null by design: sch.component_pins returns only X/Y/PinNumber/PinName/Rotation/PinLength/PrimitiveId/NoConnected and lib.device.get returns no pin table either, so this editor has no electrical-type read channel and any pinType written here would be invented. Direction is the compass derived from the measured Rotation (0 = right, 180 = left); only 0 and 180 occur in these eight symbols, so the 90/270 spellings are not measured and are not cited. Evidence: evidence/534/probes/pins_C1590.json + measure_summary.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-VCC",
+      "title": "PWR-VCC",
+      "body": [
+        -6.0,
+        0.0,
+        6.0,
+        18.0
+      ],
+      "pins": [],
+      "source": "flag glyph convention of the compiler (the host places a power flag by kind+net, never from a library profile). NOT re-measured this batch: carried over from blocklib/specs/ch340_serial.library.json (its last two profiles, the flag-family convention), whose own source records the live-host measurement of 2026-10-03 for the family: the Power flag placed at (300,300) with net VCC resolves to the host symbol 'Power-5V', has its connection point AT the origin (PinLength 5) and its glyph 4.5..10.5 units ABOVE it (bbox [294.5,304.5,305.5,310.5]); the Ground flag at (600,300) has its connection point at the origin (PinLength 10) and its bars 9.5..19.5 units BELOW it ([589.5,280.5,610.5,290.5]) - pit 43's two families. Evidence (as cited by ch340_serial.library.json, not re-taken here): outputs/099/libprobe/pins_flag_vcc.json + 08_geometry_probe.json"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-GND",
+      "title": "PWR-GND",
+      "body": [
+        -6.0,
+        0.0,
+        6.0,
+        18.0
+      ],
+      "pins": [],
+      "source": "flag glyph convention of the compiler; the measured Ground family hangs below its connection point (see PWR-VCC's source line and SKILL pit 43). NOT re-measured this batch: carried over from blocklib/specs/ch340_serial.library.json (its last two profiles), whose measurement is dated 2026-10-03 on the live host"
+    },
+    {
+      "kind": "boardwise-symbol-profile",
+      "profileVersion": 1,
+      "symbolRef": "PWR-+5V",
+      "title": "PWR-+5V",
+      "body": [
+        -6.0,
+        0.0,
+        6.0,
+        18.0
+      ],
+      "pins": [],
+      "source": "旗标族别名，沿用 ch340_serial 2026-10-03 真机测量（pit 43），本批未重测；+5V 轨凭此落旗标而非网络标签"
+    }
+  ]
+}

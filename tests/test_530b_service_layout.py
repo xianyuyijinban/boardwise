@@ -650,10 +650,13 @@ def test_a_run_of_three_is_evenly_spaced_with_the_declared_pitch():
         {key: ["R1", "R2", "R3"]}, spans=spans, names=names, reaches=reaches,
         budget=budget,
     )[key]
+    # 534 R1: the pitch reads the geometry — the body span and where the row sits
+    # (`draw_span`, 532) — and no longer the strings; the string's own width is a
+    # *pair* rent, charged next door by `row_text_rent`.
     assert pitch == pytest.approx(
         il._snap_up(  # noqa: SLF001
             max(
-                max(spans.values()), max(names.values()),
+                max(spans.values()),
                 max(left + right for left, right in reaches.values()),
             ),
             budget.grid,
@@ -675,23 +678,23 @@ def test_a_run_of_three_is_evenly_spaced_with_the_declared_pitch():
     )
 
 
-def test_a_row_takes_the_pitch_its_values_need_and_never_prints_them_over_each_other():
-    """S-21's subject, answered by the **pitch** where the pitch can answer it.
+def test_a_rows_pitch_is_geometry_and_its_values_pay_rent_beside_it():
+    """534 R1, on the fixture 531 wrote for the opposite answer.
 
-    Same three parts and a long value each, and this is the case 530B's own model
-    could not see: the row's pitch was derived from the parts' boxes and their
-    designators, so a 27-unit value row printed level with its neighbour's at a
-    12-unit pitch — one value over another, which `readability` reports as
-    `text-overlap` between two boxes **this compiler placed**, i.e. a hard finding.
-    531 measured where those rows are (`core.textmetrics.symbol_rows`) and put the
-    value's own width into the pitch (`pack_rows`), so the same fixture now prints
-    every value, evenly spaced, and no two of them touch.
+    531 answered S-21 by growing the row pitch to fit the value string. What that
+    cost was measured on the real board in `evidence/534/quality/REPORT.md` §3: a
+    9-unit-wide resistor carrying 「1k 1% 0805」 asked for a 41.7+ pitch, the
+    island paid it in width, and the usb_c island came out 420x154 at 12.6% fill.
+    The string is not what a row **is**. This test owns the split — `row_pitch`
+    reads the parts' geometry (`body_span`, `draw_span`), `row_text_rent` states
+    what a text row wider than its column asks of the row **next to it**, and
+    `row_pair_pitch` takes the larger of the two, so a neighbour that really does
+    print beside it still gets the room.
 
-    S-21's 「值应隐藏」 is still the answer *where the pitch cannot grow* — two parts
-    that are not a row at all, or a decap pair S-05 caps — and there it is still
-    taken with the reason written down (the real page has five such values, and
-    `tests/test_531_text_ruler.py` pins them).  What this test now owns is the half
-    that changed: a row of long values is *spaced*, not silently emptied.
+    S-21's own promise stays where it can be checked as a fact about the page:
+    every value is printed or hidden with a reason, and no two printed value rows
+    overlap — that assertion is unchanged from 531 and is what makes a narrower
+    pitch legal rather than merely cheap.
     """
     from boardwise.core.textmetrics import render_width
 
@@ -716,29 +719,50 @@ def test_a_row_takes_the_pitch_its_values_need_and_never_prints_them_over_each_o
             f"{second.bbox} intersect — a pitch that does not fit the row it prints "
             f"({render_width(long_value):.0f} units) is what this test is for"
         )
-    # The rule the pitch now states: a row is laid on a pitch that fits the widest
-    # thing it prints. That is `pack_rows`' own contract since 531 and it is a fact
-    # about the function, not about this fixture's geometry.
+
+    # -- the 534 R1 contract, stated as a fact about the functions --------------
+    budget = il.IslandBudget()
+    group = ("R0402", "U1", "up")
+    spans = {name: 20.0 for name in names}
     pitch = il.pack_rows(
-        {("R0402", "U1", "up"): ["R1", "R2", "R3"]},
-        spans={name: 20.0 for name in names},
+        {group: ["R1", "R2", "R3"]},
+        spans=spans,
         names={name: render_width(name) for name in names},
         values={name: render_width(long_value) for name in names},
-        budget=il.IslandBudget(),
-    )[("R0402", "U1", "up")]
+        budget=budget,
+    )[group]
     assert pitch == pytest.approx(
-        il._snap_up(  # noqa: SLF001
-            max(20.0, max(render_width(name) for name in names),
-                render_width(long_value)),
-            il.IslandBudget().grid,
-        ) + il.IslandBudget().row_gap, abs=1e-9,
+        il._snap_up(20.0, budget.grid) + budget.row_gap, abs=1e-9,  # noqa: SLF001
     ), (
-        "the row pitch must be the widest thing the row prints — body, designator "
-        "or **value** — plus `row_gap`"
+        f"the row pitch {pitch:g} is not `snap_up(body span) + row_gap` — a value "
+        f"string {render_width(long_value):.0f} wide reached the pitch again"
     )
-    assert pitch >= render_width(long_value), (
-        f"the pitch {pitch:g} is narrower than the value row "
-        f"{render_width(long_value):.1f} — which is the case this test exists for"
+    rent = il.row_text_rent(
+        name_w=max(render_width(name) for name in names),
+        value_w=render_width(long_value),
+        budget=budget,
+    )
+    assert rent == pytest.approx(
+        il._snap_up(render_width(long_value), budget.grid) + budget.row_gap,  # noqa: SLF001
+        abs=1e-9,
+    ), "the rent is what the widest printed string asks for, snapped like a pitch"
+    assert rent > pitch, (
+        "the rent has to be the bigger number here, or this fixture cannot tell the "
+        f"two apart (pitch {pitch:g}, rent {rent:g})"
+    )
+
+    # -- and the pair step is the larger of the two ----------------------------
+    extents = il.row_group_extents(
+        {group: ["R1", "R2", "R3"]},
+        spans=spans,
+        names={name: render_width(name) for name in names},
+        values={name: render_width(long_value) for name in names},
+        reaches={name: (0.0, 0.0) for name in names},
+    )
+    two_rows = il.row_pair_pitch(extents, group, group, budget=budget)
+    assert two_rows == pytest.approx(max(pitch, rent), abs=1e-9), (
+        f"two rows side by side cost {two_rows:g}; the contract is "
+        f"max(geometry pitch {pitch:g}, text rent {rent:g})"
     )
 
 

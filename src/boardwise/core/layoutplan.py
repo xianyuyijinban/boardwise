@@ -130,6 +130,10 @@ _PART_KEYS = (
     "rotation",
     "mirror",
     "valueVisible",
+    # 536: which group (a module's drawing) and which island of it this part is
+    # placed in — machine-readable ownership, not a coordinate and not a note.
+    "group",
+    "island",
 )
 _SEGMENT_KEYS = ("net", "points")
 _JUNCTION_KEYS = ("net", "x", "y")
@@ -210,6 +214,17 @@ class LayoutPart:
     #: Is this part's **value row** printed? False means the plan states it is
     #: suppressed, and the landing step writes the host's ``valueVisible``.
     value_visible: bool = True
+    #: 536: which group (a module's drawing) and which island of that group this
+    #: part is drawn in. **Machine-readable ownership**, not a note: the
+    #: archipelago contract checks the plan's partition against the presentation's
+    #: declaration (`core.archipelago.validate_archipelago_plan`), and a sentence
+    #: in ``notes`` could not be checked at all.  Both are written **only when
+    #: non-empty** (like ``valueVisible``), so a plan built before 536 — or one
+    #: whose blocks state no group at all — keeps the bytes and the digest it
+    #: already had.  When they are stated they are part of that digest: the same
+    #: coordinates under a different declared partition are not the same preview.
+    group: str = ""
+    island: str = ""
 
 
 @dataclass
@@ -484,6 +499,11 @@ class LayoutPlan:
                     # value says nothing here, so every plan whose parts print
                     # their values keeps the digest it already had.
                     **({"valueVisible": False} if not item.value_visible else {}),
+                    # 536: the same discipline for the ownership pair — written
+                    # only when stated, so an unstamped plan is byte-identical
+                    # to what this repo recorded before 536.
+                    **({"group": item.group} if item.group else {}),
+                    **({"island": item.island} if item.island else {}),
                 }
                 for item in self.parts
             ],
@@ -731,6 +751,8 @@ def _parts_from(value: Any) -> list[LayoutPart]:
             value_visible=_boolean(
                 body.get("valueVisible", True), f"{spot}.valueVisible"
             ),
+            group=_text(body.get("group"), f"{spot}.group"),
+            island=_text(body.get("island"), f"{spot}.island"),
         ))
     return out
 

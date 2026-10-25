@@ -224,6 +224,20 @@ class Action:
     #: Docs only — what a successful ``data`` payload looks like.
     returns: str = ""
     params_schema: str = ""
+    #: Whether the action **changes the project's own bytes** (537A3), as opposed
+    #: to the two things ``risk`` groups with it but should not send through the
+    #: daemon's project whitelist: moving the editor's focus (``doc.open`` /
+    #: ``doc.focus`` decide what the next call lands on, but change no project
+    #: content) and replacing the connector itself (``sys.self_update`` swaps
+    #: running code, not the design).
+    #:
+    #: **Defaults to ``True`` on purpose.** A new non-read action is a design
+    #: write unless somebody deliberately says otherwise, so forgetting to
+    #: register it cannot reopen the hole the whitelist exists to close — the
+    #: safe answer is the one you get by not thinking about it. ``read`` actions
+    #: are unaffected either way (the daemon checks ``risk`` first). Declared
+    #: last so every pre-existing positional construction keeps its order.
+    design_write: bool = True
 
 
 #: Every action the bridge knows about. ``--help`` renders this table, and the
@@ -309,6 +323,9 @@ ACTIONS: tuple[Action, ...] = (
             "`boardwise bridge update-connector --no-reload`)"
         ),
         risk="dangerous",
+        # 537A3: replaces the connector's bundle and reloads the editor — not a
+        # byte of the project changes, so a project whitelist must not stop it.
+        design_write=False,
     ),
     Action(
         name="sys.identity",
@@ -1023,6 +1040,10 @@ ACTIONS: tuple[Action, ...] = (
         returns="{activated, tabId, title, documentType}",
         params_schema="pageUuid or tabId, one required",
         risk="write",
+        # 537A3: navigation only — it decides which page the next placement
+        # lands on, but writes nothing into the project. ``risk`` stays
+        # ``write`` so 537A2's read-only gate keeps refusing it.
+        design_write=False,
     ),
     Action(
         name="doc.delete_page",
@@ -1198,6 +1219,9 @@ ACTIONS: tuple[Action, ...] = (
         returns="{uuid, tabId, opened, activated, document: {uuid, name, type, active}}",
         params_schema="uuid: schematic page / schematic / PCB uuid (from doc.list)",
         risk="write",
+        # 537A3: opening a document moves the editor's focus; it renames,
+        # creates and deletes nothing. ``risk`` stays ``write`` for 537A2.
+        design_write=False,
     ),
     Action(
         name="pcb.doc.new",
@@ -1256,6 +1280,16 @@ class ErrorCodes:
     #: A ``create`` action arrived without ``params.confirm is True``. Raised by
     #: the daemon, before anything is forwarded, so the editor never sees it.
     CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+    #: A **design write** was routed to a window whose project the daemon may not
+    #: write into (537A3). Raised after routing and before the frame is
+    #: forwarded, so the editor never sees the call — the whole point is that the
+    #: refusal does not depend on a caller (or a model) remembering to stay out
+    #: of real projects. The daemon allows ``test`` / ``test2`` by default; an
+    #: operator can name other projects in ``BOARDWISE_WRITE_PROJECTS``, where
+    #: ``*`` is the legacy full-allow switch and an explicitly empty value denies
+    #: everything. Reads, navigation (``doc.open`` / ``doc.focus``) and
+    #: ``sys.self_update`` are outside this gate: they are not design writes.
+    WRITE_PROJECT_FORBIDDEN = "WRITE_PROJECT_FORBIDDEN"
     #: The action needs the editor but no connector is connected.
     NO_CONNECTOR = "NO_CONNECTOR"
     #: A ``targetProject`` hint that no connected window has open (023). Raised

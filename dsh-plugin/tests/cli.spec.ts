@@ -77,6 +77,12 @@ describe('resolveCli: PATH lookups', () => {
     })
   })
 
+  it('does not spawn a PATH batch launcher without a shell', () => {
+    const dir = dirWith('boardwise.cmd')
+    expect(() => resolveCli({ PATH: dir }, 'win32')).toThrow(BoardwiseCliError)
+    expect(() => resolveCli({ PATH: dir }, 'win32')).toThrow(/boardwise CLI not found/)
+  })
+
   it('falls back to `python -m boardwise.cli` when PATH has an interpreter only', () => {
     const dir = dirWith('python.exe')
     expect(resolveCli({ PATH: dir }, 'win32')).toEqual({

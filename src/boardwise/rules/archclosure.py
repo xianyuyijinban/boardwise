@@ -1020,6 +1020,14 @@ class ResistorLeg:
     is a priced power rail (empty otherwise), and ``far_is_ground`` says whether
     the far end is ground — the two facts that decide which role the resistor
     plays (the shunt, a direct pull to a rail, one leg of a divider, or a stray).
+
+    ``value`` is what a message writes for the resistance — the Value field
+    verbatim when that field stated it, the recovered resistance otherwise — and
+    ``provenance`` is non-empty **only** when the number came from the part's MPN
+    (:meth:`FactsRule.resistance_reading`, 537F). The two travel with ``ohms`` so
+    the arithmetic and the sentence cannot disagree about where the number came
+    from, and a row that priced a recovered leg says so instead of quoting it as
+    if it had been drawn.
     """
 
     designator: str
@@ -1029,6 +1037,7 @@ class ResistorLeg:
     far: str
     far_is_ground: bool
     far_power: str
+    provenance: str = ""
 
 
 def _resistor_legs(
@@ -1036,11 +1045,23 @@ def _resistor_legs(
 ) -> list[ResistorLeg]:
     """Every resistor on ``net`` whose far end can be read, in designator order.
 
-    A part the shelf (or its own value) does not call a resistor is skipped —
-    :func:`_resistor_like`'s one judgement, the same the pull-up rule uses — and a
-    resistor whose value does not parse as a resistance is skipped too: a row that
-    printed ``R17（10kΩ）`` for a value nobody could read would be inventing the
-    number the arithmetic then rests on.
+    ``rule.resistance_reading`` is the one judgement of 「is this a resistor, and
+    how many ohms」 (537F): a part the shelf declares as something else is skipped,
+    and so is a part whose resistance cannot be read — a row that printed
+    ``R17（10kΩ）`` for a value nobody could read would be inventing the number the
+    arithmetic then rests on. A leg whose **Value field is empty** but whose MPN
+    states one unambiguous resistance is read **through the same call**, with the
+    recovery source carried on the leg; before 537F this function parsed
+    ``comp.value`` itself, so such a leg was skipped here while the sampling-bias
+    rule counted it — the same divider judged two ways.
+
+    **Non-positive resistances stop here, and only here.** The shared reading
+    hands back ``0Ω`` as the reading a ``0Ω`` Value states (a link is a statement,
+    not an unreadable field), so this function — the arithmetic layer, where a leg
+    becomes a term in ``R_th``/``R_sense`` — is what skips ``ohms <= 0``. That is
+    the pre-537F guard, restored where it belongs: the existence question stays
+    answered by :meth:`FactsRule.resistance_reading` alone, and no formula ever
+    divides by a zero leg.
 
     "In designator order" is a promise this docstring used to make and the code
     kept only by accident: it walked ``_members``, i.e. the netlist's own order,
@@ -1053,22 +1074,21 @@ def _resistor_legs(
         if designator == exclude:
             continue
         comp = model.components.get(designator)
-        if not _resistor_like(rule, comp):
+        reading = rule.resistance_reading(comp)
+        if reading is None or reading.ohms <= 0:
             continue
         far = next((pin.net for pin in comp.pins if pin.net and pin.net != net), "")
         if not far:
             continue
-        ohms = parse_resistance_ohms(comp.value or "")
-        if ohms is None or ohms <= 0:
-            continue
         legs.append(ResistorLeg(
             designator=designator,
-            value=(comp.value or ""),
-            ohms=ohms,
+            value=reading.display,
+            ohms=reading.ohms,
             net=net,
             far=far,
             far_is_ground=is_ground_net(far),
             far_power=_power_class(guesses, far),
+            provenance=reading.provenance,
         ))
     return legs
 
@@ -1164,6 +1184,12 @@ class BiasSource:
     shapes this is, so a message can write the terms it actually used
     (``R_up‖R_dn + Rs``, or ``Rs`` alone) rather than a formula label that does
     not match the board.
+
+    ``provenance`` (537F) is the recovery sentence of every leg whose resistance
+    came from its MPN rather than from the Value field — empty when all of them
+    were drawn. It is appended to :attr:`shape`, so the evidence the arithmetic
+    rests on names where a recovered number came from instead of presenting a
+    reading the page never stated.
     """
 
     designators: tuple[str, ...]
@@ -1172,6 +1198,7 @@ class BiasSource:
     v_open: float | None
     volts_because: str
     is_divider: bool
+    provenance: str = ""
 
 
 def _bias_source(
@@ -1193,16 +1220,18 @@ def _bias_source(
     far = leg.far
     if leg.far_power:
         volts, source, why = domain_of(guesses, far)
+        shape = (
+            f"{leg.designator}（{_ohms(leg.ohms)}）直接上拉到 power-class 轨 "
+            f"{far!r}（依据：{leg.far_power}）—— 轨内阻记 0"
+        )
         return BiasSource(
             designators=(leg.designator,),
-            shape=(
-                f"{leg.designator}（{_ohms(leg.ohms)}）直接上拉到 power-class 轨 "
-                f"{far!r}（依据：{leg.far_power}）—— 轨内阻记 0"
-            ),
+            shape=(f"{shape}；{leg.provenance}" if leg.provenance else shape),
             r_source=0.0,
             v_open=volts,
             volts_because=(source if volts is not None else why),
             is_divider=False,
+            provenance=leg.provenance,
         )
     up: ResistorLeg | None = None
     down: ResistorLeg | None = None
@@ -1216,17 +1245,25 @@ def _bias_source(
     r_source = 1.0 / (1.0 / up.ohms + 1.0 / down.ohms)
     volts, source, why = domain_of(guesses, up.far)
     v_open = volts * down.ohms / (up.ohms + down.ohms) if volts is not None else None
+    # 537F: whichever of the three legs was read from its MPN says so here, so
+    # the evidence behind `R_th = 10500Ω` a reader checks names the source. A
+    # board that states all three values renders byte-for-byte as before.
+    provenance = "；".join(dict.fromkeys(
+        note for note in (up.provenance, down.provenance, leg.provenance) if note
+    ))
+    shape = (
+        f"分压 {up.designator}（{_ohms(up.ohms)}）@{up.far!r} / "
+        f"{down.designator}（{_ohms(down.ohms)}）@GND，中点 {far!r} 经串阻 "
+        f"{leg.designator}（{_ohms(leg.ohms)}）送到 {leg.net!r}"
+    )
     return BiasSource(
         designators=(leg.designator, up.designator, down.designator),
-        shape=(
-            f"分压 {up.designator}（{_ohms(up.ohms)}）@{up.far!r} / "
-            f"{down.designator}（{_ohms(down.ohms)}）@GND，中点 {far!r} 经串阻 "
-            f"{leg.designator}（{_ohms(leg.ohms)}）送到 {leg.net!r}"
-        ),
+        shape=(f"{shape}；{provenance}" if provenance else shape),
         r_source=r_source,
         v_open=v_open,
         volts_because=(source if volts is not None else why),
         is_divider=True,
+        provenance=provenance,
     )
 
 
@@ -1601,7 +1638,8 @@ class ArchSenseBiasClosure(FactsRule):
         )
         evidence.extend([
             f"采样电阻 {shunt.designator} = {_ohms(r_sense)} @ {net} → {shunt.far}"
-            + (f"（{declared_where} 点名）" if declared_where else ""),
+            + (f"（{declared_where} 点名）" if declared_where else "")
+            + (f"；{shunt.provenance}" if shunt.provenance else ""),
             f"偏置源：{source.shape}",
             f"R_th = {source.r_source:g} + {series.ohms:g} = {r_th:g}Ω；V_bias = "
             + (_volts(source.v_open) if source.v_open is not None else "读不出")

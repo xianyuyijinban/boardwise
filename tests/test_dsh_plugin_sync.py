@@ -1,10 +1,16 @@
 """Drift guard (045 §7): the dsh plugin wraps CLI commands **by name**.
 
-`dsh-plugin/src/index.ts` builds argv arrays whose first token is a boardwise
-CLI command. Renaming or removing such a command breaks the plugin on every dsh
-machine, silently from pytest's point of view — unless this guard is watching.
-The reverse direction (a new CLI command not yet wrapped) is a release-checklist
-judgment, not a failure: see `tasks/045-dsh-plugin.md` §7.
+Every module under `dsh-plugin/src/` builds argv arrays whose first token is a
+boardwise CLI command (`index.ts` for most tools, `review-finalize.ts` for
+`review finalize`). Renaming or removing such a command breaks the plugin on
+every dsh machine, silently from pytest's point of view — unless this guard is
+watching. The reverse direction (a new CLI command not yet wrapped) is a
+release-checklist judgment, not a failure: see `tasks/045-dsh-plugin.md` §7.
+
+`review finalize` also gets its own pin: the top-level `review` group surviving
+in cli.py says nothing about the subcommand, so the plugin's
+`['review', 'finalize', …]` argv **and** the CLI dispatch to
+`_cmd_review_finalize` are both asserted by name (537D3a).
 """
 
 import json
@@ -13,7 +19,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 CLI = REPO / "src" / "boardwise" / "cli.py"
-PLUGIN = REPO / "dsh-plugin" / "src" / "index.ts"
+PLUGIN_SRC = REPO / "dsh-plugin" / "src"
+REVIEW_FINALIZE_MODULE = PLUGIN_SRC / "review-finalize.ts"
 PLUGIN_PKG = REPO / "dsh-plugin" / "package.json"
 PLUGIN_README = REPO / "dsh-plugin" / "README.md"
 
@@ -23,6 +30,16 @@ PLUGIN_README = REPO / "dsh-plugin" / "README.md"
 PEER_RANGE = ">=0.0.1-rc.1 <0.3.0 || >=0.1.7-rc.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0"
 VERIFIED_DSH = ("0.1.7-rc.2", "0.2.0-rc.1")
 
+# `['review', 'finalize'` with any spacing / quote style.
+REVIEW_FINALIZE_ARGV = re.compile(r"\[\s*(['\"])review\1\s*,\s*(['\"])finalize\2")
+# The CLI dispatch, either spelling: `getattr(args, "file", None) == "finalize"`
+# (today's code) or `args.file == "finalize"`.
+REVIEW_FINALIZE_DISPATCH = re.compile(
+    r'(?:getattr\(\s*args\s*,\s*(["\'])file\1\s*(?:,\s*None\s*)?\)|args\.file)'
+    r'\s*==\s*(["\'])finalize\2'
+)
+REVIEW_FINALIZE_HANDLER = "_cmd_review_finalize("
+
 
 def _cli_commands() -> set[str]:
     text = CLI.read_text(encoding="utf-8")
@@ -30,23 +47,54 @@ def _cli_commands() -> set[str]:
     return set(re.findall(r"add_parser\(\s*[\"']([\w-]+)[\"']", text))
 
 
+def _plugin_modules() -> list[Path]:
+    """Every TypeScript module under dsh-plugin/src, in a stable order."""
+    return sorted(PLUGIN_SRC.glob("*.ts"))
+
+
 def _wrapped_commands() -> set[str]:
-    text = PLUGIN.read_text(encoding="utf-8")
     commands = set()
-    for argv in re.findall(r"const argv = \[([^\]]+)\]", text):
-        first = argv.split(",", 1)[0].strip().strip("'\"")
-        if first:
-            commands.add(first)
+    for module in _plugin_modules():
+        text = module.read_text(encoding="utf-8")
+        for argv in re.findall(r"const argv = \[([^\]]+)\]", text):
+            first = argv.split(",", 1)[0].strip()
+            # Only a quoted literal names a CLI command; `[...cli.prefix, …]`
+            # (the spawn wrapper itself) is a spread, not a command.
+            if not first.startswith(("'", '"')):
+                continue
+            command = first.strip("'\"")
+            if command:
+                commands.add(command)
     return commands
 
 
 def test_every_command_the_dsh_plugin_spawns_exists_in_the_cli():
     wrapped = _wrapped_commands()
-    assert wrapped, "guard vacuous: no argv arrays found in dsh-plugin/src/index.ts"
+    assert wrapped, "guard vacuous: no argv arrays found under dsh-plugin/src/*.ts"
     missing = wrapped - _cli_commands()
     assert not missing, (
         f"dsh-plugin wraps CLI commands that no longer exist: {sorted(missing)} — "
         "a rename in cli.py must be mirrored in dsh-plugin (045 §7 sync discipline)"
+    )
+
+
+def test_review_finalize_subcommand_is_wrapped_and_still_dispatched():
+    """537D3a: the subcommand is pinned on both sides, not just its `review` group."""
+    plugin = REVIEW_FINALIZE_MODULE.read_text(encoding="utf-8")
+    assert REVIEW_FINALIZE_ARGV.search(plugin), (
+        "dsh-plugin/src/review-finalize.ts no longer builds a `['review', 'finalize', …]` argv — "
+        "a surviving top-level `review` command does not keep the finalize subcommand alive"
+    )
+
+    cli = CLI.read_text(encoding="utf-8")
+    dispatch = REVIEW_FINALIZE_DISPATCH.search(cli)
+    assert dispatch, (
+        "src/boardwise/cli.py no longer dispatches `review finalize` on args.file == \"finalize\""
+    )
+    window = cli[dispatch.start(): dispatch.start() + 400]
+    assert REVIEW_FINALIZE_HANDLER in window, (
+        "the `review finalize` dispatch no longer calls _cmd_review_finalize — "
+        "the subcommand is wired to a handler that moved or disappeared"
     )
 
 

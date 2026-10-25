@@ -35,6 +35,7 @@ rules themselves arrive in 126b/126c.
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -447,6 +448,91 @@ def cross_view_lonely_pins(
     return rows
 
 
+#: 537C1：``crossView.candidateMappings[].evidence`` 的三段出处。
+#:
+#: 两侧都是**归档**读数——``checkup --file`` 读的就是这两份归档导出，谁都不是
+#: live 证据，所以证据里不写 "live" 也不写哪个「对」。``basis`` 说明候选是按
+#: **同名网**取的：PCB 行的 ``pcbNet`` 与原理图 ``nets`` 的键名逐字相等时，成员才
+#: 是候选；名字不同（这个工具的自动名 ``NET7`` 对编辑器的 ``$1N66612``，pits.md
+#: 坑 24）就无从比对，宁可给空。
+CROSS_VIEW_MAPPING_EVIDENCE = {
+    "pcb": "archivePcb",
+    "schematic": "archiveSchematic",
+    "basis": "same-net-name",
+}
+
+
+def _net_member_refs(net: Any) -> list[str]:
+    """``REF.pin`` for every member of ``net``, deduplicated, read like a person reads.
+
+    ``Net.pins`` holds ``(designator, pin number)`` tuples and can carry the same
+    member twice (two wires of one net record) — the mapping states the net's
+    **real member list**, so a repeat would read as two parts on one pin and is
+    written once. Order is ``(designator, pin number)`` through
+    :func:`_pin_sort_key`, the same reading the lonely rows use, so ``U9.2``
+    precedes ``U9.10``.
+    """
+    seen: set[tuple[str, str]] = set()
+    members: list[tuple[str, str]] = []
+    for designator, number in (getattr(net, "pins", None) or ()):
+        key = (str(designator), str(number))
+        if key in seen:
+            continue
+        seen.add(key)
+        members.append(key)
+    members.sort(key=lambda item: (item[0], _pin_sort_key(item[1])))
+    return [f"{designator}.{number}" for designator, number in members]
+
+
+def _cross_view_candidate_mappings(
+    schematic: Any, pcb_model: Any, lonely: list[dict]
+) -> list[dict]:
+    """One suspected mapping per lonely row, from the **same-named** schematic net.
+
+    189A2's rows say «the schematic leaves this pin alone, the PCB gives it
+    company» and then stop: the reader is left to open both archives and work out
+    by hand which schematic pins the PCB net might correspond to. That hand work
+    is where a candidate gets mis-typed — or where a same net **name** gets read
+    as «confirmed». This function does the mechanical half only:
+
+    ``pcbPin`` is ``designator.pin`` of the lonely row; ``pcbMembers`` is the
+    PCB net's **real** whole member list (the row itself carried a count); and
+    ``schematicCandidates`` is the whole member list of the schematic net whose
+    **key equals** ``pcbNet``, or ``[]`` when there is no net by that name. A
+    candidate is never inferred from the PCB members or from what the circuit
+    probably is, and a member of the *same designator on another pin* (``U9.3``
+    beside ``U9.1``) is **kept**: 「this is a renumbering」 is one of the two
+    readings the difference allows, and dropping it would be picking a side.
+
+    What this deliberately does **not** do: decide which view is right. Both
+    sides are **archive** readings (``checkup --file`` reviews the exported
+    schematic and PCB documents; neither is live evidence), so the mapping is a
+    machine-assembled candidate list for a person to check, and the section says
+    ``status: suspected`` for exactly that reason. It is not a confirmation, and
+    no ``confirmed`` verdict is written anywhere by this module.
+
+    An exception out of here is **not** swallowed into a partial mapping list:
+    the caller runs this inside the same ``try`` as the comparison, so a broken
+    read comes back as the existing ``checked: false`` disclosure instead of a
+    ``checked: true`` section that quietly lost its mappings.
+    """
+    pcb_nets = getattr(pcb_model, "nets", None) or {}
+    schematic_nets = getattr(schematic, "nets", None) or {}
+    mappings: list[dict] = []
+    for row in lonely:
+        name = row["pcbNet"]
+        pcb_net = pcb_nets.get(name)
+        candidate_net = schematic_nets.get(name)
+        mappings.append({
+            "pcbPin": f"{row['designator']}.{row['pin']}",
+            "pcbNet": name,
+            "pcbMembers": _net_member_refs(pcb_net),
+            "schematicCandidates": _net_member_refs(candidate_net),
+            "evidence": dict(CROSS_VIEW_MAPPING_EVIDENCE),
+        })
+    return mappings
+
+
 def _pcb_documents(source: Any) -> list[tuple[str, str, Any]]:
     """``(META title, META board, document)`` for every PCB document, in file order.
 
@@ -524,14 +610,36 @@ def cross_view_section(
     entry, because 「没配对」 and 「对上了」 are two different statements and a
     missing key cannot tell them apart (钉 5).
 
-    An exception out of the comparison is **the third** ``checked: false``, and
-    it is caught here on purpose: this reading is extra evidence beside the
-    rules, so a model it chokes on may not take the whole ``pcb_review`` section
-    down with it (the runner's own contract is that one broken check never kills
-    the report — 169 did the same for a raising rule, whose id is *named* in
-    ``rules_errored``). The reason names the exception, so 「检查崩了」 is a
-    reading the report carries rather than a silence a reader would take for
-    agreement.
+    **537C adds two keys, and only when there is something to suspect.** With a
+    non-empty ``lonely`` the section also carries ``status: "suspected"`` and one
+    ``candidateMappings`` entry per row, in the rows' own order, assembled by
+    :func:`_cross_view_candidate_mappings` from the **same-named** schematic net.
+    With an empty ``lonely`` the dict is ``{checked, minPins, lonely}`` exactly as
+    before: 「the views agree on these pins」 may not acquire a status, and
+    nothing here writes ``confirmed`` — a net **name** shared by the two archives
+    is a candidate, never a confirmation. The same holds for every
+    ``checked: false`` path: no partial ``status`` and no empty
+    ``candidateMappings``, because a section that says 「没查」 may not also look
+    half-checked.
+
+    Both sides of a mapping are **archive** readings (``checkup --file`` reviews
+    the exported schematic and PCB documents; neither is live evidence), so the
+    mapping is a machine-assembled candidate list for a person to check — it does
+    **not** judge which view is right, and 189A2's two possible readings (a
+    parser/pose artifact versus a genuinely unconnected pin whose board copy was
+    never re-synced) both stay open.
+
+    An exception out of the comparison — or out of the candidate read, which runs
+    inside the same ``try`` — is **the third** ``checked: false``, and it is
+    caught here on purpose: this reading is extra evidence beside the rules, so a
+    model it chokes on may not take the whole ``pcb_review`` section down with it
+    (the runner's own contract is that one broken check never kills the report —
+    169 did the same for a raising rule, whose id is *named* in ``rules_errored``).
+    The reason names the exception, so 「检查崩了」 is a reading the report carries
+    rather than a silence a reader would take for agreement. Running the mapping
+    pass inside this ``try`` is also what guarantees the shape 537C forbids never
+    appears: a ``checked: true`` section whose ``lonely`` has rows but whose
+    ``candidateMappings`` is missing.
     """
     if schematic_board is None:
         return {
@@ -547,17 +655,317 @@ def cross_view_section(
         }
     try:
         lonely = cross_view_lonely_pins(schematic_board, pcb_model)
+        mappings = (
+            _cross_view_candidate_mappings(schematic_board, pcb_model, lonely)
+            if lonely
+            else None
+        )
     except Exception as exc:  # noqa: BLE001 — named below, never silently dropped
         return {
             "checked": False,
             "reason": f"跨视图网表一致性检查未完成（{type(exc).__name__}: {exc}）"
                       "—— 没查，不是一致",
         }
-    return {
+    section = {
         "checked": True,
         "minPins": CROSS_VIEW_MIN_PINS,
         "lonely": lonely,
     }
+    if mappings is not None:
+        section["status"] = "suspected"
+        section["candidateMappings"] = mappings
+    return section
+
+
+#: 537C3b3：实时候选的三种状态。词汇与 537C 的覆盖账同一套（``ok / missing /
+#: unavailable``），但这里是**一条映射的实时半边**，不是通道覆盖：``missing`` 是
+#: 「实时网表里没有这个同名网」，``unavailable`` 是「有网，但名字在这份实时网表里
+#: 不能唯一定位」。
+LIVE_CANDIDATE_OK = "ok"
+LIVE_CANDIDATE_MISSING = "missing"
+LIVE_CANDIDATE_UNAVAILABLE = "unavailable"
+
+#: 本棒往每条 mapping 上追加的两个键，顺序固定在归档 ``evidence`` 之后。
+LIVE_CANDIDATE_KEYS = ("liveSchematicCandidates", "liveCandidateEvidence")
+
+#: 实时侧 evidence 的固定四段，与归档侧逐字分开：``schematic`` 只有在这里才是
+#: ``liveSchematic``——归档 mapping 自己那份永远写 ``archiveSchematic``。
+LIVE_CANDIDATE_EVIDENCE = {
+    "pcb": "archivePcb",
+    "schematic": "liveSchematic",
+    "basis": "same-net-name",
+}
+
+
+def _live_netlist_binding(netlist_artifact: Any) -> dict:
+    """A deep copy of the netlist artifact that **binds** the live candidates.
+
+    A live candidate list without a provenance binding is worse than none: the
+    reader cannot say which netlist produced it. ``file`` and ``sha256`` are
+    therefore mandatory and non-empty (``netlistType`` may ride along), and the
+    caller gets a ``ValueError`` instead of a candidate with no origin.
+    """
+    if not isinstance(netlist_artifact, dict):
+        raise ValueError(
+            "live 候选需要 netlist artifact（含非空 file/sha256），"
+            f"拿到的是 {type(netlist_artifact).__name__}——不生成无出处候选"
+        )
+    for key in ("file", "sha256"):
+        value = netlist_artifact.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(
+                f"live 候选的 netlist artifact 缺非空 {key}——不生成无出处候选"
+            )
+    return copy.deepcopy(netlist_artifact)
+
+
+def _live_repeated_designators(live_model: Any) -> set[str]:
+    """Names this live model cannot resolve to one placement (consumer view).
+
+    ``DesignModel.repeated_designators()`` is the consumer-facing reading (040
+    §WI-3): a repeated designator is ambiguous even where it is not a defect.
+    The method is preferred; the bare lists are the fallback for a model-shaped
+    stand-in.
+    """
+    repeated = getattr(live_model, "repeated_designators", None)
+    if callable(repeated):
+        return {str(name) for name in repeated()}
+    names = getattr(live_model, "duplicate_designators", None) or ()
+    return {str(name) for name in names}
+
+
+def _live_evidence(netlist: dict, status: str, **extra: Any) -> dict:
+    evidence: dict = {"status": status}
+    evidence.update(LIVE_CANDIDATE_EVIDENCE)
+    evidence["netlist"] = netlist
+    evidence.update(extra)
+    return evidence
+
+
+def _live_candidates_for_net(
+    live_model: Any,
+    net_name: str,
+    *,
+    repeated: set[str],
+    nets: dict,
+    netlist_artifact: dict,
+) -> tuple[list[dict], dict]:
+    """``([{pin, pinName}, …], evidence)`` for one mapping's live same-named net.
+
+    The members are the **live** net's own ``(designator, pin number)`` list —
+    never the archive ``schematicCandidates`` and never the archive ``pcbMembers``.
+    A member's ``pinName`` is read from the live component's pin with that exact
+    number; an empty name stays ``""`` (no guessing). The pin **number** on the
+    live net is authoritative precisely because the original session measured
+    that it can differ from the archive's (``U9.11`` archive vs ``U9.33`` live).
+
+    Three refusals, all stated rather than papered over:
+
+    * no net by that name, or a net with no members → ``missing``;
+    * the live model repeats a designator on this net → ``unavailable`` with
+      ``ambiguousDesignators``; the net is not resolved by picking one placement;
+    * a member cannot be resolved to a component/pin of the live model →
+      ``unavailable`` with ``unresolvedPins``.
+
+    The last two deliberately return **no** candidates at all: a partially
+    certain list would read as "these are the live members" while some of them
+    were silently dropped.
+    """
+    net = nets.get(net_name)
+    if net is None:
+        return [], _live_evidence(
+            copy.deepcopy(netlist_artifact),
+            LIVE_CANDIDATE_MISSING,
+            reason=(
+                f"实时网表里没有名为 {net_name} 的网——不拿归档候选或 PCB 成员补"
+            ),
+        )
+    members = getattr(net, "pins", None)
+    if members is None:
+        members = ()
+    if not isinstance(members, (list, tuple)):
+        raise ValueError(f"实时网 {net_name} 的 pins 不是成员列表，读不出候选")
+    if not members:
+        return [], _live_evidence(
+            copy.deepcopy(netlist_artifact),
+            LIVE_CANDIDATE_MISSING,
+            reason=f"实时网 {net_name} 没有成员——不拿归档候选或 PCB 成员补",
+        )
+
+    components = getattr(live_model, "components", None)
+    if not isinstance(components, dict):
+        components = {}
+
+    ambiguous: set[str] = set()
+    unresolved: set[tuple[str, str]] = set()
+    candidates: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for designator, number in members:
+        designator, number = str(designator), str(number)
+        if (designator, number) in seen:
+            continue
+        seen.add((designator, number))
+        if designator in repeated:
+            # Ambiguity is a property of the name being on this net, not of the
+            # pin resolving: a repeated designator may not be resolved by
+            # picking one placement, whether or not this pin reads.
+            ambiguous.add(designator)
+        component = components.get(designator)
+        if component is None:
+            unresolved.add((designator, number))
+            continue
+        pin = next(
+            (
+                pin
+                for pin in (getattr(component, "pins", None) or ())
+                if str(getattr(pin, "number", "")) == number
+            ),
+            None,
+        )
+        if pin is None:
+            unresolved.add((designator, number))
+            continue
+        candidates.append((designator, number, str(getattr(pin, "name", "") or "")))
+
+    netlist = copy.deepcopy(netlist_artifact)
+    if ambiguous or unresolved:
+        extra: dict[str, Any] = {}
+        if ambiguous:
+            extra["ambiguousDesignators"] = sorted(ambiguous)
+        if unresolved:
+            extra["unresolvedPins"] = [
+                f"{designator}.{number}"
+                for designator, number in sorted(
+                    unresolved, key=lambda item: (item[0], _pin_sort_key(item[1]))
+                )
+            ]
+        return [], _live_evidence(
+            netlist,
+            LIVE_CANDIDATE_UNAVAILABLE,
+            reason=(
+                f"实时网 {net_name} 含重复位号或无法精确解析的成员，"
+                "不能给出唯一候选（不给部分确定的列表）"
+            ),
+            **extra,
+        )
+
+    candidates.sort(key=lambda item: (item[0], _pin_sort_key(item[1])))
+    return (
+        [{"pin": f"{designator}.{number}", "pinName": name}
+         for designator, number, name in candidates],
+        _live_evidence(netlist, LIVE_CANDIDATE_OK),
+    )
+
+
+def enrich_cross_view_live_candidates(
+    cross_view: dict,
+    live_model: Any,
+    *,
+    netlist_artifact: dict,
+    identity_verified: bool,
+) -> dict:
+    """Add the **live** half of every crossView candidate mapping (537C3b3).
+
+    ``cross_view`` is :func:`cross_view_section`'s dict (or one read out of a
+    saved report). Each existing ``candidateMappings[]`` entry keeps every
+    archive field it had — ``pcbPin`` / ``pcbNet`` / ``pcbMembers`` /
+    ``schematicCandidates`` / ``evidence`` are **not** rewritten — and gains, in
+    this order after the archive ``evidence``:
+
+    * ``liveSchematicCandidates``: ``[{"pin": "U9.33", "pinName": "PB11"}, …]``,
+      the real members of the live net whose name equals ``pcbNet``, deduplicated
+      and sorted through :func:`_net_member_refs`' reading (designator, then
+      pin number numerically). ``pinName`` comes from that live component's pin
+      with the exact same number; an empty name stays ``""``;
+    * ``liveCandidateEvidence``: ``{status, pcb: "archivePcb", schematic:
+      "liveSchematic", basis: "same-net-name", netlist: <deep copy>}`` plus, when
+      status is not ``ok``, a concrete ``reason`` (and ``ambiguousDesignators`` /
+      ``unresolvedPins`` for ``unavailable``).
+
+    **Why the live net's members and not the archive refs:** the original
+    session measured that an archive ``pcbPin`` (``U9.11``) can be a *different*
+    pin number from the live same-named net's member (``U9.33``). Naming the old
+    archive refs from the live netlist would attach the wrong pin name to a
+    physical pin; the live candidate list is therefore rebuilt from the live
+    net, and the archive list is left standing beside it as the other reading.
+
+    Purity and idempotence: the input dict is deep-copied and never mutated; the
+    netlist artifact is deep-copied per mapping and never aliased. Old
+    ``liveSchematicCandidates`` / ``liveCandidateEvidence`` are removed from
+    **every** mapping first, so a second call replaces the previous live half
+    and a verified→unverified call strips it entirely.
+
+    What this deliberately does **not** do:
+
+    * it never writes ``status: confirmed`` and never changes the section's own
+      ``status`` — a live netlist that agrees on membership proves the live
+      reading, not which archive view was wrong, so ``suspected`` stays;
+    * with ``identity_verified=False`` it stops right after stripping: the live
+      candidates may belong to another project, so the archive section is
+      returned as it is and no model is consulted (a caller needs no model on
+      this path);
+    * with an empty ``lonely``, a missing ``candidateMappings`` or an unchecked
+      (``checked: false``) section it does not call a model at all: there is no
+      mapping to enrich, and 「没查」 may not acquire a live reading.
+
+    A live candidate list without provenance is refused: ``netlist_artifact``
+    must carry a non-empty ``file`` and ``sha256`` (a ``netlistType`` may ride
+    along), otherwise ``ValueError``. A ``live_model`` that must be read but
+    cannot be (``None``, no readable ``nets``) is also a ``ValueError`` — this
+    function does not guess what a broken model meant.
+    """
+    if not isinstance(cross_view, dict):
+        raise ValueError(
+            f"crossView 必须是 dict，拿到的是 {type(cross_view).__name__}"
+        )
+    enriched = copy.deepcopy(cross_view)
+
+    mappings = enriched.get("candidateMappings")
+    if mappings is None:
+        return enriched
+    if not isinstance(mappings, list):
+        raise ValueError("crossView.candidateMappings 不是列表，无法补实时候选")
+
+    stripped: list[dict] = []
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            raise ValueError("crossView.candidateMappings 里有非 mapping 条目")
+        stripped.append(
+            {key: value for key, value in mapping.items() if key not in LIVE_CANDIDATE_KEYS}
+        )
+    enriched["candidateMappings"] = stripped
+
+    if enriched.get("checked") is not True:
+        # 「没查」/「没配对」 may never look half-checked: no mapping is enriched,
+        # even if a malformed report carried one.
+        return enriched
+    if not identity_verified:
+        return enriched
+    if not stripped:
+        return enriched
+
+    nets = getattr(live_model, "nets", None)
+    if not isinstance(nets, dict):
+        raise ValueError(
+            "补实时候选需要可读的 live_model.nets（身份已核实时仍缺，不猜）"
+        )
+    netlist_artifact = _live_netlist_binding(netlist_artifact)
+    repeated = _live_repeated_designators(live_model)
+
+    for mapping in stripped:
+        net_name = mapping.get("pcbNet")
+        if not isinstance(net_name, str) or not net_name:
+            raise ValueError("candidateMapping 没有可核对的 pcbNet，无法取实时同名网")
+        candidates, evidence = _live_candidates_for_net(
+            live_model,
+            net_name,
+            repeated=repeated,
+            nets=nets,
+            netlist_artifact=netlist_artifact,
+        )
+        mapping["liveSchematicCandidates"] = candidates
+        mapping["liveCandidateEvidence"] = evidence
+    return enriched
 
 
 def _board_entry(

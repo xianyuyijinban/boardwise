@@ -57,7 +57,12 @@ const NOT_FOUND_HELP =
   '  3. run this plugin from a boardwise checkout so its virtualenv interpreter can be used ' +
   '(<repo>/.venv/Scripts/python.exe).'
 
-const WINDOWS_LAUNCHERS = ['boardwise.exe', 'boardwise.cmd', 'boardwise.bat', 'boardwise'] as const
+// Batch launchers are deliberately not spawned directly: Node cannot execute a
+// .cmd/.bat without a shell, and routing model-supplied argv through cmd.exe
+// opens a command-injection path. Point BOARDWISE_EXE at the .exe or at a
+// Python interpreter instead; a PATH that only has a batch launcher falls
+// through to the interpreter lookup (and then to the three-way error).
+const WINDOWS_LAUNCHERS = ['boardwise.exe', 'boardwise'] as const
 const POSIX_LAUNCHERS = ['boardwise'] as const
 const WINDOWS_PYTHONS = ['python.exe', 'python3.exe', 'py.exe'] as const
 const POSIX_PYTHONS = ['python3', 'python', 'py'] as const

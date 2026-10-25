@@ -85,14 +85,14 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 > 同目录 `references/` 下读同名文件（install-skill 会把引用的 references 全拷到 SKILL.md 旁边，
 > 缺了重跑 `boardwise install-skill`，别手抄路径硬找）。
 
-- **审板子**：`boardwise checkup` 一条出报告（ERC/DRC + 20 条自有规则 + 数据手册闸
-  + 分诊/器件/总结槽位），并一键出 `board-report.md`（**整板报告**：ERC+DRC+模块+器件
-  合成一份，按「板 → 模块/规则族」分组、按「严重度 × 模块权重」排序、末段答「整工程
-  能不能投板」——先看它一眼定盘）。**开工第一句先报连接状态**、报告逐段读法、
-  `review-summary.md` 收尾补全并**当面把结论讲给工程师**（2026-10-15 岳的口径：
-  审查结果由 AI 发给工程师——verdict 一句话 + ERROR 逐条点名 + 分诊建议 + 缺手册清单，
-  工程师不翻文件；文件留档路径一句话带过）、架构走查（044 起强制环节）、
-  triage 分诊口径，全在 `docs/review-sop.md`。
+- **审板子**：`boardwise checkup` 一条出报告（ERC/DRC + 自有规则 + 手册闸 + 分诊/器件/总结槽位），一键出 `board-report.md`（**整板报告**，末段答「整工程能不能投板」）。
+  **收尾固定顺序**（537E，完整口径见 `docs/review-sop.md`）：结构化读取（`boardwise_review_read` 只读完整 JSON 文件，不解析 `runBoardwise` 截断 stdout）→
+  分诊（`needs-manual` 仍 pending，不能用有益/有害/无害关掉无细节项）→ environment/evidence 覆盖补全（live 与 archive 分开，`partial` 只描述覆盖）→
+  人工填 `review-summary.md` → `review finalize --out DIR` 校验交付并签 CLI 收据 → 顺序交付。**`finalize.ok`/退出 0 只是交付校验，板级结论只认 `report.conclusion`**；
+  `partial`/needs-manual/open-items 披露一致即可交付，不许为过闸编证据。DSH：`boardwise_review_finalize` 成功后本 Session 才有 receipt，
+  `present` 必须等它、不能并行；手写 `finalize.json` 没有 Session 特权；未重启就别声称当前 DSH 已加载新闸。
+  连接状态第一句、架构走查、逐段读法、「文件留档 + 当面把结论讲给工程师」全在 `docs/review-sop.md`。
+
 - **缺手册 → 清闸**：给 PDF **不清闸**。`parts fetch --file` 只写 `facts_verified: false`
   的候选（不驱动规则）；清闸 = 货架条目带**已核验 facts**：
   `boardwise parts add <MPN> --lcsc <C码> --facts <facts.json> --verified`（读完 PDF 写 facts
@@ -194,7 +194,7 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 
 ## 6. 真机事实坑表（每条都真机踩过，出处可查）
 
-> **124 减重**：全表外置到 `docs/pits.md`（45 条全文 + 用法 + 出处）；这里只留索引
+> **124 减重**：全表外置到 `docs/pits.md`（53 条全文 + 用法 + 出处）；这里只留索引
 > ——命中关键词就去 `docs/pits.md` 读全行。**加新坑两边一起加**（这里一行 + 全表一行）。
 > 仓库里读 `docs/pits.md`；install-skill 装的读 SKILL.md 旁边的 `references/pits.md`。
 
@@ -251,6 +251,8 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 | 49 | 页面图幅属性读不出 `getCurrentSchematicPageInfo`（`document.current` 的 `schematicPage` 是 `{}`），但 `sys.get_document_source` 的记录流里有（图纸符号自己的 `Width/Height/Blade Width/Title Block Position`） |
 | 50 | `bridge status` / `--project` 可能看不到「在线但还没报名」的窗口（530A：`--project test` 报 PROJECT_NOT_CONNECTED 但窗口在线；逐窗口 `document.current`/`sys.identity` 核实），用 `--project` 判在线的测试两次全量会差 2 条 |
 | 51 | `sch.geometry` 的 `netflag.Component.name` 是**字形名**（`Ground-PGND`/`Power-5V`），网名在 `Net`/`Name`/`Global Net Name`——当旗标符号读会误判没落上 |
+| 52 | 器件删除**一次送多个 part id 必 `delete returned false`、同一 id 单发必成**（534：3 件 / 2 件批量 13 ms 全 false，单发就成；按单件发，或失败后单件重试——对照坑 46「超时也可能其实已删」） |
+| 53 | 删除耗时**不是恒 3.7 s/件**（534：首轮 20 根导线 150 s 只走完 10 根 ≈15 s/件，宿主后台续删 10–40 s/件，队列排空后 0.15 s/件；超时先回读、靠计数下降确认，绝不重发） |
 
 宿主声明 ≠ 宿主实现（`sch_ManufactureData.getPngFile` 声明 v3.2.183 却回 `NOT_IMPLEMENTED`，两台实测互证）；每一节的第一步都是真机 probe，probe 不通就如实降级，**不许照类型包硬写**。
 
@@ -272,11 +274,9 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 - **release notes 是公开文案**（岳 2026-10-08 定）：面向任意读者——只写变更内容、
   影响与升级指引；**禁内部语境**（同事/朋友/领导/明天演示/客户名/会议纪要），
   禁进度语气（「今晚」「终于」）；人称一律「本工具/本版本」，不写「我/我们」。
-- **派单纪律：串行小批，不派两小时黑箱**（xianyuyijinban 2026-09-28 定）：一个任务书只装
-  一个缺口/一个文件域；多缺口的大批拆成串行小批（并行会同文件撞车），每批目标半小时内交卷。
+- **派单纪律：串行小批，不派两小时黑箱**（xianyuyijinban 2026-09-28 定）：一个任务书只装一个缺口/一个文件域；多缺口的大批拆成串行小批（并行会同文件撞车），每批目标半小时内交卷。
   子代理上下文 500k 是 TaskStop 红线，但设计目标是**根本到不了**——上下文越重幻觉越多、返工越多（060 三缺口合一批：41 万 tokens、跑满 2h timeout 被斩，实证）。
-- **issue 不由我们关**（xianyuyijinban 2026-09-29 定，原话「问题还没确定解决就关掉」）：
-  修复落地后只 comment「待验证」+ 验证步骤/commit hash，**由提出人实测确认后自己关**（或明说「关掉吧」）。代码完成 ≠ 问题解决。
+- **issue 不由我们关**（xianyuyijinban 2026-09-29 定，原话「问题还没确定解决就关掉」）：修复落地后只 comment「待验证」+ 验证步骤/commit hash，**由提出人实测确认后自己关**（或明说「关掉吧」）。代码完成 ≠ 问题解决。
 - **删除一律进回收站，禁 `rm` / `unlink` 直删**（xianyuyijinban 2026-09-28 定）——包括临时目录、
   变异备份、废弃产物，没有例外。Git Bash 里用 Windows 原生通道：
 

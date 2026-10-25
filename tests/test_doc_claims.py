@@ -484,3 +484,121 @@ def test_the_two_sop_copies_stay_byte_identical():
             f"{relative} drifted from {SOP_COPIES[0]} — the two are one file in two "
             "places; re-copy it (`cp`), never re-edit one side"
         )
+
+
+# ============================================ 537E：收尾顺序与交付边界（dsh 审查闭环）
+#: 收尾小节从 `⓹ 收尾死一步` 起，到下一个 `### ` 标题为止。只解析**这一小节**：
+#: 拿全文做等值比较，正文别处改一个字就红，钉住的是排版不是语义。
+_SOP_TAIL_HEADING = "⓹ 收尾死一步"
+#: 六步的**加粗标题**，按 SOP 要求的顺序。它们是顺序本身，不只是关键词。
+_SOP_TAIL_STEPS = (
+    "**结构化读取**",
+    "**分诊**",
+    "**environment / evidence 覆盖补全**",
+    "**人工填 `review-summary.md`**",
+    "**`boardwise review finalize --out <目录>`**",
+    "**顺序交付**",
+)
+
+
+def _sop_tail_section() -> str:
+    """`docs/review-sop.md` 的收尾小节（含 `⓹` 标题行，到下一个 `### ` 为止）。"""
+    lines = SOP.splitlines()
+    start = next((i for i, line in enumerate(lines) if _SOP_TAIL_HEADING in line), None)
+    assert start is not None, (
+        "docs/review-sop.md lost its `⓹ 收尾死一步` section — the 537E delivery order "
+        "lives there"
+    )
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("### ")),
+        len(lines),
+    )
+    return "\n".join(lines[start:end])
+
+
+def test_the_sop_tail_section_keeps_the_537e_order():
+    """护 537E：收尾必须依次是 读取 → 分诊 → 覆盖补全 → 填总结 → finalize → 交付。
+
+    失效时的样子（537E 之前）：SOP 的收尾只有「填 review-summary + 当面讲」两个动作，
+    结构化读取、needs-manual 仍 pending、live/archive 覆盖分开、finalize 收据全没写；
+    照着读的人照样解析 `runBoardwise` 的截断 stdout、照样用三词关掉无细节 ERC。
+    """
+    section = _sop_tail_section()
+    positions: list[int] = []
+    for step in _SOP_TAIL_STEPS:
+        assert step in section, f"the 537E tail section lost its step {step!r}"
+        positions.append(section.index(step))
+    assert positions == sorted(positions), (
+        "the 537E tail steps are out of order: " + " → ".join(_SOP_TAIL_STEPS)
+    )
+    assert "runBoardwise" in section and "截断" in section, (
+        "the tail section stopped forbidding truncated `runBoardwise` stdout parsing"
+    )
+    assert "needs-manual" in section and "pending" in section, (
+        "the tail section stopped saying a `needs-manual` slot stays pending"
+    )
+
+
+def test_the_sop_tail_section_keeps_finalize_and_the_board_verdict_apart():
+    """护 537D2/537E：`finalize.ok`/退出 0 只是交付校验，板级结论只认 `report.conclusion`。
+
+    失效时的样子：把 `finalize.ok` 读成板子通过（或拿 `summary.conclusion` 拼一句结论），
+    于是交付校验冒充板级裁决；或者为了过闸，把模型记忆当手册证据、把归档当实时。
+    """
+    section = _sop_tail_section()
+    assert "finalize.ok" in section and "不是板级通过" in section
+    assert "report.conclusion" in section and "唯一权威" in section
+    assert "在披露一致时可以交付" in section, (
+        "the tail section stopped allowing partial/needs-manual deliveries when disclosed"
+    )
+    assert "只描述证据/交付覆盖" in section, (
+        "the tail section stopped saying `partial` describes coverage, not a board verdict"
+    )
+    assert "编造证据" in section, "the tail section no longer forbids fabricating evidence"
+    assert "模型记忆不是数据手册证据" in section
+    assert "web_search" in section and "手册已核" in section, (
+        "the tail section lost the rule that a failed web_search may not be worded as a "
+        "checked datasheet"
+    )
+    assert "archive 不等于 live" in section
+    assert "环境限制与证据缺口" in section and "披露" in section
+
+
+def test_the_sop_tail_section_orders_the_dsh_receipt_before_present():
+    """护 537D3：`boardwise_review_finalize` 成功之后才有 Session receipt，present 等它。
+
+    失效时的样子（原会话 seq 431）：同一步里发检查与 present，present 在没有任何
+    finalize 记录时把文件端出去；或把模型可写的手写 `finalize.json` 当成授权。
+    闸由插件实现，但**顺序与「手写文件没有 Session 特权」是 SOP 必须说清的那一半**。
+    """
+    section = _sop_tail_section()
+    finalize_at = section.index("boardwise_review_finalize")
+    present_at = section.index("present")
+    assert finalize_at < present_at, (
+        "the tail section puts `present` before the Session receipt exists"
+    )
+    assert "不能与 finalize 并行" in section
+    assert "手写 `finalize.json` 没有 Session 特权" in section
+    assert "当前运行中的 DSH" in section and "新闸" in section, (
+        "the tail section stopped warning that the running DSH has not loaded the new gate"
+    )
+
+
+def test_the_skill_review_route_compresses_the_tail_order_and_points_at_the_sop():
+    """护 537E 的路由层：SKILL 只留压缩后的顺序 + 权威边界，细节指到 SOP。
+
+    SKILL 是运行时必读的路由层（320 行预算由上面那条钉着），所以这里只要求它点到
+    顺序与两个权威边界，不要求它复制 SOP 的正文。
+    """
+    skill = (REPO / SOP_COPIES[0]).read_text(encoding="utf-8")
+    for token in (
+        "收尾固定顺序",
+        "boardwise_review_read",
+        "runBoardwise",
+        "boardwise_review_finalize",
+        "present",
+        "report.conclusion",
+        "手写 `finalize.json` 没有 Session 特权",
+        "docs/review-sop.md",
+    ):
+        assert token in skill, f"SKILL lost {token!r} from the review route"

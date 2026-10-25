@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import io
 import json
 import zipfile
@@ -1938,6 +1939,54 @@ def test_canvas_images_are_rendered_per_page_and_named_relative(fake_bridge, tmp
              if action == "doc.open"]
     assert opens[-1] == PAGE_UUID
     assert "export.render" in _FakeBridgeClient.history
+
+
+def test_two_schematics_with_a_p1_page_do_not_overwrite_each_other(
+    fake_bridge, tmp_path
+):
+    """539: page titles are not unique; the report, host name and bytes must agree."""
+    second_uuid = "a49f56119597d6d5"
+    answers = _live_answers()
+    answers["doc.list"] = {
+        **answers["doc.list"],
+        "documents": [
+            {"uuid": PAGE_UUID, "name": "P1", "type": "page", "active": True},
+            {"uuid": second_uuid, "name": "P1", "type": "page"},
+            {"uuid": "5dc38976c1fa45ce", "name": "PCB1", "type": "pcb"},
+        ],
+    }
+    payloads = [TINY_PNG, TINY_PNG + b"\x00"]
+    render_calls = []
+
+    def render(action, params):
+        render_calls.append(dict(params))
+        return _render_answer(payloads[len(render_calls) - 1])
+
+    answers["export.render"] = render
+    _FakeBridgeClient.answers = answers
+    args = _checkup_args(out=str(tmp_path / "out"))
+
+    assert _cmd_checkup(args) == 3
+
+    out = tmp_path / "out"
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    images = report["ai_slots"]["canvas_images"]
+    assert [image["pageUuid"] for image in images] == [PAGE_UUID, second_uuid]
+    assert [image["file"] for image in images] == [
+        "canvas-P1.png", f"canvas-P1-{second_uuid[-6:]}.png",
+    ]
+    assert len({image["file"] for image in images}) == 2
+    for image, expected in zip(images, payloads, strict=True):
+        written = (out / image["file"]).read_bytes()
+        assert written == expected
+        assert image["bytes"] == len(written)
+        assert image["sha256"] == hashlib.sha256(written).hexdigest()
+    assert [call["fileName"] for call in render_calls] == [
+        image["file"] for image in images
+    ]
+    assert sorted(path.name for path in out.glob("canvas-P1*.png")) == sorted(
+        image["file"] for image in images
+    )
 
 
 def test_a_page_that_cannot_be_rendered_is_an_entry_not_a_failure(fake_bridge, tmp_path):

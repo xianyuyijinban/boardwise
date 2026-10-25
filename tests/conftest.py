@@ -24,6 +24,32 @@ def _no_auto_daemon(monkeypatch):
     monkeypatch.setenv("BOARDWISE_NO_AUTO_DAEMON", "1")
 
 
+#: The two markers DeepSeek Harness (dsh) exports into the processes it runs.
+#: Since 537A `doctor` branches on them: a dsh session judges the **workspace's**
+#: ``.agents/skills/boardwise/SKILL.md`` and prints one ``skill-dsh`` line instead
+#: of the two user-level ``skill-kimi`` / ``skill-claude`` ones.
+DSH_MARKERS: tuple[str, ...] = ("DSH_SESSION_ID", "DSH_HOME")
+
+
+@pytest.fixture(autouse=True)
+def _legacy_harness_environment(monkeypatch):
+    """Every test starts outside a dsh session (537A).
+
+    The suite itself may well be *run* from one — this repository is developed in
+    dsh — and `DSH_SESSION_ID` / `DSH_HOME` would then leak into every in-process
+    `doctor` call and every subprocess's ``os.environ.copy()``. That would make the
+    061/062 tests (two harness lines, ``10/10``) pass or fail by which harness
+    happened to launch pytest, which is not a property of the code. So the legacy
+    environment is the **stated default** here, and ``tests/test_537a_doctor_dsh.py``
+    puts the markers back on purpose, per test.
+
+    ``raising=False`` because a plain CI shell has neither variable, and that is
+    the same legacy environment this fixture exists to guarantee.
+    """
+    for name in DSH_MARKERS:
+        monkeypatch.delenv(name, raising=False)
+
+
 # C7 (perf-02B): `tests/_pcb_cache.py` installs a session cache in front of
 # `boardwise.engines.pcbreview.run_pcb_review`, which was 383 calls / 444 s of
 # worker time per full run — the largest single engine entry in the suite.

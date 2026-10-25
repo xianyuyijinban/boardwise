@@ -161,6 +161,18 @@ def candidate_from_netlist(text: str, netlist_type: str = "EasyEDA") -> DesignMo
         device_name = str(props.get("DeviceName") or "").strip()
         if device_name:
             component.props["device_name"] = device_name
+        # 537C3b3: two netlist entries answering to one designator are **one
+        # ambiguous name**, not a choice between them. The reads below stay
+        # exactly as they were — the later placement still owns
+        # ``components[designator]`` and both placements still contribute their
+        # net members — but a consumer that names a part (a live candidate, an
+        # edit plan, a BOM line) has to be able to see the clash. That is what
+        # ``duplicate_designators`` / ``repeated_designators()`` state. This is
+        # disclosure only: it does **not** judge a same-page duplicate as a
+        # drawing defect (that verdict is CONN-1's, on the schematic side), so
+        # nothing is added to ``unproven_nets`` and no pin list is dropped.
+        if designator in model.components and designator not in model.duplicate_designators:
+            model.duplicate_designators.append(designator)
         for number, pin in sorted(
             (entry.get("pinInfoMap") or {}).items(), key=lambda kv: len(kv[0]),
         ):

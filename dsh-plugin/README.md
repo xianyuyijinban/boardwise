@@ -8,6 +8,12 @@ DeepSeek Harness（dsh）的 boardwise 插件：在 dsh 里直接调 boardwise �
 产物路径包装成 tool 返回值。解析器、规则引擎、报告——全在 Python 侧；
 TS 里不重算任何审查结论（任务书 045 §1）。
 
+## 版本策略
+
+**从 0.6.0 起，插件版本与 boardwise 外部版本同号**：发布 0.6.0 时，根 shim
+`package.json` 与 `dsh-plugin/package.json` 一起改成 `0.6.0`，不再单独维护 `0.1.x` 线。
+`0.1.3` 是 `0.1.x` 的最后一版；0.6.0 之前现有安装照用，不追着改版本号。
+
 ## 工具面
 
 | 工具 | 包装的命令 | 关键参数 | timeoutMs |
@@ -39,13 +45,56 @@ TS 里不重算任何审查结论（任务书 045 §1）。
 1. 环境变量 `BOARDWISE_EXE` —— 指向 `boardwise.exe`，或指向一个**装了 boardwise 的 Python 解释器**
    （名字像 `python`/`py` 时自动补 `-m boardwise.cli`）。指向不存在的文件 = **报错**，不会悄悄换别的
    （R3：找不到就停下来说，不自行替代）。
-2. PATH 上的 `boardwise`（Windows 依次试 `boardwise.exe` / `.cmd` / `.bat`）。
+2. PATH 上的 `boardwise.exe`（Windows 只自动执行 **exe**；`.cmd` / `.bat` 不直接 spawn，
+   因为 Node 无法在不经 shell 的情况下执行批处理，经 `cmd.exe` 又会把模型给的参数暴露在
+   shell 解析下。只有批处理启动器时请改用 `BOARDWISE_EXE` 指向 exe 或 Python）。
 3. PATH 上的 `python` / `py` + `-m boardwise.cli`（开发机 fallback；该解释器没装 boardwise 时，
    结果里会附一行 hint 让你改用 `BOARDWISE_EXE`）。
 
 三条都没有 → 报错文案直接给出三出路（装 exe / 设 env / 用仓库 venv）。
 
+注意：**插件不会自动探测仓库里的 `.venv`**。报错文案第三条「用仓库 venv」是一条**人照着做**的
+出路——把 `BOARDWISE_EXE` 指向 `<repo>/.venv/Scripts/python.exe`，不是插件的自动行为。
+开发机上最常见的首次失败正是第 3 档：PATH 上的 Python 能跑、但没装 boardwise，
+于是拿到 `ModuleNotFoundError: No module named 'boardwise'` 和一行 hint，而不是工具结论。
+
 ## 安装
+
+### 先决条件：dsh 进程要能找到 boardwise CLI
+
+插件只是 spawn 本机 CLI 的薄适配层，不把审查逻辑搬进 Node。所以装完插件还要保证
+**dsh 进程**能按上一节的顺序解析到 CLI；否则第一次调用会返回一条指路错误（不是插件装坏了）。
+本机实测能走通的路有两条（另附源码树冒烟时的默认指向）：
+
+**A. 把仓库装进用户级 site-packages（开发机最省事）**
+
+```sh
+pip install --user -e <boardwise 仓库>
+```
+
+这会生成 `%APPDATA%\Python\Python3xx\Scripts\boardwise.exe`；该目录通常已在 PATH 上，
+插件的结果里会写 `cli: path` 并给出这个 exe 的绝对路径。dsh 桌面应用的子进程读同一份
+用户级 site-packages，所以**装完即可用，不必重启 dsh、不必设环境变量**。
+
+本机实测（2026-10-24）：`boardwise_doctor` 返回
+`cli: path` → `C:\Users\<用户>\AppData\Roaming\Python\Python314\Scripts\boardwise.exe`。
+若 `...\Scripts` 不在 PATH 上，改用 B 并把路径写死。
+
+**B. 装发布版 exe，并让 `BOARDWISE_EXE` 指向它**
+
+```sh
+setx BOARDWISE_EXE "<boardwise.exe 的绝对路径>"
+# 也可以指向装了 boardwise 的 Python 解释器（名字像 python/py 时自动补 -m boardwise.cli）：
+setx BOARDWISE_EXE "<boardwise 仓库>\.venv\Scripts\python.exe"
+```
+
+`setx` 只影响**之后**启动的进程：重开 dsh 才生效。指向不存在的文件时插件**直接报错**，
+不会悄悄换用别的 boardwise（R3：找不到就停下来说）。
+
+**C. 源码树直接跑冒烟**：`npm run smoke` 会自动把 `BOARDWISE_EXE` 指到
+`<repo>/.venv/Scripts/python.exe`，不需要额外设变量（这条只是冒烟脚本的默认值，不是第三条安装路）。
+
+### 构建与打包
 
 ```sh
 cd <boardwise 仓库>/dsh-plugin
@@ -54,12 +103,19 @@ npm run typecheck && npm test && npm run build
 npm pack                       # 产出 boardwise-dsh-<version>.tgz
 ```
 
-装进 profile（tarball 方式，不进 npm registry）：
+### 装进 profile
 
 ```sh
+dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
 dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
-# headless / desktop 是**不同** profile，各装一次
+# desktop / web / headless 是**不同** profile，各装一次
 dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
+```
+
+也可以从 GitHub 装（要求仓库根的 shim 已提交，见下节）：
+
+```sh
+dsh plugin --profile desktop add github:xianyuyijinban/boardwise
 ```
 
 或从 npm registry 装（**发布后**才可用，见下节 publish 指引）：
@@ -73,12 +129,74 @@ dsh plugin --profile headless add boardwise-dsh
 验证：
 
 ```sh
-dsh --profile web --dump-config | grep tool-boardwise
+dsh plugin --profile desktop why boardwise-dsh   # 应报 1 个版本，挂在 dsh-profile-desktop 下
+dsh --profile desktop --dump-config | grep tool-boardwise
 ```
 
 让模型跑一次 `boardwise_doctor`：daemon 在线应看到 `PASS` 行与逐项结论；
 多窗口在线时那 4 项会写「未验证」（daemon 设计上不猜窗口），
 用 `project=` / `instance=` 指定一个窗口即转 PASS。
+
+### headless profile 的 store 分裂（已裁：新建 profile）
+
+**现象**：headless profile 上的 `dsh plugin --profile headless add <tgz>` 会报
+`ERR_PNPM_UNEXPECTED_STORE`——pnpm 认为这个 `node_modules` 是**另一个 store** 物化的，
+于是拒绝在它上面继续装。
+
+**本机证据**（2026-10-24 读文件所得，不是猜）：
+
+```text
+D:\dsh-home\profiles\headless\node_modules\.modules.yaml
+  storeDir:        C:\Users\<用户>\AppData\Local\pnpm\store\v11
+  virtualStoreDir: C:\Users\<用户>\.dsh\profiles\headless\node_modules\.pnpm
+D:\dsh-home\profiles\desktop\node_modules\.modules.yaml
+  storeDir:        D:\.pnpm-store\v11
+  virtualStoreDir: D:\dsh-home\profiles\desktop\node_modules\.pnpm
+```
+
+headless 的 `node_modules` 是早先 `~/.dsh` 时代物化的，profile 后来搬到了
+`D:\dsh-home\profiles\headless`，但 `.modules.yaml` 里记的还是旧的 store 与旧路径；
+desktop 则用 `D:\.pnpm-store\v11`。两套 store 对不上，pnpm 就报这个错。
+
+**最小复现**（2026-10-24 实测触发；在已存在的 headless profile 上再装一次即可，不需要先卸载，
+pnpm 在解析阶段就拒）：
+
+```sh
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
+# → ERR_PNPM_UNEXPECTED_STORE（modules dir 的 store 与当前 store 不一致）
+```
+
+**处置（2026-10-24 已裁）**：不要为了消掉这个报错去清空或重链 `DSH_HOME` 的 pnpm store——那会牵动
+desktop / web 两个在用的 profile。也不迁移旧 headless 的 `node_modules`；从 headless 模板新建一个干净
+profile，在它上面安装：
+
+```sh
+dsh --profile boardwise-clean --from-default-profile headless --dump-config
+dsh plugin --profile boardwise-clean add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
+```
+
+本机实测：安装 431ms 成功，`--dump-config` 出现 `# == boardwise-dsh` / `tool-boardwise`；旧
+`headless` 的 store 与 `node_modules` 一个字节未动。现有 headless 里已经装好的 0.1.3 仍可照用，
+需要干净安装就用新 profile。
+
+### web profile：旧 profile 不硬修，新建 `boardwise-web-clean`
+
+现有 `web` profile 的 `node_modules/.modules.yaml` 还记着
+`C:\Users\xiangyu\.dsh\profiles\web\node_modules\.pnpm`（profile 搬过家），在原 profile
+上安装会报 `ERR_PNPM_UNEXPECTED_VIRTUAL_STORE`。不重建旧 `web` 的依赖，按 headless 同法
+从 web 模板新建一个干净 profile：
+
+```sh
+# 当前 Desktop CLI；版本目录以本机 host-commands 为准
+DSH="$HOME/AppData/Roaming/DSH Desktop/host-commands/desktop/generations/<hash>/bin/dsh.cmd"
+"$DSH" --profile boardwise-web-clean --from-default-profile web --dump-config
+"$DSH" plugin --profile boardwise-web-clean add \
+  file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
+"$DSH" --profile boardwise-web-clean --dump-config | grep -n 'tool-boardwise'
+```
+
+本机实测：安装 377ms，`--dump-config` 出现 `# == boardwise-dsh` / `tool-boardwise`。
+启动 web 时用 `--profile boardwise-web-clean`；旧 `web` profile 保持原样。
 
 ### DSH STORE 那条命令现在能用了（根 shim）
 
@@ -147,8 +265,10 @@ npm publish --dry-run           # 只看文件面，不上传
 |---|---|---|
 | `0.1.7-rc.2` | ✔ 全通 | 2026-09-29 实测：`plugin add` exit 0、bundle patch 生效、4 工具注册 4/4、`boardwise_arch` 真调 exit 0 |
 | `0.2.0-rc.1` | ✔ 全通 | 同一轮实测，输出与 0.1.7-rc.2 **逐字节相同** |
+| `0.2.1-rc.2` | ✔ 桌面版实读 | 2026-10-24 桌面 profile 实测：`plugin why` 报 1 个版本、`--dump-config` 有 `tool-boardwise`、`boardwise_doctor` 真调 exit 1（daemon 在线、结果非失败）、`boardwise_checkup` 真调 exit 3 且 report.json / report.md / architecture.md / design-intent.md 四件产物均 `[present]` |
 
-原始日志与结论：`outputs/066_dsh_matrix/VERDICT.md`（零 FAIL 格）。
+原始日志与结论：`outputs/066_dsh_matrix/VERDICT.md`（零 FAIL 格；`0.2.1-rc.2`
+一行是 2026-10-24 在桌面 profile 上的补读，不是矩阵里那一轮的产物）。
 
 - **peer 范围**：`@deepseek-ai/dsh-tools` peerDep 自 0.1.1 起是三分支范围
   `>=0.0.1-rc.1 <0.3.0 || >=0.1.7-rc.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0`
@@ -167,7 +287,7 @@ npm publish --dry-run           # 只看文件面，不上传
 
 ```sh
 npm run typecheck     # tsc --noEmit（src 为唯一被检查的源码）
-npm test              # vitest run tests —— 48 例（mock spawn，不起真进程）
+npm test              # vitest run tests —— 52 例（51 过 1 跳过；mock spawn，不起真进程）
 npm run build         # → lib/
 npm run smoke         # 独立冒烟：import lib/index.js，真起 CLI（见下）
 ```
@@ -182,6 +302,10 @@ npm run smoke         # 独立冒烟：import lib/index.js，真起 CLI（见下
    PATH 上什么都没有——各自断言明确报错文案。
 
 它不碰在线编辑器写动作，也不调 `bridge` 任何动作。
+
+在受限文件沙箱里跑时，第 3 步可能报 exit 1 而不是 0/3：node 在 `%TEMP%` 建的目录，
+沙箱外的子进程 Python 写不进去（`PermissionError: …\report.json`）。这是环境 ACL 限制，
+不是插件缺陷——真实桌面 dsh 里同一调用返回 exit 3，四件产物均写出。
 
 ## 非目标
 

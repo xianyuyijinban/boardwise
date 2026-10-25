@@ -846,6 +846,53 @@ def _project_hint_matches(hint: str, window: WindowConnection) -> bool:
     return False
 
 
+#: The projects this daemon may **design-write** into when nobody says
+#: otherwise (537A3). The scratch projects are the only ones the project's own
+#: rules allow an AI to write at all, so "silence" has to mean them and nothing
+#: else: a real board is refused by default, not by a prompt.
+DEFAULT_WRITE_PROJECTS: frozenset[str] = frozenset({"test", "test2"})
+
+
+def _normalise_write_projects(value: Any) -> frozenset[str]:
+    """One allowlist out of an iterable, a comma-separated string, or an empty one.
+
+    The same folding as a routing hint (:func:`_normalise_project_hint`), so the
+    name an operator types and the name the connector reports compare equal:
+    ``/test``, ``TEST`` and ``test`` are one project. ``*`` passes through as
+    itself — it is a literal switch, not a project name.
+
+    A string is split on commas because that is the environment variable's
+    syntax; an iterable is taken as entries. An entry that folds to nothing is
+    dropped, which keeps a stray comma from becoming an allowlisted ``""``.
+    """
+    if isinstance(value, str):
+        entries: list[Any] = value.split(",")
+    else:
+        entries = list(value)
+    return frozenset(
+        folded
+        for folded in (_normalise_project_hint(entry) for entry in entries)
+        if folded
+    )
+
+
+def _resolve_write_projects(injected: Any) -> frozenset[str]:
+    """The policy in force: injection first, then ``BOARDWISE_WRITE_PROJECTS``.
+
+    ``None`` means "not injected" and *only* ``None`` does: an empty string or
+    an empty collection is a policy — "write nowhere" — and must not be read as
+    an absent value, because that would turn an operator's explicit nothing into
+    the default ``test`` / ``test2``. Injection outranks the environment so a
+    test can pin a policy without touching the process environment.
+    """
+    if injected is not None:
+        return _normalise_write_projects(injected)
+    raw = os.environ.get("BOARDWISE_WRITE_PROJECTS")
+    if raw is None:
+        return DEFAULT_WRITE_PROJECTS
+    return _normalise_write_projects(raw)
+
+
 def window_listing(windows: Iterable[WindowConnection]) -> str:
     """``projectName (instanceId)`` for each window, comma-separated (023).
 
@@ -913,6 +960,20 @@ class BridgeDaemon:
     #: A callback rather than a print: this module is a library, and the tests
     #: collect notices instead of capturing stdout.
     on_pairing: Callable[[PairingNotice], None] | None = None
+    #: Which projects this daemon may **design-write** into (537A3). Injected
+    #: explicitly by a test that wants to pin a policy, otherwise read once at
+    #: construction from ``BOARDWISE_WRITE_PROJECTS`` (``None`` = the variable is
+    #: absent, which is not the same as an empty one). Kept as the folded set
+    #: (:func:`_normalise_write_projects`) so the message and the comparison
+    #: cannot disagree, and so ``*`` — the legacy full-allow switch — is one
+    #: membership test rather than a special case in every caller.
+    write_projects: frozenset[str] | None = None
+
+    def __post_init__(self) -> None:
+        # Resolved here, not at each use: the policy is a property of this daemon
+        # process, and re-reading the environment per call would let a caller's
+        # `os.environ` change mid-run decide where a write may land.
+        self.write_projects = _resolve_write_projects(self.write_projects)
 
     # -- handshake ------------------------------------------------------
 
@@ -1454,6 +1515,71 @@ class BridgeDaemon:
 
     # -- dispatch -------------------------------------------------------
 
+    def _check_design_write(self, spec: Action, window: WindowConnection) -> None:
+        """Refuse a design write into a project this daemon was not told to write.
+
+        The gate exists because the alternatives all depend on somebody
+        remembering: a prompt, a CLI flag, a plugin that forwards what it is
+        given. 537A2 closed the *escape hatch* (``bridge call --read-only`` and
+        the DSH plugin), while a plain ``bridge call`` or ``edit apply`` still
+        reached any project the routed window had open. This is the one place
+        every forwarded frame passes through, so the decision lives here.
+
+        What is checked is ``risk`` **and** ``design_write``: reads cannot change
+        anything, and the three non-design writes (``doc.open`` / ``doc.focus`` /
+        ``sys.self_update``) are navigation or the connector replacing itself —
+        they keep their old ``risk`` and their old gates. Everything else that
+        is not a read is a design write and must name a project the operator
+        allowed.
+
+        Identity is the window's own claim (``projectName`` / ``projectUuid``,
+        refreshed by every response) because the daemon cannot read a project
+        itself. A window that named neither is refused rather than assumed safe:
+        "which project" being unknown is the same danger as "the wrong project",
+        and refusing costs only a ``hello``-less connector's write.
+
+        The refusal happens **after routing** (so the message can name the
+        project actually selected) and **before the out-parameter is marked and
+        before the frame is forwarded** (so a caller cannot report a write that
+        never left the daemon). It names the action, the project, the allowed set
+        and the fact that nothing was forwarded — the four things needed to fix
+        it without reading this code.
+        """
+        if spec.risk == "read" or not spec.design_write:
+            return
+        allowed = self.write_projects or frozenset()
+        if "*" in allowed:
+            return
+        name = window.project_name or ""
+        uuid = window.project_uuid or ""
+        if any(
+            _normalise_project_hint(value) in allowed for value in (name, uuid) if value
+        ):
+            return
+        project = name or uuid
+        if not project:
+            project = (
+                "(unknown project: the window named neither a project name nor "
+                "a uuid)"
+            )
+        rendered_allowed = ", ".join(sorted(allowed)) or "(none)"
+        raise BridgeError(
+            ErrorCodes.WRITE_PROJECT_FORBIDDEN,
+            f"{spec.name} is a design write, and the routed window's project is "
+            f"{project!r}; design writes are allowed only for: "
+            f"{rendered_allowed}. Nothing was forwarded to the editor. To allow "
+            "a project, list its name or uuid in BOARDWISE_WRITE_PROJECTS "
+            "(comma-separated; '*' restores legacy full access).",
+            {
+                "action": spec.name,
+                "project": project,
+                "projectName": name or None,
+                "projectUuid": uuid or None,
+                "allowed": sorted(allowed),
+                "risk": spec.risk,
+            },
+        )
+
     async def handle_request(
         self,
         action: str,
@@ -1479,6 +1605,11 @@ class BridgeDaemon:
             return self._local_action(action)
         params = self._gate_confirmation(spec, params)
         window = self.route(target_project, action, target_instance)
+        # 537A3: the project gate sits between routing and the write lock. After
+        # routing, because the refusal has to name the project that *would* have
+        # been written; before `routed` is marked and before `_forward`, because
+        # a refused call was not sent anywhere and must not read as if it was.
+        self._check_design_write(spec, window)
         if routed is not None:
             routed["windowKey"] = window.key
         if spec.risk == "read":

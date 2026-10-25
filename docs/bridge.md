@@ -519,6 +519,18 @@ call, so it is beyond every `write`-tier action and is meant for scratch pages o
 `write`, so the `create` gate above does not cover it — what guards it is the page-uuid check
 (a uuid the project does not list is `NOT_FOUND`), not a confirmation flag.
 
+**537A3 — a design write also names a project.** Every entry carries `design_write`: whether the
+call changes the **project's own bytes**. It defaults to `True`, so a new non-read action is gated
+unless it is deliberately classified otherwise, and only two kinds are: navigation (`doc.open`,
+`doc.focus` — they decide which page the next call lands on but write nothing) and
+`sys.self_update` (replaces the connector, not the design). The daemon allows design writes only
+into `test` / `test2` by default; any other project — or a window whose project it cannot read at
+all — is refused with `WRITE_PROJECT_FORBIDDEN`, **after routing and before the frame is
+forwarded**. Reads, navigation and self-update are untouched, and their `risk` values are unchanged
+(so `bridge call --read-only` still refuses `doc.focus`/`doc.open`). `BOARDWISE_WRITE_PROJECTS`
+(§8) names other projects; `*` is the legacy full-allow switch. Pinned by
+`tests/test_537a_daemon_write_policy.py`.
+
 Two tests keep this table honest: `connector/tests/contract-drift.test.mjs` asserts that
 `ACTIONS`, the connector's handler registry and **this table** all list the same names
 (both difference directions reported), and `tests/test_action_catalogue.py` checks the catalogue
@@ -764,6 +776,7 @@ Notes that matter operationally:
 | `WINDOW_NOT_CONNECTED` | **Superseded by `INSTANCE_STALE` (185 §C), kept in the vocabulary.** A `targetInstance` hint that no connected window answers to (023 follow-up) | The daemon no longer sends this code: an instance hint that resolves to nothing live is reported as `INSTANCE_STALE`, which says the same thing and adds why it happens. A field build that still switches on this string has a branch that no longer fires |
 | `INSTANCE_STALE` | A `targetInstance` hint that names no **live** window (185 §C) | The window is closed, or the id is stale: the connector mints a new instance id every time a window greets the daemon, so restarting the editor or reloading the page makes the old one name nothing. **This is not "the call worked and returned nothing"** — nothing was forwarded. The message lists every online window as `projectName (windowKey) 页 pageType pageUuid`; copy a `windowKey` out of it, or re-read `bridge status`. The daemon cannot tell an id it has never seen from one whose window has gone (a window is dropped from the hub when its socket ends, and no per-instance history survives), so both are reported under this one code |
 | `CONFIRMATION_REQUIRED` | A `create` action (one that produces a new document) arrived without `confirm: true` | Expected on the first call — re-send with `confirm: true`, or let the CLI ask (§4, 006c). Nothing was forwarded, so nothing was created |
+| `WRITE_PROJECT_FORBIDDEN` | A **design write** was routed to a window whose project the daemon may not write into (537A3) | The default policy allows `test` / `test2` only; a real project — and a window that named no project at all — is refused **after routing and before anything is forwarded**. Name the action, the project it would have written and the allowed set in the message; allow another project with `BOARDWISE_WRITE_PROJECTS` (§8), or do the edit by hand in the editor. Reads, `doc.open`/`doc.focus` and `sys.self_update` are not design writes and are unaffected |
 | `CONNECTOR_ERROR` | The connector raised, or refused (e.g. no image, canvas refused markers) | A document is not open/focused |
 | `PAGE_MISMATCH` | The page (or PCB/board) the action was given is not the one the editor has focused; also a **read** aimed at a kind of document the editor does not have in front (527B B4: `pcb.readback` / `sch.readback` with the other kind focused) | A call aimed at a tab that is not in front — the guard exists so a write cannot land on the wrong page. Focus it first (`doc.focus`, or `doc.open` if it is not open) and re-check with `doc.list` . For a readback the refusal needs an **exact** focus reading (the `typeSource` `document.current` reports as `dmt_SelectControl.getCurrentDocumentInfo`); when the connector cannot name the focused document it reads as before, and says so in the answer's `problems` (an unnamed type means the guard did not run) while `null` holes the host left are **counted** in `unreadable` — a count, not a reason list |
 | `NOT_FOUND` | The uuid / primitive id / designator the action named does not exist: not in the project, not on the page, or with no open tab | A stale reference — the document was renamed or deleted, the primitive is gone, or the tab is closed. Re-read `doc.list` / `sch.geometry` and address what the editor actually reports |
@@ -969,6 +982,7 @@ the hub depends on the handler loop exiting. So a *half-open* socket can leave `
 | Daemon host | `DEFAULT_HOST` | `127.0.0.1` (no public-interface code path exists) |
 | Daemon port | `BOARDWISE_PORT`, `--port` | `61190` |
 | Daemon state dir | `BOARDWISE_HOME` | `~/.boardwise` |
+| Design-write projects | `BOARDWISE_WRITE_PROJECTS` (comma-separated project names / uuids; `*` = legacy full allow; an **explicitly empty** value denies every project) | `test`, `test2` — anything else, and a window that named no project, is `WRITE_PROJECT_FORBIDDEN` (§4, 537A3) |
 | CLI token file | `token_path()` | `~/.boardwise/token` |
 | Paired connector token | `connector_token_path()` | `~/.boardwise/connector-token` (created on first pairing) |
 | Audit log | `audit_dir()` | `~/.boardwise/audit/YYYY-MM-DD.jsonl` |

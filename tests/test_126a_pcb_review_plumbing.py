@@ -1359,8 +1359,16 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 改写（把宽铜降到门槛以下的 40 mil，保住它们要钉的**连通分量闭包**与 ERROR 通路；
     # 60/10 的形状改由新建 `tests/test_84_ampacity_branch.py` 按 #84 的口径钉）。
     # 变异验证（cp 备份 + sha256 还原）见 `evidence/84/mutation_log.txt`。
-    assert old_digest == "b6b6f2dd"
-    assert recursive == "22eb8d3e", (
+    # **537F moved BOTH** — direct b6b6f2dd -> cda23a06，recursive 22eb8d3e ->
+    # 83d0e91c。537F 在三个**直接**文件（`rules/facts.py`、`rules/archclosure.py`、
+    # `rules/sensebias.py`）里引入共享的 `ResistanceReading`：`Value` 为空、MPN 唯一
+    # 可解析时恢复阻值，并把同一份读数共享给**存在性**判读与 **Thévenin** 计算；
+    # **0Ω 仍算「存在」**（存在性不因阻值为零而丢），非正值由算术层排除。
+    # **公式与阈值未改**，判决语义的锚是 `tests/test_094_sense_bias.py`（最终
+    # 41 passed）；两个值都是在**当前这棵工作树**上按本文件上方 171 条同一配方直接
+    # 量得（direct 走 `*.py` 直读、recursive 走 `rulebody_fingerprint`）。
+    assert old_digest == "cda23a06"
+    assert recursive == "83d0e91c", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

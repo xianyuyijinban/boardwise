@@ -109,7 +109,14 @@ class FakeConnector:
 
 
 def _daemon(home: Path) -> BridgeDaemon:
-    return BridgeDaemon(token=TOKEN, home=home)
+    # 537A3: this suite's fake windows mostly name **no** project, so the
+    # production policy (``test`` / ``test2``, unknown identity refused) would
+    # turn every legacy write case into WRITE_PROJECT_FORBIDDEN. The project
+    # whitelist has its own suite (test_537a_daemon_write_policy.py); here
+    # `{"*"}` is the legacy full-allow switch, pinned explicitly so these tests
+    # keep testing routing/locking/forwarding and nothing silently depends on
+    # the production default.
+    return BridgeDaemon(token=TOKEN, home=home, write_projects={"*"})
 
 
 async def _start(daemon: BridgeDaemon) -> tuple[object, int]:

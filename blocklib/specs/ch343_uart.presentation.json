@@ -1,0 +1,68 @@
+{
+  "kind": "boardwise-presentation-spec",
+  "specVersion": 1,
+  "grammarRef": "ic-periphery",
+  "sidePreferences": {
+    "input": "left",
+    "output": "right",
+    "load": "left",
+    "source": "left",
+    "power": "top",
+    "gnd": "bottom"
+  },
+  "portRoles": {
+    "D+": "load",
+    "D-": "load",
+    "VCC": "input",
+    "TXD": "output",
+    "RXD": "input",
+    "RTS": "output",
+    "CTS": "input",
+    "DTR": "output",
+    "DSR": "input",
+    "DCD": "input",
+    "RI": "input"
+  },
+  "flow": [
+    ["usb_c", "ch343"],
+    ["ch343", "hdr"]
+  ],
+  "modules": [
+    {
+      "id": "usb_c",
+      "parts": ["USB1", "R1", "R2", "C2", "D1", "R3"],
+      "role": "the USB end: the Type-C receptacle with its two CC pulldowns (R1/R2), the VBUS reservoir C2 and the VBUS lamp D1+R3, drawn first because the reader enters the sheet from the connector side",
+      "grammarRef": "ic-periphery",
+      "core": "USB1"
+    },
+    {
+      "id": "ch343",
+      "parts": ["U1", "C1", "C3"],
+      "role": "the middle: the CH343G bridge U1 with its own-pin passives, C1 on VDD5 and C3 on the V3 regulator output; every signal it carries leaves this island for one of the other two, so the island's boundary nets are all cross-island labels",
+      "grammarRef": "ic-periphery",
+      "core": "U1"
+    },
+    {
+      "id": "hdr",
+      "parts": ["H1"],
+      "role": "the far end: the 2x5 header carrying the eight UART/MODEM lines plus the VCC level rail and GND, where the peer board attaches",
+      "grammarRef": "ic-periphery",
+      "core": "H1"
+    }
+  ],
+  "labelPolicy": {
+    "local": "wire",
+    "crossModule": "label",
+    "highFanout": "label"
+  },
+  "directWiringObligations": [
+    {
+      "nets": ["D+", "D-"],
+      "note": "the USB data pair is a solid conductor from the receptacle's two DP/DN pin pairs to UD+/UD- of the bridge — no series resistor, no stub: the datasheet says the pins connect straight to the bus"
+    },
+    {
+      "nets": ["LED_A"],
+      "note": "the VBUS lamp's cathode and R3 are one conductor inside the usb_c island: labelPolicy.local is 'wire', so naming the lamp's return would be a label where the policy promises a wire (534; the pair is D1 pin 2 to R3 pin 1, nothing else on the net)"
+    }
+  ]
+}

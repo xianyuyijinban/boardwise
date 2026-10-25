@@ -2,9 +2,13 @@
 
 `docs/multi-island-design.md` §5 gives this stage one job: "每岛布局（复用
 chain+shelf），每岛出一个内嵌小图".  This module is the second half of that sentence
-only — it computes an island's local drawing.  **It is not called by `compile` and
-must not be until 岳 has ruled on the shape** (that is 520m's gate); nothing in the
-compiler, the checker or the page compiler imports it.
+only — it computes an island's local drawing, and since 536 it **is** the stage
+`drawcompiler` calls for a declared island page: `_try_island_variants` builds
+the blocks here, packs them, and hands the packed `LayoutPlan` to the gate.  It
+is **not** a multi-group assembler — it does not decide which islands belong to
+which group, it does not place two groups on one sheet, and it does not own the
+partition (520j's `islands` does); a page of several groups is the later
+assembler's job, and `drawcompiler` refuses one until it exists.
 
 Why it is not `chain+shelf` (route P1, measured in
 ``evidence/520k/probes/10_p1_feasibility.py``): that solver is driven by a
@@ -78,7 +82,7 @@ same preview, checker and landing step can consume them later.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Iterable, Mapping, Sequence
 
 from ..core.circuitspec import CircuitSpec
@@ -268,6 +272,39 @@ class IslandBudget:
     gnd_flag: str = "PWR-GND"
     power_flag_prefix: str = "PWR-"
 
+    def __post_init__(self) -> None:
+        """Refuse non-finite/negative geometry before the placer consumes it.
+
+        This is a value object shared by the page and independent-island paths.
+        Validating here keeps a zero grid, a negative channel or a fractional
+        rung count from becoming a low-level arithmetic/range failure later.
+        """
+        for name in ("grid", "channel", "text_row"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value <= 0
+            ):
+                raise ValueError(f"IslandBudget.{name} must be finite and > 0")
+        for name in ("pin_gap", "row_gap", "stub", "text_gap"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(f"IslandBudget.{name} must be finite and >= 0")
+        for name in ("slot_rungs", "text_rungs"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"IslandBudget.{name} must be an integer >= 0")
+        for name in ("gnd_flag", "power_flag_prefix"):
+            if not isinstance(getattr(self, name), str):
+                raise ValueError(f"IslandBudget.{name} must be a string")
+
 
 @dataclass(frozen=True)
 class IslandPin:
@@ -350,6 +387,10 @@ class IslandSubgraph:
     role: str
     parts: tuple[str, ...]
     nets: tuple[IslandNet, ...]
+    #: 536: the group (a module's drawing) this island is a child of, empty for a
+    #: legacy island list that states none.  Carried so `layout_island` can stamp
+    #: the block without re-reading the presentation.
+    group: str = ""
 
     @property
     def internal_nets(self) -> tuple[IslandNet, ...]:
@@ -512,6 +553,10 @@ def island_subgraph(
         role=island.role,
         parts=tuple(island.parts),
         nets=tuple(nets),
+        # 536: an archipelago island's group travels with its subgraph, so the
+        # block (and then the page plan) can state which drawing this is a piece
+        # of.  A legacy island states none and nothing is invented.
+        group=getattr(island, "group", "") or "",
     )
 
 
@@ -842,8 +887,8 @@ def pack_rows(
 def row_pitch(
     *,
     body_span: float,
-    name_w: float,
-    value_w: float,
+    name_w: float = 0.0,
+    value_w: float = 0.0,
     draw_span: float,
     budget: IslandBudget,
 ) -> float:
@@ -857,10 +902,40 @@ def row_pitch(
     arithmetic with :func:`pack_rows` for exactly this reason, and 532 needs the
     same number for a pair, so the expression itself moved down here.
     """
-    return (
-        _snap_up(max(body_span, name_w, value_w, draw_span), budget.grid)
-        + budget.row_gap
-    )
+    # 534 R1: **the pitch is a fact about the geometry, not about the strings.**
+    # Until 534 the widest *value row* was one of the terms, so a 9-unit-wide
+    # resistor carrying 「1k 1% 0805」 was laid out on a
+    # ``snap_up(41.7) + row_gap`` pitch (measured: five 0603 parts of one row took
+    # 41.7 units of pitch each, `evidence/534/quality/REPORT.md` S-2/R1) — the
+    # *string* decided how far apart the *parts* stood, in every row, including
+    # the rows whose text is not printed beside the neighbour at all.
+    #
+    # What the room a row needs actually depends on is **where the row is**
+    # (`draw_span`, the 532 term: the host prints a row at the symbol's declared
+    # offset, so the string may reach past the part's own body or lie inside it),
+    # and that is still paid here. The *string's width* on top of that is a rent
+    # two **adjacent** rows owe each other, not a property of one row:
+    # :func:`row_text_rent` charges it in :func:`row_pair_pitch`, and where even
+    # that is not enough the value is *moved* by the ladder / the row walk rather
+    # than the pitch being widened for the whole island. ``name_w``/``value_w``
+    # stay in the signature because every caller has them and the pair step is
+    # written in terms of the same four extents; they no longer reach the number.
+    del name_w, value_w
+    return _snap_up(max(body_span, draw_span), budget.grid) + budget.row_gap
+
+
+def row_text_rent(*, name_w: float, value_w: float, budget: IslandBudget) -> float:
+    """What two rows lying **side by side** owe each other for their text (534 R1).
+
+    The width terms :func:`row_pitch` no longer charges, charged where they are
+    true: between one row's right-hand text and the next row's left-hand text.
+    It is a *pair* number — a row on its own has nothing to collide with, and
+    charging every row for it is what made one wide value widen a whole island.
+    """
+    widest = max(name_w, value_w)
+    if widest <= 0.0:
+        return 0.0
+    return _snap_up(widest, budget.grid) + budget.row_gap
 
 
 def row_pair_pitch(
@@ -883,12 +958,22 @@ def row_pair_pitch(
     """
     body = extents[left_key]
     other = extents[right_key]
-    return row_pitch(
-        body_span=max(body[0], other[0]),
-        name_w=max(body[1], other[1]),
-        value_w=max(body[2], other[2]),
-        draw_span=max(body[3] + other[4], other[3] + body[4]),
-        budget=budget,
+    # 534 R1: the two rows' own geometry first (`reaches` already carries where
+    # each row sits), then the text rent for the one arrangement the reaches
+    # cannot see — the *string* of one row starting before the next row's last
+    # units. Taking the larger keeps the 532 guarantee (a pair never overlaps)
+    # while the single-row pitch (`pack_rows`) no longer pays it.
+    return max(
+        row_pitch(
+            body_span=max(body[0], other[0]),
+            draw_span=max(body[3] + other[4], other[3] + body[4]),
+            budget=budget,
+        ),
+        row_text_rent(
+            name_w=max(body[1], other[1]),
+            value_w=max(body[2], other[2]),
+            budget=budget,
+        ),
     )
 
 
@@ -1979,6 +2064,49 @@ def probe_boxes(
 # ------------------------------------------------------------------ the block
 
 
+def _parts_with_identity(block: "IslandBlock") -> list[LayoutPart]:
+    """One block's parts, stamped with the block's own group and island (536).
+
+    :meth:`IslandBlock.plan` and :meth:`PackedPage.plan` are two readings of the
+    **same** picture, so the identity has to be stated by one function rather
+    than twice: a page plan that stamped and a block plan that did not would
+    describe two different drawings from one block.  Three rules, in this order:
+
+    * a block that states **no group** — every island this module drew before
+      536, and every legacy island list — hands its parts back **verbatim**.  No
+      field is filled in, so its bytes and its `geometry_sha256` are unchanged.
+    * a block that states a group stamps ``block.group`` and ``block.island_id``
+      on every part it carries: the plan is the machine-readable statement
+      `core.archipelago.validate_archipelago_plan` reads, so the identity cannot
+      stop at the block.
+    * a part that already states a **different** group or island is a
+      contradiction, and it is refused here rather than overwritten.  Silently
+      re-stamping it would launder the contradiction into a plan that validates
+      and draws the wrong picture (`docs/drawing-archipelago-route.md` §2.3:
+      never re-stamp a part to make the page pass).
+
+    Nothing else moves: coordinates, notes and `bbox` are untouched.
+    """
+    if not block.group:
+        return list(block.parts)
+    parts: list[LayoutPart] = []
+    for item in block.parts:
+        if item.group and item.group != block.group:
+            raise ValueError(
+                f"part {item.part_id} states group {item.group!r} but island "
+                f"block {block.island_id!r} is in group {block.group!r}: a part's "
+                "identity is not something a page rewrites"
+            )
+        if item.island and item.island != block.island_id:
+            raise ValueError(
+                f"part {item.part_id} states island {item.island!r} but sits in "
+                f"island block {block.island_id!r} (group {block.group!r}): a "
+                "part's identity is not something a page rewrites"
+            )
+        parts.append(replace(item, group=block.group, island=block.island_id))
+    return parts
+
+
 @dataclass
 class IslandBlock:
     """One island drawn in a frame of its own: the anchor at the local origin.
@@ -2048,6 +2176,11 @@ class IslandBlock:
     #: keep their signatures (`DESIGN` §8.2).
     ring_radius: float = 0.0
     order: list[str] = field(default_factory=list)
+    #: 536: the group (a module's drawing) this island is a child of, empty for a
+    #: legacy island.  :meth:`PackedPage.plan` reads it to stamp every part of
+    #: this block with ``group`` and ``island``; an empty group stamps nothing,
+    #: which is why an old island page keeps its parts' bytes and its digest.
+    group: str = ""
 
     def translated(self, dx: float, dy: float) -> IslandBlock:
         """This block moved whole — every part, wire, junction, name and text box.
@@ -2066,6 +2199,11 @@ class IslandBlock:
                     symbol_hash=item.symbol_hash, x=item.x + dx, y=item.y + dy,
                     rotation=item.rotation, mirror=item.mirror,
                     reference=item.reference, value_visible=item.value_visible,
+                    # 536: the move is rigid, and ownership is part of what
+                    # travels — copied verbatim, never filled in here (a part
+                    # that states no island is one this path did not place, and
+                    # stamping it would invent an identity it never had).
+                    group=item.group, island=item.island,
                 )
                 for item in self.parts
             ],
@@ -2121,6 +2259,8 @@ class IslandBlock:
             notes=list(self.notes),
             ring_radius=self.ring_radius,
             order=list(self.order),
+            # 536: the block's group moves with the block.
+            group=self.group,
         )
 
     def bbox(self) -> Box:
@@ -2156,10 +2296,16 @@ class IslandBlock:
         `svgpreview.render_svg`, `readability.check` and the landing step all take
         a `LayoutPlan`, and a local picture that was its own type would need a
         second copy of each.  This is the whole of the conversion.
+
+        536: the parts go through :func:`_parts_with_identity` — the same stamp
+        the page plan makes, from the same block — so a single island's own
+        picture states its group and island instead of coming out anonymous.  A
+        block with no group still emits its parts verbatim (bytes and digest
+        unchanged).
         """
         return LayoutPlan(
             source=source or LayoutSource(),
-            parts=list(self.parts),
+            parts=_parts_with_identity(self),
             segments=list(self.segments),
             junctions=list(self.junctions),
             labels=list(self.labels),
@@ -2349,7 +2495,15 @@ class PackedPage:
         power_symbols: list[LayoutPowerSymbol] = []
         texts: list[LayoutText] = []
         for block in self.blocks:
-            parts.extend(block.parts)
+            # 536: an archipelago block states which group it belongs to, and then
+            # every part it carries is stamped with that group and this island —
+            # the plan is the machine-readable statement the archipelago check
+            # reads, so the identity cannot stop at the block.  The stamp is
+            # `_parts_with_identity`'s, the same one `IslandBlock.plan` makes, and
+            # a block with no group (every island page this module drew before
+            # 536) still extends its parts **as they are**: no field is filled in,
+            # so its bytes and its digest are unchanged.
+            parts.extend(_parts_with_identity(block))
             segments.extend(block.segments)
             junctions.extend(block.junctions)
             labels.extend(block.labels)
@@ -2696,6 +2850,9 @@ def layout_island(
     block = IslandBlock(
         island_id=subgraph.island_id, role=subgraph.role, anchor=anchor,
         ring_radius=radius, order=list(subgraph.bfs_order(anchor)),
+        # 536: which group's drawing this island is a piece of (empty for a
+        # legacy island list that states none).
+        group=subgraph.group,
     )
     block.notes.extend(placement.notes)
     # 530E, `DESIGN` §5.6 L3: an island the clustering derived is **drawn** (a

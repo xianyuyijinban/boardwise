@@ -230,7 +230,7 @@ describe('boardwise_doctor: argument assembly', () => {
 })
 
 describe('boardwise_bridge: argument assembly', () => {
-  it('passes action, params and the window hint through verbatim', async () => {
+  it('passes action, params, the read-only gate and the window hint through verbatim', async () => {
     const mock = installSpawn(child => {
       child.out('{"ok":true}')
       child.finish(0)
@@ -246,6 +246,7 @@ describe('boardwise_bridge: argument assembly', () => {
       process.env['BOARDWISE_EXE'] as string,
       'bridge',
       'call',
+      '--read-only',
       '--action',
       'doc.list',
       '--params',
@@ -254,6 +255,29 @@ describe('boardwise_bridge: argument assembly', () => {
       'test',
     ])
     expect(text).toContain('{"ok":true}')
+  })
+
+  it('pins --read-only on every call, whatever the action', async () => {
+    // 537A: the tool's read-only promise is an argv fact, not a sentence in the
+    // description. A write (`doc.focus`), a create and an unknown name all go
+    // to the CLI with the same gate; the refusal comes back as a non-zero CLI
+    // result, so the model cannot route around it.
+    const mock = installSpawn(child => {
+      child.out('{"ok":true}')
+      child.finish(0)
+    })
+
+    for (const action of ['doc.list', 'doc.focus', 'sch.doc.new', 'no.such.action']) {
+      await call('boardwise_bridge', { action, params: '{}' })
+      const argv = spawnedCommand(mock)
+      expect(argv.slice(0, 4)).toEqual([
+        process.env['BOARDWISE_EXE'] as string,
+        'bridge',
+        'call',
+        '--read-only',
+      ])
+      expect(flagValue(argv, '--action')).toBe(action)
+    }
   })
 
   it('refuses params that are not a JSON object', async () => {

@@ -40,6 +40,11 @@ from ..core.parts import (
     FACTS_TRUST_MACHINE,
     FACTS_TRUST_VERIFIED,
 )
+# 537C3a: the six-channel evidence ledger's shared renderer. `evidence.py` never
+# imports this module back (it handles data and text only), so this edge is one
+# way. The report's own `evidence` section is built in `cli.py` from the values
+# that run actually collected; this module only prints it.
+from .evidence import EVIDENCE_KEY, render_evidence_markdown
 
 #: How the components were grouped, per module and for the report header.
 MODULE_BASIS_PAGE = "page"
@@ -950,6 +955,286 @@ def chain_text(row: dict) -> str:
     return line
 
 
+# --------------------------------------------------------------------------
+# 537C2: the run's environment — version pair, write permission, limitations
+# --------------------------------------------------------------------------
+
+#: The report key the section lives under. One name, read by `report.md`,
+#: `review-summary.md` and the console line, so the three cannot drift.
+ENVIRONMENT_KEY = "environment"
+
+#: The heading both Markdown products print. Deliberately **unnumbered**: the
+#: review-summary's own section numbering (1 连接状态 / 2 逐条问题 / 3 待确认 /
+#: 4 下一步) is what the SOP and `tests/test_069a` name, and inserting a new
+#: 3 would renumber four sections a reader already knows.
+ENVIRONMENT_HEADING = "## 审查环境与权限（environment）"
+
+#: The four states of the version comparison. A plain string comparison: this
+#: tool does not infer capability compatibility from semver ordering, so equal
+#: strings are the only thing that may be called `match`.
+CONNECTOR_VERSION_NOT_APPLICABLE = "not-applicable"
+CONNECTOR_VERSION_MATCH = "match"
+CONNECTOR_VERSION_MISMATCH = "mismatch"
+CONNECTOR_VERSION_UNKNOWN = "unknown"
+
+#: The tier ids the environment section has something tier-specific to say about.
+#: They are the same ids `CHECKUP_TIERS` (in `cli.py`) spells; kept as literals so
+#: this module does not import the CLI.
+OFFLINE_TIER = "file"
+PER_PAGE_TIER = "per-page"
+NETLIST_TIER = "netlist"
+
+#: Which conclusions a missing live connector touches. The image channels are
+#: included because a version difference is exactly the case where the rendered
+#: picture may be of a different capability set than the requested one.
+LIVE_EVIDENCE_AFFECTS = ["liveSchematic", "livePcb"]
+LIVE_EVIDENCE_AND_IMAGES_AFFECTS = ["liveSchematic", "livePcb", "schematicImage", "pcbImage"]
+
+#: The **only** next steps a review may offer, in this order. Two of them are
+#: offline/manual; the third requires an explicit task authorisation and an
+#: identity check, and is still limited to the named test projects. Deliberately
+#: no entry here names an apply against any project: `writeAllowed=false` is a
+#: statement about *this review's* authorisation, and a next step that writes to
+#: a real project is something a model must never be handed as a ready command.
+ALLOWED_NEXT_ACTIONS: tuple[dict, ...] = (
+    {
+        "id": "offline-plan",
+        "mode": "offline",
+        "description": "生成离线 ChangePlan；不连接编辑器、不修改设计",
+    },
+    {
+        "id": "engineer-manual",
+        "mode": "manual",
+        "description": "由工程师在编辑器中核对并手动修改",
+    },
+    {
+        "id": "authorized-test-project",
+        "mode": "explicit-authorization",
+        "projects": ["test", "test2"],
+        "description": "仅在任务明确授权且完成工程身份核对后，按测试工程流程执行",
+    },
+)
+
+
+def _version_text(value: object) -> str | None:
+    """A version as the section carries it: a non-empty string, or ``None``.
+
+    ``None`` is not "zero" or "unknown string" — it is the honest "this side of
+    the comparison was not read", which is what makes the status `unknown`
+    instead of a fabricated `match`.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def connector_version_status(*, tier: str, expected: str | None, running: str | None) -> str:
+    """The four-state comparison, decided in one place.
+
+    The offline tier is answered **first**: it has no connector, so an empty
+    running version there is not a mismatch and not an unknown — the comparison
+    simply does not apply. Everything else needs both sides to be readable
+    strings; equality is the only `match` this tool can honestly certify.
+    """
+    if tier == OFFLINE_TIER:
+        return CONNECTOR_VERSION_NOT_APPLICABLE
+    if not expected or not running:
+        return CONNECTOR_VERSION_UNKNOWN
+    return CONNECTOR_VERSION_MATCH if expected == running else CONNECTOR_VERSION_MISMATCH
+
+
+def environment_limitations(
+    *, tier: str, expected: str | None, running: str | None, status: str
+) -> list[dict]:
+    """What this run could not establish, as `{code, affects, message}` rows.
+
+    The message says what the limitation **costs** (「不得当作已确认」), never
+    that the board passed: a reader who sees a clean finding list must not be
+    able to read these rows as a green light. One row per code — a `match` adds
+    no version row at all, which is the difference between "verified equal" and
+    "nothing to verify".
+    """
+    rows: list[dict] = []
+    if tier == OFFLINE_TIER:
+        rows.append({
+            "code": "offline-no-live-evidence",
+            "affects": list(LIVE_EVIDENCE_AFFECTS),
+            "message": (
+                "离线文件（--file）没有实时编辑器证据：原理图与 PCB 读数都来自归档，"
+                "不是实时检查成功；受影响的实时结论不得当作已确认。"
+            ),
+        })
+    elif status == CONNECTOR_VERSION_MISMATCH:
+        rows.append({
+            "code": "connector-version-mismatch",
+            "affects": list(LIVE_EVIDENCE_AND_IMAGES_AFFECTS),
+            "message": (
+                f"连接器版本不一致：期望 {expected}，运行 {running}；两者只是字符串对拍"
+                "（本工具不做 semver 推断），受影响的实时结论（含两张实时图）不得标 confirmed。"
+            ),
+        })
+    elif status == CONNECTOR_VERSION_UNKNOWN:
+        rows.append({
+            "code": "connector-version-unverified",
+            "affects": list(LIVE_EVIDENCE_AND_IMAGES_AFFECTS),
+            "message": (
+                f"连接器版本未核实：期望 {expected or '（未读到）'}，"
+                f"运行 {running or '（未读到）'}；能力兼容性未证实，不能当成 match，"
+                "受影响的实时结论不得当作已确认。"
+            ),
+        })
+    if tier == PER_PAGE_TIER:
+        rows.append({
+            "code": "per-page-connectivity-limit",
+            "affects": ["crossPageConnectivity", "archivePcb"],
+            "message": (
+                "逐页归档合并只按同名网拼接：同名网不构成已验证的跨页连接"
+                "（agreement by name is not a verified connection），跨页连通性结论只能当待核；"
+                "该档也没有整工程 PCB 归档，archivePcb 不存在。"
+            ),
+        })
+    if tier == NETLIST_TIER:
+        rows.append({
+            "code": "connectivity-only-model",
+            "affects": ["values", "mpn", "archivePcb"],
+            "message": (
+                "在线网表档（sch.netlist / sch.geometry）只有连通性：没有 Value / MPN，"
+                "依赖元件参数与型号的结论不可得；也没有 PCB 归档，archivePcb 不存在。"
+            ),
+        })
+    return rows
+
+
+def _allowed_next_actions() -> list[dict]:
+    """The frozen three, copied so a caller cannot mutate the constants."""
+    return [
+        dict(action, **({"projects": list(action["projects"])} if "projects" in action else {}))
+        for action in ALLOWED_NEXT_ACTIONS
+    ]
+
+
+def environment_section(
+    *, tier: str, source: dict | None, expected_connector_version: str = ""
+) -> dict:
+    """Assemble the ``environment`` section from the tier and the run's ``source``.
+
+    The running version is read from ``source.connectorVersion`` — the same
+    reading the report already carried before this section existed, so the two
+    cannot disagree — and the expected one is passed in (the caller owns "which
+    checkout would be installed"). ``writeAllowed`` is always ``false`` here:
+    a review is a read, and this section states **this run's** authorisation, not
+    the daemon's global configuration.
+    """
+    expected = _version_text(expected_connector_version)
+    running = _version_text((source or {}).get("connectorVersion"))
+    status = connector_version_status(tier=tier, expected=expected, running=running)
+    return {
+        "tier": tier,
+        "expectedConnectorVersion": expected,
+        "runningConnectorVersion": running,
+        "connectorVersionStatus": status,
+        "writeAllowed": False,
+        "allowedNextActions": _allowed_next_actions(),
+        "limitations": environment_limitations(
+            tier=tier, expected=expected, running=running, status=status
+        ),
+    }
+
+
+def _environment_status_label(status: str) -> str:
+    return {
+        CONNECTOR_VERSION_NOT_APPLICABLE: "离线，没有可对拍的运行连接器",
+        CONNECTOR_VERSION_MATCH: "期望与运行逐字相同",
+        CONNECTOR_VERSION_MISMATCH: "期望与运行不同，实时结论不得标 confirmed",
+        CONNECTOR_VERSION_UNKNOWN: "任一侧版本缺失，能力兼容未证实",
+    }.get(status, "")
+
+
+def render_environment_markdown(
+    environment: object, *, heading: str = ENVIRONMENT_HEADING
+) -> list[str]:
+    """The section as Markdown lines, shared by `report.md` and `review-summary.md`.
+
+    **Empty in, empty out**: a report built before this section existed (or by a
+    test that hand-builds one) renders exactly what it rendered before — the old
+    rendering is the compatibility promise, so nothing here invents text for a
+    missing section. Deliberately bullet-only: the review-summary's own row
+    counting reads `|`-lines, and a table here would look like findings.
+    """
+    if not isinstance(environment, dict) or not environment:
+        return []
+    expected = environment.get("expectedConnectorVersion") or "（未读到）"
+    running = environment.get("runningConnectorVersion") or "（未读到）"
+    status = str(environment.get("connectorVersionStatus") or CONNECTOR_VERSION_UNKNOWN)
+    # Rendered from the section's own value, not a second hard-coded `false`: a
+    # renderer that always printed false would agree with a buggy section and
+    # disagree with `report.json` the day the field moved.
+    write_flag = "false" if environment.get("writeAllowed", False) is False else "true"
+    lines = [
+        heading,
+        "",
+        f"- 数据档（tier）：`{environment.get('tier') or '?'}`",
+        f"- 连接器版本：期望 `{expected}` / 运行 `{running}` —— 状态 `{status}`"
+        f"（{_environment_status_label(status)}）",
+        # The scope of the claim is part of the claim: `writeAllowed=false` here
+        # says *this review* is not authorised to write, and nothing else.
+        f"- writeAllowed：`{write_flag}` —— 本次 review 不授权写（这是本次审查的授权状态，"
+        "不是 daemon 的全局配置）",
+        "- 允许的下一步（allowedNextActions）：",
+    ]
+    for action in environment.get("allowedNextActions") or []:
+        projects = " / ".join(str(p) for p in (action.get("projects") or []))
+        suffix = f"；projects：{projects}" if projects else ""
+        lines.append(
+            f"  - `{action.get('id')}`（{action.get('mode')}{suffix}）："
+            f"{action.get('description')}"
+        )
+    limitations = environment.get("limitations") or []
+    if limitations:
+        lines.append("- 限制（limitations，逐条说明影响，不是通过）：")
+        for row in limitations:
+            affects = "、".join(str(a) for a in (row.get("affects") or []))
+            lines.append(f"  - `{row.get('code')}`（影响：{affects}）—— {row.get('message')}")
+    else:
+        lines.append("- 限制（limitations）：无——本次环境没有未证实项")
+    lines.append("")
+    return lines
+
+
+def environment_console_line(environment: object) -> str:
+    """The one-line console summary of the same section, or ``''`` when absent.
+
+    One line on purpose: the console is a checklist, and the details (messages,
+    affects) are in the two Markdown products. It still names every field the
+    contract requires — expected / running / status, the write flag, and the
+    next-step ids — so a terminal reader needs no follow-up command.
+
+    The write flag is **rendered from the section**, exactly like
+    :func:`render_environment_markdown`: a hard-coded ``false`` here would agree
+    with the JSON only for as long as the section happens to say false, and would
+    silently diverge the day it says otherwise. One section, four renderings
+    (JSON / report.md / review-summary.md / stdout) — none of them a second
+    opinion.
+    """
+    if not isinstance(environment, dict) or not environment:
+        return ""
+    expected = environment.get("expectedConnectorVersion") or "(none)"
+    running = environment.get("runningConnectorVersion") or "(none)"
+    status = environment.get("connectorVersionStatus") or CONNECTOR_VERSION_UNKNOWN
+    write_flag = "false" if environment.get("writeAllowed", False) is False else "true"
+    next_ids = ",".join(
+        str(action.get("id")) for action in (environment.get("allowedNextActions") or [])
+    )
+    codes = ",".join(
+        str(row.get("code")) for row in (environment.get("limitations") or [])
+    ) or "(none)"
+    return (
+        f"environment: expected={expected} running={running} status={status} "
+        f"writeAllowed={write_flag} next={next_ids} limitations={codes}"
+    )
+
+
 #: The skeleton header `review-summary.md` carries (issue #69 条 1 的 AI 侧机械化).
 #: Every line here is load-bearing: the SOP says the model fills the two blanks and
 #: nothing else, so the header is what makes "补全骨架" an instruction rather than
@@ -1020,6 +1305,21 @@ def render_review_summary(report: dict, chains: list[dict]) -> str:
             f"| {_cell(chain_text(row))} | {_cell(row['problem'])} "
             f"| {REVIEW_SUMMARY_BLANK_ANALYSIS} | {REVIEW_SUMMARY_BLANK_ADVICE} |\n"
         )
+    # 537C2: the environment between the findings and the worklist — a reader
+    # who is about to fill 「分析/建议」 must first know what this run could not
+    # see and that it was read-only. Additive: a hand-built report with no
+    # `environment` keeps the skeleton exactly as it was.
+    environment_lines = render_environment_markdown(report.get(ENVIRONMENT_KEY))
+    if environment_lines:
+        lines.append("\n")
+        lines.extend(f"{line}\n" for line in environment_lines)
+    # 537C3a: the same ledger, rendered by the same helper `report.md` uses. One
+    # section, two files — the model filling 「分析/建议」 must be able to see what
+    # the run did not collect before it writes a conclusion.
+    evidence_lines = render_evidence_markdown(report.get(EVIDENCE_KEY))
+    if evidence_lines:
+        lines.append("\n")
+        lines.extend(f"{line}\n" for line in evidence_lines)
     lines.append(
         "\n## 3. 待确认（本报告依赖的未知项）\n\n"
         "<!-- needs_datasheet 非空时逐条写：缺什么资料、找谁要。空着才允许写「通过」。 -->\n"
@@ -3121,6 +3421,107 @@ def _render_guarded(lines: list[str], name: str, body) -> None:
 #: The verdict vocabulary the AI fills, one of these three and nothing else.
 TRIAGE_VERDICTS = ("有益", "有害", "无害")
 
+#: 537B: the fourth **answer** — deliberately not a fourth verdict. The three
+#: words above answer 「这条警告说的是什么」, which needs the warning's own text; a
+#: source that only returned totals (see :data:`ERC_TEXT_UNAVAILABLE`) cannot
+#: answer it, so what a reviewer can honestly write against such a row is 「需要
+#: 人工看」. It sits **beside** :data:`TRIAGE_VERDICTS` and not inside it, because
+#: every reader of the three-word set (the 063 gate, the report's table, the
+#: exit-code arithmetic) treats a member as a *closed* judgement — and this one is
+#: not closed: the row stays in `completion.warningsPendingTriage` and is counted
+#: a second time as `warningsNeedsManual`.
+TRIAGE_UNJUDGEABLE = "needs-manual"
+
+#: What `--verdict` accepts: the three words, then the one word that says a human
+#: must look. argparse reads this list; the gate below keeps the two sets apart.
+TRIAGE_VERDICT_CHOICES = (*TRIAGE_VERDICTS, TRIAGE_UNJUDGEABLE)
+
+
+def triage_slot_text_missing(slot: dict) -> bool:
+    """Whether this slot has no per-item text to judge — the 537B §2 criterion.
+
+    Two readings, in this order:
+
+    * an **empty** ``text`` is the statement itself: the host ERC answer is totals
+      only (:data:`ERC_TEXT_UNAVAILABLE`), so its slot carries ``text: ""`` and a
+      `textUnavailable` sentence saying why;
+    * on a ``host-erc`` row a **missing** field means the same thing, because the
+      source is the evidence — the host's answer has no items to put there. This
+      is the follow-up the reviewer measured: with only the empty-field reading, a
+      hand-trimmed `report.json` (delete `text`, keep the verdict) was judgeable
+      again and cleared pending exactly like the seq 320 verdict did. The field is
+      not a formality a caller can remove; on this source its absence *is* the
+      「没有逐条文本」 statement.
+
+    An absent field on any **other** slot is still not that statement: every slot
+    :func:`warning_triage_slots` generates stamps the field (063 §1's public
+    shape), so a dict without it and without a `host-erc` source is a report
+    written before that shape existed or a count somebody built by hand — refusing
+    a verdict there would change the meaning of slots this gate never met, and the
+    three-word behaviour of 063/070 is a contract (537B §5).
+
+    A `host-erc` row that *does* carry text (a future read interface, say) is not
+    textless: the three words become admissible for it and nothing has to move.
+    """
+    slot = slot or {}
+    if "text" in slot:
+        return not str(slot.get("text") or "").strip()
+    return str(slot.get("source") or "") == "host-erc"
+
+
+def triage_verdict_is_admissible(slot: dict, verdict: str) -> bool:
+    """**The one predicate**: may this verdict be recorded against this slot?
+
+    Two doors, one rule (537B §2) — `boardwise triage` asks it *before* writing
+    (so a refusal leaves both the report and the sidecar untouched), and
+    :func:`merge_triage_sidecar` asks it while folding a sidecar back in (so a
+    hand-edited `warning-triage.json` cannot do what the command refuses). The
+    question is always asked of the **generated slot**, never of the sidecar's own
+    `text` field — that field a hand edit also controls, and answering from it
+    would hand the gate back to whoever is trying to get around it.
+
+    * an empty verdict decides nothing; the merge treats it as "no decision to
+      put back" and it is admissible here for exactly that reason;
+    * :data:`TRIAGE_UNJUDGEABLE` is admissible everywhere: it is the honest answer
+      to a row nobody can judge from the report alone;
+    * a three-word verdict needs the slot's own text. Measured twice (025 §0,
+      039 批②): the host's ERC answer is per-kind totals with no items, and the
+      original session marked one of them 「有害」 anyway — seq 320 wrote the
+      verdict, seq 435 read `pending = 0`, and no one had seen a warning. A count
+      is not a warning, so a count cannot be judged;
+    * a word outside :data:`TRIAGE_VERDICT_CHOICES` is not a judgement at all.
+
+    Textlessness is read by :func:`triage_slot_text_missing` — an **empty** `text`
+    field, which is what the generator writes for a row whose source gave no
+    items.
+    """
+    verdict = str(verdict or "").strip()
+    if not verdict:
+        return True
+    if verdict == TRIAGE_UNJUDGEABLE:
+        return True
+    if verdict not in TRIAGE_VERDICTS:
+        return False
+    return not triage_slot_text_missing(slot)
+
+
+def triage_slot_is_manual(slot: dict) -> bool:
+    """Whether a human still owes this row a look (537B §3)."""
+    return str((slot or {}).get("verdict") or "").strip() == TRIAGE_UNJUDGEABLE
+
+
+def triage_slot_is_closed(slot: dict) -> bool:
+    """Whether this slot counts as **judged** — the read side of the same rule.
+
+    One arithmetic for the count, the console line, `report.md` and
+    `completion.verdictWhy`: a slot is closed only when it carries a member of
+    :data:`TRIAGE_VERDICTS` *and* that verdict is admissible for it. A
+    `needs-manual` row, an empty row, and a row somebody hand-edited to 「大概没事」
+    are all still pending — an unknown word must not be read as an answer.
+    """
+    verdict = str((slot or {}).get("verdict") or "").strip()
+    return verdict in TRIAGE_VERDICTS and triage_verdict_is_admissible(slot, verdict)
+
 #: Why the host's ERC warnings arrive without text — measured twice now (025 §0
 #: on 2026-09-23, and again by the 039 批② probe on 2026-09-25): the answer is
 #: `[{type: 'warn', count: n}]` for *every* page of a project, and the per-item
@@ -3460,7 +3861,7 @@ def warning_triage_slots(
 
 
 def merge_triage_sidecar(
-    slots: list[dict], entries: list[dict] | None
+    slots: list[dict], entries: list[dict] | None, refused: list[dict] | None = None
 ) -> tuple[list[dict], int, int]:
     """Put the sidecar's verdicts back onto freshly generated `warning_triage[]` slots.
 
@@ -3478,6 +3879,16 @@ def merge_triage_sidecar(
     judged, and a re-run of `checkup` is not the place to forget a judgement. An
     entry whose verdict is empty counts as neither: its key landed, but there is
     no decision in it to fold in.
+
+    **537B §4: a verdict is folded in only if :func:`triage_verdict_is_admissible`
+    allows it for the generated slot.** A three-word judgement against a row with
+    no text (the host ERC totals — `text` empty) is exactly what seq 320/435
+    measured: written by hand into this file, it used to clear the pending count
+    without anyone reading a warning. Such an entry is *refused* — not merged, and
+    **not** `unmatched` either (its key does exist, so calling it a miss would be
+    a false report) — and appended to ``refused`` when the caller asks for the
+    list, which is how `checkup` says 「拒收 N 条」 in the report's `notes`. The
+    entry stays in the sidecar: an audit trail is never edited from here.
     """
     by_key: dict[str, dict] = {}
     for slot in slots:
@@ -3495,8 +3906,15 @@ def merge_triage_sidecar(
         if not key or key not in by_key:
             unmatched += 1
             continue
-        if not str(entry.get("verdict") or "").strip():
+        verdict = str(entry.get("verdict") or "").strip()
+        if not verdict:
             continue  # a row with no decision is not one to put back
+        if not triage_verdict_is_admissible(by_key[key], verdict):
+            # Asked of the **slot**, not of the entry's own `text`: see the
+            # predicate's docstring — a hand edit controls that field too.
+            if refused is not None:
+                refused.append(entry)
+            continue
         decisions[key] = entry
 
     out: list[dict] = []
@@ -4737,6 +5155,24 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
     if source.get("notes"):
         lines.append("> " + "；".join(str(note) for note in source["notes"]))
         lines.append("")
+    # 537C2: what the run's environment could and could not establish, before the
+    # findings — "no ERROR" means something different when the reading was an
+    # offline archive against an unverified connector. Additive: no section, no
+    # text (the pre-537C2 hand-built reports render as before).
+    _render_guarded(
+        lines,
+        "审查环境与权限（environment）",
+        lambda: lines.extend(render_environment_markdown(report.get(ENVIRONMENT_KEY))),
+    )
+    # 537C3a: the six-channel evidence ledger, next to the environment because it
+    # answers the same reader's next question — "what did this run actually
+    # collect?" — before any conclusion is read. Additive: no section, no text,
+    # so a hand-built (or pre-537C3a) report renders as before.
+    _render_guarded(
+        lines,
+        "证据覆盖（evidence）",
+        lambda: lines.extend(render_evidence_markdown(report.get(EVIDENCE_KEY))),
+    )
 
     # --- 154 / E4: the integrated whole-board report, first, because it is the
     # one section a person reads end to end (ERC + DRC + module + device, grouped
@@ -4782,6 +5218,15 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
             f"{completion.get('warningsPendingTriage', 0)} · 架构槽位 stale "
             f"{architecture_slots.get('stale', 0)}（槽位 {architecture_slots.get('total', 0)}，"
             f"已填 {architecture_slots.get('filled', 0)}，TODO {completion.get('openTodos', 0)}）"
+            # 537B §3: the pending count above already includes these rows (they
+            # are *not* closed); this says how many of them need a human to look,
+            # which is the next action a reader has — same number as
+            # `completion.warningsNeedsManual` and the console line.
+            + (
+                f" · 待人工复核 {TRIAGE_UNJUDGEABLE} "
+                f"{completion.get('warningsNeedsManual', 0)}"
+                if completion.get("warningsNeedsManual") else ""
+            )
             # 191A: the engineer's accepted-unknown parts are **not** a debt, but
             # they are read beside the row they left, so the ledger says the number
             # rather than leaving a reader to reconstruct it from the section.
@@ -5401,10 +5846,16 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
         lines.append(
             "逐条填 `verdict`（" + " / ".join(TRIAGE_VERDICTS) + "）与 `reason`（xianyuyijinban的审查三步之②）："
             "用 `boardwise triage --out <本目录> --key <key> --verdict "
-            + "|".join(TRIAGE_VERDICTS) + " --reason …` 写回（key 见下表，它是这条警告的身份；"
+            + "|".join(TRIAGE_VERDICT_CHOICES) + " --reason …` 写回（key 见下表，它是这条警告的身份；"
             "判决同时写进 `warning-triage.json`，所以重跑 `checkup` 不会丢）。"
             "主机 ERC 的条目**没有逐条文本**——它的答复只有按 kind 的合计（见 drc.schematic），"
             "逐条详情在编辑器底部面板且没有读取接口。"
+        )
+        lines.append("")
+        lines.append(
+            "**`text` 为空的槽位不能用上面三个词关闭**（那三个词要有警告自己的文本才成立）："
+            f"它们只能标 `{TRIAGE_UNJUDGEABLE} --reason …`，标完**仍计入** "
+            "`completion.warningsPendingTriage`，并在本表后面单列成「需人工复核」。"
         )
         lines.append("")
         lines.append("| # | key | 来源 | 级别 | 计数 | 归属模块 | 文本 | verdict | 理由 |")
@@ -5421,6 +5872,25 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
                 f"| {_cell(entry.get('count'))} | {_cell(module)} | {_cell(text)} "
                 f"| {_cell(entry.get('verdict') or '（待填）')} | {_cell(entry.get('reason') or '（待填）')} |"
             )
+        # 537B §3: the rows a human owes a look, rendered from `completion`'s own
+        # list so this table and the gate are one arithmetic (the console line and
+        # `verdictWhy` read the same count).
+        manual = (report.get("completion") or {}).get("manualReviewRequired") or []
+        if manual:
+            lines.append("")
+            lines.append(
+                f"**需人工复核（{TRIAGE_UNJUDGEABLE}）{len(manual)} 条** —— 这些槽位没有逐条文本，"
+                "三词判决对它们不成立；它们仍计入 `completion.warningsPendingTriage`，"
+                "要人去编辑器底部面板/画布上逐条看："
+            )
+            lines.append("")
+            lines.append("| key | 来源 | 计数 | 理由 |")
+            lines.append("|---|---|---|---|")
+            for row in manual:
+                lines.append(
+                    f"| {_cell(row.get('key'))} | {_cell(row.get('source'))} "
+                    f"| {_cell(row.get('count'))} | {_cell(row.get('reason'))} |"
+                )
     lines.append("")
 
     layout = report.get("layout_review")
