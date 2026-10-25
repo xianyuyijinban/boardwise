@@ -10,9 +10,9 @@ TS 里不重算任何审查结论（任务书 045 §1）。
 
 ## 版本策略
 
-**从 0.6.0 起，插件版本与 boardwise 外部版本同号**：发布 0.6.0 时，根 shim
-`package.json` 与 `dsh-plugin/package.json` 一起改成 `0.6.0`，不再单独维护 `0.1.x` 线。
-`0.1.3` 是 `0.1.x` 的最后一版；0.6.0 之前现有安装照用，不追着改版本号。
+**从 0.5.22 起，插件版本与 boardwise 外部版本同号**：根 shim
+`package.json` 与 `dsh-plugin/package.json` 一起改成 `0.5.22`，不再单独维护 `0.1.x` 线。
+`0.1.3` 是 `0.1.x` 的最后一版；现有安装可继续使用，升级时按本版 tarball 重装。
 
 ## 工具面
 
@@ -21,15 +21,19 @@ TS 里不重算任何审查结论（任务书 045 §1）。
 | `boardwise_checkup` | `checkup [--file F \| --project P \| --instance I] --out D` | `file` / `project` / `instance` 三选一，`out` 可选 | 600 000 |
 | `boardwise_arch` | `arch <file> [--out]` | `file` 必填 | 120 000 |
 | `boardwise_doctor` | `doctor [--project/--instance]` | 可选寻址 | 60 000 |
-| `boardwise_bridge` | `bridge call --action A --params J [--project/--instance]` | `action`/`params` 必填 | 120 000 |
+| `boardwise_bridge` | `bridge call --read-only --action A --params J [--project/--instance]` | `action`/`params` 必填 | 120 000 |
+| `boardwise_review_read` | `review-read --out D --section S --json TMP` | `out` / `section` 必填，完整 JSON 返回 | 120 000 |
+| `boardwise_review_evidence` | `review-evidence --out D [--project P] [--page U ...] [--pcb U ...]` | `out` 必填，`page`/`pcb` 可重复 | 600 000 |
+| `boardwise_triage_batch` | `triage-batch --out D --input BATCH --json RESULT` | `out` / `entries` 必填，整批原子应用 | 120 000 |
+| `boardwise_review_finalize` | `review finalize --out D` | `out` 必填，签发当前 Session 的交付收据 | 120 000 |
 
 统一约定：
 
 - **参数原样透传**，插件不解释。唯一的前置校验：`file` 路径必须存在（不存在 → 执行前拒绝，
   不 spawn）；`bridge` 的 `params` 必须是合法 JSON 对象字面量；`checkup` 必须恰好指定
   一个目标（`file` 或 `project`/`instance`），不替模型猜窗口。
-- **只读优先**：三个工作流工具全只读。`boardwise_bridge` 是逃生舱（探针与诊断），
-  描述里写明优先用只读动作；写动作走 CLI，服从既有的真机身份纪律。
+- **只读优先**：所有工具都不修改设计。`boardwise_bridge` 强制 `--read-only`；分诊与 finalize
+  只更新审查报告和交付收据，真实工程的设计写仍走 CLI 的身份与权限闸。
 - **返回值** = `exit code` + `cli`（怎么找到的）+ `command` + 产物路径（`report.json` /
   `report.md` / `architecture.md`，逐个标 `present` / `MISSING`）+ stdout（必要时 stderr）。
   非零 exit 是**结果**不是失败（doctor / checkup 就用 exit 报告状态）；
@@ -106,10 +110,10 @@ npm pack                       # 产出 boardwise-dsh-<version>.tgz
 ### 装进 profile
 
 ```sh
-dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
-dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
+dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
+dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
 # desktop / web / headless 是**不同** profile，各装一次
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
 ```
 
 也可以从 GitHub 装（要求仓库根的 shim 已提交，见下节）：
@@ -162,7 +166,7 @@ desktop 则用 `D:\.pnpm-store\v11`。两套 store 对不上，pnpm 就报这个
 pnpm 在解析阶段就拒）：
 
 ```sh
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
 # → ERR_PNPM_UNEXPECTED_STORE（modules dir 的 store 与当前 store 不一致）
 ```
 
@@ -172,7 +176,7 @@ profile，在它上面安装：
 
 ```sh
 dsh --profile boardwise-clean --from-default-profile headless --dump-config
-dsh plugin --profile boardwise-clean add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
+dsh plugin --profile boardwise-clean add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
 ```
 
 本机实测：安装 431ms 成功，`--dump-config` 出现 `# == boardwise-dsh` / `tool-boardwise`；旧
@@ -191,7 +195,7 @@ dsh plugin --profile boardwise-clean add file:E:/boardwise/dsh-plugin/boardwise-
 DSH="$HOME/AppData/Roaming/DSH Desktop/host-commands/desktop/generations/<hash>/bin/dsh.cmd"
 "$DSH" --profile boardwise-web-clean --from-default-profile web --dump-config
 "$DSH" plugin --profile boardwise-web-clean add \
-  file:E:/boardwise/dsh-plugin/boardwise-dsh-0.1.3.tgz
+  file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
 "$DSH" --profile boardwise-web-clean --dump-config | grep -n 'tool-boardwise'
 ```
 
@@ -212,7 +216,7 @@ dsh plugin add github:xianyuyijinban/boardwise
 
 仓库根现在补了一份**纯 shim** `package.json`（`"name": "boardwise-dsh"`、版本与插件同步、
 `main` / `types` 指进 `dsh-plugin/lib/`、`dsh.bundle.patch` 指向
-`dsh-plugin/cordis.patch.yml`），装上它就能真正挂上 bundle、注册 4 工具。
+`dsh-plugin/cordis.patch.yml`），装上它就能真正挂上 bundle、注册 8 工具。
 shim **不是** npm 工程：没有 `scripts`、没有 `dependencies`，根目录不跑构建。
 
 **shim 必须提交进 HEAD 才会生效**：pnpm 的 git 依赖物化的是**提交树**，
@@ -287,7 +291,7 @@ npm publish --dry-run           # 只看文件面，不上传
 
 ```sh
 npm run typecheck     # tsc --noEmit（src 为唯一被检查的源码）
-npm test              # vitest run tests —— 52 例（51 过 1 跳过；mock spawn，不起真进程）
+npm test              # vitest run tests —— 114 例（113 过 1 跳过；mock spawn，不起真进程）
 npm run build         # → lib/
 npm run smoke         # 独立冒烟：import lib/index.js，真起 CLI（见下）
 ```
