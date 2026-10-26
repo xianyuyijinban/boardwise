@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 import subprocess
 
@@ -85,3 +86,21 @@ def test_the_520_hunt_helper_has_no_process_temp_fallback():
                 and isinstance(node.func.value, ast.Name)
                 and node.func.value.id == "tempfile"
             ), "the helper must never create a process-tempdir fallback"
+
+
+def test_the_editor_view_hides_only_tmp_scaffolding():
+    """``files.exclude`` 只隐藏 ``.tmp_`` 脚手架，不许顺手藏源码。
+
+    A broad pattern (``**``, ``**/*``) or one whose core is ``src`` / ``docs`` /
+    ``tests`` would make the tree look clean while the files are still there —
+    visual hiding is not cleanup, and it must not hide the code being reviewed.
+    """
+    settings = json.loads((ROOT / ".vscode" / "settings.json").read_text(encoding="utf-8"))
+    exclude = settings["files.exclude"]
+    assert exclude["**/.tmp_*"] is True
+    for pattern, value in exclude.items():
+        assert value is True, f"unexpected non-true entry: {pattern}"
+        assert pattern not in ("**", "**/*", "*", "**/"), f"too broad: {pattern}"
+        core = pattern.removeprefix("**/").strip("/")
+        assert core not in ("src", "docs", "tests"), f"would hide {core}: {pattern}"
+        assert core.startswith(".tmp_"), f"only .tmp_ scaffolding may be hidden: {pattern}"

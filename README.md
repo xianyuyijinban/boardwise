@@ -65,6 +65,14 @@ Newer pieces worth knowing:
   the conclusion still counts the accepted parts.
 - **KiCad bare net ids** — a `(net 3)` with no name is read (as `net#3`) instead
   of the whole board being refused for carrying no net names.
+- **Staged, interruptible review** — after **one** `checkup` the first checkpoint
+  (`initial`/`partial`: environment and versions, `report.conclusion`, ERROR / host
+  DRC, open items, artifact paths) is delivered **before** any deeper digging; deeper
+  work then runs in small batches (at most 3 findings each). An existing report can be
+  read again instead of re-run, and an aborted run is summarised as `partial` from what
+  is already on disk. The first-checkpoint order and the global recompute dedupe are
+  still **process constraints, not runtime gates** — see `docs/review-sop.md` §3.0a.
+  Nothing here is claimed to be enforced by the tool automatically.
 
 ## Architecture and roadmap
 
@@ -82,8 +90,9 @@ daemon + editor extension      reads design data; writes go preview → approve 
 EasyEDA Pro (today) · KiCad (planned)
 ```
 
-Standing rules: the workflow lives in tools, not in prompts; every
-conclusion carries evidence; writes are preview → authorize → readback;
+Standing rules: the checks and the delivery validation live in tools;
+orchestration constraints that have no runtime gate yet are disclosed in the SOP as
+exactly that; every conclusion carries evidence; writes are preview → authorize → readback;
 on a timeout or disconnect it reads back first and never blindly
 retries.
 
@@ -234,6 +243,12 @@ boardwise checkup
   不再欠它；它**不是审过**，结论里照样数着这些被接受的器件。
 - **KiCad 裸网序号**——没有名字的 `(net 3)` 照读（记成 `net#3`），不再因为一块板
   网名全丢就整盘读不出来。
+- **分阶段、可中断的审查**——**一次** `checkup` 之后，先把首轮检查点
+  （`initial`/`partial`：环境与版本、`report.conclusion`、ERROR / 宿主 DRC、待确认项、
+  产物位置）交付出去，再分批深挖；每批最多 3 条 finding。已有报告可以复读而不必重跑，
+  中止的 run 基于已在盘上的产物整理成 `partial`。首轮顺序与「全局重算去重」目前仍是
+  **流程约束，不是运行时硬闸**——见 `docs/review-sop.md` §3.0a。这里没有一句说工具会
+  自动执行它。
 
 ### 架构和规划
 
@@ -251,7 +266,8 @@ daemon + 编辑器扩展      读工程数据，写之前先预览、你授权�
 立创 EDA 专业版（现在） · KiCad（规划）
 ```
 
-规矩就几条：工作流住在工具里，不住在 prompt 里；每个结论带证据；
+规矩就几条：**检查与交付校验**住在工具里；**尚未形成硬闸的编排约束**在 SOP 里明确
+披露，不当成工具已自动执行；每个结论带证据；
 写操作一律预览 → 授权 → 回读；超时断连先读回，绝不盲目重试。
 
 路线图：

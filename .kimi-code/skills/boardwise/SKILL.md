@@ -86,12 +86,12 @@ boardwise CLI（`boardwise bridge call …`，短命进程）
 > 缺了重跑 `boardwise install-skill`，别手抄路径硬找）。
 
 - **审板子**：`boardwise checkup` 一条出报告（ERC/DRC + 自有规则 + 手册闸 + 分诊/器件/总结槽位），一键出 `board-report.md`（**整板报告**，末段答「整工程能不能投板」）。
+  **首轮检查点先交付**：完成环境/身份确认与一次 checkup 后，先交付 `initial/partial` 首轮检查点（连接与版本、`report.conclusion`、ERROR/宿主 DRC、待确认项、产物位置，五字段模板见 `docs/review-sop.md` §3.0a），再按批深挖；**不许一上来自由探索**，每批结束先更新阶段报告再决定继续；每批最多 3 条 finding、约 15 分钟，约 30 分钟（自首轮检查点后累计）必交付。
   **收尾固定顺序**（537E，完整口径见 `docs/review-sop.md`）：结构化读取（`boardwise_review_read` 只读完整 JSON 文件，不解析 `runBoardwise` 截断 stdout）→
   分诊（`needs-manual` 仍 pending，不能用有益/有害/无害关掉无细节项）→ environment/evidence 覆盖补全（live 与 archive 分开，`partial` 只描述覆盖）→
   人工填 `review-summary.md` → `review finalize --out DIR` 校验交付并签 CLI 收据 → 顺序交付。**`finalize.ok`/退出 0 只是交付校验，板级结论只认 `report.conclusion`**；
-  `partial`/needs-manual/open-items 披露一致即可交付，不许为过闸编证据。DSH：`boardwise_review_finalize` 成功后本 Session 才有 receipt，
-  `present` 必须等它、不能并行；手写 `finalize.json` 没有 Session 特权；未重启就别声称当前 DSH 已加载新闸。
-  连接状态第一句、架构走查、逐段读法、「文件留档 + 当面把结论讲给工程师」全在 `docs/review-sop.md`。
+  `partial`/needs-manual/open-items 披露一致即可交付，不许为过闸编证据。DSH：`boardwise_review_finalize` 成功后本 Session 才有 receipt，`present` 必须等它、不能并行；手写 `finalize.json` 没有 Session 特权；未重启就别声称当前 DSH 已加载新闸。
+  连接状态第一句、架构走查、逐段读法、「文件留档 + 当面把结论讲给工程师」全在 `docs/review-sop.md`；**调度/批次预算属「未形成硬约束」**：没跑的 checkup/DRC 不许写成工具已执行。
 
 - **缺手册 → 清闸**：给 PDF **不清闸**。`parts fetch --file` 只写 `facts_verified: false`
   的候选（不驱动规则）；清闸 = 货架条目带**已核验 facts**：

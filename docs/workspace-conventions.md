@@ -33,6 +33,10 @@
 `untracked`、`ignored`、`.tmp_` 前缀、文件时间为旧，**任何一项单独都不是回收依据**。
 `归档` 也不等于 `可回收`。
 
+编辑器的 `files.exclude`（`.vscode/settings.json` 里的 `**/.tmp_*`）只是**视觉隐藏**：
+它不移动、不删除任何文件，也不改变上面任何一条保留/归档/回收判据；被隐藏的目录仍然
+占用磁盘、仍然受本文件约束。
+
 ## 3. worktree 是独立边界
 
 清理任何 `.tmp_*` 前先看 `git worktree list --porcelain`。**注册 worktree 绝不能按普通临时目录处理。**
