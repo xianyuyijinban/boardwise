@@ -69,6 +69,14 @@ class _FakeEditor:
         timeouts: tuple[str, ...] = (),
         render_ok: bool = True,
         value_write_lands: bool = True,
+        document_source: str = "",
+        source_write_lands: bool = True,
+        source_uuid: str | None = None,
+        source_type: str = "page",
+        source_grow_on_write: int = 0,
+        source_hide_truncated: bool = False,
+        active_page: str | None = None,
+        focus_refused: bool = False,
     ):
         self.page = page
         self.exists = exists
@@ -99,6 +107,35 @@ class _FakeEditor:
         #: 180 审计 LOW-c1 的判别台架：按网名拒放（per-action 的 `unresolved`
         #: 做不到只拒一颗旗）。
         self.place_power_refused: set[str] = set()
+        #: 542: the page's own document stream, as `sys.get_document_source`
+        #: answers it, and whether `sys.set_document_source` actually stores what
+        #: it was told — the second one is how "the host said yes and changed
+        #: nothing" (`532`'s live failure mode) is faked.
+        self.document_source = document_source
+        self.source_write_lands = source_write_lands
+        #: 542 F1: the envelope the connector puts around that stream
+        #: (`actions.ts` `sysGetDocumentSource`): the document it names (`uuid`,
+        #: `type`) and whether `data` is the **whole** stream (`chars` vs
+        #: `maxChars`).  `source_uuid` lets a test answer with somebody else's
+        #: document; the default is the active page, which is what the real
+        #: read answers.
+        self.source_uuid = source_uuid
+        self.source_type = source_type
+        #: How many characters the host's own re-serialisation adds to the stored
+        #: document, so a write can push it past `maxChars` between the two reads.
+        self.source_grow_on_write = source_grow_on_write
+        #: 542 F1 (review): an envelope that never says whether the text is all of
+        #: it — no `truncated` key at all.  Silence is not `false`.
+        self.source_hide_truncated = source_hide_truncated
+        #: The params of every `sys.get_document_source` call, so a test can state
+        #: that the read named the page it stands behind.
+        self.source_requests: list[dict] = []
+        #: Which document the editor says is **active** (`doc.list`'s `active`),
+        #: when that is not the page the plan names — the one state 5c refuses on.
+        self.active_page = active_page
+        #: `doc.focus` answers, and the focus does not move (a host that refuses
+        #: to bring the page forward is exactly what 5c has to notice).
+        self.focus_refused = focus_refused
 
     # ---------------------------------------------------------- the page
 
@@ -169,15 +206,67 @@ class _FakeEditor:
                 [{"uuid": self.page, "name": "boardwise draw", "type": "sch"}]
                 if self.exists else []
             )
+            active = (
+                self.active_page if self.active_page is not None else self.page
+            ) if self.exists else None
             return {
                 "documents": documents,
                 "projects": [{"projectUuid": "proj-1", "name": "test", "focused": True}],
-                "active": {"uuid": self.page if self.exists else None, "type": "sch"},
+                "active": {"uuid": active, "type": "sch"},
                 "count": len(documents),
             }
         if action == "doc.focus":
-            self.page = str(params.get("pageUuid") or self.page)
-            return {"activated": True, "tabId": "tab", "documentType": "sch"}
+            if not self.focus_refused:
+                self.page = str(params.get("pageUuid") or self.page)
+                self.active_page = None
+            return {"activated": not self.focus_refused, "tabId": "tab",
+                    "documentType": "sch"}
+        if action == "sys.get_document_source":
+            # 542: the value-row flags live in the document, so this is the read
+            # 5c's own postcondition is stated against.  The envelope is the
+            # connector's (actions.ts `sysGetDocumentSource`): `uuid`/`type` name
+            # the document, `chars`/`maxChars`/`truncated` say whether `data` is
+            # all of it — and a `uuid` naming a document that is not active is
+            # refused there (`DOC_NOT_ACTIVE`), so it is refused here.
+            self.source_requests.append(dict(params))
+            requested = str(params.get("uuid") or "").strip()
+            if requested and requested != self.page:
+                raise _BridgeError(
+                    "DOC_NOT_ACTIVE",
+                    f"sys.get_document_source reads the active document only, and "
+                    f"{self.page!r} is the active one",
+                )
+            max_chars = int(params.get("maxChars") or 65_536)
+            source = self.document_source
+            answer = {
+                "source": "sys_FileManager.getDocumentSource",
+                "uuid": self.source_uuid if self.source_uuid is not None else self.page,
+                "type": self.source_type,
+                "chars": len(source),
+                "maxChars": max_chars,
+                "truncated": len(source) > max_chars,
+                "data": source[:max_chars],
+            }
+            if self.source_hide_truncated:
+                # The stream is cut and the envelope keeps silent about it — the
+                # shape 542 F1's review asked for: only an explicit `false` may
+                # be read as "this is the whole document".
+                answer.pop("truncated")
+            return answer
+        if action == "sys.set_document_source":
+            self.writes.append((action, params))
+            if self.source_write_lands:
+                self.document_source = str(params.get("source") or "")
+                if self.source_grow_on_write:
+                    filler = (
+                        '{"type":"COMPONENT","id":"grown","ticket":1}'
+                        '||{"x":0,"y":0}|'
+                    )
+                    pad = (filler * (self.source_grow_on_write // len(filler) + 1))[
+                        : self.source_grow_on_write
+                    ]
+                    self.document_source += "\n" + pad + "\n"
+            return {"uuid": str(params.get("uuid") or self.page), "written": True}
         if action == "sys.identity":
             return {"consistent": True, "consistentBasis": "project-uuid",
                     "pageUuid": self.page}
@@ -1092,3 +1181,447 @@ def test_a_new_finding_stops_the_run_before_the_save(monkeypatch, tmp_path, caps
     assert code == 2, printed
     assert "sch.doc.save" not in [action for action, _params in editor.writes]
     assert "new_finding" in printed or "新增 finding" in printed
+
+
+# ---------------------------------- 542: the hidden value rows must be *read back*
+
+
+def _document_source(rows: dict[str, str]) -> str:
+    """A page document shaped the way `sys.get_document_source` answers one.
+
+    One line per record (`<head>||<body>|`), carrying the two ATTR records `532`
+    measured the rows out of: a `Designator` ATTR (`value` = the designator,
+    `parentId` = the component) and that component's `Name` ATTR — the value row,
+    whose `valueVisible` is the flag. ``rows`` maps a designator to the raw JSON
+    text its row states (`"true"`, `"false"`, `"null"`, or `""` for "no such
+    key at all"), so a test can hand back a flag that is not a boolean.
+    """
+    lines = [
+        json.dumps({"type": "DOCHEAD", "id": "", "ticket": 1})
+        + "||" + json.dumps({"docType": "SCH_PAGE", "uuid": "page-1"}) + "|"
+    ]
+    for index, (designator, flag) in enumerate(rows.items()):
+        component = f"comp-{index}"
+        lines.append(
+            json.dumps({"type": "COMPONENT", "id": component, "ticket": 1})
+            + "||" + json.dumps({"x": 0, "y": 0, "parentId": ""}) + "|"
+        )
+        lines.append(
+            json.dumps({"type": "ATTR", "id": f"a{index}d", "ticket": 1})
+            + "||"
+            + json.dumps({"key": "Designator", "value": designator,
+                          "parentId": component})
+            + "|"
+        )
+        body = (
+            '{"key":"Name","value":"={Value}","parentId":"%s"%s}'
+            % (component, f',"valueVisible":{flag}' if flag else "")
+        )
+        lines.append(
+            json.dumps({"type": "ATTR", "id": f"a{index}n", "ticket": 1})
+            + "||" + body + "|"
+        )
+    return "\n".join(lines)
+
+
+def _plan_hiding(tmp_path: Path, *hidden: str):
+    """The fixture drawing's plan, with these parts' value rows declared hidden.
+
+    `532` states the row is not printed as `valueVisible: false` on the plan's own
+    part (`PlanDrawPart.value_visible`), so that is what this sets — the plan is
+    then dumped and re-loaded by `draw apply` like any other.
+    """
+    path, plan = _plan(tmp_path)
+    for part in plan.change.draw_parts:
+        if part.designator in hidden:
+            part.value_visible = False
+    plan.dump(path)
+    _reloaded = ChangePlan.load(path)
+    assert [item.designator for item in _reloaded.change.draw_parts
+            if not item.value_visible] == list(hidden), (
+        "the plan on disk must carry the declared visibility, or the run under "
+        "test is not the one this test is about"
+    )
+    return path, _reloaded
+
+
+def _apply(monkeypatch, tmp_path: Path, plan_path: Path, editor: _FakeEditor, capsys):
+    """Run `draw apply` against ``editor`` and read the report it wrote."""
+    _stub_editor(monkeypatch, editor)
+    _stub_export(monkeypatch, components={}, findings=[])
+    report = tmp_path / "apply.json"
+    code = cli.main([
+        "draw", "apply", str(plan_path), "--new-page", "--project", "test",
+        "--json", str(report),
+    ])
+    printed = capsys.readouterr().out
+    payload = (json.loads(report.read_text(encoding="utf-8"))
+               if report.exists() else {})
+    return code, payload, printed
+
+
+def _nothing_was_drawn(editor: _FakeEditor, payload: dict) -> None:
+    """The one claim every 542 refusal makes: it stopped before the canvas."""
+    actions = [action for action, _params in editor.writes]
+    assert "sch.place_wire" not in actions, actions
+    assert "sch.place_power" not in actions, actions
+    assert "sch.doc.save" not in actions, actions
+    assert "export.render" not in editor.calls, editor.calls
+    assert payload["outcome"] == "unknown", payload.get("outcome")
+    assert payload["ok"] is False
+
+
+def test_a_hidden_row_that_stays_printed_stops_the_run_before_any_wire(
+    monkeypatch, tmp_path, capsys,
+):
+    """The write answered "done" and the document still prints the row (532's shape).
+
+    A page that says `valueVisible: true` after the write is the *plan's* claim
+    refuted by the document, and it is not a note: the host will paint a value the
+    drawing stated is hidden, which is the 531 defect — refused before the wires.
+    """
+    plan_path, plan = _plan_hiding(tmp_path, "R1")
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        document_source=_document_source({"R1": "true", "R2": "true"}),
+        source_write_lands=False,   # the host accepts the call and stores nothing
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+    assert code == 3, printed
+    assert payload["reason"] == "value_visibility_still_visible", payload.get("reason")
+    hidden = payload["write"]["hiddenValues"]
+    assert hidden["declared"] == ["R1"]
+    assert hidden["written"] == ["R1"]
+    assert hidden["readBack"] != "confirmed"
+    assert hidden.get("confirmed", []) == [], (
+        "a row the document still prints is never reported as confirmed"
+    )
+    assert editor.calls.count("sys.set_document_source") == 1, (
+        "one attempt, then the document decides — a write whose outcome is "
+        "disagreed with is never retried"
+    )
+    _nothing_was_drawn(editor, payload)
+    assert any("值行" in item or "value row" in item for item in payload["notes"])
+
+
+def test_a_row_the_document_does_not_carry_is_not_already(
+    monkeypatch, tmp_path, capsys,
+):
+    """No record for the row is `missing` — never `already`, and never a pass.
+
+    `532`'s reader reports a designator with no `Name` record as missing; the
+    plan states that row is not printed, and a document that holds no such record
+    cannot confirm it (the render is what would decide, and the run has not
+    reached a render).
+    """
+    plan_path, plan = _plan_hiding(tmp_path, "R1")
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        document_source=_document_source({"R2": "true"}),
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+    assert code == 3, printed
+    assert payload["reason"] == "value_visibility_row_missing", payload.get("reason")
+    hidden = payload["write"]["hiddenValues"]
+    assert hidden["missing"] == ["R1"]
+    assert hidden["readBack"] != "already", (
+        "a missing row must not be read as the already-hidden state"
+    )
+    assert "sys.set_document_source" not in editor.calls
+    _nothing_was_drawn(editor, payload)
+
+
+def test_an_empty_document_is_not_already_either(monkeypatch, tmp_path, capsys):
+    """The empty source is the degenerate case of the same rule, not a special one."""
+    plan_path, plan = _plan_hiding(tmp_path, "R1")
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        document_source="",
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+    assert code == 3, printed
+    assert payload["reason"] == "value_visibility_row_missing", payload.get("reason")
+    hidden = payload["write"]["hiddenValues"]
+    assert hidden["written"] == [] and hidden["missing"] == ["R1"]
+    assert hidden["readBack"] != "already"
+    assert "sys.set_document_source" not in editor.calls
+    _nothing_was_drawn(editor, payload)
+
+
+def test_a_flag_that_is_not_false_is_not_already(monkeypatch, tmp_path, capsys):
+    """`rewritten == source` is not the postcondition; *each row reads false* is.
+
+    A row whose flag is `null` cannot be flipped (`hide_value_rows` only writes
+    `true` → `false`) and cannot be read as false — so the document changed
+    nothing and states nothing, and "already" would be a pass this page never
+    earned.
+    """
+    plan_path, plan = _plan_hiding(tmp_path, "R1")
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        document_source=_document_source({"R1": "null", "R2": "true"}),
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+    assert code == 3, printed
+    assert payload["reason"] == "value_visibility_unconfirmed", payload.get("reason")
+    hidden = payload["write"]["hiddenValues"]
+    assert hidden["readBack"] != "already"
+    assert hidden.get("confirmed", []) == []
+    assert "sys.set_document_source" not in editor.calls, (
+        "there was nothing to write; what failed is the read-back"
+    )
+    _nothing_was_drawn(editor, payload)
+
+
+def test_a_page_the_editor_will_not_focus_stops_the_run(
+    monkeypatch, tmp_path, capsys,
+):
+    """The flags live in the **active** document, so an unfocusable page is a stop.
+
+    `sys.set_document_source` reads and rewrites only the focused document; a
+    write aimed at a page the editor will not bring forward would edit the wrong
+    file, so this refuses rather than reporting the rows as handled.
+    """
+    plan_path, plan = _plan_hiding(tmp_path, "R1")
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        document_source=_document_source({"R1": "true", "R2": "true"}),
+        active_page="page-other", focus_refused=True,
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+    assert code == 3, printed
+    assert payload["reason"] == "value_visibility_page_not_active", (
+        payload.get("reason")
+    )
+    assert payload["write"]["hiddenValues"]["readBack"] == "page_not_active"
+    assert "sys.set_document_source" not in editor.calls
+    _nothing_was_drawn(editor, payload)
+
+
+def test_a_row_already_false_is_not_written_and_the_run_continues(
+    monkeypatch, tmp_path, capsys,
+):
+    """The protection's other half: the state the plan asks for is a pass.
+
+    `R1` is already `valueVisible: false`, so there is nothing to write and no
+    document write happens at all — and the run still lands the drawing (this is
+    the path a second apply takes, and refusing it would break idempotence).
+    """
+    plan_path, plan = _plan_hiding(tmp_path, "R1")
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        document_source=_document_source({"R1": "false", "R2": "true"}),
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+    assert code == 0, printed
+    hidden = payload["write"]["hiddenValues"]
+    assert hidden["readBack"] == "already"
+    assert hidden["confirmed"] == ["R1"], (
+        "the pass is stated as the flag that was read, not as a write that happened"
+    )
+    assert hidden["missing"] == []
+    actions = [action for action, _params in editor.writes]
+    assert "sys.set_document_source" not in actions, (
+        "an already-hidden row is not rewritten — the page keeps the document it had"
+    )
+    assert "sch.place_wire" in actions and "sch.doc.save" in actions
+    assert payload["write"]["pinReadback"]["problems"] == []
+    assert payload["verification"]["ok"] is True
+
+
+# ------------------ 542 F1: the whole-page read is an envelope, not a string
+
+
+SOURCE_CAP = 4_000_000
+TAIL_MARKER = '{"type":"WIRE","id":"TAIL_MARKER"}||{"net":"VIN"}|'
+
+
+def _document_source_padded(rows: dict[str, str], total: int, *, tail: str = "") -> str:
+    """`_document_source`, padded with whole record lines to exactly ``total``.
+
+    The rows under test stay at the **front** — a page's first parts are, and that
+    is what makes the truncation dangerous: `hide_value_rows` finds them in the
+    prefix of a cut stream and happily rewrites it.  ``tail`` goes past the cap,
+    so a read of the stream answers the front and loses it.
+    """
+    base = _document_source(rows)
+    filler = '{"type":"COMPONENT","id":"filler","ticket":1}||{"x":0,"y":0}|'
+    lines = [base]
+    length = len(base) + 1
+    while length < total:
+        lines.append(filler)
+        length += len(filler) + 1
+    body = "\n".join(lines)
+    while len(body) > total:
+        body = body.rsplit("\n", 1)[0]
+    body += "\n" * (total - len(body))
+    assert len(body) == total, (len(body), total)
+    assert base in body
+    return body + tail
+
+
+def test_a_truncated_page_read_is_never_rewritten(monkeypatch, tmp_path, capsys):
+    """542 F1: 4,000,000 of 4,000,116 characters is the front of the page.
+
+    `hide_value_rows` finds R1's `Name` ATTR in the prefix (it is at the front, as
+    a real page's first parts are), flips it, and the pre-fix flow wrote the cut
+    stream back — the document lost everything past `maxChars` (the probe's
+    `TAIL_MARKER`), and the run went on to draw.  A read that does not answer the
+    whole page cannot be the basis of a rewrite, so this stops **before**
+    `sys.set_document_source`, and the page keeps the document it had.
+    """
+    plan_path, plan = _plan_hiding(tmp_path, "R1")
+    source = _document_source_padded(
+        {"R1": "true", "R2": "true"}, SOURCE_CAP, tail="\n" + TAIL_MARKER + "\n"
+    )
+    assert len(source) > SOURCE_CAP
+    assert "R1" in source[:SOURCE_CAP], "the target row is in the prefix, by design"
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        document_source=source,
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+    assert code == 3, printed
+    assert payload["reason"] == "value_visibility_source_unverified", (
+        payload.get("reason")
+    )
+    assert "sys.set_document_source" not in editor.calls, (
+        "a truncated read must not be rewritten: the write would store the front "
+        "of the page and drop the rest"
+    )
+    assert editor.document_source == source, "the page keeps the document it had"
+    assert "TAIL_MARKER" in editor.document_source
+    envelope = payload["write"]["hiddenValues"]["sourceEnvelope"]
+    assert envelope["truncated"] is True
+    assert envelope["maxChars"] == SOURCE_CAP
+    assert envelope["chars"] == len(source)
+    assert envelope["problem"].startswith(
+        f"the answer is the first {SOURCE_CAP} of {len(source)} character(s)"
+    ), (
+        "the refusal has to be the truncation arm: uuid and type were answered "
+        "correctly, so a different problem would mean the test proved the wrong thing"
+    )
+    assert envelope["uuid"] and envelope["type"] == "page"
+    assert payload["write"]["hiddenValues"]["readBack"] == "source_unverified"
+    assert all(request.get("uuid") for request in editor.source_requests), (
+        "the read stands behind a page, so it names the page it read — every time"
+    )
+    _nothing_was_drawn(editor, payload)
+
+
+def test_a_write_that_grows_the_page_past_the_cap_is_not_confirmed(
+    monkeypatch, tmp_path, capsys,
+):
+    """A complete read before the write, a cut one after it: still no confirmation.
+
+    The host re-serialises the page on `set_document_source`, so the stored
+    document can be longer than the text that was handed to it.  The read-back is
+    then the front of the page — it may even show R1's flag flipped, since R1 is
+    early in the stream — and the pre-fix flow called that `confirmed` and drew.
+    One write, no retry, and no pass from a stream that does not answer the page.
+    """
+    plan_path, plan = _plan_hiding(tmp_path, "R1")
+    source = _document_source_padded({"R1": "true", "R2": "true"}, SOURCE_CAP - 100)
+    assert len(source) < SOURCE_CAP, "the pre-write read has to be complete"
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        document_source=source, source_grow_on_write=400,
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+    assert code == 3, printed
+    assert payload["reason"] == "value_visibility_readback_unverified", (
+        payload.get("reason")
+    )
+    assert editor.calls.count("sys.set_document_source") == 1, (
+        "one write, then the document decides — a read that is not the page is "
+        "never retried"
+    )
+    assert len(editor.document_source) > SOURCE_CAP, (
+        "the write grew the document past the cap, or this test proves nothing"
+    )
+    hidden = payload["write"]["hiddenValues"]
+    assert hidden["readBack"] != "confirmed"
+    assert hidden["confirmed"] == [], (
+        "a truncated read-back is not the page, so it cannot confirm a row"
+    )
+    assert hidden["readBackEnvelope"]["truncated"] is True
+    assert hidden["readBackEnvelope"]["chars"] > SOURCE_CAP
+    _nothing_was_drawn(editor, payload)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"source_uuid": "page-other"},
+        {"source_type": "sch"},
+    ],
+    ids=["the-answer-names-another-document", "the-answer-is-not-a-page"],
+)
+def test_a_read_of_some_other_document_is_not_this_pages_source(
+    monkeypatch, tmp_path, capsys, answer,
+):
+    """The envelope's other two refusals: wrong `uuid`, wrong `type`.
+
+    `sys.get_document_source` names the document it answered (`uuid`, `type`), and
+    a caller that does not check them is reading whatever was in front of the
+    editor — `178b`'s failure mode, where page B's source answered for page A.
+    These flags are page state, so a read of some other document is not this
+    page's source, and nothing is written from it.
+    """
+    plan_path, plan = _plan_hiding(tmp_path, "R1")
+    source = _document_source({"R1": "true", "R2": "true"})
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        document_source=source, **answer,
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+    assert code == 3, printed
+    assert payload["reason"] == "value_visibility_source_unverified", (
+        payload.get("reason")
+    )
+    assert "sys.set_document_source" not in editor.calls, (
+        "the flags belong to the plan's page; another document's source is not it"
+    )
+    assert editor.document_source == source
+    envelope = payload["write"]["hiddenValues"]["sourceEnvelope"]
+    assert envelope["uuid"] or envelope["type"], "the refusal names what it read"
+    assert {request.get("uuid") for request in editor.source_requests} == {editor.page}
+    _nothing_was_drawn(editor, payload)
+
+
+def test_a_read_that_does_not_say_it_was_complete_is_not_trusted(
+    monkeypatch, tmp_path, capsys,
+):
+    """A missing `truncated` is not a `false` — 542 F1's fail-closed direction.
+
+    The envelope exists so a caller can tell a whole page from its front.  An
+    answer that names the page, is a page, and hands back 4,000,000 characters of
+    a 4,000,116-character stream while **omitting** `truncated` has not said the
+    read was complete; reading that silence as "complete" is how the pre-fix flow
+    applied the cut page (tail dropped, then wires).  Only an explicit
+    `truncated: false` may be trusted.
+    """
+    plan_path, plan = _plan_hiding(tmp_path, "R1")
+    source = _document_source_padded(
+        {"R1": "true", "R2": "true"}, SOURCE_CAP, tail="\n" + TAIL_MARKER + "\n"
+    )
+    assert len(source) > SOURCE_CAP
+    editor = _FakeEditor(
+        exists=False, netlists=[{"components": {}}, _live_netlist_for(plan)],
+        document_source=source, source_hide_truncated=True,
+    )
+    code, payload, printed = _apply(monkeypatch, tmp_path, plan_path, editor, capsys)
+    assert code == 3, printed
+    assert payload["reason"] == "value_visibility_source_unverified", (
+        payload.get("reason")
+    )
+    assert "sys.set_document_source" not in editor.calls, (
+        "an envelope that never says `truncated: false` is not the page, so there "
+        "is nothing to rewrite from"
+    )
+    assert editor.document_source == source, "nothing was cut off the page"
+    assert "TAIL_MARKER" in editor.document_source
+    envelope = payload["write"]["hiddenValues"]["sourceEnvelope"]
+    assert envelope["truncated"] is None, "the answer did not carry the field"
+    assert "truncated" in envelope["problem"], envelope["problem"]
+    _nothing_was_drawn(editor, payload)

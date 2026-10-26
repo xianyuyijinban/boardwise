@@ -11084,6 +11084,68 @@ async def _draw_apply_flow(
                 found[(part.designator, number)] = point
         return found
 
+    async def read_page_source(page_uuid: str, why: str):
+        """Read **this page's** whole source, or say why what came back is not it.
+
+        542 F1: the connector answers `sys.get_document_source` with an envelope
+        (`connector/src/actions.ts` `sysGetDocumentSource`) — `uuid`/`name`/`type`
+        name the document it read, and `chars`/`maxChars`/`truncated` say whether
+        `data` is **all** of it.  A truncated answer is the front of the page: the
+        value rows live near the front (a page's first parts) and past the cut is
+        everything else, so a rewrite built from it stores the front and drops the
+        tail (`probe_truncation.py`: 4,000,116 chars in, 4,000,001 written back,
+        `TAIL_MARKER` gone).  The page's flags are only the page's if the answer
+        names the page, is a page, and is the whole of it — stated in the
+        connector's own words, not inferred from a length.
+        """
+        payload = await call(
+            "sys.get_document_source",
+            {"uuid": page_uuid, "maxChars": 4_000_000},
+            why,
+        )
+        envelope = {
+            "answered": isinstance(payload, dict),
+            "uuid": payload.get("uuid") if isinstance(payload, dict) else None,
+            "type": payload.get("type") if isinstance(payload, dict) else None,
+            "chars": payload.get("chars") if isinstance(payload, dict) else None,
+            "maxChars": payload.get("maxChars") if isinstance(payload, dict) else None,
+            "truncated": (
+                payload.get("truncated") if isinstance(payload, dict) else None
+            ),
+        }
+        problem = ""
+        if not isinstance(payload, dict):
+            problem = "the read did not answer"
+        elif str(payload.get("uuid") or "") != page_uuid:
+            problem = (
+                f"the answer names {payload.get('uuid')!r}, not the plan's page "
+                f"{page_uuid!r}"
+            )
+        elif payload.get("type") != "page":
+            problem = f"the answer is a {payload.get('type')!r}, not a page"
+        elif payload.get("truncated") is not False:
+            # Fail-closed (542 F1 review): an envelope that never says `truncated:
+            # false` has not said the read was complete — `True` is the cut,
+            # `None`/absent is the silence, and both refuse here.
+            marks = payload.get("truncated")
+            if marks is True:
+                problem = (
+                    f"the answer is the first {payload.get('maxChars')} of "
+                    f"{payload.get('chars')} character(s)"
+                )
+            else:
+                problem = (
+                    "the answer does not say `truncated: false` "
+                    f"(truncated={marks!r}; {payload.get('chars')} of "
+                    f"{payload.get('maxChars')} character(s))"
+                )
+        source = payload.get("data") if isinstance(payload, dict) else ""
+        if not isinstance(source, str):
+            source = ""
+            problem = problem or "the answer carries no text"
+        envelope["problem"] = problem
+        return source, problem, envelope
+
     # ---- 0. the guard inputs (read before anything is written) -------------
     try:
         if args.circuit:
@@ -11639,6 +11701,7 @@ async def _draw_apply_flow(
         ),
         "written": [],
         "missing": [],
+        "confirmed": [],
         "readBack": "",
     }
     if to_hide:
@@ -11663,61 +11726,155 @@ async def _draw_apply_flow(
                 "reported as success)"
             )
             report["write"]["hiddenValues"]["readBack"] = "page_not_active"
+            notes.append(
+                "计划声明这些值行不印，而写这一行只能落在**活动**文档上；当前活动页"
+                f"不是 {page}，标志一个都没写 —— 值行会被打印，故在拉线、保存、"
+                "render 之前停下（不写、不重试）"
+            )
+            return done(3, "unknown", "value_visibility_page_not_active")
+        source, source_problem, source_envelope = await read_page_source(
+            page, "read the document whose value rows have to stop being printed"
+        )
+        report["write"]["hiddenValues"]["sourceEnvelope"] = source_envelope
+        if source_problem:
+            # 542 F1: the rewrite is the whole document (that is what
+            # `sys.set_document_source` stores), so it may only be built from a
+            # read that answered the whole document.  This is before the
+            # visibility rewrite, so the visibility source is not touched — the
+            # parts and values placed above stay on the page as the report's
+            # evidence: nothing here cleans them up, nothing is retried.
+            notes.append(
+                "the document whose value rows the plan hides could not be read as "
+                f"**this page's whole source**: {source_problem}. A rewrite is built "
+                "from the read and stored whole, so a cut read would drop everything "
+                "past the cut — the flags were NOT written, and nothing is drawn"
+            )
+            notes.append(
+                "值行所在文档没有整页读到（截断/错页/读失败），写回会丢尾部记录 —— "
+                "不写、不拉线、不保存、不 render"
+            )
+            report["write"]["hiddenValues"]["readBack"] = "source_unverified"
+            return done(3, "unknown", "value_visibility_source_unverified")
+        rewritten, hidden, missing = partvisibility.hide_value_rows(source, to_hide)
+        report["write"]["hiddenValues"]["written"] = hidden
+        report["write"]["hiddenValues"]["missing"] = missing
+        # A row the document does not carry is **not** the state the plan asks
+        # for: `532` reports it as missing rather than as hidden, and the read-back
+        # below is the only thing that may call a row hidden.  So this refuses
+        # here, before the wires — the same rank as the value and pin read-backs
+        # (055 G2), not a note.
+        if missing:
+            notes.append(
+                "the document carries no value row for "
+                f"{', '.join(missing)} — its value is not printed by any record "
+                "this reader can see, and no read-back below can confirm a row the "
+                "document does not hold"
+            )
+            notes.append(
+                "计划声明这些值行不印，文档里却没有对应记录，回读无从确认 —— 在拉线、"
+                "保存、render 之前停下"
+            )
+            report["write"]["hiddenValues"]["readBack"] = "row_missing"
+            return done(3, "unknown", "value_visibility_row_missing")
+        if rewritten == source:
+            # "Nothing to write" is a pass only when **every** planned row reads
+            # `valueVisible: false`.  `rewritten == source` says the text did not
+            # move — a row whose flag is absent or `null` is neither flipped by
+            # `hide_value_rows` (it only ever writes `true` → `false`) nor
+            # confirmed by `value_row_visible` (which answers `None`), and calling
+            # that "already" is the flattering reading of a missing record.
+            unconfirmed = [
+                designator for designator in hidden
+                if partvisibility.value_row_visible(source, designator) is not False
+            ]
+            if unconfirmed:
+                report["write"]["hiddenValues"]["readBack"] = "unconfirmed"
+                notes.append(
+                    "the plan states these value row(s) are not printed "
+                    f"({', '.join(unconfirmed)}) and the document neither changes "
+                    "nor reads back as `valueVisible: false` — there is no byte to "
+                    "write and no `false` to confirm"
+                )
+                notes.append(
+                    "值行标志既没写成、也读不出 false（不是「已经是隐藏」）—— 在拉线、"
+                    "保存、render 之前停下"
+                )
+                return done(3, "unknown", "value_visibility_unconfirmed")
+            report["write"]["hiddenValues"]["readBack"] = "already"
+            report["write"]["hiddenValues"]["confirmed"] = list(hidden)
+            notes.append(
+                f"the {len(hidden)} value row(s) the plan hides are already "
+                "`valueVisible: false` on this page — nothing to write"
+            )
         else:
-            source_payload = await call(
-                "sys.get_document_source", {"maxChars": 4_000_000},
-                "read the document whose value rows have to stop being printed",
+            written = await call(
+                "sys.set_document_source",
+                {"uuid": page, "source": rewritten, "confirm": True},
+                "stop the host printing the value rows the plan hides",
+                writes=True,
             )
-            source = (
-                source_payload.get("data", "")
-                if isinstance(source_payload, dict) else ""
+            report["write"]["calls"] += 1
+            after, after_problem, after_envelope = await read_page_source(
+                page, "read the document back to see whether the flags took"
             )
-            rewritten, hidden, missing = partvisibility.hide_value_rows(source, to_hide)
-            report["write"]["hiddenValues"]["written"] = hidden
-            report["write"]["hiddenValues"]["missing"] = missing
-            if missing:
+            report["write"]["hiddenValues"]["readBackEnvelope"] = after_envelope
+            if after_problem:
+                # 542 F1: the read-back is the postcondition's only witness, so a
+                # read-back that is not the page confirms nothing — even when the
+                # prefix it did answer shows the flag flipped.  The write already
+                # happened; it is not repeated (016 §4 protection 4).
                 notes.append(
-                    "the document carries no value row for "
-                    f"{', '.join(missing)} — its value is not printed by any record "
-                    "this reader can see, which the render below is what decides"
+                    "the visibility write's own read-back is not this page's whole "
+                    f"source ({after_problem}), so the flags cannot be confirmed "
+                    "from it — the one write already made is not retried, and "
+                    "nothing is drawn"
                 )
-            if rewritten == source:
-                report["write"]["hiddenValues"]["readBack"] = "already"
                 notes.append(
-                    f"the {len(hidden)} value row(s) the plan hides are already "
-                    "`valueVisible: false` on this page — nothing to write"
+                    "值行写后的回读不是整页源（截断/错页/读失败），前缀里即使读到 false "
+                    "也不算确认 —— 不重试、不拉线、不保存、不 render"
                 )
-            else:
-                written = await call(
-                    "sys.set_document_source",
-                    {"uuid": page, "source": rewritten, "confirm": True},
-                    "stop the host printing the value rows the plan hides",
-                    writes=True,
+                report["write"]["hiddenValues"]["readBack"] = "readback_unverified"
+                return done(3, "unknown", "value_visibility_readback_unverified")
+            # Read **the record the write addressed**, one designator at a time:
+            # `False` is the only answer that confirms, `True` is "the host will
+            # print it", and `None` is "this document cannot say" — the last two
+            # are both refusals, and the run stops before the wires with them.
+            flags = {
+                designator: partvisibility.value_row_visible(after, designator)
+                for designator in hidden
+            }
+            still = [
+                designator for designator in hidden if flags[designator] is not False
+            ]
+            report["write"]["hiddenValues"]["readBack"] = (
+                "confirmed" if not still else "differs"
+            )
+            report["write"]["hiddenValues"]["answered"] = (
+                isinstance(written, dict)
+            )
+            if still:
+                printed = [name for name in still if flags[name] is True]
+                unreadable = [name for name in still if flags[name] is None]
+                if printed:
+                    report["write"]["hiddenValues"]["stillVisible"] = printed
+                if unreadable:
+                    report["write"]["hiddenValues"]["unreadable"] = unreadable
+                notes.append(
+                    "the visibility write could not be confirmed for "
+                    f"{', '.join(still)} (still printed: {printed or '[]'}; "
+                    f"unreadable: {unreadable or '[]'}) — the plan states those "
+                    "rows are not printed and the document disagrees"
                 )
-                report["write"]["calls"] += 1
-                again = await call(
-                    "sys.get_document_source", {"maxChars": 4_000_000},
-                    "read the document back to see whether the flags took",
+                notes.append(
+                    "值行标志写后回读不是 false —— 在拉线、保存、render 之前停下"
+                    "（已写进文档的部分不清理、不重试）"
                 )
-                after = (
-                    again.get("data", "") if isinstance(again, dict) else ""
+                return done(
+                    3, "unknown",
+                    "value_visibility_still_visible" if printed
+                    else "value_visibility_unreadable",
                 )
-                still = [
-                    designator for designator in hidden
-                    if partvisibility.value_row_visible(after, designator) is not False
-                ]
-                report["write"]["hiddenValues"]["readBack"] = (
-                    "confirmed" if not still else "differs"
-                )
-                report["write"]["hiddenValues"]["answered"] = (
-                    isinstance(written, dict)
-                )
-                if still:
-                    notes.append(
-                        "the visibility write could not be confirmed for "
-                        f"{', '.join(still)} — the plan states those rows are not "
-                        "printed and the render below is what decides whether they are"
-                    )
+            report["write"]["hiddenValues"]["confirmed"] = list(hidden)
 
     # ---- 6. protection 3: the pin read-back, before any wire --------------
     placed_geometry = await call(
