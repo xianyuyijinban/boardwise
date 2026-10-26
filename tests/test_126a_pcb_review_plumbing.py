@@ -1399,19 +1399,17 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `evidence/540/final-mutation-restoration-check.log`。两个值同样在**当前这棵
     # 工作树**上按上方同一配方直接量得，recursive 与
     # `contracts/differential/manifest.json` 的 `producerVersions.rulebody` 一致。
-    # **#88A moved `recursive` only** — 25b7de70 -> **25ab5405**。原因是
-    # `rules/pcb/focground.py` 的 R1 口径修正：`net_clearance` 的默认读数是
-    # plan-view（允许跨层），而 #88A 让 pour 按 rings 计铜之后，1.0.0 的
-    # PGND↔AGND 的 plan-view 最近对变成「顶层走线 × 底层铺铜」，R1 的正距离跨层
-    # 分支却把投影写成「on shared (no layer) … the isolation holds by this
-    # measurement」。修正把该分支改成明确 plan-view 投影、非表面间距、不据此声称
-    # 同层隔离，并给行文补上「出数不出判定」。这是**措辞/口径**变化，不是判决、
-    # 公式或阈值变化：direct 摘要仍为 `ea1d06e0`，行为锚是
-    # `tests/test_133c_foc_ground.py` 的 R1 各条（含跨层零距那条）。recursive 与
-    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
-    # 由 `tools.build_differential_fixtures` 重生成同步，两个值在本树上直接量得。
+    # **#88 docstring refresher moved `recursive` only** — 25ab5405 -> **7646ae9a**。
+    # 本批只改 `rules/pcb/focthermal.py` 的**模块 docstring**（#88 四视图：
+    # pre-#83 15 = 281+14 / bd5809f 50 = 246+49 / rings 边+弦 containment
+    # 56 = 240+55 / HEAD 1 = 295；55 = 14+35+6），无规则行为、判决、公式或阈值
+    # 变化；direct 仍为 `ea1d06e0`。行为锚不变：
+    # `tests/test_133d_foc_thermal.py`、`test_131f_mcu_crystal_keepout.py`、
+    # `test_135_poured_result.py` 与 47 条 #88 聚焦。recursive 与
+    # `contracts/differential/manifest.json` 的
+    # `producerVersions.rulebody` 由 `tools.build_differential_fixtures` 重生成同步。
     assert old_digest == "ea1d06e0"
-    assert recursive == "25ab5405", (
+    assert recursive == "7646ae9a", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

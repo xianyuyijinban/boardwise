@@ -1911,17 +1911,30 @@ def pour_connectivity(board: BoardGeometry, net: str) -> PourConnectivity:
     7 494 300 → 2 210 304.2 sq mil, 药箱's ``GND`` stays at 1 island,
     9 201 550 → 7 151 163.8 sq mil.
 
-    **ROBOT's island count was 135's one number that was never copper.** 135
-    read that result as **15** islands; #88A–D measure the pour on its rings
-    (every ``ARC`` expanded), size the coarse-reject box over **all** rings,
-    and judge containment on the rings' solid rather than on the outline — and
-    the same poured result is **1** island of **295** members (281 shapes +
-    the 14 stitching vias sitting in the outline's bulge), area still
-    2 210 304.2 sq mil. The fifteen was an artifact of pairing the
-    arcs-as-chords ``points`` view with a box sized by that same chord: the box
-    stopped at the chord, the 14 vias fell outside it, and each was pruned as
-    「too far to touch」. So 15 is **not** a property of this board's result
-    copper — see issue #88 and
+    **ROBOT's island count records four views of one poured result, and only
+    the last is the copper.** All four keep the result's area
+    (2 210 304.226455 sq mil) and layer span [1, 2, 15, 16] unchanged; what
+    moves is which elements the measurement lets reach the union:
+
+    * **15 = 281 + 14** — the **pre-#83** reading, when the containment
+      disjunct compared a polygon with its own vertices and pour pairs fused
+      tautologically. Reconstructed from this tree by restoring that
+      expression; it matches 135's published 281 members and 14 vias exactly.
+    * **50 = 246 + 49** — bd5809f, after #83 fixed the disjunct and while the
+      pour was still measured on ``PourShape.points`` (arcs as chords): the
+      chord-sized box stopped short of the bulge and pruned 49 vias.
+    * **56 = 240 + 55** — rings edges and the all-ring box, but the old chord
+      containment: six more vias separate because the chords had been reading
+      a false 0.0 contact.
+    * **1 = 295** (68 tracks + 172 vias + 47 pads + 8 POURED shapes) — HEAD:
+      #88A–D measure on the rings and test containment on solid copper, and
+      all 55 chord-orphaned vias sit inside the solid of the two GND results.
+
+    The fifty-five are **14 + 35 + 6**: fourteen were already orphaned before
+    #83, thirty-five were exposed by #83, and six by the rings edge view. The
+    earlier 「281 + the 14 stitching vias」 reading is that pre-#83 subset, not
+    the current account; and 15 is not a rings-view answer (the rings edge/box
+    view reads 56). See issue #88 and
     ``tests/test_88_pour_rings.py::test_88d_a_via_fence_in_the_bulge_is_one_island_and_bbox_is_not_the_merge``.
     #88A–D leave the other three numbers above unmoved; 162a then moved
     毕设FOC 1.0.0's ``GND`` once more, 39 → 37, by measuring copper bodies

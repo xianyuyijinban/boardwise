@@ -309,18 +309,17 @@ def test_poured_is_now_parsed_and_reads_as_board_coordinates():
         #     touch. Pour area 224 746.8 -> 205 038.9 sq mil.
         #   GND 46 -> 39: the same effect on 毕设FOC's ground, 12 350.0 ->
         #     10 614.0 sq mil.
-        #   ROBOT GND 1 -> 15 in 135, and **#88D puts it back to 1**. 135's
-        #     rule (read the result, not the region) was right; the fifteen-way
-        #     split was not copper. The pour outline bulges, 14 stitching vias
-        #     sit in the bulge, and a measurement of the pour on
-        #     ``PourShape.points`` (the arcs-as-chords view) pairs that rings
-        #     geometry with a chord-sized coarse box: the box stops at the
-        #     chord, the 14 vias fall outside it, and every one of them is
-        #     rejected as 「too far to touch」 — fourteen false islands beside
-        #     the plane. With **all rings** in the box and exact ring
-        #     containment (#88A/#88D) the same poured result is **one** island
-        #     of 295 members (281 + the 14 vias). So 15 is a chord-bbox
-        #     artifact, never a property of this board's result copper; 133d's
+        #   ROBOT GND 1 -> 15 in 135: that 15 is the **pre-#83** reading
+        #     (281 + 14), measured while the pour-containment disjunct compared
+        #     a polygon with its own vertices. #83 then exposed the chord view:
+        #     bd5809f reads **50** = 246 + 49, and the rings edge/box view with
+        #     the old chord containment reads **56** = 240 + 55. **#88A/#88D
+        #     put it back to 1** = 295 members (68 tracks + 172 vias + 47 pads
+        #     + 8 POURED), area 2 210 304.226455 sq mil and layers 1/2/15/16
+        #     unchanged: all 55 chord-orphaned vias sit inside the solid of the
+        #     two GND results. The 55 are 14 + 35 + 6 (14 pre-#83, 35 exposed by
+        #     #83, 6 by the rings edge view), so "the 14 stitching vias" is only
+        #     the historical subset and 15 is not a rings-view answer. 133d's
         #     R9 and 135's anchor carry the same correction.
         #
         # AGND and 药箱 GND stay at 1: their results are still one piece each,

@@ -554,15 +554,16 @@ def test_u2_ep_on_1_1_0_is_continuous_and_its_island_is_a_poured_result():
     [
         # ROBOT's GND: 1 -> 1, deliberately the same digit for two different
         # reasons, and **not** 「the pour result is still fifteen pieces」. 135's
-        # swap of region for result is what the before/after pins; the fifteen
-        # that swap produced was a chord-bbox artifact: the pour outline bulges,
-        # 14 stitching vias sit inside the bulge, and measuring the pour on
-        # `PourShape.points` (arcs-as-chords) put the coarse box at the chord, so
-        # the 14 vias were falsely read as separate copper. #88D reads all rings
-        # in the box and tests containment on the rings: the 14 false orphans
-        # return to the one GND plane, which is why the same poured result is now
-        # 295 members (281 + 14) in 1 island. Area 2 210 304 sq mil and layer
-        # span [1, 2, 15, 16] never moved.
+        # swap of region for result is what the before/after pins. 135's
+        # fifteen was the **pre-#83** reading (281 + 14); #83 then exposed the
+        # chord view — bd5809f reads 50 = 246 + 49, and the rings edge/box view
+        # with the old chord containment reads 56 = 240 + 55. #88A/#88D read
+        # all rings in the box and test containment on the solid: all 55
+        # chord-orphaned vias return to the one GND plane, which is why the
+        # same poured result is now 295 members (68 tracks + 172 vias + 47 pads
+        # + 8 POURED) in 1 island. The 55 are 14 + 35 + 6, so 15 is a
+        # historical reading, not a rings-view answer. Area 2 210 304.226455
+        # sq mil and layer span [1, 2, 15, 16] never moved.
         (ROBOT, "GND", 1, 1),
         # Or removes the clearance voids from it. 162a then merged two pairs of
         # this net's (track, via) copper that genuinely touches — copper the
@@ -577,12 +578,15 @@ def test_island_counts_move_and_the_reason_is_the_result_layer(
     """Acceptance anchors, each a correction rather than a regression.
 
     ROBOT's ``GND`` region is one solid plane and its poured **result** is one
-    plane too — 135's fifteen-way split, retracted by #88D, was 14 stitching
-    vias falsely cut off by measuring the pour on its arcs-as-chords view (see
-    the parameter comment). 毕设FOC 1.0.0's ``GND`` loses islands because the
-    result polygons exclude the parts the pour engine cleared away. Both are
-    the same rule: read the result, not the intent — and measure its copper on
-    the copper, not on the chords.
+    plane too. Its island count has four measured views: 135's **15** is the
+    **pre-#83** reading (281 + 14); bd5809f's chord view reads **50** = 246 +
+    49; the rings edge/box view with the old chord containment reads **56** =
+    240 + 55; and #88A/#88D's rings + solid containment reads **1** = 295.
+    The 55 are 14 + 35 + 6, so 15 is a historical reading and not a rings-view
+    answer (see the parameter comment). 毕设FOC 1.0.0's ``GND`` loses islands
+    because the result polygons exclude the parts the pour engine cleared away.
+    Both are the same rule: read the result, not the intent — and measure its
+    copper on the copper, not on the chords.
     """
     board = parse_epro2(str(path))
     conn = pour_connectivity(board, net)

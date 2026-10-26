@@ -802,16 +802,18 @@ def test_r9_reports_robots_huge_first_island_of_one_connected_plane():
       7 494 300 sq mil of *region* copper) and its poured **result** is what
       the pour engine left, so the area fell to 2 210 304 and the member count
       to 281. That much stands: read the result, not the intent.
-    * #88D: 135 also reported **15** islands here, and that was wrong. The
-      outline bulges, 14 stitching vias ring it *inside the bulge*, and the
-      pour was measured with ``PourShape.points`` — the arcs-as-chords view —
-      so the coarse box stopped at the chord, called every one of those 14
-      vias 「too far to touch」 and split them off. With all ``rings`` in the
-      box and exact ring containment (#88A) plus the same correction here, the
-      net is **one** plane of **295** members (281 + 14 vias), area and layer
-      span unchanged. So the 15 was a chord-bbox artifact, not a partition of
-      this board's copper, and the pad's massive exit path is a single plane
-      after all.
+    * The island count has four measured views, and 135's **15** is the
+      **pre-#83** one (281 + 14): at that time the containment disjunct
+      compared a polygon with its own vertices, so pour pairs fused
+      tautologically. #83 then exposed the chord view: bd5809f reads **50** =
+      246 + 49, and the rings edge/box view with the old chord containment
+      reads **56** = 240 + 55. **#88A/#88D measure on the rings and test solid
+      containment: 1 plane of 295 members** (68 tracks + 172 vias + 47 pads +
+      8 POURED), area 2 210 304.226455 sq mil and layers 1/2/15/16 unchanged.
+      All 55 chord-orphaned vias sit inside the solid of the two GND results;
+      the 55 are 14 + 35 + 6, so 15 is neither the current reading nor a
+      rings-view answer. The pad's massive exit path is a single plane after
+      all.
     """
     rows = [r for r in _rows(ROBOT, R9) if r.board == "PCB1"]
     assert len(rows) == 1

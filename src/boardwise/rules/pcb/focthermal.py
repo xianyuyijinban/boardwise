@@ -95,8 +95,9 @@ holds the pad, then reports that island's area and layer span. Measured:
 * the 1.1.0 board's ``U2``: all four vias **and** the pad are in **one** island
   (id 9, 15 members, **21 644 sq mil** of pour, layers 1/2/15/16) — a
   continuous exit to a large plane, and the two boards differ;
-* ROBOT's ``DRV1``: island 0, 281 members, **2 210 304 sq mil**, layers
-  1/2/15/16, out of **15** islands on that net.
+* ROBOT's ``DRV1``: **the pre-#83/135-era reading** — island 0, 281 members,
+  **2 210 304 sq mil**, layers 1/2/15/16, out of **15** islands on that net
+  (15 = 281 + 14; the current reading is 1 island / 295 members, below).
 
 **135 re-measured all three, and the island *numbers* moved while the verdicts
 held.** 135 parses ``POURED`` records — the pour **result** — into board
@@ -113,9 +114,16 @@ rule's three rows:
 * ``U2``'s area 24 523 -> 21 644 sq mil, members 15 unchanged: one member is
   now the ``POURED`` result where it used to be its ``POUR`` region, and a
   result is less copper than the region it was poured from.
-* ROBOT's ``DRV1`` is the one that moved most: the net reads **15** islands,
-  not 1. Its single near-full-board ``GND`` **region** is fifteen pieces once
-  poured. The pad still sits in the large one, so the exit path is continuous.
+* ROBOT's ``DRV1`` is the one that moved most, and its history now has four
+  readings. 135 swapped the region for its result and read **15** islands
+  (281 members, pre-#83: 15 = 281 + 14). #83 then exposed the chord view —
+  bd5809f reads **50** = 246 + 49 — and the rings edge/box view with the old
+  chord containment reads **56** = 240 + 55. **Current (#88A–D): 1 island of
+  295 members** (68 tracks + 172 vias + 47 pads + 8 POURED), area
+  2 210 304.226455 sq mil, layers 1/2/15/16: all 55 chord-orphaned vias sit in
+  the solid of the two GND results. The 55 are 14 + 35 + 6, so the 14-via
+  reading is the pre-#83 subset, not the current count. The pad still sits in
+  the large one, so the exit path is continuous.
 
 So R9 reports per board and does not generalise one board's answer onto
 another. Note also that island area is **pour area only** — tracks and vias
