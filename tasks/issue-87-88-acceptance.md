@@ -145,9 +145,11 @@ connector **536 passed** + typecheck；DSH **127 passed / 1 skipped** + typechec
 Rust **45 passed / 4 ignored** + fmt/clippy；Python/Rust 5 case 的 normalized SHA-256
 完全一致。ignored 是需显式语料的可选项，不写成已运行。
 
-## 6. issue 评论候选（尚未发布）
+## 6. issue 评论收据（2026-10-26 已发布）
 
-### #87 —— 部分落地，整单保持 OPEN
+以下为发布时正文摘要；实际评论与开放状态以链接为准。
+
+### [#87 —— 部分落地，整单保持 OPEN](https://github.com/xianyuyijinban/boardwise/issues/87#issuecomment-6415800085)
 
 > 候选 `3398e8a`：①③已有真实 CLI 集成证据；⑤完成离线归档替代，在线取档未复测。
 > ②未改 connector、未完成 PCB render 真机复测，SOP 披露不算修复。④目前
@@ -155,7 +157,7 @@ Rust **45 passed / 4 ignored** + fmt/clippy；Python/Rust 5 case 的 normalized 
 > UNKNOWN 行无 measurement，其他规则也未形成统一覆盖。因此①③⑤（⑤仅离线）可验收，
 > ②④继续开放，整单不关闭。
 
-### #88 —— 代码主体完成，15→1 与四视图待提出人确认，保持 OPEN
+### [#88 —— 代码主体完成，15→1 与四视图待提出人确认，保持 OPEN](https://github.com/xianyuyijinban/boardwise/issues/88#issuecomment-6415806004)
 
 > 候选 `3398e8a`：三组实板净空逐位复现（F `+12V↔GND` **11.213162658**、
 > F `GND↔VCC` **3.538172961**、B `PGND↔AGND` **14.095168282** mil）；rings/void
@@ -174,4 +176,5 @@ Rust **45 passed / 4 ignored** + fmt/clippy；Python/Rust 5 case 的 normalized 
    字段及 UNKNOWN 行的身份边界；本批不以文字说明冒充结构变更。
 3. #87⑤：在线取档单独立项复测；不修改 `sch.readback` 的既有结论。
 4. #88：提出人确认候选读数，尤其是 **15 → 1** 的验收锚修正；确认前不关单。
-5. 任何 issue 评论、关闭、推送或新 git 提交都按各自授权执行；本文自身不代表已评论。
+5. 两条“待验证/边界确认”评论已按授权发布，两个 issue 均保持 OPEN；未关单、未 push。
+   后续评论、关闭、推送或新 git 提交仍按各自授权执行。
