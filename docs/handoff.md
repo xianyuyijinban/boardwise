@@ -103,15 +103,27 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
   `boardwise_draw_lint` 共 10 工具。**127 passed / 1 skipped** + typecheck + build，离线 smoke 为
   3 candidates/6 artifacts + page 8 pages/16 artifacts + lint replay 0；未热加载、未发布（下列为 0.1.3 历史）。
 - `dsh-plugin/package.json` 0.1.2 → **0.1.3**（commit `23b2a53`）：`npm run check` 全绿
-  （50 passed / 1 skipped + typecheck + build），`npm pack` 出 `boardwise-dsh-0.1.3.tgz`，
+  （51 passed / 1 skipped + typecheck + build），`npm pack` 出 `boardwise-dsh-0.1.3.tgz`，
   `npm publish --dry-run` exit 0。
+- **headless store 分裂按新建 profile 处置**（2026-10-24）：从 headless 模板建
+  `boardwise-clean`，装 `boardwise-dsh-0.1.3.tgz`，`--dump-config` 见 `tool-boardwise`；
+  旧 `headless` 的 `node_modules` / store 未动。PATH 只接受 `boardwise.exe`，`.cmd/.bat`
+  不再直接 spawn（Node 批处理 EINVAL），改用 `BOARDWISE_EXE` 指向 exe 或 Python。
+- **web store 分裂**（2026-10-24）：现有 `web` profile 的 `node_modules/.modules.yaml`
+  仍指向 `C:\Users\xiangyu\.dsh\profiles\web\...`，在原 profile 上 `add` 会报
+  `ERR_PNPM_UNEXPECTED_VIRTUAL_STORE`；不改旧 profile，从 web 模板新建
+  `boardwise-web-clean` 并装 0.1.3，`--dump-config` 见 `tool-boardwise`，旧 `web` 未动。
 - 仓库根 `package.json` **shim 已随 23b2a53 入库**（`main`/`types` 指进 `dsh-plugin/lib/`）——
   DSH STORE 那条 `dsh plugin add github:xianyuyijinban/boardwise` 以 **push 后的 HEAD 树**
   为准，push 前商城安装仍装到空壳。
 - **待做**：`npm login` → `cd dsh-plugin && npm publish --access public`（**岳的 npm 账号，
   未 publish**）；push 后等几小时复检商城页。
+- **版本策略（2026-10-24 定）**：从 **0.6.0 起插件与 boardwise 外部版本同号**；发布 0.6.0
+  时同时把根 shim `package.json` 与 `dsh-plugin/package.json` 改成 0.6.0。`0.1.3` 是
+  `0.1.x` 线最后一版，不再发 `0.1.x`。`BOARDWISE_EXE` 持久化暂不做，保留环境变量方式；
+  根 shim 入库、npm publish 都并入 0.6.0 发布动作。
 - 纪律：**TS 侧不实现任何审查逻辑**；CLI 命令面变更时检查 dsh-plugin 工具面要不要跟，
-  漂移哨兵 `tests/test_dsh_plugin_sync.py` 常跑；插件版本号等 0.6.0 再同步。
+  漂移哨兵 `tests/test_dsh_plugin_sync.py` 常跑。
 
 ### 3.4 迁移线（Kimi Code → dsh）
 
