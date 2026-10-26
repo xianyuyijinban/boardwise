@@ -5136,6 +5136,14 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
         "",
         f"- 工程：`{title}`" + (f"（{project.get('projectUuid')}）" if project.get("projectUuid") else ""),
         f"- 数据来源：`{source.get('tier')}` — {source.get('tierLabel', '')}",
+        # #87 ①: the engine that wrote this report, in the block a reader sees
+        # before any section. A report older than the field says so instead of
+        # inheriting today's version — "unknown" is a fact, a guess is not.
+        (
+            f"- 工具版本：`boardwise {report['toolVersion']}`"
+            if report.get("toolVersion")
+            else "- 工具版本：未知（这份报告没有记录写它的引擎版本）"
+        ),
         f"- 模型：{model.get('components', '?')} 器件 / {model.get('nets', '?')} 网"
         + (f"，位号 {'、'.join(model.get('designators') or [])}" if model.get("designators") else ""),
         f"- 计数：{errors} ERROR / {warnings} WARN / {summary.get('infoCount', 0)} INFO",

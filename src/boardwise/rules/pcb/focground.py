@@ -429,6 +429,24 @@ class FocGroundDomains(PcbRule):
        island reading 131f made possible, reported per domain so 「PGND is one
        plane and GND is 46 fragments」 is a sentence this row can carry.
 
+    **Two口径, and the row never mixes them (#88A).** ``net_clearance`` is
+    called with its default, which is the **plan-view minimum over every pair,
+    cross-layer pairs included** — that is the reading whose ``distance <= 0``
+    end 1.1.0's PGND↔GND turns into 「a cross-layer 0.0 is not a short」. The
+    same口径 has a positive end, and since #88A measures a pour on its rings
+    (and so on its real copper rather than on a chord of it) 1.0.0's PGND↔AGND
+    lands there: its plan-view minimum is a top-side track over a bottom-side
+    poured result, 5.9 mil in projection against a 14.1 mil same-layer gap.
+    Only a pair with a **non-empty** ``shared_layer_ids`` may be reported as
+    「nearest copper pair is N mil … on shared layer … the isolation holds by
+    this measurement」; a pair without one is reported as a **plan-view
+    projection, not a surface-to-surface gap**, with **no same-layer isolation
+    claimed** from it. The distinction is the whole point of
+    ``ClearanceResult``'s own docstring: judging a projection as a spacing
+    measures the board's thickness, and the sentence the pre-#88A code could
+    only reach on a same-layer minimum would, written for a cross-layer pair,
+    claim a shared layer that does not exist.
+
     **No verdict.** 「Isolation holds」 is reported as an INFO row and 「the two
     domains touch here」 is reported as an INFO row too: 岳 has ruled that the
     pack measures, and which of the two a given board should be is his call.
@@ -538,13 +556,13 @@ class FocGroundDomains(PcbRule):
                 "claimed, and no clearance violation is claimed either"
             )
             measurement = _measurement("distance", result.distance)
-        else:
+        elif result.shared_layer_ids:
             verdict = (
                 f"**no direct copper connection** between {reading.power!r} and "
                 f"{reading.logic!r}: nearest copper pair is "
                 f"{_mil(result.distance):.1f} mil edge-to-edge "
                 f"({result.element_a} ↔ {result.element_b}) on shared "
-                f"{_shared_layers(board, (result.shared_layer_ids or [None])[0])}"
+                f"{_shared_layers(board, result.shared_layer_ids[0])}"
                 + (
                     f" / {', '.join(str(l) for l in result.shared_layer_ids[1:])}"
                     if len(result.shared_layer_ids) > 1
@@ -552,6 +570,41 @@ class FocGroundDomains(PcbRule):
                 )
                 + " — the isolation TI §1.3.1 asks for **holds by this "
                 "measurement**, stated as a number and not as a verdict"
+            )
+            measurement = _measurement("distance", result.distance)
+        else:
+            # #88A made this branch reachable. ``net_clearance``'s default is the
+            # **plan-view** minimum over every pair, cross-layer pairs included
+            # (measure.py's ``_best_pair`` / ``ClearanceResult`` own that
+            # reading), and on 毕设FOC 1.0.0 the measured PGND↔AGND pair is now
+            # a top-side track over a bottom-side poured result: 5.9 mil in
+            # projection against a 14.1 mil same-layer gap. Before #88A measured
+            # a pour on its rings, this board's minimum happened to be a
+            # same-layer pair, so the sentence the old code wrote for this
+            # branch — 「nearest copper pair is N mil … on shared (no layer) …
+            # the isolation holds by this measurement」 — was unreachable here.
+            # It is not a sentence this row may write for a cross-layer pair: the
+            # number is the projection of two bodies separated by the stackup,
+            # so it measures board thickness, not a same-layer isolation. The
+            # reading is reported as what it is and no isolation claim is taken
+            # from it. The ``distance <= 0.0`` branch above stays where it is —
+            # a cross-layer 0.0 is the same口径's other end, and 1.1.0's
+            # PGND↔GND is its measured instance.
+            verdict = (
+                f"**no direct copper connection** between {reading.power!r} and "
+                f"{reading.logic!r}: the nearest pair **in plan view** is "
+                f"{_mil(result.distance):.1f} mil ({result.element_a} ↔ "
+                f"{result.element_b}), and those two shapes share **no copper "
+                "layer at all** — so that figure is a **plan-view projection, "
+                "not a surface-to-surface gap**, and it is **not** a spacing: "
+                "the two bodies are separated vertically by the board's stackup, "
+                "and judging them by the projection would be measuring board "
+                "thickness. **No same-layer isolation is claimed from this "
+                "number**, and no short is claimed either "
+                f"(`overlapping={result.overlapping!r}`, no shared layer) — a "
+                "same-layer gap is the reading that answers TI §1.3.1, and this "
+                "pair has no same-layer contact to report; the projection is "
+                "stated as a number, not as a verdict"
             )
             measurement = _measurement("distance", result.distance)
 

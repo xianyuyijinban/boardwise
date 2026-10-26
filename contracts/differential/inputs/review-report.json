@@ -1,6 +1,7 @@
 {
   "schema": "boardwise.checkup/7",
   "generatedAt": "<GENERATED_AT>",
+  "toolVersion": "0.5.22",
   "source": {
     "tier": "file",
     "tierLabel": "离线文件（--file）：不连编辑器",
@@ -1131,7 +1132,7 @@
     "review_summary": {
       "file": "review-summary.md",
       "entries": 2,
-      "note": "逐条 finding 的定位链已预填进 `review-summary.md`，「分析」「建议」两栏留空给模型（docs/review-sop.md §3.1 收尾死一步：必须补全，工程师只看这一份）"
+      "note": "逐条 finding 的定位链已预填进 `review-summary.md`，「分析」「建议」两栏留空给模型（docs/review-sop.md §3.1 收尾死一步：必须补全，工程师只看这一份）；重跑同一 --out 时机器内容重生成、人工两栏与 1/3/4 节按 key 保留"
     }
   },
   "shelfPath": "blocklib/parts.json",
@@ -1949,7 +1950,7 @@
     },
     "sourceVersions": {
       "ruleset": "a0c5e0a0",
-      "rulebody": "25b7de70"
+      "rulebody": "25ab5405"
     },
     "verdict": "incomplete",
     "verdictWhy": [

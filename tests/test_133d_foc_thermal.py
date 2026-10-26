@@ -784,44 +784,42 @@ def test_r9_reports_the_two_boards_answering_differently():
     assert "**no pour polygon at all**" not in continuous.message
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "issue #88: _Shape measures a pour on PourShape.points, the "
-        "arcs-as-chords view (135), so this net reads 50 islands and this pad's "
-        "island 246 members, where the arcs-expanded rings view reads the "
-        "documented 15 / 281. #83's fix made pour pairs measurable for the "
-        "first time and the chord error surfaced as extra splits; the region "
-        "copper count and the verdict are unchanged."
-    ),
-)
-def test_r9_reports_robots_huge_first_island_out_of_fifteen():
+def test_r9_reports_robots_huge_first_island_of_one_connected_plane():
     """Acceptance anchor: ROBOT's ``DRV1`` — the pad's island is huge, and the
-    net has **fifteen** of them.
+    net is **one** connected plane.
 
-    Measured: the ``GND`` net on ROBOT reads **15 islands** in total; the pad's
-    is island 0, 281 members, layers 1/2/15/16 and **2 210 304 sq mil** of pour —
-    the pad's copper is in the plane, and its plane is two orders of magnitude
-    larger than the 1.1.0 board's. The pad has no thermal via in it at all
-    (162a: the one suture via on this board is 17.65 mil past the pad's end —
-    see ``test_r7_reports_no_via_on_robots_drv1_thermal_pad``), so the row names
-    no via island rather than a vialess 「the pad's own island」.
+    Measured: the ``GND`` net on ROBOT reads **1 island** in total; the pad's
+    is island 0, **295** members, layers 1/2/15/16 and **2 210 304 sq mil** of
+    pour — the pad's copper is in the plane, and its plane is two orders of
+    magnitude larger than the 1.1.0 board's. The pad has no thermal via in it
+    at all (162a: the one suture via on this board is 17.65 mil past the pad's
+    end — see ``test_r7_reports_no_via_on_robots_drv1_thermal_pad``), so the
+    row names no via island rather than a vialess 「the pad's own island」.
 
-    **135 moved both numbers.** ROBOT's ``GND`` went from 1 island / 289
-    members / 7 494 300 sq mil to **15** / 281 / 2 210 304, and the reason is
-    the same one as everywhere else in this task: the single ``GND`` **region**
-    on this board is one near-full-board plane, and its poured **result** is
-    fifteen pieces. Reading the region (131f's choice) gave "one island"; the
-    result says the pour engine cut that plane apart. The pad still sits in the
-    big one, so the exit path verdict is unchanged.
+    **Two numbers moved here, for two unrelated reasons.**
+
+    * 135: the ``GND`` **region** was one near-full-board plane (289 members,
+      7 494 300 sq mil of *region* copper) and its poured **result** is what
+      the pour engine left, so the area fell to 2 210 304 and the member count
+      to 281. That much stands: read the result, not the intent.
+    * #88D: 135 also reported **15** islands here, and that was wrong. The
+      outline bulges, 14 stitching vias ring it *inside the bulge*, and the
+      pour was measured with ``PourShape.points`` — the arcs-as-chords view —
+      so the coarse box stopped at the chord, called every one of those 14
+      vias 「too far to touch」 and split them off. With all ``rings`` in the
+      box and exact ring containment (#88A) plus the same correction here, the
+      net is **one** plane of **295** members (281 + 14 vias), area and layer
+      span unchanged. So the 15 was a chord-bbox artifact, not a partition of
+      this board's copper, and the pad's massive exit path is a single plane
+      after all.
     """
     rows = [r for r in _rows(ROBOT, R9) if r.board == "PCB1"]
     assert len(rows) == 1
     row = rows[0]
     assert "the pad is in island 0 of 'GND'" in row.message
-    assert "281 member(s), layers [1, 2, 15, 16]" in row.message
+    assert "295 member(s), layers [1, 2, 15, 16]" in row.message
     assert "2210304 sq mil of pour" in row.message
-    assert "15 island(s) on this net" in _evidence(row)
+    assert "1 island(s) on this net" in _evidence(row)
     # 162a: the board's only suture via is 17.65 mil off this 45° pad's end, so
     # no via shares the pad's island and the row says exactly that.
     assert "no thermal via of this pad appears in any island" in row.message

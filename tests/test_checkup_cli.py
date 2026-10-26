@@ -423,6 +423,52 @@ def test_the_file_fallback_never_touches_the_bridge(fake_bridge, tmp_path):
     assert report["model"]["nets"] == 13
 
 
+def _header_area(markdown: str) -> str:
+    """The report's title block: everything before its first `##` section.
+
+    The body legitimately names versions too (the environment section prints the
+    running pair), so a "the report says which engine wrote it" test must look at
+    the one place a reader sees before any section — not anywhere in the file.
+    """
+    return markdown.split("\n## ", 1)[0]
+
+
+def _assert_one_version_on_three_faces(out: str, out_dir: Path, version: str) -> None:
+    """#87 ①: `report.json` top level, `report.md` title block, CLI first line."""
+    report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["toolVersion"] == version, "工具版本在 report.json 顶层，不在 source 里"
+    header = _header_area((out_dir / "report.md").read_text(encoding="utf-8"))
+    assert version in header, "report.md 的标题区没有说这一份是谁写的"
+    first_line = out.strip().splitlines()[0]
+    assert version in first_line, f"CLI 首行没有说这一份是谁跑的：{first_line!r}"
+
+
+def test_one_engine_version_on_report_json_markdown_and_the_first_console_line(
+    fake_bridge, capsys, tmp_path
+):
+    """#87 ①: a checkup report can be traced to the engine that wrote it.
+
+    Three faces, one fact — the running `boardwise.__version__` — and both first
+    lines carry it, offline (`--file`) and online (a tier), because a reader who
+    puts a console tail and a report side by side must not have to guess whether
+    they came from the same build. Additive and **not a gate**: the two exit
+    codes below are the ones this board already produced (073's `incomplete`),
+    so a version line that moved a verdict would fail here.
+    """
+    from boardwise import __version__
+
+    assert _cmd_checkup(_checkup_args(file=str(GOLDEN), out=str(tmp_path / "offline"))) == 3
+    _assert_one_version_on_three_faces(
+        capsys.readouterr().out, tmp_path / "offline", __version__
+    )
+
+    _FakeBridgeClient.answers = _live_answers()
+    assert _cmd_checkup(_checkup_args(out=str(tmp_path / "online"))) == 3
+    _assert_one_version_on_three_faces(
+        capsys.readouterr().out, tmp_path / "online", __version__
+    )
+
+
 def test_nothing_is_pending_once_batch_four_has_run(tmp_path):
     """`pending` is empty and every section is real.
 
@@ -2151,3 +2197,226 @@ def test_the_offline_path_writes_markdown_and_no_canvas(fake_bridge, tmp_path):
     assert "**未检查** —— 离线路径" in markdown
     assert "无图。离线路径" in markdown
     assert "## 模块" in markdown and "## AI 槽位" in markdown
+
+
+# --------------------------------------------------------------------------
+# #87③B: a second `checkup` over the same --out must not eat the human columns
+# --------------------------------------------------------------------------
+
+MARK_ANALYSIS = "人工分析：MARK-ANALYSIS-87B"
+MARK_ADVICE = "人工建议：MARK-ADVICE-87B"
+#: Appended to every finding's message on the second run, so "the current run's
+#: text" is observable without a new fixture: identity is `boardwise-rule:<rule>:
+#: <target/refs>`, never the message, so the keys do not move.
+DRIFT_SUFFIX = "（第二次重跑改过）"
+
+
+def _mark_review_summary(path: Path) -> bytes:
+    """Fill the two human columns and sections 1/3/4 the way a model would."""
+    from boardwise.engines.checkup import (
+        REVIEW_SUMMARY_BLANK_ADVICE,
+        REVIEW_SUMMARY_BLANK_ANALYSIS,
+    )
+
+    text = path.read_bytes().decode("utf-8")
+    assert REVIEW_SUMMARY_BLANK_ANALYSIS in text, "run 1 wrote no blank rows to fill"
+    filled = text.replace(REVIEW_SUMMARY_BLANK_ANALYSIS, MARK_ANALYSIS)
+    filled = filled.replace(REVIEW_SUMMARY_BLANK_ADVICE, MARK_ADVICE)
+    for heading, marker in (
+        ("## 1. 连接状态", "连接状态-MARK-1"),
+        ("## 3. 待确认", "待确认-MARK-3"),
+        ("## 4. 下一步", "下一步-MARK-4"),
+    ):
+        assert heading in filled, heading
+        filled = filled.replace(heading, f"{heading}\n\n{marker}", 1)
+    path.write_bytes(filled.encode("utf-8"))
+    return filled.encode("utf-8")
+
+
+def _review_summary_console_line(printed: str) -> str:
+    """The one console line that announces ``review-summary.md``."""
+    lines = [line for line in printed.splitlines() if line.lstrip().startswith("review-summary:")]
+    assert len(lines) == 1, printed
+    return lines[0]
+
+
+def test_a_second_run_keeps_the_human_columns_and_sections_1_3_4(
+    fake_bridge, tmp_path, monkeypatch
+):
+    """#87③B §2: machine content is regenerated, human content merges back.
+
+    Run 1 is the real golden fixture. The model fills 「分析/建议」 and sections
+    1/3/4. Run 2 changes every finding's prose (same keys), so the summary must
+    show **run 2's** messages while the human cells and the three hand-written
+    sections survive; `report.json` must be run 2's, version and all.
+    """
+    import boardwise.cli as cli_module
+    from boardwise import __version__
+
+    out = tmp_path / "out"
+    _FakeBridgeClient.answers = _live_answers()
+    args = _checkup_args(out=str(out))
+    first = _cmd_checkup(args)
+    _mark_review_summary(out / "review-summary.md")
+
+    real_run_review = cli_module.run_review
+    drift = {"on": False}
+
+    def run_review_with_drift(model, **kwargs):
+        findings = real_run_review(model, **kwargs)
+        if drift["on"]:
+            for finding in findings:
+                finding.message = finding.message + DRIFT_SUFFIX
+        return findings
+
+    monkeypatch.setattr(cli_module, "run_review", run_review_with_drift)
+    drift["on"] = True
+    second = _cmd_checkup(args)
+
+    assert second == first, "prose must not move the verdict"
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    assert report["toolVersion"] == __version__
+    assert report["findings"], "the golden fixture still finds something"
+    assert all(row["message"].endswith(DRIFT_SUFFIX) for row in report["findings"])
+
+    summary = (out / "review-summary.md").read_bytes().decode("utf-8")
+    assert DRIFT_SUFFIX in summary, "section 2 must be the CURRENT run's table"
+    assert MARK_ANALYSIS in summary and MARK_ADVICE in summary, (
+        "the human columns were lost on the second run"
+    )
+    for marker in ("连接状态-MARK-1", "待确认-MARK-3", "下一步-MARK-4"):
+        assert marker in summary, f"section marker {marker} was lost"
+    assert f"逐条问题（{len(report['findings'])} 条）" in summary
+    slot = report["ai_slots"]["review_summary"]
+    assert slot["entries"] == len(report["findings"])
+    assert "未更新" not in slot["note"]
+
+
+def test_a_second_run_of_the_unchanged_board_is_stable_from_then_on(
+    fake_bridge, tmp_path
+):
+    """#87③B §2: the merge re-renders section 2 once (the pure function pads its
+    cells), and from that merged state every further run is a byte-for-byte
+    no-op — the human fill never drifts or disappears."""
+    out = tmp_path / "out"
+    _FakeBridgeClient.answers = _live_answers()
+    args = _checkup_args(out=str(out))
+    assert _cmd_checkup(args) in (0, 1, 3)
+    _mark_review_summary(out / "review-summary.md")
+
+    _cmd_checkup(args)
+    merged_once = (out / "review-summary.md").read_bytes()
+    text = merged_once.decode("utf-8")
+    assert MARK_ANALYSIS in text and MARK_ADVICE in text
+    for marker in ("连接状态-MARK-1", "待确认-MARK-3", "下一步-MARK-4"):
+        assert marker in text, f"section marker {marker} was lost"
+
+    _cmd_checkup(args)
+
+    assert (out / "review-summary.md").read_bytes() == merged_once
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ("old-report-missing", "old-report-bad-json", "old-summary-unmergeable"),
+)
+def test_a_damaged_previous_run_keeps_the_old_summary_bytes(
+    fake_bridge, tmp_path, capsys, damage
+):
+    """#87③B §3: when the merge cannot be done, the old file is not touched.
+
+    The current report.json / report.md are still written and the exit code does
+    not move; the summary keeps every byte, the report slot says ``entries:
+    null`` with a code instead of the current chain count, and the console
+    stops announcing a skeleton.
+    """
+    from boardwise import __version__
+
+    _FakeBridgeClient.answers = _live_answers()
+    out = tmp_path / "out"
+    first = _cmd_checkup(_checkup_args(out=str(out)))
+    marked = _mark_review_summary(out / "review-summary.md")
+
+    if damage == "old-report-missing":
+        delivered = tmp_path / "delivered"
+        delivered.mkdir()
+        (delivered / "review-summary.md").write_bytes(marked)
+        out = delivered
+    elif damage == "old-report-bad-json":
+        (out / "report.json").write_bytes(b'{"schema": "boardwise.checkup/7"')
+    else:
+        damaged = marked.decode("utf-8").replace(
+            "|---|---|---|---|---|---|---|", "|---|---|---|", 1
+        )
+        assert damaged != marked.decode("utf-8"), "the table shape did not change"
+        (out / "review-summary.md").write_bytes(damaged.encode("utf-8"))
+
+    sentinel = (out / "review-summary.md").read_bytes()
+    capsys.readouterr()  # the first run's console is not this test's subject
+
+    second = _cmd_checkup(_checkup_args(out=str(out)))
+
+    assert second == first, "degrading the merge must not change what the run exits"
+    assert (out / "review-summary.md").read_bytes() == sentinel, (
+        "旧 summary 被覆盖了：降级路径必须一个字节都不动"
+    )
+    printed = capsys.readouterr().out
+    line = _review_summary_console_line(printed)
+    assert "未更新" in line and "旧文件保留" in line
+    assert "骨架" not in line, "降级时不再打印「骨架 N 条」"
+
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    assert report["toolVersion"] == __version__
+    assert (out / "report.md").is_file(), "report.md is still written"
+    slot = report["ai_slots"]["review_summary"]
+    assert slot["entries"] is None, "不得伪报当前 chains 数"
+    assert slot["code"] in line and slot["code"] in slot["note"]
+    assert "保留" in slot["note"]
+
+
+def test_a_crlf_delivery_survives_the_merge_as_crlf(fake_bridge, tmp_path):
+    """#87③B §1: bytes in, bytes out — the file's terminator is the document's,
+    not the OS's. A `read_text`/`write_text` pair would fold CRLF to LF (or
+    rewrite LF as `os.linesep`), and the merge's newline contract is exactly
+    that this must not happen."""
+    out = tmp_path / "out"
+    _FakeBridgeClient.answers = _live_answers()
+    args = _checkup_args(out=str(out))
+    _cmd_checkup(args)
+    marked = _mark_review_summary(out / "review-summary.md")
+    (out / "review-summary.md").write_bytes(marked.replace(b"\n", b"\r\n"))
+
+    _cmd_checkup(args)
+
+    after = (out / "review-summary.md").read_bytes()
+    assert b"\r\n" in after
+    assert after.replace(b"\r\n", b"").count(b"\n") == 0, "merge folded CRLF to LF"
+    text = after.decode("utf-8")
+    assert MARK_ANALYSIS in text and MARK_ADVICE in text
+
+
+def test_a_blank_delivered_summary_is_not_a_degradation(fake_bridge, tmp_path):
+    """#87③B §3 boundary: a blank file has nothing to merge.
+
+    The pure ``merge_review_summary`` returns the current skeleton for a blank
+    ``old_summary`` *before* it looks at the old report, so the CLI must not turn
+    "nobody filled this yet" into ``old-report-missing`` — the current skeleton
+    is written, the slot reports its own chain count, and the console announces
+    a skeleton like any first run.
+    """
+    _FakeBridgeClient.answers = _live_answers()
+    out = tmp_path / "delivered"
+    out.mkdir()
+    (out / "review-summary.md").write_bytes(b"\r\n  \r\n\t\r\n")
+    assert not (out / "report.json").exists()
+
+    code = _cmd_checkup(_checkup_args(out=str(out)))
+
+    assert code in (0, 1, 3)
+    text = (out / "review-summary.md").read_bytes().decode("utf-8")
+    report = json.loads((out / "report.json").read_text(encoding="utf-8"))
+    assert "## 2. 逐条问题" in text
+    assert f"逐条问题（{len(report['findings'])} 条）" in text
+    slot = report["ai_slots"]["review_summary"]
+    assert slot["entries"] == len(report["findings"])
+    assert "未更新" not in slot["note"]

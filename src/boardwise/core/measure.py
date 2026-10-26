@@ -28,6 +28,7 @@ sets for pads, tracks-as-capsules and pour polygons. Keep its contract
 from __future__ import annotations
 
 import math
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -874,8 +875,19 @@ class _Shape:
     pad belongs to and is empty for every shape that belongs to none (issue
     #85) — see :attr:`ClearanceResult.within_one_footprint` for what reads it.
 
-    **``bbox`` is the copper's box, not the centreline's** (162a): the vertex
-    box inflated by ``radius``, which is the box of the capsule's own body —
+    **``rings`` is the pour's copper-presence view** (R2-1, issue #88A):
+    ``[outline, void, void, ...]`` with every ``ARC`` expanded, as
+    :class:`~boardwise.core.geometry.PourShape` carries it. Empty for every
+    non-pour shape, and for a pour record that has no rings at all (``POLY`` /
+    ``POUR`` / a hand-built KiCad-shaped one), where ``points`` is the only
+    view there is — the consumers therefore read :func:`_shape_rings`, which
+    falls back to ``[points]``. ``points`` itself is **not** corrected: it
+    stays the chord view every pour area and element label is read from, so
+    reading rings changes what is *measured*, never what is *accounted*.
+
+    **``bbox`` is the copper's box, not the centreline's** (162a): the outline
+    box (a ringed pour: the union of every ring's box) inflated by ``radius``,
+    which is the box of the capsule's own body —
     the centreline's bbox inflated by the shape's half width, exactly the
     Minkowski sum of the vertex box with the radius disc. The distinction is
     not cosmetic. Both consumers of this field
@@ -889,9 +901,30 @@ class _Shape:
     record order reached first won). Inflating at construction makes the box
     contain the capsule, hence ``bbox distance <= true edge gap``, which is the
     property both callers need.
+
+    **The exact tests' lookups are precomputed per shape** (#88F): ring boxes
+    (the containment prefilter), every ring vertex (the witness set) and every
+    edge packed with its own box (the distance sweep). They are derived once,
+    at construction, from the same ``points``/``rings`` the shape was built
+    from — not a cache across calls: every call builds its own shapes. A ring
+    with no points has a ``None`` box and contributes no copper and no edges.
     """
 
-    __slots__ = ("points", "radius", "layers", "label", "component", "bbox", "is_pour")
+    __slots__ = (
+        "points",
+        "radius",
+        "layers",
+        "label",
+        "component",
+        "bbox",
+        "is_pour",
+        "rings",
+        "ring_boxes",
+        "witness",
+        "edges_sorted",
+        "min_xs",
+        "max_dx",
+    )
 
     def __init__(
         self,
@@ -902,6 +935,7 @@ class _Shape:
         *,
         is_pour: bool = False,
         component: str = "",
+        rings: list[list[Point]] | None = None,
     ) -> None:
         self.points = points
         self.radius = radius
@@ -921,12 +955,63 @@ class _Shape:
         #: within_one_footprint`): two pads of one component are a gap the
         #: part's selection fixed, and no routing change can move them.
         self.component = component
-        box = BBox.from_points(points)
+        #: ``[outline, void, ...]`` for a pour, empty for everything else; see
+        #: the class doc. Kept as its own field so ``points`` (area, label,
+        #: chord view) is never rewritten by it (issue #88A).
+        self.rings = [list(ring) for ring in rings] if rings else []
+        # The box covers **all** of the copper: for a ringed pour the union of
+        # every ring's box (voids sit inside the outline today, but a union is
+        # the safe reading — a smaller box would be a wrong lower bound and
+        # would let the coarse rejects drop pairs that overlap). No rings, or a
+        # non-pour, is the original single-outline path.
+        box: BBox | None = None
+        for ring in self.rings or [points]:
+            ring_box = BBox.from_points(ring)
+            if ring_box is None:
+                continue
+            box = (
+                ring_box
+                if box is None
+                else BBox(
+                    min(box.min_x, ring_box.min_x),
+                    min(box.min_y, ring_box.min_y),
+                    max(box.max_x, ring_box.max_x),
+                    max(box.max_y, ring_box.max_y),
+                )
+            )
         if box is not None and radius > 0.0:
             box = BBox(
                 box.min_x - radius, box.min_y - radius, box.max_x + radius, box.max_y + radius
             )
         self.bbox = box
+        # #88F: derive, once per shape, the three lookups the exact pair tests
+        # need — ring boxes (containment prefilter), every ring vertex (the
+        # witness set), and every edge packed with its own axis-aligned box,
+        # sorted by left edge (the distance sweep). They come from the same
+        # ``points``/``rings`` the shape was built from and are rebuilt for
+        # every `_Shape`; this is construction work, not a cross-call cache.
+        shape_rings = self.rings or [points]
+        self.ring_boxes = [BBox.from_points(ring) for ring in shape_rings]
+        self.witness = [point for ring in shape_rings for point in ring]
+        packed: list[tuple[float, float, float, float, Point, Point]] = []
+        for ring in shape_rings:
+            for p1, p2 in _edges(ring):
+                packed.append(
+                    (
+                        p1.x if p1.x < p2.x else p2.x,
+                        p1.y if p1.y < p2.y else p2.y,
+                        p2.x if p1.x < p2.x else p1.x,
+                        p2.y if p1.y < p2.y else p1.y,
+                        p1,
+                        p2,
+                    )
+                )
+        packed.sort(key=lambda edge: edge[0])
+        self.edges_sorted = packed
+        self.min_xs = [edge[0] for edge in packed]
+        # The longest edge's x-extent: the sweep widens its window by this,
+        # because an edge that *starts* left of the window can still reach in.
+        self.max_dx = max((edge[2] - edge[0] for edge in packed), default=0.0)
 
 
 def _copper_layer_ids(board: BoardGeometry) -> list[int]:
@@ -1215,6 +1300,11 @@ def _net_shape_records(
                     layers or {_UNKNOWN_LAYER},
                     _describe(f"pour {pour.kind}", pour.id, pour.layer_id),
                     is_pour=True,
+                    # Issue #88A: the copper-presence view, with the explicit
+                    # fallback for a record that carries no rings (POLY / POUR /
+                    # KiCad) — `points` is then the whole truth. Area and label
+                    # keep reading `pour.points` / the record, above.
+                    rings=pour.rings or [pour.points],
                 ),
                 pour.area if with_area else 0.0,
             )
@@ -1227,6 +1317,182 @@ def _net_shapes(board: BoardGeometry, net: NetGeometry) -> list[_Shape]:
     return [shape for _, shape, _ in _net_shape_records(board, net, with_area=False)]
 
 
+def _shape_rings(shape: _Shape) -> list[list[Point]]:
+    """The polygons that describe where a shape's copper is (issue #88A).
+
+    A pour that carries parsed rings answers with them — ``rings[0]`` is the
+    outline, ``rings[1:]`` the voids the pour engine cut. Every other shape,
+    and a pour whose ``rings`` is empty (a ``POLY`` / ``POUR`` / hand-built
+    record), answers with the single ``points`` outline, which is exactly what
+    this module read before #88A existed.
+    """
+    return shape.rings if shape.rings else [shape.points]
+
+
+def _shape_witness_points(shape: _Shape) -> list[Point]:
+    """Every vertex that can witness the shape's body for containment.
+
+    For a ringed pour the outline's vertices are the arcs-expanded ones, so
+    ``points`` (the chord view) is a subset and reading only ``points`` would
+    miss a body that sits in a bulge. A void vertex is on the copper's own
+    boundary — copper ends at the void edge — so a void vertex inside another
+    pour's solid means the two bodies meet there.
+
+    The flattened list is built by :class:`_Shape` at construction (#88F), from
+    the same ``_shape_rings`` reading; this accessor never rebuilds it.
+    """
+    return shape.witness
+
+
+def _point_in_solid(shape: _Shape, point: Point) -> bool:
+    """True when ``point`` is inside ``shape``'s **solid** copper.
+
+    Solid is 「inside ``rings[0]`` and inside no void」. Before #88A the test was
+    「inside the outline」, which is what made a foreign body lying in a
+    clearance void read as embedded in copper, and therefore unmeasurable.
+
+    **Box first (#88F).** A ring's points all lie inside its box, so a point
+    outside the box is provably outside the ring — a necessary-condition
+    prefilter, not an approximation. The boxes are widened by ``1e-9``, the
+    exact tolerance :func:`point_in_polygon` uses for 「on the edge counts as
+    inside」, so an on-edge point is never rejected here. A ring with no points
+    has a ``None`` box: an empty outline holds no copper (``False``), an empty
+    void holds nothing to exclude (skipped).
+    """
+    rings = _shape_rings(shape)
+    boxes = shape.ring_boxes
+    outer_box = boxes[0]
+    if outer_box is None:
+        return False
+    if not (
+        outer_box.min_x - 1e-9 <= point.x <= outer_box.max_x + 1e-9
+        and outer_box.min_y - 1e-9 <= point.y <= outer_box.max_y + 1e-9
+    ):
+        return False
+    if not point_in_polygon(point, rings[0]):
+        return False
+    for index in range(1, len(rings)):
+        void_box = boxes[index]
+        if void_box is None:
+            continue
+        if not (
+            void_box.min_x - 1e-9 <= point.x <= void_box.max_x + 1e-9
+            and void_box.min_y - 1e-9 <= point.y <= void_box.max_y + 1e-9
+        ):
+            continue
+        if point_in_polygon(point, rings[index]):
+            return False
+    return True
+
+
+def _shape_edges(shape: _Shape) -> list[tuple[Point, Point]]:
+    """The shape's edges for the edge-to-edge measurement.
+
+    A ringed pour contributes every ring, voids included: a void edge is real
+    copper boundary, and the gap to a body inside the void is the distance to
+    that edge — the measurement #88A exists to recover.
+    """
+    return [edge for ring in _shape_rings(shape) for edge in _edges(ring)]
+
+
+def _edge_distance(a: _Shape, b: _Shape) -> float:
+    """Exact minimum centreline distance between two shapes' edge sets.
+
+    The pre-#88F formulation was ``min(_segment_distance(...))`` over the
+    complete ``edges_a x edges_b`` cross product; ROBOT's GND has two poured
+    results with 553 and 6 251 outline points (9 000 edges with their voids),
+    so one board-wide call evaluated ~11 M segment pairs. This sweep returns
+    the **same** minimum while only exact-testing pairs that can still improve
+    it:
+
+    * **Lower bound.** An edge pair's box gap — ``max(dx, dy)`` with each axis
+      clamped at 0 — is a lower bound on its segment distance (the box of an
+      edge contains the edge, so the boxes are never farther apart than the
+      segments). A pair whose bound already reaches the current ``best``
+      cannot hold a smaller distance; skipping it cannot change the minimum.
+    * **Window.** Inner edges are sorted by ``min_x``. An inner edge can only
+      be within ``best`` of an outer edge spanning ``[ax0, ax1]`` when
+      ``min_x <= ax1 + best`` and ``max_x >= ax0 - best``. Since
+      ``max_x <= min_x + max_dx``, starting the scan at
+      ``min_x >= ax0 - best - max_dx`` is exact also for an edge that *starts*
+      left of the window but reaches into it; the binary search finds that
+      start, and the scan stops once ``min_x`` passes the window's end.
+    * **Seed.** One real pair is measured first — the inner edge whose box is
+      closest to the outer list's first edge — so the sweep starts from a
+      finite answer instead of paying for a full first scan.
+    * ``best`` only ever decreases, so the bound and the window stay valid
+      while the loop narrows them.
+
+    Returns the centreline distance; the caller subtracts both radii. A
+    finding of 0.0 is returned immediately (the minimum cannot go lower). An
+    empty edge set keeps the old double loop's failure mode: ``min()`` over an
+    empty pair set raised ``ValueError``, and no caller may read an invented
+    ``inf`` instead.
+    """
+    if len(a.edges_sorted) <= len(b.edges_sorted):
+        outer, inner = a, b
+    else:
+        outer, inner = b, a
+    inner_edges = inner.edges_sorted
+    if not outer.edges_sorted or not inner_edges:
+        # The interpreter's own message for the pre-sweep `min()` on this
+        # Python; the type and the 「empty」 reading are the contract.
+        raise ValueError("min() iterable argument is empty")
+
+    count = len(inner_edges)
+    inner_xs = inner.min_xs
+    max_dx = inner.max_dx
+
+    ax0, ay0, ax1, ay1, ap1, ap2 = outer.edges_sorted[0]
+    seed = 0
+    seed_bound = math.inf
+    for index in range(count):
+        bx0, by0, bx1, by1, _, _ = inner_edges[index]
+        dx = bx0 - ax1
+        if ax0 - bx1 > dx:
+            dx = ax0 - bx1
+        dy = by0 - ay1
+        if ay0 - by1 > dy:
+            dy = ay0 - by1
+        if dx <= 0.0 and dy <= 0.0:
+            seed = index
+            break
+        bound = dx if dx > dy else dy
+        if bound < seed_bound:
+            seed_bound = bound
+            seed = index
+    best = _segment_distance(ap1, ap2, inner_edges[seed][4], inner_edges[seed][5])
+    if best <= 0.0:
+        return 0.0
+
+    # 1e-9 keeps the window a hair wide, so float rounding in the box bounds
+    # can never drop a pair whose exact distance would tie the minimum.
+    eps = 1e-9
+    for ax0, ay0, ax1, ay1, ap1, ap2 in outer.edges_sorted:
+        limit = ax1 + best + eps
+        start = ax0 - best - max_dx - eps
+        index = bisect_left(inner_xs, start)
+        while index < count:
+            bx0, by0, bx1, by1, bp1, bp2 = inner_edges[index]
+            if bx0 > limit:
+                break
+            dx = bx0 - ax1
+            if ax0 - bx1 > dx:
+                dx = ax0 - bx1
+            if dx < best:
+                dy = by0 - ay1
+                if ay0 - by1 > dy:
+                    dy = ay0 - by1
+                if dy < best:
+                    distance = _segment_distance(ap1, ap2, bp1, bp2)
+                    if distance < best:
+                        best = distance
+                        if best <= 0.0:
+                            return 0.0
+            index += 1
+    return best
+
+
 def _capsule_distance(a: _Shape, b: _Shape, *, connectivity: bool) -> float:
     """Edge-to-edge distance between two capsules (0 when they touch/overlap).
 
@@ -1234,6 +1500,13 @@ def _capsule_distance(a: _Shape, b: _Shape, *, connectivity: bool) -> float:
     edge-segment pairs, minus both half-widths, floored at 0. Exact for the
     convex constant-width shapes this module produces (tracks, vias, pad
     rectangles, convex pours).
+
+    **Issue #88A: a pour is measured on its rings.** Its edges are every ring's
+    edges (outline **and** the clearance voids), and its solid copper is the
+    outline minus those voids (:func:`_point_in_solid`), so a body lying in a
+    void is an ordinary measurable pair instead of 「inside copper」. When the
+    other side is a pour too, its witness vertices and edges come from its own
+    rings for the same reason; ``points`` remains the area / label view.
 
     **Containment is handled by caller intent, because it means different
     things in the two callers:**
@@ -1262,19 +1535,21 @@ def _capsule_distance(a: _Shape, b: _Shape, *, connectivity: bool) -> float:
     # every pour pair, ``connectivity=True`` answered ``0.0`` for every pour
     # pair. The operands below are the docstring's reading — when ``a`` is the
     # pour it is **b**'s body that is tested against ``a``'s polygon.
-    contained = (a.is_pour and any(point_in_polygon(p, a.points) for p in b.points)) or (
-        b.is_pour and any(point_in_polygon(p, b.points) for p in a.points)
+    #
+    # Issue #88A: the pour's polygon is its **solid** copper (outline minus
+    # voids) and b's witness vertices come from b's own rings when it is a
+    # pour too, so a chord view can neither invent a containment nor hide one.
+    contained = (
+        a.is_pour and any(_point_in_solid(a, p) for p in _shape_witness_points(b))
+    ) or (
+        b.is_pour and any(_point_in_solid(b, p) for p in _shape_witness_points(a))
     )
     if contained:
         return 0.0 if connectivity else math.inf
-    edges_a = _edges(a.points)
-    edges_b = _edges(b.points)
-    center_distance = min(
-        _segment_distance(p1, p2, p3, p4)
-        for p1, p2 in edges_a
-        for p3, p4 in edges_b
-    )
-    return max(0.0, center_distance - a.radius - b.radius)
+    # The edge-pair minimum is taken by the box-bounded sweep; it returns the
+    # centreline distance and both radii are still subtracted here, so every
+    # caller keeps the capsule semantics of #88A and 162a unchanged.
+    return max(0.0, _edge_distance(a, b) - a.radius - b.radius)
 
 
 def _overlapping(a: _Shape, b: _Shape) -> bool:
@@ -1303,7 +1578,8 @@ def _best_pair(
     back unmeasurable (a foreign element wholly inside a pour outline — see
     :func:`_capsule_distance`; such a net pair is absent from the result
     rather than reported as 0.0). The bbox of a capsule is the **capsule's
-    own** axis-aligned box — the vertex box inflated by its radius, see
+    own** axis-aligned box — the outline box (a ringed pour: the union of every
+    ring's box, issue #88A) inflated by its radius, see
     :class:`_Shape` — so the box-to-box gap is a *lower bound* on the
     edge-to-edge gap the exact test returns. Two boxes that overlap may still
     have separated capsules, and two whose boxes are already farther apart than
@@ -1626,16 +1902,30 @@ def pour_connectivity(board: BoardGeometry, net: str) -> PourConnectivity:
     ``AGND`` read 67 islands without it and reads 1 with it, ROBOT's ``GND``
     194 → 1, 药箱's ``GND`` 225 → 1, while ``llc`` (which stores no ``POUR``)
     is untouched. 135 then swapped region geometry for result geometry on top
-    of that, which changes the **numbers** again without changing their
-    meaning — same islands, less area (the clearance voids are now excluded),
-    and more of them where the pour engine fragmented a plane the region drew
-    as one piece. Measured: 毕设FOC 1.0.0's ``GND`` 46 → 39 islands and
+    of that, which changes the **numbers** without changing their meaning: the
+    *result* is the truthful copper, so areas shrink (the clearance voids are
+    now excluded) and a plane the region drew as one piece can come back in
+    more than one. Measured by 135: 毕设FOC 1.0.0's ``GND`` 46 → 39 islands and
     12 350.0 → 10 614.0 sq mil, ``AGND`` 2 059 037.0 → 1 433 311.2 sq mil
-    (still one island — a smaller plane, not a broken one); ROBOT's ``GND``
-    1 island / 7 494 300 sq mil → **15** islands / 2 210 304.2 sq mil — that
-    board's ``GND`` region is one solid plane, and the result says the pour
-    engine cut it into fifteen pieces. 药箱's ``GND`` stays at 1 island,
+    (still one island — a smaller plane, not a broken one), ROBOT's ``GND``
+    7 494 300 → 2 210 304.2 sq mil, 药箱's ``GND`` stays at 1 island,
     9 201 550 → 7 151 163.8 sq mil.
+
+    **ROBOT's island count was 135's one number that was never copper.** 135
+    read that result as **15** islands; #88A–D measure the pour on its rings
+    (every ``ARC`` expanded), size the coarse-reject box over **all** rings,
+    and judge containment on the rings' solid rather than on the outline — and
+    the same poured result is **1** island of **295** members (281 shapes +
+    the 14 stitching vias sitting in the outline's bulge), area still
+    2 210 304.2 sq mil. The fifteen was an artifact of pairing the
+    arcs-as-chords ``points`` view with a box sized by that same chord: the box
+    stopped at the chord, the 14 vias fell outside it, and each was pruned as
+    「too far to touch」. So 15 is **not** a property of this board's result
+    copper — see issue #88 and
+    ``tests/test_88_pour_rings.py::test_88d_a_via_fence_in_the_bulge_is_one_island_and_bbox_is_not_the_merge``.
+    #88A–D leave the other three numbers above unmoved; 162a then moved
+    毕设FOC 1.0.0's ``GND`` once more, 39 → 37, by measuring copper bodies
+    instead of centrelines.
 
     Islands are numbered by the flat order :func:`_net_shape_records`
     yields (tracks, then vias, then pads, then pours), and
@@ -1658,8 +1948,9 @@ def pour_connectivity(board: BoardGeometry, net: str) -> PourConnectivity:
             # Coarse reject: shapes whose bboxes are farther apart than 0
             # cannot touch, so skip the exact test. (0 is the touch threshold;
             # a positive bbox gap already proves separation.) The bbox is the
-            # capsule's own — vertex box inflated by radius, see `_Shape` — so
-            # a positive box gap is a proven positive copper gap. Against the
+            # capsule's own — outline box inflated by radius (a ringed pour:
+            # the union of every ring's box, issue #88A) — so a positive box
+            # gap is a proven positive copper gap. Against the
             # raw vertex box this reject was wrong in the other direction:
             # two 10-wide tracks 10 mil apart centre-to-centre have touching
             # copper and were counted as two islands.

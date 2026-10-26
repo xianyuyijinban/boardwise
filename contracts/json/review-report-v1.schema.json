@@ -15,6 +15,10 @@
   "properties": {
     "schema": {"const": "boardwise.checkup/7"},
     "generatedAt": {"type": "string"},
+    "toolVersion": {
+      "type": "string",
+      "description": "The boardwise engine that wrote this report (`boardwise.__version__`, the value `--version` prints). Deliberately not in `required`: reports written before #87 carry no such key, and a missing key reads as 'not recorded', never as 'no version'."
+    },
     "source": {
       "type": "object",
       "required": ["tier", "tierLabel", "attempts", "notes"],

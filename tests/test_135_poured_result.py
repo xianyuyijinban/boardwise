@@ -552,24 +552,18 @@ def test_u2_ep_on_1_1_0_is_continuous_and_its_island_is_a_poured_result():
 @pytest.mark.parametrize(
     "path,net,before_islands,after_islands",
     [
-        # The result layer fragments what the region drew as one piece.
-        pytest.param(
-            ROBOT,
-            "GND",
-            1,
-            15,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "issue #88: _Shape measures a pour on PourShape.points, the "
-                    "arcs-as-chords view (135), so this net reads 50 islands "
-                    "here where the arcs-expanded rings view reads the "
-                    "documented 15. #83's fix made pour pairs measurable for the "
-                    "first time and the chord error surfaced as extra splits; "
-                    "the number returns to 15 when #88 lands."
-                ),
-            ),
-        ),
+        # ROBOT's GND: 1 -> 1, deliberately the same digit for two different
+        # reasons, and **not** 「the pour result is still fifteen pieces」. 135's
+        # swap of region for result is what the before/after pins; the fifteen
+        # that swap produced was a chord-bbox artifact: the pour outline bulges,
+        # 14 stitching vias sit inside the bulge, and measuring the pour on
+        # `PourShape.points` (arcs-as-chords) put the coarse box at the chord, so
+        # the 14 vias were falsely read as separate copper. #88D reads all rings
+        # in the box and tests containment on the rings: the 14 false orphans
+        # return to the one GND plane, which is why the same poured result is now
+        # 295 members (281 + 14) in 1 island. Area 2 210 304 sq mil and layer
+        # span [1, 2, 15, 16] never moved.
+        (ROBOT, "GND", 1, 1),
         # Or removes the clearance voids from it. 162a then merged two pairs of
         # this net's (track, via) copper that genuinely touches — copper the
         # coarse reject had been separating by its centreline box (see
@@ -582,10 +576,13 @@ def test_island_counts_move_and_the_reason_is_the_result_layer(
 ):
     """Acceptance anchors, each a correction rather than a regression.
 
-    ROBOT's ``GND`` region is one solid plane; its poured **result** is
-    fifteen pieces, and the island count now says so. 毕设FOC 1.0.0's ``GND``
-    loses islands because the result polygons exclude the parts the pour engine
-    cleared away. Both are the same rule: read the result, not the intent.
+    ROBOT's ``GND`` region is one solid plane and its poured **result** is one
+    plane too — 135's fifteen-way split, retracted by #88D, was 14 stitching
+    vias falsely cut off by measuring the pour on its arcs-as-chords view (see
+    the parameter comment). 毕设FOC 1.0.0's ``GND`` loses islands because the
+    result polygons exclude the parts the pour engine cleared away. Both are
+    the same rule: read the result, not the intent — and measure its copper on
+    the copper, not on the chords.
     """
     board = parse_epro2(str(path))
     conn = pour_connectivity(board, net)

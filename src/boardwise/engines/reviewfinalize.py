@@ -35,6 +35,13 @@ coverage), and every byte outside those two headings is left exactly as the
 human wrote it. That function is a pure text transform too: no file is opened
 here; the CLI is the only caller that writes.
 
+And it owns the cross-run **merge** (``merge_review_summary``, 537D③A): the
+previous delivery's human 分析/建议 put back onto a freshly rendered skeleton by
+``checkup.triage_key``'s ``boardwise-rule`` identity, vanished findings archived
+under their own keys in a separate ``## 2b`` table, everything the machine does
+not own carried through byte for byte. Like the validator, it reads its
+arguments and nothing else — no file, no editor, no CLI.
+
 The seven groups, in the order they are checked:
 
 1. the main findings table — ``## 2. 逐条问题（N 条）``, seven columns, one row
@@ -70,10 +77,17 @@ from .checkup import (
     REVIEW_SUMMARY_BLANK_ANALYSIS,
     VERDICT_COMPLETE,
     chain_text,
+    disambiguate_triage_keys,
     render_environment_markdown,
+    render_review_summary,
+    triage_key,
+    triage_order,
     triage_slot_is_closed,
     triage_slot_is_manual,
     unreviewed_clearing_note,
+    # The renderer's own cell writer: a cell this module escaped differently
+    # would be the same drift the shared renderers exist to prevent.
+    _cell,
 )
 from .evidence import (
     CHANNEL_ORDER,
@@ -305,15 +319,16 @@ def split_markdown_row(line: str) -> list[str] | None:
     return cells
 
 
-def _is_separator_row(cells: list[str] | None) -> bool:
+def _is_separator_row(cells: list[str] | None, columns: int = TABLE_COLUMNS) -> bool:
     """``|---|---|…|`` — the delimiter GFM requires under a header.
 
-    It must have **the same seven columns** as the header. A one-cell
+    It must have **the same number of columns** as the header it sits under: the
+    main table's seven (the default), or the 2b archive's eight. A one-cell
     ``|---|`` renders as a table header with no body columns, so a complete
     header above it is not a table: the rows would not be read as findings by
     anything downstream.
     """
-    if not cells or len(cells) != TABLE_COLUMNS:
+    if not cells or len(cells) != columns:
         return False
     for cell in cells:
         text = cell.strip()
@@ -1916,3 +1931,649 @@ def validate_review_summary(report: dict, summary: str) -> list[dict]:
     _check_evidence(report, summary, issues)
     _check_cross_view(report, summary, issues)
     return _dedupe(issues)
+
+
+# ---------------------------------------------------------------------------
+# 10. the cross-run merge (537D③A): one delivery, two runs
+# ---------------------------------------------------------------------------
+#
+# Why this exists. ``review-summary.md`` is the one product a human edits: the
+# 分析/建议 columns, section 1, section 3 and section 4 are theirs. A re-run
+# re-derives the whole report, so the skeleton it renders knows nothing about
+# that prose — and before this function a second ``checkup`` simply dropped a
+# delivered summary on the floor.
+#
+# The merge puts the two together **without inventing an identity rule**. A
+# finding's identity is ``checkup.triage_key``'s ``boardwise-rule`` recipe — the
+# structured target first, the prose ``refs`` only when there is nothing
+# structured to read (issue #13) — a collision is resolved by
+# ``checkup.disambiguate_triage_keys`` in ``checkup.triage_order``'s stable
+# order, and nothing here matches on a message, a measurement or a row number.
+# Every byte of the two machine sections comes from the **current** report
+# through the renderers that own them, and everything the machine does not own
+# is carried as it was (CRLF included).
+
+#: The archive's heading, **exactly** this text. ``## 2b. …`` is a different
+#: section from the ``^2\s*[.．]\s*逐条问题`` the validator matches, so the
+#: archive table is never read as the current findings table — 537D2a1's
+#: contract, deliberately left untouched.
+MERGE_ARCHIVE_HEADING = "## 2b. 已消失（重跑保留）"
+
+#: The archive table's columns: the **key** first, then the old row's seven.
+#: Eight on purpose — a table that satisfied the section-2 parser is a table a
+#: later reader could mistake for findings; this one cannot.
+MERGE_ARCHIVE_COLUMNS = TABLE_COLUMNS + 1
+
+
+class ReviewSummaryMergeError(ValueError):
+    """The old delivery cannot be merged without guessing. ``code`` says why.
+
+    Raised rather than returned because every silent alternative is worse:
+    dropping a row loses prose a human wrote, and matching a row without its
+    identity is exactly the guess this function refuses to make. The caller's
+    next move is the caller's decision (ship the current skeleton, keep the old
+    file next to it, ask the engineer) — but it is a *decision*, not a merge that
+    quietly ate a paragraph.
+
+    ``code`` is a closed vocabulary so the CLI can branch on it:
+
+    * the arguments: ``report-not-dict``, ``chains-not-list``,
+      ``chains-row-not-dict``, ``old-summary-not-str``;
+    * the old text: ``old-summary-findings-section-missing``,
+      ``old-summary-table-unreadable``, ``old-summary-table-row-unknown``,
+      ``old-summary-table-row-duplicate``, ``old-summary-2b-unreadable``,
+      ``old-summary-2b-duplicate-key``;
+    * the old report: ``old-report-ledgers-unreadable``,
+      ``old-report-ledgers-misaligned``, ``old-report-ledgers-ambiguous``;
+    * the current report: ``report-ledgers-unreadable``,
+      ``report-ledgers-misaligned``.
+
+    Nothing here reads a file, so this exception never carries an ``OSError``:
+    it is always about the two documents the caller handed over.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+
+
+def _newline_of(text: str) -> str:
+    """The line terminator a text already uses — a merge never normalises it."""
+    if "\r\n" in text:
+        return "\r\n"
+    if "\n" in text:
+        return "\n"
+    if "\r" in text:
+        return "\r"
+    return "\n"
+
+
+def _to_newline(text: str, newline: str) -> str:
+    """Re-terminate generated (LF) text with the file's own terminator."""
+    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", newline)
+
+
+def _section_spans(text: str) -> list[tuple[str, int, int]]:
+    """``[(heading, start, end)]`` for every ``## `` block, in file order.
+
+    The boundaries are :func:`_split_sections`'s own: a block runs from its
+    heading line to the next ``## `` line, or to EOF, and the heading is spelled
+    the way :class:`_Section` spells it (the ``## `` marker removed), so the
+    section regexes above match it unchanged. Character offsets (not line
+    numbers) are what a splice needs.
+    """
+    starts: list[tuple[int, str]] = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        starts.append((offset, line))
+        offset += len(line)
+    spans: list[tuple[str, int, int]] = []
+    for index, (start, line) in enumerate(starts):
+        stripped = line.strip()
+        if not stripped.startswith("## "):
+            continue
+        end = len(text)
+        for after in range(index + 1, len(starts)):
+            if starts[after][1].strip().startswith("## "):
+                end = starts[after][0]
+                break
+        spans.append((stripped[3:].strip(), start, end))
+    return spans
+
+
+def _span_matching(text: str, pattern: re.Pattern[str]) -> tuple[str, int, int] | None:
+    """The first block whose heading matches ``pattern``."""
+    for heading, start, end in _section_spans(text):
+        if pattern.match(heading):
+            return heading, start, end
+    return None
+
+
+def _span_exact(text: str, heading: str) -> tuple[int, int] | None:
+    """The block under a heading spelled **exactly** ``heading``.
+
+    ``heading`` may be given the way a file spells it (``## 2b. …``) or the way
+    :class:`_Section` does (``2b. …``); both name the same block.
+    """
+    wanted = heading.strip()
+    if wanted.startswith("## "):
+        wanted = wanted[3:].strip()
+    for text_heading, start, end in _section_spans(text):
+        if text_heading == wanted:
+            return start, end
+    return None
+
+
+def _trailing_newlines(block: str) -> str:
+    """The run of line terminators a block ends with — the spacing it already has."""
+    match = re.search(r"(?:\r\n|\r|\n)+\Z", block)
+    return match.group(0) if match else ""
+
+
+def _table_lines(block: str) -> list[str]:
+    """The ``|``-leading lines of one block, in file order."""
+    return [line for line in block.splitlines() if line.lstrip().startswith("|")]
+
+
+def _is_main_header(cells: list[str] | None) -> bool:
+    """Whether ``cells`` is the seven-column header the renderer writes.
+
+    The same labels the validator's ``summary-findings-table-header`` asks for,
+    matched by ``in`` on the location chain because that cell carries its own
+    explanation (「定位链（工程 → 板 → 页 → 器件/网）」).
+    """
+    if cells is None or len(cells) != TABLE_COLUMNS:
+        return False
+    labels = [cell.strip() for cell in cells]
+    return (
+        labels[0] == "#"
+        and labels[1] == "级别"
+        and labels[2] == "规则"
+        and "定位链" in labels[3]
+        and labels[4] == "问题"
+        and labels[5] == "分析"
+        and labels[6] == "建议"
+    )
+
+
+def _read_main_table(block: str) -> list[list[str]] | None:
+    """The old findings table's data rows, or ``None`` when it is not one.
+
+    ``None`` is the honest answer for a table this build cannot align — a header
+    with six or eight labels, a separator that does not match the header, a row
+    that splits differently. A caller that guessed anyway would put a human's
+    分析 into another finding's 建议.
+    """
+    rows = _table_lines(block)
+    if len(rows) < 2:
+        return None
+    if not _is_main_header(split_markdown_row(rows[0])):
+        return None
+    if not _is_separator_row(split_markdown_row(rows[1])):
+        return None
+    data: list[list[str]] = []
+    for row in rows[2:]:
+        cells = split_markdown_row(row)
+        if cells is None or len(cells) != TABLE_COLUMNS:
+            return None
+        data.append([cell.strip() for cell in cells])
+    return data
+
+
+def _read_archive_table(block: str) -> list[list[str]] | None:
+    """The 2b archive's rows (``key`` + the old seven), or ``None`` if unreadable."""
+    rows = _table_lines(block)
+    if not rows:
+        return []
+    if len(rows) < 2:
+        return None
+    header = split_markdown_row(rows[0])
+    if header is None or len(header) != MERGE_ARCHIVE_COLUMNS:
+        return None
+    if header[0].strip() != "key" or not _is_main_header(header[1:]):
+        return None
+    if not _is_separator_row(
+        split_markdown_row(rows[1]), MERGE_ARCHIVE_COLUMNS
+    ):
+        return None
+    data: list[list[str]] = []
+    for row in rows[2:]:
+        cells = split_markdown_row(row)
+        if cells is None or len(cells) != MERGE_ARCHIVE_COLUMNS:
+            return None
+        cells = [cell.strip() for cell in cells]
+        if not cells[0]:
+            return None
+        data.append(cells)
+    return data
+
+
+#: One name per ledger-role, so a failure says **which** report could not be read
+#: (the CLI's fallback differs: an unreadable *old* report means the previous
+#: delivery cannot be keyed, an unreadable *current* one means this run is broken).
+_LEDGER_CODES = {
+    "old": ("old-report-ledgers-unreadable", "old-report-ledgers-misaligned"),
+    "current": ("report-ledgers-unreadable", "report-ledgers-misaligned"),
+}
+
+
+def _ledger_pairs(report: object, chains: object, role: str) -> list[tuple[dict, dict]]:
+    """``[(finding, chain)]`` from one report, aligned position by position.
+
+    The two ledgers are one row per finding in the report's own order — the
+    precondition the validator states as ``location-chains-count-mismatch``. A
+    report that does not satisfy it is refused rather than paired by guesswork.
+    """
+    unreadable, misaligned = _LEDGER_CODES[role]
+    label = "旧 report" if role == "old" else "当前 report"
+    if not isinstance(report, dict):
+        raise ReviewSummaryMergeError(
+            unreadable, f"{label} 不是 dict，读不出它的 findings。"
+        )
+    findings = report.get("findings")
+    if not isinstance(findings, list):
+        raise ReviewSummaryMergeError(
+            unreadable, f"{label} 的 findings 不是 list：没有身份可算。"
+        )
+    if chains is None:
+        chains = report.get(CHAINS_KEY)
+        if not isinstance(chains, list):
+            # The pre-chain schema's own name, the alias checkup._report_chains
+            # keeps for hand-built reports.
+            chains = report.get("finding_chains")
+    if not isinstance(chains, list):
+        raise ReviewSummaryMergeError(
+            unreadable, f"{label} 缺 {CHAINS_KEY}：主表的 # 没有可对的机器账。"
+        )
+    if len(findings) != len(chains):
+        raise ReviewSummaryMergeError(
+            misaligned,
+            f"{label} 的 findings 有 {len(findings)} 条、定位链有 {len(chains)} 行："
+            "两张账没对齐，按位置配对会认错 finding。",
+        )
+    pairs: list[tuple[dict, dict]] = []
+    for position, (finding, chain) in enumerate(zip(findings, chains)):
+        if not isinstance(finding, dict) or not isinstance(chain, dict):
+            raise ReviewSummaryMergeError(
+                unreadable,
+                f"{label} 第 {position} 行不是 dict（finding / 定位链）："
+                "既没有身份也没有 #。",
+            )
+        pairs.append((finding, chain))
+    return pairs
+
+
+def _finding_identity(finding: dict) -> str:
+    """One finding's ``boardwise-rule`` triage key — checkup's recipe, verbatim.
+
+    **Every** severity is keyed, not the WARN subset ``warning_triage`` carries:
+    the key is an identity, not a ledger. The severity travels in the slot shape
+    the recipe reads, but the ``boardwise-rule`` key itself is ``rule_id`` + the
+    structured identity (:func:`checkup.triage_identity`), so a finding that is
+    re-graded keeps its key and its prose.
+    """
+    refs = finding.get("refs")
+    target = finding.get("target")
+    return triage_key(
+        {"source": "boardwise-rule", "severity": str(finding.get("severity") or "")},
+        rule_id=str(finding.get("rule_id") or ""),
+        refs=[str(ref) for ref in refs] if isinstance(refs, list) else [],
+        target=target if isinstance(target, dict) else None,
+    )
+
+
+def _keyed_rows(pairs: list[tuple[dict, dict]]) -> list[tuple[str, dict, dict]]:
+    """``[(key, finding, chain)]``, with checkup's own disambiguation applied.
+
+    A chain that already carries a non-empty ``key`` (a build that stamps one)
+    keeps that stamp — a key is written once, where it is made, and never
+    recomputed. Otherwise the key is :func:`_finding_identity` over the paired
+    finding. Whatever still collides goes through
+    :func:`checkup.disambiguate_triage_keys`, ordered by
+    :func:`checkup.triage_order`, exactly as ``warning_triage_slots`` does: one
+    recipe, so a verdict written against ``…#2`` lands on the same row twice.
+
+    Known limit, inherited rather than introduced: within a genuine collision
+    group (two findings whose structured identity is identical) the tie-break is
+    the finding's text, so text that both changes **and** re-orders can move the
+    ``#2`` stamp from one row to the other. Findings with their own identity —
+    the normal case — are unaffected, which is why the recipe is reused instead
+    of a second, cleverer one being invented here.
+    """
+    pending: list[tuple[str, tuple[str, str, str, str], dict]] = []
+    for finding, chain in pairs:
+        stamp = chain.get("key")
+        key = (
+            stamp.strip()
+            if isinstance(stamp, str) and stamp.strip()
+            else _finding_identity(finding)
+        )
+        target = finding.get("target") if isinstance(finding.get("target"), dict) else None
+        slot = {
+            "key": key,
+            "source": "boardwise-rule",
+            "severity": str(finding.get("severity") or ""),
+            "text": str(finding.get("message") or ""),
+            "target": target,
+        }
+        pending.append((key, triage_order({"text": slot["text"]}, target), slot))
+    slots, _collided = disambiguate_triage_keys(pending)
+    return [
+        (str(slot.get("key") or ""), finding, chain)
+        for slot, (finding, chain) in zip(slots, pairs)
+    ]
+
+
+def _index_text(value: object) -> str:
+    """A chain index as the table's ``#`` cell spells it."""
+    return str(value if value is not None else "").strip()
+
+
+def _merge_table_block(block: str, human: list[tuple[str, str]]) -> str:
+    """Rewrite one rendered table's 分析/建议 cells from ``human``, positionally.
+
+    ``block`` is the **current** skeleton's section-2 block, so the row order is
+    the current ledger's and every machine column is already the current
+    report's; only cells 5 and 6 are touched. ``human[i]`` belongs to data row
+    ``i``, which is ``chains[i]``. Each line keeps its own line terminator.
+    """
+    lines = block.splitlines(keepends=True)
+    data_seen = 0
+    for position, line in enumerate(lines):
+        if not line.lstrip().startswith("|"):
+            continue
+        data_seen += 1
+        if data_seen <= 2:  # header + separator are the renderer's own
+            continue
+        row = data_seen - 3
+        if row >= len(human):
+            continue
+        cells = split_markdown_row(line)
+        if cells is None or len(cells) != TABLE_COLUMNS:
+            continue
+        cells[ANALYSIS_COLUMN] = _cell(human[row][0])
+        cells[ADVICE_COLUMN] = _cell(human[row][1])
+        ending = line[len(line.rstrip("\r\n")) :]
+        lines[position] = "| " + " | ".join(cells) + " |" + ending
+    return "".join(lines)
+
+
+def _archive_block(rows: list[list[str]], newline: str) -> str:
+    """The 2b archive table: one keyed row per finding that has vanished."""
+    header = ["key", "#", "级别", "规则", "定位链", "问题", "分析", "建议"]
+    lines = [
+        MERGE_ARCHIVE_HEADING,
+        "",
+        "| " + " | ".join(header) + " |",
+        "|" + "|".join(["---"] * MERGE_ARCHIVE_COLUMNS) + "|",
+    ]
+    lines.extend("| " + " | ".join(_cell(cell) for cell in row) + " |" for row in rows)
+    return newline.join(lines) + newline
+
+
+def _current_preamble(report: dict, current: str) -> str:
+    """The current skeleton's top block, carrying the **current** conclusion.
+
+    ``render_review_summary`` writes the narrow reading (``summary.conclusion``,
+    or the exit code) because the model fills ``conclusion.oneLiner`` later. A
+    merged delivery is already past that step, so the line the validator compares
+    with ``conclusion.oneLiner`` is written here from the report. When the report
+    has no readable one-liner the skeleton's own line is left exactly as it is —
+    nothing is invented, and the validator's ``conclusion-*`` code still answers.
+    """
+    spans = _section_spans(current)
+    preamble = current[: spans[0][1]] if spans else current
+    conclusion = report.get("conclusion")
+    one_liner = conclusion.get("oneLiner") if isinstance(conclusion, dict) else None
+    if not isinstance(one_liner, str) or not one_liner.strip():
+        return preamble
+    lines = preamble.splitlines(keepends=True)
+    for position, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith(_CONCLUSION_PREFIX):
+            continue
+        match = _CONCLUSION_LINE_RE.match(stripped)
+        if match is None:
+            continue
+        lines[position] = (
+            f"{_CONCLUSION_PREFIX}{one_liner.strip()}**{match.group('tail')}"
+            f"{_newline_of(line)}"
+        )
+        break
+    return "".join(lines)
+
+
+def merge_review_summary(
+    old_summary: str | None,
+    old_report: dict | None,
+    report: dict,
+    chains: list[dict],
+) -> str:
+    """Merge a previously delivered summary into the current skeleton.
+
+    ``old_summary`` is the text of the last ``review-summary.md`` (``None`` or
+    blank on a first run), ``old_report`` the ``report.json`` **that summary was
+    written against**, ``report`` the current report and ``chains`` the current
+    ``location_chains``. The result is the current skeleton with a human's work
+    put back on it:
+
+    * the main seven-column table is the **current** one — current location
+      chain, rule, severity, problem, count, conclusion — and only the 分析/建议
+      columns are inherited, matched by ``checkup.triage_key``'s
+      ``boardwise-rule`` identity (never by message, measurement or row
+      number). A finding nobody has written about keeps the skeleton's blank;
+    * a finding that is gone is **not** dropped: it moves to its own
+      ``## 2b. 已消失（重跑保留）`` table, which carries the key explicitly plus
+      the old row's seven columns, so the next run can recognise it. 2b is a
+      separate heading, so the validator still reads only section 2 as findings;
+    * a finding that comes back comes back **with** its human columns and leaves
+      2b; one still gone stays; a second merge is a byte-for-byte no-op;
+    * sections 1 / 3 / 4, any other hand-written section (a human ``## 2b. …``
+      included) and the file's own CRLF endings are carried through untouched —
+      this function splices three machine-owned regions (the preamble, the
+      section-2 table and its 2b archive) and re-renders environment/evidence
+      through :func:`synchronize_review_summary_sections`;
+    * ``old_summary`` absent ⇒ the plain ``render_review_summary`` skeleton;
+      nothing to merge, nothing invented.
+
+    Safety fallback (537D③A §6). Structural damage is **refused**, never
+    guessed: an old file with no section-2 table, a table that does not split
+    into seven columns, a ``#`` the old ledger does not know, an unreadable old
+    report, two ledgers of different lengths, a 2b table that is not eight
+    columns or holds one key twice — each raises
+    :class:`ReviewSummaryMergeError` with a ``code`` naming the defect. The
+    alternative (carry what parses, drop the rest) is the silent loss this
+    function exists to prevent; deciding what to do instead belongs to the
+    caller.
+
+    Pure and deterministic: neither argument is mutated, no file, socket or
+    editor is touched, and the same four inputs always give the same text. The
+    module's other promise holds too — nothing here imports ``boardwise.cli``.
+    """
+    if not isinstance(report, dict):
+        raise ReviewSummaryMergeError(
+            "report-not-dict", f"report 必须是 report.json 的 dict，实际是 {type(report).__name__}。"
+        )
+    if not isinstance(chains, list):
+        raise ReviewSummaryMergeError(
+            "chains-not-list", f"chains 必须是定位链 list，实际是 {type(chains).__name__}。"
+        )
+    if not all(isinstance(chain, dict) for chain in chains):
+        raise ReviewSummaryMergeError(
+            "chains-row-not-dict", "chains 里每一行必须是 dict（index/severity/rule_id/…）。"
+        )
+    current = render_review_summary(report, chains)
+    if old_summary is None:
+        return current
+    if not isinstance(old_summary, str):
+        raise ReviewSummaryMergeError(
+            "old-summary-not-str",
+            f"旧 summary 必须是 review-summary.md 的文本或 None，"
+            f"实际是 {type(old_summary).__name__}。",
+        )
+    if not old_summary.strip():
+        return current
+
+    newline = _newline_of(old_summary)
+
+    spans = _section_spans(old_summary)
+    if not spans:
+        raise ReviewSummaryMergeError(
+            "old-summary-findings-section-missing",
+            "旧 summary 里没有任何 `## ` 节：找不到第 2 节主表，人工列没有来源。",
+        )
+    found = _span_matching(old_summary, _SECTION_2_RE)
+    if found is None:
+        raise ReviewSummaryMergeError(
+            "old-summary-findings-section-missing",
+            "旧 summary 里找不到 `## 2. 逐条问题（N 条）`：主表不在这份文件里。",
+        )
+    _old_heading, old_start, old_end = found
+    old_block = old_summary[old_start:old_end]
+    old_rows = _read_main_table(old_block)
+    if old_rows is None:
+        raise ReviewSummaryMergeError(
+            "old-summary-table-unreadable",
+            "旧 summary 第 2 节的表不是七列主表（表头 / 分隔行 / 列数对不上）："
+            "猜哪一列是「分析」会把人工的话写进别人的行。",
+        )
+    if old_rows and all(tuple(cells) == EMPTY_ROW_CELLS for cells in old_rows):
+        # The old run had no findings: the em-dash line is a reading, not a row.
+        old_rows = []
+
+    # The old identity needs the old report's findings: the seven-column table
+    # carries no key of its own, and matching on its text is the guess this
+    # function refuses.
+    old_keyed = _keyed_rows(_ledger_pairs(old_report, None, "old")) if old_rows else []
+    old_by_index: dict[str, str] = {}
+    for key, _finding, chain in old_keyed:
+        index = _index_text(chain.get("index"))
+        if index in old_by_index and old_by_index[index] != key:
+            raise ReviewSummaryMergeError(
+                "old-report-ledgers-ambiguous",
+                f"旧 report 里 index={index!r} 出现在两条 finding 上："
+                "旧主表的 # 无法唯一定位一行。",
+            )
+        old_by_index[index] = key
+
+    old_human: dict[str, tuple[str, str]] = {}
+    for cells in old_rows:
+        key = old_by_index.get(cells[0])
+        if key is None:
+            raise ReviewSummaryMergeError(
+                "old-summary-table-row-unknown",
+                f"旧主表有一行的 # 是 {cells[0]!r}，旧 report 的定位链里没有这个 index："
+                "这一行的人工列无法归属，不能猜。",
+            )
+        if key in old_human:
+            raise ReviewSummaryMergeError(
+                "old-summary-table-row-duplicate",
+                f"旧主表有两行落到同一条 finding（key {key!r}）：人工列有两个答案。",
+            )
+        old_human[key] = (cells[ANALYSIS_COLUMN], cells[ADVICE_COLUMN])
+
+    old_archive: list[tuple[str, list[str]]] = []
+    archive_span = _span_exact(old_summary, MERGE_ARCHIVE_HEADING)
+    if archive_span is not None:
+        rows = _read_archive_table(old_summary[archive_span[0] : archive_span[1]])
+        if rows is None:
+            raise ReviewSummaryMergeError(
+                "old-summary-2b-unreadable",
+                f"旧 summary 的 `{MERGE_ARCHIVE_HEADING}` 表不是 "
+                f"{MERGE_ARCHIVE_COLUMNS} 列（key + 旧七列）：上一轮归档的 finding "
+                "读不回来。",
+            )
+        seen: set[str] = set()
+        for cells in rows:
+            key = cells[0]
+            if key in seen:
+                raise ReviewSummaryMergeError(
+                    "old-summary-2b-duplicate-key",
+                    f"2b 归档里 key {key!r} 出现了两次：同一条 finding 有两份人工列。",
+                )
+            seen.add(key)
+            old_archive.append((key, cells[1:]))
+
+    current_keyed = _keyed_rows(_ledger_pairs(report, chains, "current"))
+    current_keys = {key for key, _finding, _chain in current_keyed}
+    archived_human = {
+        key: (cells[ANALYSIS_COLUMN], cells[ADVICE_COLUMN]) for key, cells in old_archive
+    }
+    human = [
+        old_human.get(key)
+        or archived_human.get(key)
+        or (REVIEW_SUMMARY_BLANK_ANALYSIS, REVIEW_SUMMARY_BLANK_ADVICE)
+        for key, _finding, _chain in current_keyed
+    ]
+
+    # (1) The preamble is machine owned — title, conclusion, project/source — so
+    # it is the current skeleton's, in this file's line endings. Human prose
+    # belongs to sections 1–4 and is spliced back untouched below.
+    text = old_summary
+    current_preamble = _to_newline(_current_preamble(report, current), newline)
+    text = current_preamble + text[_section_spans(text)[0][1] :]
+
+    # (2) Section 2: the current table (current order, current count), with the
+    # inherited 分析/建议 cells put back by key. The old block's own trailing
+    # spacing is preserved so the surrounding sections do not drift.
+    current_found = _span_matching(current, _SECTION_2_RE)
+    assert current_found is not None, "render_review_summary 不再写第 2 节"
+    _heading, current_start, current_end = current_found
+    block = _to_newline(current[current_start:current_end], newline)
+    block = _merge_table_block(block, human)
+    found = _span_matching(text, _SECTION_2_RE)
+    if found is None:  # unreachable: the section was found above
+        raise ReviewSummaryMergeError(
+            "old-summary-findings-section-missing", "旧 summary 第 2 节在拼接时丢了。"
+        )
+    _heading, start, end = found
+    tail = _trailing_newlines(text[start:end]) or newline
+    text = text[:start] + block.rstrip("\r\n") + tail + text[end:]
+
+    # (3) The archive: 2b rows that are still gone, then the findings that just
+    # vanished (in the old ledger's order). A key that is current again leaves
+    # the archive on its own — that is the revival, with no special case.
+    archive_rows: list[list[str]] = []
+    for key, cells in old_archive:
+        if key in current_keys:
+            continue
+        archive_rows.append([key, *cells])
+    for key, _finding, chain in old_keyed:
+        if key in current_keys or any(row[0] == key for row in archive_rows):
+            continue
+        analysis, advice = old_human.get(
+            key, (REVIEW_SUMMARY_BLANK_ANALYSIS, REVIEW_SUMMARY_BLANK_ADVICE)
+        )
+        archive_rows.append(
+            [
+                key,
+                _index_text(chain.get("index")),
+                str(chain.get("severity") or ""),
+                str(chain.get("rule_id") or ""),
+                chain_text(chain),
+                str(chain.get("problem") or ""),
+                analysis,
+                advice,
+            ]
+        )
+    archive_span = _span_exact(text, MERGE_ARCHIVE_HEADING)
+    if archive_rows:
+        archive = _archive_block(archive_rows, newline)
+        if archive_span is not None:
+            tail = _trailing_newlines(text[archive_span[0] : archive_span[1]]) or newline
+            text = (
+                text[: archive_span[0]] + archive.rstrip("\r\n") + tail + text[archive_span[1] :]
+            )
+        else:
+            _heading, _start, section_end = _span_matching(text, _SECTION_2_RE)
+            text = text[:section_end] + archive + newline + text[section_end:]
+    elif archive_span is not None:
+        # Nothing is disappeared any more: the machine section earns no empty
+        # table, and the next merge would produce it again if something did.
+        text = text[: archive_span[0]] + text[archive_span[1] :]
+
+    # (4) environment / evidence: the current report's own rendering, through the
+    # one function that owns both formats. A heading the old file never had is
+    # not invented — the validator names that instead.
+    return synchronize_review_summary_sections(report, text)

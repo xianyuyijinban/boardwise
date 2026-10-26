@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -452,6 +454,228 @@ def test_the_sop_and_the_writer_agree_that_one_answer_fills_both_voltage_keys():
         "the pair moved — update docs/review-sop.md §3.1b in the same breath, and this "
         "pin with it"
     )
+
+
+# ============================ #87⑤ readback 缺 value/mpn 的离线归档配方
+#: SOP §3.2 里那条配方的标题锚点（pits #3 指向它）。
+_READBACK_RECIPE_MARKER = "**`sch.readback` 没有 value/mpn**"
+#: 仓库既有匿名 fixture：47 个器件，C3 的 Value/MPN 都可读，C1 有 MPN 但没有 Value
+#: ——后半句正是「空值不伪造」要钉的形状。
+_READBACK_FIXTURE = REPO / "tests" / "fixtures" / "llc_board.epro2"
+
+
+def _sop_readback_section() -> str:
+    """SOP 的 readback 配方段：从标题到下一个顶层 bullet 为止。"""
+    assert _READBACK_RECIPE_MARKER in SOP, (
+        "docs/review-sop.md lost the `sch.readback` value/mpn recipe — pit #3 "
+        "would then point at nothing"
+    )
+    tail = SOP.split(_READBACK_RECIPE_MARKER, 1)[1]
+    end = re.search(r"\n- \*\*", tail)
+    return tail[: end.start()] if end else tail
+
+
+def _sop_readback_recipe_code() -> str:
+    """The ```python block the SOP tells the reader to copy, verbatim."""
+    match = re.search(r"```python\n(.*?)```", _sop_readback_section(), re.DOTALL)
+    assert match is not None, "the readback recipe lost its ```python block"
+    return match.group(1)
+
+
+def test_the_sop_readback_recipe_runs_and_reads_real_value_mpn():
+    """护 #87⑤：文档里的配方必须能直接跑，且读的是 fixture 的真字段。
+
+    提取 SOP 原文的代码块执行（不是测试里另写一份），把公开占位符
+    `<导出.epro2>` 换成仓库既有匿名 fixture：C3 的值/料号可读，C1 的空
+    Value 仍是空串——空值不补猜。字段改名或文档改了代码没改，这条当场红。
+    """
+    code = _sop_readback_recipe_code()
+    section = _sop_readback_section()
+    assert '"<导出.epro2>"' in code, (
+        "the recipe must keep the public placeholder `<导出.epro2>`, not a real path"
+    )
+    assert "`C1`" in section, "the public example designator must stay generic C1"
+    runnable = code.replace('"<导出.epro2>"', json.dumps(str(_READBACK_FIXTURE)))
+    proc = subprocess.run(
+        [sys.executable, "-c", runnable],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+    )
+    assert proc.returncode == 0, (
+        "the SOP recipe does not run as written:\n" + proc.stderr
+    )
+    rows = json.loads(proc.stdout)
+    by_designator = {row["designator"]: row for row in rows}
+    assert by_designator["C3"]["value"] == "330uF 400V"
+    assert by_designator["C3"]["mpn"].strip(), (
+        "C3's MPN must be read from the archive, not left empty"
+    )
+    assert by_designator["C1"]["value"] == "", (
+        "a component with no Value must print an empty string, not an invented value"
+    )
+    assert set(by_designator["C3"]) == {"board", "designator", "value", "mpn"}
+
+
+def test_the_sop_readback_recipe_keeps_its_readonly_and_live_gap_disclosure():
+    """护 #87⑤ 的边界：配方只读归档，且不把未复测的 live 取档写成已验。"""
+    section = _sop_readback_section()
+    for token in ("只读", "不碰编辑器", "不写工程", "stdout"):
+        assert token in section, f"the readback recipe lost its boundary token {token!r}"
+    assert "sys.get_project_file" in section
+    assert "未在本批复测" in section, (
+        "the recipe claims a live archive transfer this batch did not verify"
+    )
+    assert "tests/test_doc_claims.py" in section, (
+        "the SOP must name the test that keeps this recipe from drifting"
+    )
+    assert "C3" in section and "C1" in section, (
+        "the recipe's coverage sentence must name what the pin reads"
+    )
+
+
+def test_pit_3_points_at_the_sop_readback_recipe():
+    """pits #3 与 SOP 不许各说各话：坑表必须把读者送到同一条配方。"""
+    pits = (REPO / "docs" / "pits.md").read_text(encoding="utf-8")
+    rows = [line for line in pits.splitlines() if line.startswith("| 3 |")]
+    assert len(rows) == 1, "docs/pits.md lost its readback row (pit 3)"
+    row = rows[0]
+    assert "`sch.readback`" in row
+    assert "docs/review-sop.md" in row and "§3.2" in row
+    assert "value/mpn" in row, "pit 3 must name the fields the recipe recovers"
+
+
+# ============================ #87② PCB 目视复核：没有独立的已验图像通道
+#: SOP §3.2 里 PCB 目视复核那条的标题（pits #23 的 PCB 边界指向它）。
+_PCB_VISUAL_MARKER = "- **PCB 目视复核没有独立的已验图像通道**"
+_ACTIONS_TS = REPO / "connector" / "src" / "actions.ts"
+
+
+def _sop_pcb_visual_section() -> str:
+    """SOP 的 PCB 目视条：从标题到下一个顶层 bullet 为止。
+
+    按**原文**切，不按模块级的 `SOP`（那份已把空白折叠，切不出行边界）——
+    否则「这一条说了什么」会被后面几节的字混进来。
+    """
+    raw = (REPO / "docs" / "review-sop.md").read_text(encoding="utf-8")
+    assert _PCB_VISUAL_MARKER in raw, (
+        "docs/review-sop.md lost the PCB visual-review bullet — pit #23's PCB "
+        "boundary would then point at nothing"
+    )
+    tail = raw.split(_PCB_VISUAL_MARKER, 1)[1]
+    end = re.search(r"\n- \*\*", tail)
+    return tail[: end.start()] if end else tail
+
+
+def test_the_sop_separates_pcb_readonly_geometry_from_having_looked_at_the_board():
+    """护 #87② 的第一句话：只读几何与「看过板子」是两条腿，不许合并。
+
+    `pcb.readback` / `pcb.geometry` 回的是一组数字（位号/坐标/包围盒），
+    `export.render` 出的才是图。**这条只钉文案与来源**：它不证明真机出过图，
+    也不证明自绘/离线几何被渲染过——那种断言只有真机证据能给。
+    """
+    section = _sop_pcb_visual_section()
+    for action in ("pcb.readback", "pcb.geometry"):
+        assert f"`{action}`" in section, (
+            f"the PCB visual bullet must name {action} as the read-only geometry route"
+        )
+    assert "`export.render`" in section
+    assert "只读几何" in section and "几何复核" in section
+    assert "数字" in section, "the bullet must say what the readback route returns"
+    assert "这几件被读到了" in section, (
+        "a readback ok must be described as 'these parts were read', never as a pass"
+    )
+    assert "没有 PCB 专用的第二个出图动作" in section, (
+        "the bullet must say the render action is shared with the schematic route"
+    )
+
+
+def test_the_sop_never_turns_a_readback_or_a_png_into_a_visual_pass():
+    """护 #87② 的第二句话：没图就写 missing / 人工待办，不写 visual-pass。
+
+    `pcbImage` 的 `ok` 只等于「采集到一张合规 PNG」；`visual: missing` 才是
+    「本次没有看过板子」的诚实写法。真机出图与否**不在本条断言范围**。
+    """
+    section = _sop_pcb_visual_section()
+    assert "pcbImage: missing" in section
+    assert "visual: missing" in section
+    assert "人工待办" in section and "PCB 图未取到" in section
+    assert "不证明有人看过" in section, (
+        "a pcbImage ok must be read as 'a compliant PNG was collected', not as "
+        "evidence that someone looked at it"
+    )
+    assert "伪造证据" in section
+    assert "视觉通过" not in section, (
+        "the bullet must not claim a visual pass; the honest states are "
+        "missing / failed / a named manual todo"
+    )
+
+
+def test_the_sop_records_the_issue_60s_as_unreproduced_and_refuses_a_blind_retry():
+    """护 #87② 的第三句话：issue 的 60 s 是历史报告，本批没复现。
+
+    SOP 说的两个数字（`timeoutMs` 夹取 1–60 s、缺省 30 s）必须仍对得上
+    connector 源码，否则文案里的「上限」就成了二手转述；而「必然超时」
+    与「60 s 盲重试」都不许被写成建议。
+    """
+    section = _sop_pcb_visual_section()
+    assert "历史报告" in section and "本批没有复现" in section
+    assert "不给 60 s 盲重试" in section
+    assert "上限" in section and "TIMEOUT" in section
+    source = _ACTIONS_TS.read_text(encoding="utf-8")
+    assert "const EXPORT_RENDER_TIMEOUT_MS = 30_000;" in source, (
+        "the connector no longer defaults to 30 s; the SOP's default is stale"
+    )
+    assert "const EXPORT_RENDER_TIMEOUT_MAX_MS = 60_000;" in source, (
+        "the connector no longer clamps to 60 s; the SOP's upper bound is stale"
+    )
+    assert "1–60 s" in section and "30 s" in section
+
+
+def test_every_pcb_visual_command_in_the_sop_uses_a_parameter_the_connector_reads():
+    """护 #87② 的第四句话：固定命令里的参数名不许 invent。
+
+    从 SOP 原文抠 `--action X --params '<json>'`，逐个参数回 connector 源码对，
+    并确认动作真的注册过；参数名对不上就是文档自己编的（#87 的 old draft
+    正是在这一步编出过不存在的高亮成功）。
+    """
+    section = _sop_pcb_visual_section()
+    calls = re.findall(
+        r"boardwise bridge call --action ([a-z.]+) --params '(\{[^']*?\})'", section
+    )
+    assert calls, "the PCB visual bullet lost its fixed `bridge call` commands"
+    assert {action for action, _ in calls} == {"pcb.readback", "pcb.geometry"}
+    bridge_doc = (REPO / "docs" / "bridge.md").read_text(encoding="utf-8")
+    assert "--params" in bridge_doc, "`bridge call` no longer documents --params"
+    source = _ACTIONS_TS.read_text(encoding="utf-8")
+    for action, payload in calls:
+        assert f"'{action}': bind(" in source, f"{action} is not a registered action"
+        for key in json.loads(payload):
+            assert f"params.{key}" in source or f"params?.{key}" in source, (
+                f"the SOP tells the reader to pass {key!r} to {action}, but the "
+                "connector never reads that parameter"
+            )
+
+
+def test_pit_23_carries_the_pcb_boundary_without_growing_a_new_pit_number():
+    """护 #87② 的第五句话：坑表与 SOP 说同一句话，且不另开坑号。
+
+    PCB 边界是同一个坑的另一个面：新开坑号会让「导出挂死」在坑表里看起来像
+    两个不同的病。锚点原文必须仍在 SOP 里（上一条测试钉着它）。
+    """
+    pits = (REPO / "docs" / "pits.md").read_text(encoding="utf-8")
+    rows = [line for line in pits.splitlines() if line.startswith("| 23 |")]
+    assert len(rows) == 1, "docs/pits.md lost its export.render row (pit 23)"
+    row = rows[0]
+    assert "PCB 例外/边界" in row and "#87②" in row
+    assert "docs/review-sop.md" in row and "§3.2" in row
+    assert "PCB 目视复核没有独立的已验图像通道" in row, (
+        "pit 23 must quote the SOP anchor verbatim or the pointer rots"
+    )
+    assert "本批未复现" in row
+    assert "`export.render`" in row and "`pcb.readback`" in row and "`pcbImage`" in row
 
 
 # ========================================== dsh 迁移：SOP 的两个入口必须同源

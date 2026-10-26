@@ -141,7 +141,12 @@ from .engines.reviewread import (
 # `synchronize_review_summary_sections`: the two machine sections are re-rendered
 # from the recomputed report through the same renderers, and the human bytes
 # around them are never touched.
+# 87③B: the pure cross-run merge and its refusal. The CLI decides *whether* to
+# ship a merged summary and what to write when it cannot; the matching, the 2b
+# archive and the newline preservation stay in the engine function.
 from .engines.reviewfinalize import (
+    ReviewSummaryMergeError,
+    merge_review_summary,
     synchronize_review_summary_sections,
     validate_review_summary,
 )
@@ -2302,6 +2307,14 @@ def _checkup_report(
     the exit code never read it, so `partial` delivery cannot be mistaken for a
     board-level fail. `_cmd_checkup` passes the real values; the default below
     exists so a hand-built report still gets an honest basic shape.
+
+    #87 ① added `toolVersion` — the engine that wrote this report
+    (`boardwise.__version__`, the same value `--version` prints), at the **top
+    level** rather than under `source`: `source` describes what was read (a
+    project, a file, a tier ladder), and a reader asking "which build produced
+    this JSON?" is asking about the producer, not the input. Always present, and
+    **not a gate**: `completion`, `summary.exitCode` and the process exit code
+    never read it, so a version can never move a verdict.
     """
     # Read once: the `model` section below and the fallback evidence ledger both
     # need these counts, and two walks of the same model could disagree.
@@ -2309,6 +2322,10 @@ def _checkup_report(
     body: dict = {
         "schema": CHECKUP_SCHEMA,
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        # #87 ①: the product's own version, not the source's host/connector pair
+        # (`source.hostVersion` / `source.connectorVersion` stay where they are —
+        # those say what answered, this says who asked).
+        "toolVersion": _local_version(),
         "source": {
             "tier": tier,
             "tierLabel": CHECKUP_TIERS.get(tier, "(unknown tier)"),
@@ -4013,23 +4030,139 @@ def _write_board_report(out_dir: Path, report: dict) -> Path:
     return path
 
 
-def _write_review_summary(out_dir: Path, report: dict, chains: list[dict]) -> Path:
-    """Write the ``review-summary.md`` **skeleton** beside the two ledgers.
+#: Codes :func:`_review_summary_plan` adds on top of the merge's own closed
+#: vocabulary (:class:`ReviewSummaryMergeError.code`). These name a failure that
+#: happens while **reading** the two old files, before the pure function is
+#: asked; the merge's codes name what is wrong with their contents.
+OLD_SUMMARY_UNREADABLE = "old-summary-unreadable"
+OLD_SUMMARY_UNDECODABLE = "old-summary-undecodable"
+OLD_REPORT_MISSING = "old-report-missing"
+OLD_REPORT_UNREADABLE = "old-report-unreadable"
+OLD_REPORT_INVALID_JSON = "old-report-invalid-json"
 
-    Overwritten on every run, like ``report.md``: the location chains are derived
-    from the report and a stale copy of them would be a chain pointing at a board
-    that has since changed — which is worse than no file. What the model then
-    writes into the two blank columns lives in **this** file between runs, so the
-    next `checkup` replaces it; that is the same bargain ``report.md`` makes and
-    the reason the SOP tells the model to deliver the filled file to the engineer
-    rather than to leave it in `--out` and forget it.
 
-    Never raised over: a skeleton that cannot be written is a missing convenience,
+def _review_summary_plan(
+    out_dir: Path, report: dict, chains: list[dict]
+) -> tuple[str | None, dict[str, str] | None]:
+    """Decide what this run writes to ``review-summary.md`` — before anything is overwritten.
+
+    Returns ``(text, None)``: write ``text``. Or ``(None, issue)`` where
+    ``issue`` is ``{"code": ..., "reason": ...}``: the file already on disk is
+    the delivery, it is **not** to be touched, and the report's slot says
+    ``entries: null`` with that code (87③B §3).
+
+    Ordering is the point (87③B §1). `_write_checkup_report` replaces
+    `report.json`, and the old summary carries no keys of its own — its rows are
+    matched through the **old** report's ledgers (537D③A). So both files are read
+    here, from this `out_dir`, before the writer gets its turn, and the pure
+    :func:`merge_review_summary` is handed the two old documents plus the
+    current report/chains. A first run (no summary yet), or a delivered summary
+    that is blank/whitespace, is not a degradation: the pure function treats
+    ``None`` and blank alike, and the current skeleton is the answer.
+
+    Both files are read as bytes and decoded as UTF-8 (87③B §1). A `read_text`
+    would fold CRLF into LF on the way in, while the merge's contract is to keep
+    the file's own line terminator; the text is then written back as bytes, so
+    the terminator on disk is the document's and not the OS's.
+
+    Structural damage is refused rather than repaired: a missing/corrupt old
+    report, an unreadable or undecodable summary, or the merge's own
+    :class:`ReviewSummaryMergeError` all degrade to "keep the old file, disclose
+    why". Guessing which row a human's paragraph belongs to is the silent loss
+    this path exists to prevent, and the run's report / exit code are untouched
+    by the decision.
+    """
+    path = out_dir / REVIEW_SUMMARY_FILE
+    try:
+        old_bytes = path.read_bytes()
+    except FileNotFoundError:
+        return render_review_summary(report, chains), None
+    except OSError as exc:
+        return None, {
+            "code": OLD_SUMMARY_UNREADABLE,
+            "reason": f"旧 summary 读不了（{type(exc).__name__}: {exc}）",
+        }
+    try:
+        old_summary = old_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return None, {
+            "code": OLD_SUMMARY_UNDECODABLE,
+            "reason": f"旧 summary 不是 UTF-8（{exc}）",
+        }
+
+    # The pure merge's own contract (537D③A): ``None`` **or blank** means there
+    # is nothing to merge, and the current skeleton is the answer. Asking for the
+    # old report here would turn "nobody filled this yet" into `old-report-missing`
+    # — a degradation the file does not actually have.
+    if not old_summary.strip():
+        return render_review_summary(report, chains), None
+
+    report_path = out_dir / "report.json"
+    try:
+        old_report_bytes = report_path.read_bytes()
+    except FileNotFoundError:
+        return None, {
+            "code": OLD_REPORT_MISSING,
+            "reason": (
+                "out 目录里没有旧 report.json——旧主表的 # 没有机器账可对，"
+                "人工列无法归属"
+            ),
+        }
+    except OSError as exc:
+        return None, {
+            "code": OLD_REPORT_UNREADABLE,
+            "reason": f"旧 report.json 读不了（{type(exc).__name__}: {exc}）",
+        }
+    try:
+        old_report = json.loads(old_report_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, {
+            "code": OLD_REPORT_INVALID_JSON,
+            "reason": f"旧 report.json 不是合法 JSON（{type(exc).__name__}: {exc}）",
+        }
+
+    try:
+        return merge_review_summary(old_summary, old_report, report, chains), None
+    except ReviewSummaryMergeError as exc:
+        return None, {"code": exc.code, "reason": exc.message}
+
+
+def _write_review_summary(
+    out_dir: Path, report: dict, chains: list[dict], *, text: str | None = None
+) -> Path:
+    """Put the ``review-summary.md`` this run owes beside the two ledgers.
+
+    **Machine content is regenerated, human content is merged back** (87③B).
+    ``text`` is the answer :func:`_review_summary_plan` already computed in
+    memory: the current skeleton (current location chain, rule, severity,
+    problem, count, conclusion — and *this* run's project/conclusion preamble)
+    with the last delivery's 「分析」「建议」 columns and sections 1/3/4 put back
+    by `checkup.triage_key` identity. A finding nobody wrote about keeps the
+    blanks; a finding that is gone moves to its own `## 2b. 已消失（重跑保留）`
+    table and leaves it again on revival — that behaviour belongs to the pure
+    merge, not to this writer.
+
+    When the previous delivery cannot be aligned, the plan returns no text and
+    this writer is **not called**: the old file keeps every byte instead of
+    being replaced by a skeleton that would silently eat a human's prose. The
+    report's `ai_slots.review_summary` then carries `entries: null` and the
+    code, and the console does not announce a skeleton.
+
+    ``text=None`` renders the plain skeleton (a first run, or a caller with
+    nothing to merge).
+
+    Written as **bytes**: the text already carries the line terminator it must
+    keep (LF for a fresh skeleton, the old file's own CRLF after a merge), and
+    `write_text` would rewrite ``\\n`` to `os.linesep` — the bytes on disk would
+    then depend on the machine instead of on the document.
+
+    Never raised over: a summary that cannot be written is a missing convenience,
     and the review it belongs to is already complete without it.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / REVIEW_SUMMARY_FILE
-    path.write_text(render_review_summary(report, chains), encoding="utf-8")
+    body = text if text is not None else render_review_summary(report, chains)
+    path.write_bytes(body.encode("utf-8"))
     return path
 
 
@@ -6363,7 +6496,13 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             "离线路径（--file）没有 PCB 文档（或 PCB 审查未出结果），没有可渲染的版面"
             "几何；要编辑器截图需在线工程"
         )
-        print(f"boardwise checkup: {path} ({CHECKUP_TIERS['file']})")
+        # #87 ①: the first line names the engine, on both paths — the report's
+        # top-level `toolVersion` is this same `_local_version()`, so a console
+        # tail and a report.json can be matched without guessing.
+        print(
+            f"boardwise checkup: {path} ({CHECKUP_TIERS['file']}；"
+            f"boardwise {_local_version()})"
+        )
     else:
         loaded = _load_model_online(
             args, notes=notes, attempts=attempts, parse_stats=parse_stats,
@@ -6384,7 +6523,10 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         project_name = (source.get("project") or {}).get("friendlyName") or (
             (source.get("project") or {}).get("name") or "(project unknown)"
         )
-        print(f"boardwise checkup: {project_name} (tier {tier} — {CHECKUP_TIERS[tier]})")
+        print(
+            f"boardwise checkup: {project_name} (tier {tier} — "
+            f"{CHECKUP_TIERS[tier]}；boardwise {_local_version()})"
+        )
 
         # --- 阶段 B: the editor's own DRC, read-only, focus restored.
         #
@@ -7216,14 +7358,35 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         modules=modules,
     )
     report[CHAINS_KEY] = chains
-    slots["review_summary"] = {
-        "file": REVIEW_SUMMARY_FILE,
-        "entries": len(chains),
-        "note": (
-            "逐条 finding 的定位链已预填进 `review-summary.md`，「分析」「建议」两栏留空给模型"
-            "（docs/review-sop.md §3.1 收尾死一步：必须补全，工程师只看这一份）"
-        ),
-    }
+    # 87③B: read the **old** summary and the **old** report from this out_dir
+    # before `_write_checkup_report` replaces report.json below, and let the pure
+    # merge decide the text. `summary_text is None` means the previous delivery
+    # cannot be aligned safely: the old file is left exactly as it is, and the
+    # slot + console say so instead of reporting a skeleton nobody should trust.
+    summary_text, summary_issue = _review_summary_plan(out_dir, report, chains)
+    if summary_issue is None:
+        slots["review_summary"] = {
+            "file": REVIEW_SUMMARY_FILE,
+            "entries": len(chains),
+            "note": (
+                "逐条 finding 的定位链已预填进 `review-summary.md`，「分析」「建议」两栏留空给模型"
+                "（docs/review-sop.md §3.1 收尾死一步：必须补全，工程师只看这一份）；"
+                "重跑同一 --out 时机器内容重生成、人工两栏与 1/3/4 节按 key 保留"
+            ),
+        }
+    else:
+        slots["review_summary"] = {
+            "file": REVIEW_SUMMARY_FILE,
+            # Not len(chains): the file on disk was NOT updated, so saying "N 条"
+            # would report a count this run did not write.
+            "entries": None,
+            "code": summary_issue["code"],
+            "note": (
+                f"未更新，旧文件保留（{summary_issue['code']}）：{summary_issue['reason']}。"
+                " 覆盖成骨架会丢掉人工写的「分析」「建议」，所以本次一个字节都没动；"
+                "当前 report.json / report.md 照出，按 code 处理旧文件后可重跑"
+            ),
+        }
     # 154 / E4: the integrated whole-board report. `_write_checkup_report` derives
     # and stores the `board_report` section (the one place every report passes
     # through, so the two re-gate commands refresh it too); the same derivation is
@@ -7242,9 +7405,22 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         )
     report_path = _write_checkup_report(out_dir, report)
     report_md_path = _write_checkup_markdown(out_dir, report)
-    review_summary_path = _write_review_summary(out_dir, report, chains)
+    # The summary is written after report/report.md but from the text the plan
+    # decided *before* they landed — one derivation, and the old delivery it was
+    # merged against is the one that was on disk at that moment.
+    if summary_text is not None:
+        # One line on purpose: `tests/test_069d_doc_claims.py` pins the call's
+        # spelling (`_write_review_summary(out_dir`), the machine-verifiable half
+        # of the SOP's "the file this command writes" claim.
+        review_summary_path = _write_review_summary(out_dir, report, chains, text=summary_text)
+        print(f"  review-summary: {review_summary_path}（骨架 {len(chains)} 条，收尾必须补全）")
+    else:
+        assert summary_issue is not None, "plan returned neither text nor a reason"
+        print(
+            f"  review-summary: {out_dir / REVIEW_SUMMARY_FILE}"
+            f"（未更新，旧文件保留：{summary_issue['code']}）"
+        )
     board_report_path = _write_board_report(out_dir, report)
-    print(f"  review-summary: {review_summary_path}（骨架 {len(chains)} 条，收尾必须补全）")
     print(f"  board-report: {board_report_path}（{(board_report.get('verdict') or {}).get('line', '')}）")
     architecture_path = (
         _write_architecture(out_dir, architecture.markdown)

@@ -174,7 +174,10 @@ boardwise checkup --file <导出.epro2> --out <目录>       # 断连兜底：�
 那一节同一份渲染，一键出的就是它）·
 `architecture.md`（架构骨架，§3.1b 必须逐槽走；**自动生成、每次覆盖，手填无效**）·
 `design-intent.md`（**设计意图**，工程师所有：不存在时建全 TODO 模板，存在则生成器一字不改）·
-`review-summary.md`（**审查总结骨架**，见下面的收尾死一步；**每次覆盖**）·
+`review-summary.md`（**审查总结骨架**，见下面的收尾死一步；重跑同一 `--out` 时机器内容
+重生成、人工「分析/建议」与第 1/3/4 节按 key 保留，新 finding 留空、消失的进 `## 2b`、
+复活回主表；无法对齐旧文件时整份保留并在 `ai_slots.review_summary` 披露 `entries: null`
++ code）·
 `canvas-<页名>.png`（每张原理图页一张，PCB 页不出图）。
 
 **先看 `board-report.md` 一眼定盘**（哪块板、哪个模块、几条 ERROR、能不能投板），
@@ -372,7 +375,12 @@ verdict 至少是 `complete-with-open-items`；别的缺口还在时它仍是 `i
      （清单非空时这一节不许空着写「通过」）、**第 4 节填下一步**（按优先级编号，工程师照着做得动）。
    - **定位链不许另编**：机器账与骨架同一次推导（`report.json` 的 `location_chains` 节），
      改字不改位置；链上「未标注」的那一环是**要回答的问题**，不是绕过去的借口。
-   - 这个文件**每次 checkup 覆盖**，所以填完的内容必须同时落在对话里（第 6 步）。
+   - 重跑同一 `--out` 时**机器内容重生成、人工内容按 key 合并**：填好的「分析」「建议」
+     与第 1/3/4 节保留，新 finding 两栏仍空，消失的 finding 进
+     `## 2b. 已消失（重跑保留）`、复活时带着人工列回主表；无法对齐旧文件时（旧
+     `report.json` 缺失/坏、旧 summary 结构坏）**旧文件整份保留、一个字节不改**，
+     `ai_slots.review_summary` 报 `entries: null` + code，命令行不再说「骨架 N 条」。
+     人工内容仍必须同时落在对话里（第 6 步）——2b 与整份保留是兜底，不是对话的替代。
 5. **`boardwise review finalize --out <目录>`**：在内存里重算 completion / summary /
    覆盖 / 分诊，核验报告引用的交付件；**输入与内容校验（schema、分诊、覆盖、交付件、
    禁用措辞）全在写盘之前**——这一类的 1/2/3 是本目录一个字没写就退出。内存校验全过
@@ -562,6 +570,62 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   原理图的导出——"没读到"不是"干净板"，073 起不再退 `0`）。**`review --live` 同一档**（075）：
   在线拿到了模型但模型是空的（0 器件 0 网）也退 `3`，与 `checkup` 的 `coverage.modelEmpty`
   对齐——它与「根本没拿到模型」是两句话，两句话都不许读成通过。
+- **`sch.readback` 没有 value/mpn**（pits #3）：readback 每行只回
+  designator/name/footprint/supplier/…，`Value`/`mpn` 不在键里——**别拿 readback 当复查
+  模型，也别去手解析 `.epru`**。需要按位号核对值/料号时，先按上一段把工程导出成
+  `.epro2`（取消加密），再用仓库既有 parser 逐件读这份**只读归档**。把下面这段原样粘进
+  `python -`（仓库 checkout 里用 `.venv/Scripts/python.exe -`），并把 `<导出.epro2>`
+  换成实际归档路径：
+
+  ```python
+  import json
+  from boardwise.parsers.schematic import build_project_model
+
+  project = build_project_model("<导出.epro2>")
+  rows = [
+      {"board": board.board.title, "designator": c.designator,
+       "value": c.value, "mpn": c.mpn}
+      for board in project.boards
+      for c in sorted(board.components.values(), key=lambda c: c.designator)
+  ]
+  print(json.dumps(rows, ensure_ascii=True, indent=2))
+  ```
+
+  何时用：在线 readback 已给出位号（如 `C1`），但值/料号要复核；多板工程逐板输出，
+  用 `board` 区分同名位号。返回字段：`board` / `designator` / `value` / `mpn`；
+  `value` 是实例的 `Value`，`mpn` 是器件身份（实例字段优先、库 DEVICE 兜底）——
+  **读不出就是空串 `""`**，片段不补猜。边界：只读 `.epro2`、只打印到 stdout，
+  不碰编辑器、不写工程/货架/报告。**live 传输未在本批复测**：从在线工程经
+  `sys.get_project_file` 取归档这一步本批没有真机验证，别把它写成已验命令；
+  要在线取档先按 `docs/bridge.md` 核返回形态与落盘方式。**钉子**：
+  `tests/test_doc_claims.py` 原样提取上面的代码块，在仓库既有匿名 fixture 上真跑
+  （C3 值/料号可读、C1 空值仍空）——改字段或改代码而不改文档，测试当场红。
+- **PCB 目视复核没有独立的已验图像通道**（pits #23 的 PCB 边界）：`export.render` 是**一个**
+  动作，原理图页与 PCB 页共用同一份实现（`sch_ManufactureData.getExportDocumentFile`），
+  `scope=page` 时先激活目标页再导出、激活不成立就拒（不导出），返回
+  `{format, encoding, bytes, data, scope, activatedPageUuid}`——**没有 PCB 专用的第二个出图动作**。
+  issue #87 里那条「PCB `export.render` 跑满 60 s」是**历史报告，本批没有复现**；
+  `timeoutMs` 的 1–60 s 夹取与 30 s 缺省是**上限设计**（防一个不 settle 的 promise 占住动作槽），
+  不是「PCB 必然超时」的证据 ⇒ **不给 60 s 盲重试**，也不把一次 `TIMEOUT` 写成板子的性质：
+  先按 pit #23 查焦点/激活，再看那次调用到底返回了什么（参数与返回形态见
+  `docs/bridge.md` 动作表的 `export.render` 行）。
+  PCB 的「看过板子」要两条腿，缺一条就不是看过：
+  ① **只读几何**（必做）：参数名核对过的固定命令是
+  `boardwise bridge call --action pcb.readback --params '{"includePrimitives": true}'`
+  （`pcb.readback` 回 `{kind, components[], componentCount, primitives[]}`：位号/封装/坐标/层，
+  `includePrimitives` 才读线、焊盘、过孔）与
+  `boardwise bridge call --action pcb.geometry --params '{"bboxIds": ["<primitiveId>"]}'`
+  （`pcb.geometry` 给实测包围盒，读不出的 id 点名在 `meta.unreadable`）。它们全是**数字**，用来做离线/自绘
+  **几何复核**（间距、越界、丝印压焊盘）。
+  ② **图**（才叫「目视」）：`export.render` 出一张图之后**真的看一遍**再下结论。
+  `evidence.channels` 里 `pcbImage` 的 `ok` 只证明**采集到一张合规 PNG**（magic 字节对、
+  base64 非空）——**不证明有人看过**。本批没有走到渲染 + 视觉自审，所以报告里这一项只能写
+  `pcbImage: missing` / `visual: missing`，或写成**人工待办**并注明「PCB 图未取到」。
+  **`pcb.readback` 回 `ok:true` / `componentCount:N` 只说「这几件被读到了」**：把它写成
+  visual-pass、PCB 版面通过或板级通过都是**伪造证据**。另：`canvas.highlight` 回
+  `highlighted: 0` 是**一个标记都没画成**（`unresolved` 里点名没解析到的 uuid），不是高亮成功；
+  marker 画在交互叠层上，导出的**截图**按合同预期与不加 marker 时逐字节相同
+  （`docs/bridge.md` 实测表）——所以别把「高亮过」当看过板子。
 - **eprj3 文件夹工程（V4，038 A 档只读）**：`boardwise review <工程目录> --json ...`
   —— 目录内含 `<同名>.eprj3` 索引即识别（`sch/**/*.esch2` 逐页粘成一条记录流，原理图模型满血；
   文件夹只有 schematic 这一档，047 起缺省正是它，不必再显式写）。`--view pcb` 对 eprj3

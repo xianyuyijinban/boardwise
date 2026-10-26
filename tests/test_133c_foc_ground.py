@@ -22,10 +22,15 @@ switching / sense traces see under them. Three rules, all ``INFO``:
   未识别清单 of the power-stage nets whose names the sieve does not recognise.
 
 **The measured answer to the task book's own question.** 「1.0.0 的 PGND↔GND
-到底有没有真铜连」 — measured here, and the answer is **no**: PGND↔GND reads
-**68.9 mil** and PGND↔AGND reads **18.1 mil** edge-to-edge, with
+到底有没有真铜连」 — measured here, and the answer is **no**: as **same-layer**
+edge-to-edge gaps (``same_layer_only=True``, the reading a spark could actually
+cross) PGND↔GND reads **63.4 mil** and PGND↔AGND reads **14.1 mil**, with
 ``overlapping=False`` on both, and an exhaustive shape-pair sweep (104 PGND
-shapes × 180 GND shapes, 104 × 77 AGND) finds **zero** pairs at distance 0.
+shapes × 180 GND shapes, 104 × 92 AGND) finds **zero** pairs at distance 0.
+The **plan-view** call is a different口径 and is quoted as such: it reads
+**5.9 mil** for PGND↔AGND, from a top-side track over a bottom-side pour — a
+projection that ignores the stackup, so no isolation claim is taken from it
+(#88A measures a pour on its rings; R1 words that branch as a projection).
 So the 127a 「0.0 mil 贴脸」 history does **not** recur on this board between
 these two domains: 127b's pad-layer fix is holding, and the six pairs 127a
 attributed to a parser defect were indeed all top-side × bottom-side.
@@ -383,15 +388,17 @@ def test_r1_reads_no_direct_copper_connection_between_pgnd_and_the_logic_grounds
     pins it three ways so it cannot pass by accident:
 
     1. through the rule (both rows say 「no direct copper connection」);
-    2. through ``net_clearance`` directly, asserting ``overlapping is False``
-       and ``shared_layer_ids`` is a real shared layer (so the reading is a
-       same-layer gap, not a cross-layer projection);
+    2. through ``net_clearance`` directly, asking for the **same-layer** gap
+       (``same_layer_only=True``) and asserting ``overlapping is False`` plus a
+       real shared layer — the default plan-view call is asserted separately to
+       be the **cross-layer** reading it is documented to be, so the two口径
+       cannot be confused with each other again;
     3. through an **exhaustive** shape-pair sweep — every PGND shape against
        every GND and every AGND shape — asserting **zero** pairs at distance 0.
 
     The third is the one that matters: ``net_clearance`` returns the *minimum*
     pair, so a single touching pair elsewhere would be the minimum and would be
-    reported. Sweeping all pairs is what turns 「the nearest pair is 68.9 mil」
+    reported. Sweeping all pairs is what turns 「the nearest pair is 63.4 mil」
     into 「no pair touches at all」. It also settles 127a's history for these two
     nets: the six 0.0 mil pairs 127a found on this board were all top-side ×
     bottom-side, and with 127b's pad-layer fix in place they do not reappear
@@ -409,20 +416,39 @@ def test_r1_reads_no_direct_copper_connection_between_pgnd_and_the_logic_grounds
     for pair, row in rows.items():
         assert "**no direct copper connection**" in row.message, (pair, row.message)
 
-    # (2) through the primitive
-    pgnd_agnd = net_clearance(board, "PGND", "AGND")
-    pgnd_gnd = net_clearance(board, "PGND", "GND")
-    assert pgnd_agnd is not None and pgnd_gnd is not None
-    for result in (pgnd_agnd, pgnd_gnd):
+    # (2) through the primitive — the **same-layer** gap, which is the reading a
+    # spark could cross. #88A moved the *plan-view* minimum of PGND↔AGND onto a
+    # cross-layer pair (top-side track 899a48dc over bottom-side poured result
+    # e3b26ff0: 5.9 mil in projection, 14.1 mil same-layer), so the isolation
+    # number is asked for with ``same_layer_only=True``; the default call is
+    # then asserted to be the projection it is, rather than assumed same-layer.
+    # See ``test_r1_reports_a_cross_layer_zero_distance_as_no_connection`` for
+    # the other end of the same口径, and R1's cross-layer branch for the row's
+    # wording.
+    for net_a, net_b in (("PGND", "AGND"), ("PGND", "GND")):
+        result = net_clearance(board, net_a, net_b, same_layer_only=True)
+        assert result is not None, (net_a, net_b)
         assert result.overlapping is False, (
             f"{result.net_a}↔{result.net_b} overlap on "
             f"{result.shared_layer_ids}: that IS a direct copper connection"
         )
         assert result.shared_layer_ids, (
-            "the nearest pair must share a layer, or the distance is a "
-            "cross-layer projection and says nothing about a short"
+            "asked with same_layer_only=True, so the distance must be a "
+            "same-layer gap and not a cross-layer projection"
         )
         assert result.distance > 0.0, result.distance
+
+    plan = net_clearance(board, "PGND", "AGND")
+    assert plan is not None
+    assert plan.shared_layer_ids == [], (
+        "the default call is the plan-view minimum over every pair, and on this "
+        "board its PGND↔AGND pair is cross-layer — a projection that ignores "
+        "the stackup, which is why R1 no longer claims same-layer isolation "
+        "from it"
+    )
+    assert plan.distance < net_clearance(
+        board, "PGND", "AGND", same_layer_only=True
+    ).distance, "a plan-view projection reads smaller than the same-layer gap"
 
     # (3) exhaustive: no shape pair touches at all
     from boardwise.core import measure as M
@@ -450,14 +476,23 @@ def test_r1_isolation_row_is_info_and_states_a_number_not_a_verdict():
     岳's requirement is 「如实出『隔离成立』的 INFO 行」 — so the row exists, is
     ``INFO``, carries the gap in mils, and explicitly says the isolation holds
     *by this measurement* rather than 「passes」.
+
+    **The cross-layer pair is the exception, and #88A is why it exists here at
+    all.** 1.0.0's PGND↔AGND plan-view minimum is a top-side track over a
+    bottom-side poured result, so the row may not say 「nearest copper pair is N
+    mil … on shared layer …」 nor 「holds by this measurement」 from a projection:
+    it says plan view, not a surface-to-surface gap, and that no same-layer
+    isolation is claimed from it. Both wordings are pinned so that the two口径
+    cannot silently swap places — the same-layer sentence is what TI §1.3.1 is
+    answered with, and it must only ever appear for a pair that shares a layer.
     """
     rows = [r for r in _rows(FOC_100, R1) if r.board == "PCB1"]
     assert rows
+    same_layer: list = []
+    cross_layer: list = []
     for row in rows:
         assert row.severity == "INFO"
-        assert "holds by this measurement" in row.message
         assert "not as a verdict" in row.message
-        assert "mil edge-to-edge" in row.message
         assert row.target.measurement is not None
         assert row.target.measurement["unit"] == "mil"
         assert row.target.measurement["value"] > 0.0
@@ -466,6 +501,31 @@ def test_r1_isolation_row_is_info_and_states_a_number_not_a_verdict():
             "R1 states that the *form* of the join is 岳's convention, "
             "and that it is R1b's subject rather than this row's"
         )
+        if "in plan view" in row.message:
+            cross_layer.append(row)
+        else:
+            same_layer.append(row)
+
+    assert len(same_layer) == 1, [r.message for r in same_layer]
+    (gnd_row,) = same_layer
+    assert gnd_row.target.net_refs == ["PGND", "GND"]
+    assert "holds by this measurement" in gnd_row.message
+    assert "mil edge-to-edge" in gnd_row.message
+    assert "on shared layer" in gnd_row.message
+
+    assert len(cross_layer) == 1, [r.message for r in cross_layer]
+    (agnd_row,) = cross_layer
+    assert agnd_row.target.net_refs == ["PGND", "AGND"]
+    assert "holds by this measurement" not in agnd_row.message, (
+        "a cross-layer projection may not be reported as the number the "
+        "isolation holds by"
+    )
+    assert "on shared (no layer)" not in agnd_row.message, (
+        "the pre-#88A sentence: it claimed a shared layer for a pair that has "
+        "none, with the layer slot reading 「(no layer)」"
+    )
+    assert "plan-view projection, not a surface-to-surface gap" in agnd_row.message
+    assert "No same-layer isolation is claimed" in agnd_row.message
 
 
 def test_r1_says_so_on_a_board_with_no_power_domain():

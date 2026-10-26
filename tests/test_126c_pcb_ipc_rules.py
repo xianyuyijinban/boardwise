@@ -56,6 +56,7 @@ from boardwise.core.geometry import (
 from boardwise.core.measure import net_clearance
 from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.engines.pcbreview import BUILTIN_PCB_RULES, run_pcb_review
+from boardwise.parsers.epru import parse_epro2
 from boardwise.rules.base import Outcome
 from boardwise.rules.pcb.base import PcbReviewContext
 from boardwise.rules.pcb.distance import ComponentSpacing, DecapDistance
@@ -1344,18 +1345,6 @@ def test_robot_pcb1_the_phase_tracks_are_six_errors_against_the_measured_width(
             assert "internal" in finding.message and "140.0" in finding.message
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "issue #88: with #83's containment fix a pour pair is measurable, and "
-        "the polygon measured is PourShape.points — the arcs-as-chords view "
-        "(135). The chord bulges 14 mil toward a +12V via, so +12V/GND reads "
-        "0.0 mil / overlapping and this rule emits a short WARN, where the "
-        "arcs-expanded rings view keeps them 11.213 mil apart (GND/VCC: 0.0 vs "
-        "3.538, a true WARN whose pair/value the chord reading replaces). "
-        "Not a real short: no assertion here is re-pinned to 0.0."
-    ),
-)
 def test_robot_pcb1_the_rails_rule_prices_the_three_voltages_and_judges_no_cross_layer_pair(
     robot_findings,
 ):
@@ -1467,19 +1456,8 @@ def test_foc_ampacity_is_silent_because_no_contract_declares_a_current(foc_findi
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "issue #88: this board's only WARN after #83 is a 2.0 mil +24V/GND pair "
-        "whose closest copper is a pour polygon read from PourShape.points (the "
-        "arcs-as-chords view, 135). On the arcs-expanded rings view the closest "
-        "24 V pair is a different one — PGND at 1.0 mil — so both this "
-        "assertion's 「no WARN」 premise and the pair it names depend on #88's "
-        "geometry work rather than on a value that could be re-pinned here."
-    ),
-)
-def test_foc_pcb1_the_spacing_readings_are_four_unknowns_and_no_warn(foc_findings):
-    """毕设FOC PCB1 anchor: five priced nets, **no WARN**, four UNKNOWNs.
+def test_foc_spacing_is_four_unknowns_and_one_same_layer_pour_gap(foc_findings):
+    """毕设FOC anchor: four UNKNOWNs and **one** same-layer pour gap on PCB3.
 
     The priced nets, and where each voltage came from (there is no contract, so
     every one is the drawing's own enumeration, and only ``VCC``/``VCCA``/
@@ -1513,28 +1491,76 @@ def test_foc_pcb1_the_spacing_readings_are_four_unknowns_and_no_warn(foc_finding
       the same potential, and two ground islands meeting in one place is the
       design's single-point join, not a defect.
 
-    What is left is the four UNKNOWNs: ``VCC`` / ``VCCA`` / ``VREF`` on PCB1
+    What is left is the four UNKNOWNs — ``VCC`` / ``VCCA`` / ``VREF`` on PCB1
     (three rails the enumeration listed but could not price) plus ``VCC`` on
-    **PCB2**, which has eight drawn nets and no priced rail of its own. PCB3 is
-    quiet as before: its two priced nets (``+24V`` and ``PGND``) measure 21.26
-    mil apart, inside the 4 mil band? no — inside it comfortably, so it passes.
+    **PCB2**, which has eight drawn nets and no priced rail of its own — and
+    **one WARN on PCB3 that #88A uncovers**, which is neither a projection nor
+    the same number re-quoted:
 
-    **The honest reading of this anchor.** Nothing on this board violates its
-    conductor spacing, and the rule now says so by saying nothing about the ten
-    priced pairs while still naming the four rails whose voltage nobody has
-    established. Before 127b it said the opposite — three 「the copper touches」
-    rows on a board that is electrically clean — and a report that cries wolf
-    three times is a report nobody reads the fourth time.
+    ``+24V`` (24 V) against ``PGND`` (0 V), **1.0387 mil** as measured (the row
+    quotes 1.0), between ``pour poured ["POURED","c26117bc9dbe993f"]`` on
+    **layer 1** and ``pad C4.2`` on **layers 1/2**. Both bodies are on the same
+    copper face (``shared_layer_ids == [1]``), so the prepreg is not in the
+    number; ``overlapping`` is **False** — they do not touch — and
+    ``within_one_footprint`` is **False**, because this is a pour and a
+    capacitor pad and not one part's own pitch. Against IPC-2221 B2's 4.0 mil
+    for 24 V uncoated, it is a violation.
+
+    **Why this is a routing item and not 「21.26 mil, corrected」.** The old
+    「PCB3 is quiet: its two priced nets measure 21.26 mil」 was never the
+    minimum of *this* pair: under the chord view the pad's vertices fall
+    **inside** the pour's outline, so the pair answered 「contained」/
+    unmeasurable and :func:`~boardwise.core.measure._best_pair` — which drops
+    such a pair rather than reporting 0.0 — fell through to the next measurable
+    pair, 21.26 mil. 21.26 was the best of the pairs that could be measured,
+    not the closest copper. The same pair on the chord polygon reads **0.0 mil
+    and ``overlapping=True``**, i.e. a short: both views put this pour at the
+    pad's edge, and #88A only made the size of the gap sayable. The row names
+    what to move (widen the ``+24V`` pour's clearance around ``C4.2``), which
+    is what makes it actionable rather than a cry of wolf.
+
+    **The honest reading of this anchor.** 126b's ``+24V``/``+5V`` and
+    ``+24V``/``GND`` rows stay gone as cross-layer projections, and its
+    ``GND``/``PGND`` row stays dropped as a same-potential join; what changed
+    is that a pair 127b's own containment clause had made unmeasurable is now
+    measurable, and it is too close. Four work orders plus one line to route.
     """
     findings, _section = foc_findings
     spacing = [f for f in findings if f.rule_id == "pcb-voltage-spacing"]
     warns = [f for f in spacing if f.severity == "WARN"]
     unknowns = [f for f in spacing if f.severity == "INFO"]
 
-    assert warns == [], (
-        "127b: the +24V/+5V and +24V/GND rows are cross-layer projections and "
-        "the GND/PGND row is a same-potential join — none is a spacing defect"
+    assert len(warns) == 1, (
+        "the +24V/+5V and +24V/GND rows are cross-layer projections and the "
+        "GND/PGND row is a same-potential join; 毕设FOC's one real gap is the "
+        f"+24V pour against C4.2's PGND pad. Got: {[f.message for f in warns]}"
     )
+    warn = warns[0]
+    assert warn.board == "PCB3"
+    assert set(warn.target.net_refs) == {"+24V", "PGND"}, warn.message
+    measurement = warn.target.measurement
+    assert measurement["unit"] == "mil"
+    assert measurement["value"] == pytest.approx(1.0), (
+        "the row quotes the 4-sig-fig gap; net_clearance says 1.0387 mil"
+    )
+    assert measurement["element_a"] == (
+        'pour poured ["POURED","c26117bc9dbe993f"] on layer 1'
+    )
+    assert measurement["element_b"] == "pad C4.2 on layers 1/2"
+    assert measurement["component_b"] == "C4"
+    assert measurement["within_one_footprint"] is False
+    assert "4.0 mil" in warn.message and "1.0 mil" in warn.message
+
+    # The layer claim the labels make in prose, from the measurement itself:
+    # both bodies sit on layer 1, so this is not a plan-view projection and
+    # 127b's cross-layer clause has nothing to drop.
+    gap = net_clearance(parse_epro2(FOC), "+24V", "PGND", same_layer_only=True)
+    assert gap is not None
+    assert gap.distance == pytest.approx(1.0387, abs=0.0005)
+    assert gap.shared_layer_ids == [1]
+    assert gap.overlapping is False
+    assert gap.element_a == measurement["element_a"]
+    assert gap.element_b == measurement["element_b"]
     assert len(unknowns) == 4
     assert sorted((f.board, f.target.net_refs[0]) for f in unknowns) == [
         ("PCB1", "VCC"), ("PCB1", "VCCA"), ("PCB1", "VREF"), ("PCB2", "VCC"),

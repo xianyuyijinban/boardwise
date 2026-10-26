@@ -47,6 +47,7 @@ from boardwise.engines.evidence import (
 )
 from boardwise.engines import reviewfinalize
 from boardwise.engines.reviewfinalize import (
+    merge_review_summary,
     split_markdown_row,
     synchronize_review_summary_sections,
     validate_review_summary,
@@ -1633,3 +1634,471 @@ def test_broken_containers_do_not_break_the_derivations():
         "evidence-live-capture-field-not-list",
         "evidence-live-capture-file-not-dict",
     } <= set(_codes(issues))
+
+
+# ---------------------------------------------------------------------------
+# 10. the cross-run merge (537D③A): the human columns travel by finding identity
+# ---------------------------------------------------------------------------
+#
+# A re-run rewrites the report from scratch, so the summary it renders knows
+# nothing about what a human already wrote. The merge puts the old delivery and
+# the new skeleton together: the **key** is `checkup`'s own boardwise-rule
+# triage identity (never the message, never the row number), so a finding that
+# was re-ordered or whose measured text changed keeps its 分析/建议, a finding
+# that is gone is archived under its own key instead of being dropped, and one
+# that comes back comes back with its human columns. The archive is a separate
+# `## 2b` table — the validator's section-2 contract (537D2a1) is untouched.
+
+MERGE_2B_HEADING = "## 2b. 已消失（重跑保留）"
+
+EMPTY_ROW = "| — | — | — | — | 本次审查没有 finding | — | — |"
+
+
+def _merge_finding(
+    index: int, severity: str, rule_id: str, message: str, component: str, pins=()
+) -> dict:
+    """One finding, in the shape the rule engine and the ledger both write."""
+    return {
+        "index": index,
+        "severity": severity,
+        "rule_id": rule_id,
+        "message": message,
+        "refs": [component],
+        "target": {"component_ref": component, "pin_refs": list(pins)},
+    }
+
+
+def _merge_report(rows: list[dict]) -> dict:
+    """A report whose two ledgers are exactly ``rows``, conclusion re-derived.
+
+    Both ledgers are kept parallel (the same input order, the same indexes),
+    which is the precondition the validator and the merge share.
+    """
+    report = _report()
+    report["findings"] = [dict(row) for row in rows]
+    report[CHAINS_KEY] = [
+        _chain(
+            row["index"],
+            row["severity"],
+            row["rule_id"],
+            row["message"],
+            "、".join(row["refs"]),
+        )
+        for row in rows
+    ]
+    report["conclusion"] = checkup.conclusion_section(report)
+    return report
+
+
+def _merge_key(row: dict) -> str:
+    """The identity the merge must use — asked of the owner, ``checkup``."""
+    return checkup.triage_key(
+        {"source": "boardwise-rule", "severity": row["severity"]},
+        rule_id=row["rule_id"],
+        refs=list(row["refs"]),
+        target=row["target"],
+    )
+
+
+def _filled_rows(summary: str, fills: dict) -> str:
+    """Fill 分析/建议 per row, addressed by the row's ``#`` cell.
+
+    ``fills`` is ``{"<# cell>": (analysis, advice)}``. Cells are re-escaped with
+    the renderer's own cell writer, so a 「|」 in the prose survives the round
+    trip exactly as `render_review_summary` would have written it.
+    """
+    lines = summary.splitlines()
+    for position, line in enumerate(lines):
+        cells = split_markdown_row(line)
+        if cells is None or len(cells) != 7:
+            continue
+        index = cells[0].strip()
+        if index not in fills:
+            continue
+        cells[5], cells[6] = fills[index]
+        lines[position] = "| " + " | ".join(checkup._cell(cell) for cell in cells) + " |"
+    return "\n".join(lines) + ("\n" if summary.endswith("\n") else "")
+
+
+def _main_rows(summary: str) -> dict[str, list[str]]:
+    """``{row #: cells}`` for section 2's data rows, header/separator skipped."""
+    rows: dict[str, list[str]] = {}
+    inside = False
+    seen = 0
+    for line in summary.splitlines():
+        if line.startswith("## 2. "):
+            inside, seen = True, 0
+            continue
+        if inside and line.startswith("## "):
+            break
+        if not inside:
+            continue
+        cells = split_markdown_row(line)
+        if cells is None:
+            continue
+        seen += 1
+        if seen <= 2:
+            continue
+        rows[cells[0].strip()] = [cell.strip() for cell in cells]
+    return rows
+
+
+def _archive_rows(summary: str) -> list[list[str]]:
+    """The 2b archive's data rows: ``[key, #, 级别, 规则, 定位链, 问题, 分析, 建议]``."""
+    rows: list[list[str]] = []
+    inside = False
+    seen = 0
+    for line in summary.splitlines():
+        if line.strip() == MERGE_2B_HEADING:
+            inside, seen = True, 0
+            continue
+        if inside and line.strip().startswith("## "):
+            break
+        if not inside:
+            continue
+        cells = split_markdown_row(line)
+        if cells is None:
+            continue
+        seen += 1
+        if seen <= 2:
+            continue
+        rows.append([cell.strip() for cell in cells])
+    return rows
+
+
+def test_merge_carries_the_human_columns_across_reorder_and_changed_text():
+    old_u1 = _merge_finding(0, "ERROR", "decap-required-caps", "去耦电容缺失或过远", "U1")
+    old_r1 = _merge_finding(1, "WARN", "param-divider-output", "分压比与目标输出不符", "R1")
+    old_report = _merge_report([old_u1, old_r1])
+    old = _filled_rows(
+        _filled(old_report),
+        {
+            "0": ("分析U1：布局把回流路径拉长了", "建议U1：把 C1 挪到 VCC 脚 3 mm 内"),
+            "1": ("分析R1：下臂取值算错", "建议R1：下臂换 1.5k"),
+        },
+    )
+
+    # The re-run: the same two findings, reversed order, every text changed, and
+    # the measurements (the chain's own prose) moved with them.
+    new_r1 = _merge_finding(0, "WARN", "param-divider-output", "分压比不符：实测下臂 1.5k", "R1")
+    new_u1 = _merge_finding(1, "ERROR", "decap-required-caps", "去耦电容离 VCC 脚 8.2 mm", "U1")
+    report = _merge_report([new_r1, new_u1])
+
+    merged = merge_review_summary(old, old_report, report, report[CHAINS_KEY])
+
+    rows = _main_rows(merged)
+    assert list(rows) == ["0", "1"]  # the current ledger's own order
+    # The human columns followed the *key*, not the row position: row 0 is a
+    # different finding than it was, and it carries R1's prose, not U1's.
+    assert rows["0"][5] == "分析R1：下臂取值算错"
+    assert rows["0"][6] == "建议R1：下臂换 1.5k"
+    assert rows["1"][5] == "分析U1：布局把回流路径拉长了"
+    assert rows["1"][6] == "建议U1：把 C1 挪到 VCC 脚 3 mm 内"
+    # Every machine column is the current run's.
+    assert [rows[key][4] for key in rows] == [
+        "分压比不符：实测下臂 1.5k",
+        "去耦电容离 VCC 脚 8.2 mm",
+    ]
+    assert rows["1"][1] == "ERROR"
+    assert rows["1"][3].endswith("U1")
+    # …and no stale reading survives anywhere in the file.
+    assert "去耦电容缺失或过远" not in merged
+    assert "分压比与目标输出不符" not in merged
+    assert "## 2. 逐条问题（2 条）" in merged
+
+
+def test_merge_leaves_a_new_finding_its_standard_blank():
+    old_report = _merge_report(
+        [_merge_finding(0, "ERROR", "decap-required-caps", "去耦电容缺失", "U1")]
+    )
+    old = _filled_rows(_filled(old_report), {"0": ("分析U1", "建议U1")})
+    report = _merge_report(
+        [
+            _merge_finding(0, "ERROR", "decap-required-caps", "去耦电容缺失", "U1"),
+            _merge_finding(1, "WARN", "param-divider-output", "新增：分压比不符", "R9"),
+        ]
+    )
+
+    merged = merge_review_summary(old, old_report, report, report[CHAINS_KEY])
+
+    rows = _main_rows(merged)
+    assert rows["0"][5] == "分析U1"
+    assert rows["0"][6] == "建议U1"
+    # A finding nobody has written about keeps the skeleton's own two blanks.
+    assert rows["1"][5] == REVIEW_SUMMARY_BLANK_ANALYSIS
+    assert rows["1"][6] == REVIEW_SUMMARY_BLANK_ADVICE
+    assert "## 2. 逐条问题（2 条）" in merged
+    assert MERGE_2B_HEADING not in merged
+
+
+def test_merge_archives_a_disappeared_finding_under_its_key():
+    old_u1 = _merge_finding(0, "ERROR", "decap-required-caps", "去耦电容缺失", "U1")
+    old_r1 = _merge_finding(1, "WARN", "param-divider-output", "分压比与目标输出不符", "R1")
+    old_report = _merge_report([old_u1, old_r1])
+    old = _filled_rows(
+        _filled(old_report), {"0": ("分析U1", "建议U1"), "1": ("分析R1", "建议R1")}
+    )
+    report = _merge_report(
+        [_merge_finding(0, "ERROR", "decap-required-caps", "去耦电容离 VCC 脚 8.2 mm", "U1")]
+    )
+
+    merged = merge_review_summary(old, old_report, report, report[CHAINS_KEY])
+
+    rows = _main_rows(merged)
+    assert list(rows) == ["0"]  # it is NOT in the current findings table
+    assert "分压比与目标输出不符" not in rows["0"][4]
+    archive = _archive_rows(merged)
+    assert len(archive) == 1
+    key, cells = archive[0][0], archive[0][1:]
+    assert key == _merge_key(old_r1)  # the explicit key column, checkup's recipe
+    assert cells[:2] == ["1", "WARN"]  # the old row's own content, verbatim
+    assert cells[2] == "param-divider-output"
+    assert cells[3].endswith("R1")
+    assert cells[4] == "分压比与目标输出不符"
+    assert cells[5] == "分析R1" and cells[6] == "建议R1"
+    assert "## 2. 逐条问题（1 条）" in merged
+    # The validator still reads the current table and only that table: a 2b
+    # row must never be counted as a finding (537D2a1's contract).
+    codes = _codes(validate_review_summary(report, merged))
+    assert codes == [], codes
+
+
+def test_a_second_merge_neither_duplicates_2b_nor_changes_a_byte():
+    old_report = _merge_report(
+        [
+            _merge_finding(0, "ERROR", "decap-required-caps", "去耦电容缺失", "U1"),
+            _merge_finding(1, "WARN", "param-divider-output", "分压比不符", "R1"),
+        ]
+    )
+    old = _filled_rows(
+        _filled(old_report), {"0": ("分析U1", "建议U1"), "1": ("分析R1", "建议R1")}
+    )
+    report = _merge_report(
+        [_merge_finding(0, "ERROR", "decap-required-caps", "去耦电容离 VCC 8.2 mm", "U1")]
+    )
+
+    once = merge_review_summary(old, old_report, report, report[CHAINS_KEY])
+    twice = merge_review_summary(once, report, report, report[CHAINS_KEY])
+
+    assert twice == once
+    assert twice.count(MERGE_2B_HEADING) == 1
+    assert len(_archive_rows(twice)) == 1
+
+
+def test_a_revived_finding_returns_with_its_human_columns_and_leaves_2b():
+    old_u1 = _merge_finding(0, "ERROR", "decap-required-caps", "去耦电容缺失", "U1")
+    old_r1 = _merge_finding(1, "WARN", "param-divider-output", "分压比与目标输出不符", "R1")
+    old_report = _merge_report([old_u1, old_r1])
+    old = _filled_rows(
+        _filled(old_report), {"0": ("分析U1", "建议U1"), "1": ("分析R1", "建议R1")}
+    )
+    second_report = _merge_report(
+        [_merge_finding(0, "ERROR", "decap-required-caps", "去耦电容离 VCC 8.2 mm", "U1")]
+    )
+    second = merge_review_summary(old, old_report, second_report, second_report[CHAINS_KEY])
+    assert [row[0] for row in _archive_rows(second)] == [_merge_key(old_r1)]
+
+    # Third merge: R1 is back, at the top of the ledger this time.
+    third_report = _merge_report(
+        [
+            _merge_finding(0, "WARN", "param-divider-output", "分压比不符（复现）", "R1"),
+            _merge_finding(1, "ERROR", "decap-required-caps", "去耦电容离 VCC 8.2 mm", "U1"),
+        ]
+    )
+    third = merge_review_summary(second, second_report, third_report, third_report[CHAINS_KEY])
+
+    rows = _main_rows(third)
+    assert rows["0"][5] == "分析R1"  # back in the main table, with its prose
+    assert rows["0"][6] == "建议R1"
+    assert rows["0"][4] == "分压比不符（复现）"
+    assert rows["1"][5] == "分析U1"
+    # Nothing is left disappeared, so the archive section itself is gone.
+    assert MERGE_2B_HEADING not in third
+    assert _archive_rows(third) == []
+
+
+def test_two_findings_of_one_identity_take_the_existing_suffix():
+    dup_a = _merge_finding(0, "WARN", "param-value-mpn-match", "dup-A", "EC1")
+    dup_b = _merge_finding(1, "WARN", "param-value-mpn-match", "dup-B", "EC1")
+    old_report = _merge_report([dup_a, dup_b])
+    old = _filled_rows(
+        _filled(old_report), {"0": ("分析A", "建议A"), "1": ("分析B", "建议B")}
+    )
+    report = _merge_report([])  # both gone: the archive is where the keys show
+
+    merged = merge_review_summary(old, old_report, report, [])
+
+    base = _merge_key(dup_a)
+    assert base == _merge_key(dup_b)  # one identity, two findings
+    archive = {row[0]: row[1:] for row in _archive_rows(merged)}
+    # The collision is resolved by checkup's own stable pass, not by a second
+    # rule invented here.
+    assert set(archive) == {base, base + "#2"}
+    assert archive[base][4] == "dup-A" and archive[base][5] == "分析A"
+    assert archive[base + "#2"][4] == "dup-B" and archive[base + "#2"][5] == "分析B"
+    assert EMPTY_ROW in merged  # the zero-finding table is still the skeleton's
+
+
+def test_merge_keeps_crlf_the_human_sections_and_a_human_2b_section():
+    old_u1 = _merge_finding(0, "ERROR", "decap-required-caps", "去耦电容缺失", "U1")
+    old_r1 = _merge_finding(1, "WARN", "param-divider-output", "分压比不符", "R1")
+    old_report = _merge_report([old_u1, old_r1])
+    old = _filled_rows(
+        _filled(old_report), {"0": ("分析U1", "建议U1"), "1": ("分析R1", "建议R1")}
+    )
+    human_2b = "## 2b. 人工补充（不是机器段）\n\n人工结论：这一段一个字都不许动。\n\n"
+    old = old.replace("## 3. 待确认", human_2b + "## 3. 待确认", 1)
+    environment_lines = render_environment_markdown(old_report["environment"])
+    assert environment_lines
+    old = old.replace(
+        "\n".join(environment_lines),
+        ENVIRONMENT_HEADING + "\n\n- 上一轮留下的旧 environment 段",
+        1,
+    )
+    assert "上一轮留下的旧 environment 段" in old
+    old = old.replace("\n", "\r\n")
+
+    report = _merge_report(
+        [
+            _merge_finding(0, "ERROR", "decap-required-caps", "去耦电容离 VCC 8.2 mm", "U1"),
+            _merge_finding(1, "WARN", "param-divider-output", "新增：分压比不符", "R9"),
+        ]
+    )
+    merged = merge_review_summary(old, old_report, report, report[CHAINS_KEY])
+
+    # The file keeps its own line endings — nothing is normalised to LF.
+    assert "\n" not in merged.replace("\r\n", "")
+    # Sections 1 / 3 / 4 and the human 2b block are byte-identical.
+    assert CONNECTION in merged
+    assert NEXT_STEPS.replace("\n", "\r\n") in merged
+    assert _section3(old_report).replace("\n", "\r\n") in merged
+    assert human_2b.replace("\n", "\r\n") in merged
+    # …while the machine sections are the current report's, not the old ones'.
+    assert "上一轮留下的旧 environment 段" not in merged
+    assert "\r\n".join(render_environment_markdown(report["environment"])) in merged
+    assert len(_archive_rows(merged)) == 1
+    assert merged.count(MERGE_2B_HEADING) == 1
+
+
+def test_merge_without_an_old_summary_is_the_plain_current_skeleton():
+    report = _merge_report(
+        [
+            _merge_finding(0, "ERROR", "decap-required-caps", "去耦电容缺失", "U1"),
+            _merge_finding(1, "WARN", "param-divider-output", "分压比不符", "R1"),
+        ]
+    )
+    chains = report[CHAINS_KEY]
+    expected = render_review_summary(report, chains)
+
+    for old in (None, "", "  \n\t\n"):
+        assert merge_review_summary(old, None, report, chains) == expected
+
+    assert MERGE_2B_HEADING not in expected
+    assert REVIEW_SUMMARY_BLANK_ANALYSIS in expected
+
+
+def test_merge_refuses_an_old_file_it_cannot_align():
+    row = _merge_finding(0, "ERROR", "decap-required-caps", "去耦电容缺失", "U1")
+    report = _merge_report([row])
+    old_report = _merge_report([row])
+    chains = report[CHAINS_KEY]
+    good = _filled(old_report)
+
+    cases = {
+        # no section 2 at all: there is no table to inherit from
+        "old-summary-findings-section-missing": "## 1. 连接状态\n\n只有连接状态。\n",
+        # a six-column table is not this contract — guessing which column is
+        # 分析 would put prose in the wrong place
+        "old-summary-table-unreadable": (
+            "## 2. 逐条问题（1 条）\n\n"
+            "| # | 级别 | 规则 | 定位链 | 问题 | 分析 |\n"
+            "|---|---|---|---|---|---|\n"
+            "| 0 | ERROR | decap-required-caps | c | p | a |\n"
+        ),
+        # a # that the old ledger does not know cannot be keyed, so it cannot
+        # be carried — the function refuses rather than dropping the prose
+        "old-summary-table-row-unknown": good.replace("| 0 | ERROR |", "| 7 | ERROR |", 1),
+    }
+    for code, text in cases.items():
+        with pytest.raises(reviewfinalize.ReviewSummaryMergeError) as caught:
+            merge_review_summary(text, old_report, report, chains)
+        assert caught.value.code == code, (code, caught.value.code)
+
+    # Human columns but no old report: the identity recipe needs the findings.
+    with pytest.raises(reviewfinalize.ReviewSummaryMergeError) as caught:
+        merge_review_summary(good, None, report, chains)
+    assert caught.value.code == "old-report-ledgers-unreadable"
+
+    misaligned = copy.deepcopy(old_report)
+    misaligned["findings"] = []
+    with pytest.raises(reviewfinalize.ReviewSummaryMergeError) as caught:
+        merge_review_summary(good, misaligned, report, chains)
+    assert caught.value.code == "old-report-ledgers-misaligned"
+
+    # The archive is read back on every run, so it has to be readable and
+    # unambiguous: two rows under one key are two answers to one question.
+    table = (
+        "## 2. 逐条问题（1 条）\n\n"
+        "| # | 级别 | 规则 | 定位链 | 问题 | 分析 | 建议 |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| 0 | ERROR | decap-required-caps | c | p | 分析 | 建议 |\n\n"
+    )
+    seven_columns_2b = (
+        table
+        + MERGE_2B_HEADING
+        + "\n\n| # | 级别 | 规则 | 定位链 | 问题 | 分析 | 建议 |\n"
+        "|---|---|---|---|---|---|---|\n| 0 | ERROR | r | c | p | a | b |\n"
+    )
+    with pytest.raises(reviewfinalize.ReviewSummaryMergeError) as caught:
+        merge_review_summary(seven_columns_2b, old_report, report, chains)
+    assert caught.value.code == "old-summary-2b-unreadable"
+
+    row = "| k | 0 | ERROR | r | c | p | 分析 | 建议 |\n"
+    duplicated_2b = (
+        table
+        + MERGE_2B_HEADING
+        + "\n\n| key | # | 级别 | 规则 | 定位链 | 问题 | 分析 | 建议 |\n"
+        "|---|---|---|---|---|---|---|---|\n" + row + row
+    )
+    with pytest.raises(reviewfinalize.ReviewSummaryMergeError) as caught:
+        merge_review_summary(duplicated_2b, old_report, report, chains)
+    assert caught.value.code == "old-summary-2b-duplicate-key"
+
+
+def test_merge_is_pure_and_deterministic():
+    old_report = _merge_report(
+        [
+            _merge_finding(0, "ERROR", "decap-required-caps", "去耦电容缺失", "U1"),
+            _merge_finding(1, "WARN", "param-divider-output", "分压比不符", "R1"),
+        ]
+    )
+    old = _filled_rows(
+        _filled(old_report), {"0": ("分析U1", "建议U1"), "1": ("分析R1", "建议R1")}
+    )
+    report = _merge_report(
+        [_merge_finding(0, "ERROR", "decap-required-caps", "去耦电容离 VCC 8.2 mm", "U1")]
+    )
+    chains = report[CHAINS_KEY]
+    old_before, old_report_before = str(old), copy.deepcopy(old_report)
+    report_before, chains_before = copy.deepcopy(report), copy.deepcopy(chains)
+
+    first = merge_review_summary(old, old_report, report, chains)
+    second = merge_review_summary(old, old_report, report, chains)
+
+    assert first == second
+    assert old == old_before
+    assert old_report == old_report_before
+    assert report == report_before
+    assert chains == chains_before
+    assert first.startswith("<!-- 本文件由 `boardwise checkup` 生成骨架")
+    assert first.endswith("\n")
+
+    # Bad shapes are named by the dedicated exception, never a traceback.
+    for bad in (123, ["x"]):
+        with pytest.raises(reviewfinalize.ReviewSummaryMergeError) as caught:
+            merge_review_summary(bad, old_report, report, chains)
+        assert caught.value.code == "old-summary-not-str"
+    with pytest.raises(reviewfinalize.ReviewSummaryMergeError):
+        merge_review_summary(old, old_report, "not-a-report", chains)
+    with pytest.raises(reviewfinalize.ReviewSummaryMergeError):
+        merge_review_summary(old, old_report, report, "not-a-list")

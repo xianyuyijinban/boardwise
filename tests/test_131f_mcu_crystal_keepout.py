@@ -296,11 +296,12 @@ def test_poured_is_now_parsed_and_reads_as_board_coordinates():
         #   separate. The number is pinned so a reader can see it rather than
         #   discover it later.
         #
-        # --- 135 moved three of these again, and the *after* column below is
-        # the 135 number. The direction is the same rule both times (read more
-        # of the real copper), but 135 swaps each poured region for its POURED
-        # *result* rather than adding to it -- see
-        # `boardwise.core.measure._poured_supersedes`. The three that moved:
+        # --- 135 moved three of these again, and #88D then moved ROBOT's GND
+        # back; the *after* column below is the current number, not 135's. The
+        # direction is the same rule both times (read more of the real copper),
+        # but 135 swaps each poured region for its POURED *result* rather than
+        # adding to it -- see `boardwise.core.measure._poured_supersedes`. The
+        # three 135 moved:
         #
         #   PGND 33 -> 31: the result polygons are smaller than the regions
         #     (the pour engine cut clearance voids out of them), so two pairs of
@@ -308,13 +309,19 @@ def test_poured_is_now_parsed_and_reads_as_board_coordinates():
         #     touch. Pour area 224 746.8 -> 205 038.9 sq mil.
         #   GND 46 -> 39: the same effect on 毕设FOC's ground, 12 350.0 ->
         #     10 614.0 sq mil.
-        #   ROBOT GND 1 -> 15: the opposite effect, and the most consequential
-        #     number in this task. ROBOT's GND *region* is one near-full-board
-        #     plane; its poured *result* is **fifteen** pieces. The region was
-        #     the designer's intent, the result is what the pour engine left,
-        #     and 131f's "one island" was reading the intent. 133d's R31/33c
-        #     text that calls ROBOT's ground a single 7 494 300 sq mil island
-        #     is superseded by this number.
+        #   ROBOT GND 1 -> 15 in 135, and **#88D puts it back to 1**. 135's
+        #     rule (read the result, not the region) was right; the fifteen-way
+        #     split was not copper. The pour outline bulges, 14 stitching vias
+        #     sit in the bulge, and a measurement of the pour on
+        #     ``PourShape.points`` (the arcs-as-chords view) pairs that rings
+        #     geometry with a chord-sized coarse box: the box stops at the
+        #     chord, the 14 vias fall outside it, and every one of them is
+        #     rejected as 「too far to touch」 — fourteen false islands beside
+        #     the plane. With **all rings** in the box and exact ring
+        #     containment (#88A/#88D) the same poured result is **one** island
+        #     of 295 members (281 + the 14 vias). So 15 is a chord-bbox
+        #     artifact, never a property of this board's result copper; 133d's
+        #     R9 and 135's anchor carry the same correction.
         #
         # AGND and 药箱 GND stay at 1: their results are still one piece each,
         #     just less copper (AGND 2 059 037.0 -> 1 433 311.2 sq mil).
@@ -332,7 +339,7 @@ def test_poured_is_now_parsed_and_reads_as_board_coordinates():
         #     ``c42fa3809e0ed76f``, and ``a64516590a1fcc71`` /
         #     ``8e6d7c7cfd8ed6be``).
         #
-        # ROBOT's GND (15) and every other net here are unmoved by 162a: the
+        # ROBOT's GND and every other net here are unmoved by 162a: the
         # real boards' copper that the old reject was separating was all on the
         # nets above. These two numbers are fixture-derived and the parser batch
         # that lands H1-H6 may move them again — re-measure rather than trust
@@ -343,25 +350,12 @@ def test_poured_is_now_parsed_and_reads_as_board_coordinates():
         (FOC_100, "MOTA", 5, 1),
         (FOC_100, "IA+", 4, 1),
         (FOC_100, "GND", 45, 37),
-        # Issue #88: this net's pour polygons are measured on
-        # ``PourShape.points`` (the arcs-as-chords view, 135), so the count reads
-        # 50 where the arcs-expanded ``rings`` view reads the 15 pinned here.
-        # #83 made pour pairs measurable for the first time and the chord error
-        # surfaced as extra splits — see the issue for the per-pair numbers.
-        pytest.param(
-            ROBOT,
-            "GND",
-            194,
-            15,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "issue #88: PourShape.points is the arcs-as-chords view, so "
-                    "this net reads 50 islands instead of 15 (the rings view "
-                    "reads 15). Chord-approximation artifact, not the copper."
-                ),
-            ),
-        ),
+        # ROBOT's ground is the net the chord view got wrong. 194 is the
+        # pre-131f count (no pour region in the union at all); the after number
+        # is 1, not the 15 of 135, because that fifteen-way split was 14
+        # stitching vias the chord-sized coarse box pruned out of a pour whose
+        # rings say they are inside it. See the #88D note above.
+        (ROBOT, "GND", 194, 1),
         # 192A：底层焊盘按「翻转封装局部 y」装到底面后，U7.6 落在 VCC 走线端点上，
         # 两块 VCC 铜由它连成一岛（2 -> 1；面积不变）。
         (ROBOT, "VCC", 3, 1),
@@ -721,8 +715,9 @@ def test_robot_crystal_has_a_gnd_pour_result_on_the_top_face_only():
     top face's result (``["POURED","0a00b1e1974c2817"]``) does, so it is still
     named, and the count of pour regions reported under the footprint is still 1.
 
-    ROBOT's ground is also the board whose ``GND`` island count moved most
-    (1 -> 15); see the island-count pin above.
+    ROBOT's ground is also the board whose ``GND`` island count was *said* to
+    move most (1 -> 15 under 135, and 1 again under #88D: the fifteen-way split
+    was a chord-bbox artifact); see the island-count pin above.
     """
     rows = _findings(ROBOT)
     assert len(rows) == 4, [row.message for row in rows]
