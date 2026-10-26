@@ -494,12 +494,14 @@ def test_a_page_with_no_sheet_packs_exactly_where_it_did_before() -> None:
     **smaller** in both directions (`958.2 x 400.5` against `1038.2 x 440.5`), and
     the two rules this file tests still do exactly nothing without a sheet.
 
-    **532 re-pinned them again** (`a797e3af…` → `e165aede…`), and this time the
-    mover is visible in the numbers rather than argued: three of the five islands
-    sit 30-40 units further out, because the row pitch is sized by where a part's
-    own drawing reaches and S-21 will not hide an R/C/L/IC value — so the blocks
-    are wider and the packer's columns move. The two rules **this file** tests are
-    still no-ops without a sheet: `keepouts == ()`, `floor == margin`, no conflict.
+    **201H re-pinned them once more** (`e165aede…` → `565ab76d…`), and the mover is
+    one row rather than a layout: the transformer's value row is hidden by S-21's
+    first way out (it prints through its own pin typography), and a text box is part
+    of the picture the digest states (`geometry_sha256`). `page.offsets` and
+    `page.bbox()` did **not** move — the block extents, the wires, the flags and the
+    parts are byte-identical (`evidence/201h/`) — which is what keeps this file's
+    two rules no-ops without a sheet: `keepouts == ()`, `floor == margin`, no
+    conflict.
     """
     circuit, presentation, book = _flyback()
     page = il.island_page(circuit, presentation, book)
@@ -517,7 +519,7 @@ def test_a_page_with_no_sheet_packs_exactly_where_it_did_before() -> None:
         (20.535064572425824, 20.0, 988.1874485165794, 400.5)
     )
     assert page.plan().geometry_sha256() == (
-        "e165aede6c98dded41df8512e70ba85778d5654dd774c731339e2e03fd380140"
+        "565ab76d0093f83c2d1053eb8d3dc60f85963a982c9137befe10e01e7f2112bd"
     ), (
         "the island page moved again: that is a *layout* batch's business, and this "
         "number is the witness of when — 532 re-pinned it from a797e3af… when the "
@@ -712,14 +714,11 @@ def test_draw_compile_reserves_the_title_block_for_an_island_page(
     assert "S-01 blank band" in notes, notes
     assert payload["ok"] is True
     assert len(payload["candidates"]) == 1 and payload["rejected"] == []
-    assert "the delivery gate tolerated 3 host-printed row(s)" in notes, (
-        "532: this page delivers with three named rows — the transformer's own pin "
-        f"typography over its own value row: {notes}"
+    assert "tolerated: " not in notes, (
+        "201H: the transformer's value row is hidden by S-21's first way out, so "
+        f"the delivery gate has nothing left to tolerate: {notes}"
     )
-    assert notes.count("tolerated: ") == 3, notes
-    assert notes.count("tolerated: [pin-text-press]") == 3, notes
-    assert "tolerated: [text-overlap]" not in notes, notes
-    assert "tolerated: [text-on-wire]" not in notes, notes
+    assert "the delivery gate tolerated" not in notes, notes
 
 
 def test_draw_compile_leaves_a_single_module_alone(

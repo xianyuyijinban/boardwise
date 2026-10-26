@@ -170,7 +170,12 @@ def pin_rows(
 
     A symbol that declares no offsets returns nothing, and so does a pin whose tip
     does not lie on the x axis: `pin_text_offsets` was measured on horizontal pins
-    only, and a vertical pin's rows are unmeasured rather than zero.
+    only, and a vertical pin's rows are unmeasured rather than zero. **The pose is
+    part of that reading (201H-a):** the offsets are stated on the page's x axis, so
+    a pose that turns the pin onto the page's y axis (rotation 90/270 on a symbol
+    with horizontal pins) is unmeasured too — returning nothing there is what keeps
+    a phantom row out of the gate and out of `islandlayout._clear_text_rows`, which
+    would otherwise hide a legible value for a collision nobody drew.
     """
     offsets = getattr(profile, "pin_text_offsets", None) or {}
     kinds_of = getattr(profile, "pin_text_kinds", None) or {}
@@ -203,7 +208,19 @@ def pin_rows(
             pin.tip[0] + outward_local[0], pin.tip[1] + outward_local[1],
             rotation=rotation, mirror=mirror, ox=origin[0], oy=origin[1],
         )
-        sx = 1.0 if far[0] > tip[0] else -1.0
+        # 201H-a: the offsets are a **horizontal** measurement and the row's side
+        # (`sx`) is a page-x sign, so the pose has to leave the pin on the page's x
+        # axis. A pose that turns it onto the y axis was never measured, and the old
+        # reading kept the offset on page x regardless: it put a row 11 units beside
+        # a tip that points along y — where the host draws nothing — and the gate,
+        # which reads these same boxes, reported a `pin-text-press` the symbol does
+        # not have, which `_clear_text_rows` then paid for with a real hidden value.
+        # An unmeasured row is not a horizontal one either, so this answers "no row
+        # this model knows", the same way a missing table does.
+        dx, dy = far[0] - tip[0], far[1] - tip[1]
+        if abs(dx) <= abs(dy):
+            continue
+        sx = 1.0 if dx > 0 else -1.0
         for kind, key, text, grows_away in (
             ("pinName", "name", str(pin.name or ""), True),
             ("pinNumber", "number", str(pin.number or ""), False),

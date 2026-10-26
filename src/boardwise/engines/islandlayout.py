@@ -121,6 +121,7 @@ from ..core.textmetrics import (
     DESIGNATOR_GROWTH,
     TEXT_ROW_HEIGHT,
     flag_name_box,
+    pin_rows,
     render_width,
     symbol_rows,
     wire_name_box,
@@ -1568,6 +1569,28 @@ def _clear_text_rows(
             pose=poses[part_id],
         )
 
+    def own_pin_boxes(part_id: str) -> list[Box]:
+        """The pin name/number rows this part's **own** symbol prints (201H).
+
+        Measured where the host draws them (:func:`textmetrics.pin_rows`), and
+        asked because a value row can be pressed by its own symbol's pin
+        typography — the half :func:`foreign` cannot see, since it deliberately
+        holds only the *other* parts' bodies and rows.
+
+        The measured case: `T1`'s `EE16_3+3_V02` is 50.27 units wide and its top
+        edge sits on the axis of pins 2/5, so it prints through `pinName[2]`,
+        `pinName[5]` and `pinNumber[5]` — three `pin-text-press` rows the gate
+        sees, and no placement of this drawing can clear them, because both rows
+        are drawn at the symbol's own offsets.  A symbol that declares no pin
+        text table returns nothing and this is a no-op for it.
+        """
+        profile = book[circuit.part(part_id).symbol_ref]
+        return [
+            box for _kind, _text, box in pin_rows(
+                profile, origins[part_id], pose=poses[part_id],
+            )
+        ]
+
     def foreign(part_id: str) -> list[Box]:
         """What this part's rows may not touch: foreign **bodies** and foreign rows.
 
@@ -1600,33 +1623,77 @@ def _clear_text_rows(
     notes: list[str] = []
     for part_id in ring:
         mine = rows_of(part_id)
+        pins = own_pin_boxes(part_id)
         may_hide, basis = value_may_be_hidden(book, circuit, part_id)
         for kind, text, box in mine:
-            if not any(_overlaps(box, other) for other in foreign(part_id)):
+            foreign_hit = any(_overlaps(box, other) for other in foreign(part_id))
+            # 201H: a value row can also be pressed by its **own** symbol's pin
+            # typography, which `foreign` excludes by construction. Both rows ride
+            # the same part, so this is the one collision no placement can answer
+            # and S-21's first way out is the only lever left.
+            pin_hits = (
+                [row for row in pins if _overlaps(box, row)]
+                if kind == "value" else []
+            )
+            if not foreign_hit and not pin_hits:
                 continue
+            printed = (
+                f"({box[0]:g}, {box[1]:g})-({box[2]:g}, {box[3]:g})"
+            )
             if kind == "value" and may_hide:
+                if pin_hits and foreign_hit:
+                    where = (
+                        "and that lands on this part's own pin name/number row(s) "
+                        "**and** on a neighbour's own row or on a foreign body"
+                    )
+                elif pin_hits:
+                    where = (
+                        "and that lands on this part's **own** pin name/number "
+                        "row(s) — both rows are drawn at the symbol's own offsets, "
+                        "so no placement of this part can separate them"
+                    )
+                else:
+                    where = (
+                        "and that lands on a neighbour's own row or on a foreign body"
+                    )
                 hidden[part_id] = (
-                    f"the host prints it at ({box[0]:g}, {box[1]:g})-"
-                    f"({box[2]:g}, {box[3]:g}) and that lands on a neighbour's own "
-                    "row or on a foreign body — S-21's first way out of a collision "
-                    "is to hide the value rather than print it through the neighbour "
-                    f"(the row's pitch is {budget.row_gap:g} + the parts' own spans, "
-                    "and this part's neighbours leave no room for it)"
+                    f"the host prints it at {printed} {where} — S-21's first way "
+                    "out of a collision is to hide the value rather than print it "
+                    "through the neighbour"
+                    + (
+                        f" (the row's pitch is {budget.row_gap:g} + the parts' own "
+                        "spans, and this part's neighbours leave no room for it)"
+                        if foreign_hit else
+                        " (moving the part cannot help: both rows ride the same "
+                        "symbol)"
+                    )
                 )
             elif kind == "value":
+                where = (
+                    "this part's own pin name/number row(s) and a neighbour"
+                    if pin_hits and foreign_hit else
+                    "this part's own pin name/number row(s)"
+                    if pin_hits else "a neighbour"
+                )
                 notes.append(
-                    f"{part_id}: its value row {text!r} at ({box[0]:g}, {box[1]:g})-"
-                    f"({box[2]:g}, {box[3]:g}) is on a neighbour, and S-21 will not "
-                    f"hide it — {basis} — so the placement is the only lever left "
-                    "and the gate is what refuses this page if the placement did not "
-                    "take it (S-21: 拥挤时只能挪器件加距)"
+                    f"{part_id}: its value row {text!r} at {printed} is on {where}, "
+                    f"and S-21 will not hide it — {basis} — so "
+                    + (
+                        "the gate is what refuses this page: no placement can "
+                        "separate two rows of one symbol, and the value stays "
+                        "printed through its own pin typography"
+                        if pin_hits and not foreign_hit else
+                        "the placement is the only lever left and the gate is what "
+                        "refuses this page if the placement did not take it "
+                        "(S-21: 拥挤时只能挪器件加距)"
+                    )
                 )
             else:
                 notes.append(
-                    f"{part_id}: its reference row at ({box[0]:g}, {box[1]:g})-"
-                    f"({box[2]:g}, {box[3]:g}) is on a neighbour, and a reference "
-                    "designator is never hidden — the page is refused by the gate "
-                    "rather than drawn with two designators in one place"
+                    f"{part_id}: its reference row at {printed} is on a neighbour, "
+                    "and a reference designator is never hidden — the page is "
+                    "refused by the gate rather than drawn with two designators in "
+                    "one place"
                 )
         rows[part_id] = [
             (kind, text, box) for kind, text, box in mine
@@ -4790,17 +4857,56 @@ def _add_texts(
     placement could not clear (`hidden_values`) is not emitted, with its reason
     written into the block's notes. A reference designator is never hidden (a part
     with no designator is not a schematic), so a reference row that is still
-    pressed after the placement's own pass is recorded here in full — where it is,
-    and that the gate will refuse the page — rather than quietly drawn.
+    pressed after the placement's own pass is recorded here — where it is, what
+    this module's own coarse reserve ran into, and the fact that the **gate** is
+    what decides — rather than quietly drawn.
+
+    **That distinction is 201H's second half (201H-b).** The reserve below is
+    deliberately coarse: it holds every ring part's body (its **own** included), a
+    one-unit wall around every conductor and the host's own conductor-name rows.
+    The gate's reading is not that reading — a part's own artwork is not scored at
+    all (`readability._check_text` skips the owner's own extent), a conductor only
+    counts at `TEXT_WIRE_PENETRATION`, and its bodies are drawn extents rather than
+    pin-inclusive boxes. The note used to state the verdict anyway ("the gate will
+    refuse this page"), and on the delivered 201H page that sentence was false
+    eleven times while the gate said `ok` — a reader (or an agent auditing the
+    notes) was told a refusal had been filed and took no action. Now the note names
+    the object it actually hit and leaves the verdict to `readability`.
     """
-    placed: list[Box] = [tuple(box) for box in bodies if box is not None]
-    placed.extend(tuple(label.bbox) for label in block.labels)
-    wires = _wire_boxes(block)
-    host_rows = _host_name_boxes(block)
+    #: Each obstacle keeps the name a reader needs: "the drawn body of T1" is a
+    #: neighbour, "this part's own symbol body" is the host's own artwork, and the
+    #: two are not the same sentence. Rows committed earlier in the ring join this
+    #: list as they are placed, and a **hidden** value never joins it — a row the
+    #: host does not print is not something to dodge (201H's `rows` filter).
+    own_bodies: dict[str, Box] = {}
+    for owner in ring:
+        box = pose_box(
+            book[circuit.part(owner).symbol_ref].body,
+            rotation=poses[owner].rotation, mirror=poses[owner].mirror,
+            ox=origins[owner][0], oy=origins[owner][1],
+        )
+        if box is not None:
+            own_bodies[owner] = box
+    obstacles: list[tuple[str, Box]] = [
+        (f"the drawn body of {owner}", box) for owner, box in own_bodies.items()
+    ]
+    obstacles.extend(
+        (f"the boundary name {label.text!r}", tuple(label.bbox))
+        for label in block.labels
+    )
+    obstacles.extend(
+        ("one of this island's own conductors (the one-unit wall)", box)
+        for box in _wire_boxes(block)
+    )
+    obstacles.extend(
+        ("the host's own name row of a conductor", box)
+        for box in _host_name_boxes(block)
+    )
     for part_id in _ring_order(ring, block.anchor):
         part = circuit.part(part_id)
         profile = book[part.symbol_ref]
         hidden = hidden_values.get(part_id, "")
+        own_body = own_bodies.get(part_id)
         if not profile.texts:
             block.notes.append(
                 f"{part_id}: its symbol ({part.symbol_ref}) declares no text "
@@ -4816,17 +4922,34 @@ def _add_texts(
             if kind == "value" and hidden:
                 _hide_value_row(block, part_id, text, hidden)
                 continue
-            if any(_overlaps(box, other) for other in placed + wires + host_rows):
+            diagnosis: list[str] = []
+            if own_body is not None and _overlaps(box, own_body):
+                diagnosis.append(
+                    "this part's own symbol body (the host draws its rows inside "
+                    "its own artwork on purpose)"
+                )
+            diagnosis.extend(
+                what for what, other in obstacles
+                if what != f"the drawn body of {part_id}" and _overlaps(box, other)
+            )
+            if diagnosis:
+                printed = f"({box[0]:g}, {box[1]:g})-({box[2]:g}, {box[3]:g})"
                 block.notes.append(
-                    f"{part_id}: its {kind} row {text!r} at "
-                    f"({box[0]:g}, {box[1]:g})-({box[2]:g}, {box[3]:g}) is where the "
-                    "host draws it, and something else is already there — the "
-                    "placement could not move the part off it and S-21 lets only a "
-                    "value go, so the gate will refuse this page rather than this "
-                    "module drawing a row over a neighbour"
+                    f"{part_id}: its {kind} row {text!r} at {printed} is where the "
+                    "host draws it, and this module's own reserve — a coarse box "
+                    "test, **not** the gate's reading — has "
+                    + " and ".join(dict.fromkeys(diagnosis))
+                    + " inside it. That is a diagnosis, not a verdict: "
+                    "`readability` decides with its own measurements (a part's "
+                    "drawn extent rather than a pin-inclusive box, its own chord "
+                    "threshold for a conductor, and a part's own artwork is not a "
+                    "finding at all), so this row may well be delivered and the "
+                    "gate's answer is what says so. Recorded because the placement "
+                    "left it: S-21 lets only a value go, and a reference is never "
+                    "hidden"
                 )
             block.texts.append(_text(text, kind, part_id, box))
-            placed.append(box)
+            obstacles.append((f"the {kind} row of {part_id}", box))
 
 
 def _ring_order(ring: Sequence[str], anchor: str) -> list[str]:

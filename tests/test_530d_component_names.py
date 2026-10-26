@@ -117,12 +117,15 @@ def test_the_real_page_names_every_blob_exactly_once() -> None:
     assert (names, blobs) == (22, 22), (names, blobs)
     assert names - blobs == 0
     assert page.plan().geometry_sha256() == (
-        "e165aede6c98dded41df8512e70ba85778d5654dd774c731339e2e03fd380140"
+        "565ab76d0093f83c2d1053eb8d3dc60f85963a982c9137befe10e01e7f2112bd"
     ), (
         "the island picture moved again — that is a *layout* batch's business and "
         "this digest is the witness of when: 532 re-pinned it from a797e3af… when "
-        "the rows a part's own drawing occupies started deciding the pitch, and the "
-        "count this test owns (22 = 22) did not move"
+        "the rows a part's own drawing occupies started deciding the pitch; 201H "
+        "re-pinned it from e165aede… when the transformer's value row was hidden "
+        "(S-21) and the digest covers text boxes. Parts, segments, junctions, labels "
+        "and flags are byte-identical in evidence/201h/, and the count this test "
+        "owns (22 = 22) did not move"
     )
 
 
@@ -311,18 +314,23 @@ def test_the_page_the_gate_reads_has_only_the_transformer_s_own_pin_text() -> No
     name for. They are delivered with, named one line each (`drawcompiler.
     island_gate_violations`); what this test still owns is that the row count is
     exactly these three and that none of 530C's own findings came back.
+
+    **201H reads zero, and the sentence behind it is S-21's own.** Both rows ride one
+    symbol, so no placement can separate them; the value row is therefore hidden
+    (`islandlayout._clear_text_rows`'s own-pin half) and the three `pin-text-press`
+    rows go with it. The class is still detected — `test_532` states that on the plan
+    that prints the row — and the delivery policy's cap did not move. What this test
+    owns now is that the page is clean **without** 530C's findings coming back.
     """
     _plan, layout = _island_change_plan()
     circuit, presentation, book = _flyback()
     _page = il.island_page(circuit, presentation, book)
     checked = rb.check(layout, circuit, presentation, book)
     kinds = {item.kind for item in checked.hard_violations}
-    assert kinds == {rb.KIND_PIN_TEXT_PRESSED}, [
-        item.render() for item in checked.hard_violations
-    ]
-    assert len(checked.hard_violations) == 3
+    assert kinds == set(), [item.render() for item in checked.hard_violations]
+    assert checked.hard_violations == []
     refusing, tolerated = dc.island_gate_violations(checked.hard_violations)
-    assert not refusing and len(tolerated) == 3
+    assert not refusing and not tolerated
     assert not [
         item for item in checked.hard_violations if "CLAMP" in item.render()
     ], "an island-internal net's row is still being modelled"

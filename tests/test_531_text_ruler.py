@@ -442,20 +442,17 @@ def test_the_gate_reads_the_real_page_clean_and_the_trade_is_named():
     and a 38.33-unit S-05 breach". 532 reads it differently and every difference is
     a measurement rather than a policy change:
 
-    * **nothing is hidden** — no value, no row. S-21's way out is still in the code
-      (`islandlayout._clear_text_rows`, and the category rule below) but this page
-      no longer needs it: the row pitch is now sized by where a part's own drawing
-      actually reaches, a part's lead has to clear that drawing from the pin it
-      serves, and a boundary stub whose outward end has no way out may try the
-      segment's **other** end. All three were forced by the same sentence — a
-      resistor's, capacitor's, inductor's or IC's value is never hidden
-      (`岳 2026-10-21`, `islandlayout.VALUE_ALWAYS_PRINTED`) — so where 531 hid four
-      values, 532 moves parts until they fit;
-    * **the tolerance account is not empty, and what is in it is the transformer's
-      own typography**: three `pin-text-press` rows (`T1`'s `2`/`5`/`5` against its
-      own `EE16_3+3_V02`), the class `readability` could not see at all before this
-      batch (it had no pin name/number rows among its five kinds). The page is
-      delivered with them named, one line each, exactly as 530F's policy says;
+    * **one value is hidden, and it is the transformer's** — 201H: `T1`'s
+      `EE16_3+3_V02` is 50.27 wide and its top edge sits on the axis of pins 2/5, so
+      it prints through its own pin name/number rows; both rows ride the same
+      symbol, so no placement can separate them and S-21's first way out is the
+      only lever left (`islandlayout._clear_text_rows`, own-pin half). Every other
+      value is printed: where 531 hid four, 532 moved parts until they fit;
+    * **the tolerance account is empty**, because the three rows that used to be in
+      it — three `pin-text-press` rows (`T1`'s `2`/`5`/`5` against its own
+      `EE16_3+3_V02`) — are gone with that value row. The cap did not move: it is
+      still 3, and the class is still detected (`test_532` states the detection on
+      the plan that prints the row);
     * the second decap of the `secondary` island stands **58.94** units from the
       pin it serves, against S-05's 30 — a bigger trade than 531's 38.33 and for
       the same reason (S-05 and "two decoupling parts on one pin" are mutually
@@ -472,18 +469,24 @@ def test_the_gate_reads_the_real_page_clean_and_the_trade_is_named():
     assert not [f for f in result.failures], "a delivered page carries no refusals"
     notes = list(result.notes)
     tolerated = [note for note in notes if note.startswith("tolerated: ")]
-    assert len(tolerated) == 3, tolerated
-    assert all("[pin-text-press]" in note for note in tolerated), tolerated
+    assert tolerated == [], (
+        "201H: the transformer's value row is hidden by S-21's first way out, so "
+        f"the three pin-text rows 532 tolerated are gone — {tolerated}"
+    )
     page = il.island_page(circuit, presentation, book)
     block_notes = [note for block in page.blocks for note in block.notes]
-    dropped = [note for note in block_notes if "is not drawn" in note]
-    assert dropped == [], (
-        f"this page hides nothing: every value fits at the pitch and the lead the "
-        f"layout gives it — {dropped}"
+    refused_claims = [note for note in block_notes if "will refuse this page" in note]
+    assert refused_claims == [], (
+        "201H audit: the gate says ok, so no note may state its verdict as a "
+        f"refusal — those are the module's own coarse readings — {refused_claims[:2]}"
     )
-    pinned = [part for part in page.plan().parts if not part.value_visible]
-    assert pinned == [], (
-        f"and no part claims otherwise for the landing step — {pinned}"
+    dropped = [note for note in block_notes if "is not drawn" in note]
+    assert len(dropped) == 1 and dropped[0].startswith("T1: the value"), (
+        f"this page hides exactly one row, the transformer's own — {dropped}"
+    )
+    pinned = [part.part_id for part in page.plan().parts if not part.value_visible]
+    assert pinned == ["T1"], (
+        f"and the landing step reads the same fact — {pinned}"
     )
     decaps = [note for note in block_notes if note.startswith("decap ")]
     assert len(decaps) == 2, decaps

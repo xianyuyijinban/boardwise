@@ -299,18 +299,24 @@ def test_the_real_page_keeps_the_electrical_violations_at_zero() -> None:
     532 adds a third row class to that set: ``pin-text-press``, a symbol's own pin
     name/number against another row of that same symbol. It is the class
     `readability` could not see before this batch — its `_text_boxes` had no pin
-    text in it at all — and the page's reading is now **three** rows, all on the
+    text in it at all — and the page's reading was then **three** rows, all on the
     transformer (`T1`'s `2`/`5`/`5` against `T1`'s own `EE16_3+3_V02`).
+
+    201H takes those three out the only way S-21 leaves: the value row is hidden
+    (`islandlayout._clear_text_rows`'s own-pin half), because both rows are drawn
+    at the symbol's own offsets and no placement can separate them. So this page
+    now reads **zero** hard violations, and the electrical zero is still the point
+    of the test.
     """
     page, circuit, presentation, book = _page()
     checked = rb.check(page.plan(), circuit, presentation, book)
     kinds = {item.kind for item in checked.hard_violations}
     assert kinds <= {"text-overlap", "text-on-wire", "pin-text-press"}, sorted(kinds)
-    assert kinds == {"pin-text-press"}, (
-        "532: the 530C/531 text rows are gone and the only hard rows left are the "
-        f"host's own pin typography — read {sorted(kinds)}"
+    assert kinds == set(), (
+        "201H: the transformer's value row is hidden, so the pin-text rows that "
+        f"were the page's only hard readings are gone — read {sorted(kinds)}"
     )
-    assert len(checked.hard_violations) <= 8, len(checked.hard_violations)
+    assert len(checked.hard_violations) == 0, len(checked.hard_violations)
 
 
 def test_a_tier_two_route_is_written_into_the_islands_notes(
@@ -448,6 +454,7 @@ def test_the_real_page_prints_a_name_only_on_the_wires_that_are_labels() -> None
     unchecked = rb.check(plan, circuit, presentation, book)
     refusing, tolerated = dc.island_gate_violations(unchecked.hard_violations)
     assert not refusing, [item.render() for item in refusing]
-    assert {item.kind for item in tolerated} == {"pin-text-press"}, [
-        item.render() for item in tolerated
-    ]
+    assert tolerated == [], (
+        "201H: the transformer's value row is hidden, so the page carries no "
+        f"tolerated row at all — {[item.render() for item in tolerated]}"
+    )

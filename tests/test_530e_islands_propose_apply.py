@@ -64,8 +64,14 @@ PROV = "verified_recipe"
 #: segment. All three are the same sentence — S-21 will not hide an R/C/L/IC
 #: value, so the parts move — and none of them is this batch's proposal path,
 #: whose two tests below still read exactly what they always did.
+#: 201H re-pinned it (`e165aede…` → `565ab76d…`) and the mover is **one row**, not a
+#: layout: the transformer's value row is hidden by S-21's first way out (it prints
+#: through its own pin name/number rows, and both rows ride the same symbol), and a
+#: text box is part of the picture the digest states. Parts, segments, junctions,
+#: labels and power symbols are byte-identical (`evidence/201h/`), so §5.2's
+#: promise — a proposal command cannot move the layout — is untouched.
 FLYBACK_ISLAND_PAGE_SHA256 = (
-    "e165aede6c98dded41df8512e70ba85778d5654dd774c731339e2e03fd380140"
+    "565ab76d0093f83c2d1053eb8d3dc60f85963a982c9137befe10e01e7f2112bd"
 )
 
 

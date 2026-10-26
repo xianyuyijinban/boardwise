@@ -214,10 +214,16 @@ def test_the_real_flyback_island_page_is_delivered_with_the_transformer_s_pin_te
 
     532 re-pinned the reading and the sentence behind it is the policy's own: the
     checker can now see a part's **pin name and number** (`textmetrics.pin_rows`),
-    so this page carries three rows it could not see before — the transformer's own
-    typography over its own value row — and 530F's rule is what they are carried
+    so this page carried three rows it could not see before — the transformer's own
+    typography over its own value row — and 530F's rule is what they were carried
     by. The acceptance anchor ("`ok=True`, every tolerated row named, the hard half
     empty") is unchanged; what moved is which rows there are to name.
+
+    201H empties the account without touching the policy: S-21's first way out
+    hides the transformer's value row (`islandlayout._clear_text_rows`), because
+    both rows are printed at the symbol's own offsets and no placement separates
+    them. So the anchor reads "`ok=True`, an empty account, the hard half empty" —
+    and the cap (3) is still the policy's, unchanged.
     """
     circuit, presentation, book = _flyback()
     result = dc.compile(circuit, presentation, book, dc.CompileBudget(max_candidates=64))
@@ -232,25 +238,19 @@ def test_the_real_flyback_island_page_is_delivered_with_the_transformer_s_pin_te
         f"{plan.evidence.hard_violations}"
     )
     tolerated = [line for line in result.notes if line.startswith("tolerated: ")]
-    assert len(tolerated) == 3, (
-        "532: exactly the transformer's three pin-text rows, one line each — "
-        f"{tolerated}"
+    assert tolerated == [], (
+        "201H: the transformer's value row is hidden by S-21's first way out, so "
+        f"the three pin-text rows 532 named are gone — {tolerated}"
     )
-    assert all("[pin-text-press]" in line for line in tolerated), tolerated
-    assert all("parts[T1]" in line for line in tolerated), tolerated
     assert not [
-        line for line in plan.evidence.notes
-        if line.startswith("tolerated: ") and "[pin-text-press]" not in line
-    ], plan.evidence.notes
-    assert len([
         line for line in plan.evidence.notes if line.startswith("tolerated: ")
-    ]) == 3, plan.evidence.notes
+    ], plan.evidence.notes
     # The electrical side is empty, and the policy is what says so rather than the
     # page happening to have none.
     checked = readability.check(plan, circuit, presentation, book)
     refusing, tolerated_readings = dc.island_gate_violations(checked.hard_violations)
     assert refusing == [], refusing
-    assert [item.kind for item in tolerated_readings] == ["pin-text-press"] * 3, (
+    assert tolerated_readings == [], (
         [item.render() for item in tolerated_readings]
     )
 

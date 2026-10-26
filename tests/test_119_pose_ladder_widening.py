@@ -512,12 +512,15 @@ def test_the_real_flyback_widens_and_still_refuses_honestly():
     # `T1` 自己的值行上——`readability` 在这批之前**根本看不见**引脚名/号
     # （`textmetrics.pin_rows` / `KIND_PIN_TEXT_PRESSED`）。交付与否（本测试真正
     # 的主语）仍然没变：`ok=True`、1 候选。
+    # **201H 重钉**：账本又空了，而这次变的是**值行本身**。S-21 的第一出路把
+    # 变压器值行藏掉——它压在自己的引脚名/号上，两行同属一个符号，任何摆位都
+    # 分不开（`islandlayout._clear_text_rows` 的 own-pin 半边），那三条
+    # `pin-text-press` 随之消失。交付与否（本测试真正的主语）没变：`ok=True`、
+    # 1 候选；532 的 cap=3 也没动，只是账上没有行可记。
     tolerated = [note for note in result.notes if note.startswith("tolerated: ")]
-    assert len(tolerated) == 3 and all(
-        "[pin-text-press]" in note for note in tolerated
-    ), (
-        "this page delivers with three named rows, all of them the transformer's "
-        f"own pin typography: {tolerated}"
+    assert tolerated == [], (
+        "201H: the transformer's value row is hidden by S-21's first way out, so "
+        f"this page delivers with an empty account: {tolerated}"
     )
     # 3) 单模块那条路（同一个模块、剥掉 islands）仍按老读数跑。
     _assert_single_module_widening_reading(
