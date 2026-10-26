@@ -108,8 +108,9 @@ def test_the_real_page_names_every_blob_exactly_once() -> None:
     A name short would leave a conductor a reader cannot name; a name extra would
     say one net twice on one blob.  On this page every named net's own segment is in
     one piece, so the count is also the witness that 530D's finer rule changed the
-    *statement* and not the picture — the geometry digest below is the same one 530C
-    froze.
+    *statement* and not the picture — while the geometry digest below is the witness
+    of every later batch that moved the *drawing*: 532 (row pitch), 201H (the
+    transformer's value row) and 542 (`FB_SENSE`'s channel off `U4`'s frame).
     """
     circuit, presentation, book = _flyback()
     page = il.island_page(circuit, presentation, book)
@@ -117,15 +118,19 @@ def test_the_real_page_names_every_blob_exactly_once() -> None:
     assert (names, blobs) == (22, 22), (names, blobs)
     assert names - blobs == 0
     assert page.plan().geometry_sha256() == (
-        "565ab76d0093f83c2d1053eb8d3dc60f85963a982c9137befe10e01e7f2112bd"
+        "9bae9deb73e2ad25bbeb1f2e90de3d44d55e9370a079ac57a72a623760e68654"
     ), (
         "the island picture moved again — that is a *layout* batch's business and "
         "this digest is the witness of when: 532 re-pinned it from a797e3af… when "
         "the rows a part's own drawing occupies started deciding the pitch; 201H "
         "re-pinned it from e165aede… when the transformer's value row was hidden "
-        "(S-21) and the digest covers text boxes. Parts, segments, junctions, labels "
-        "and flags are byte-identical in evidence/201h/, and the count this test "
-        "owns (22 = 22) did not move"
+        "(S-21) and the digest covers text boxes; 542 re-pinned it from 565ab76d… "
+        "when `FB_SENSE` stopped taking the channel inside `U4`'s frame (the "
+        "`SEC_GND` boundary stub and its flag followed it; the other four islands "
+        "are unchanged). The count this test owns (22 = 22) did not move. The "
+        "「parts, segments, junctions, labels and flags are byte-identical」 sentence "
+        "that stood here belongs to 201H's re-pin, not to this one: 542's edit is "
+        "exactly one wire, one stub and one flag"
     )
 
 

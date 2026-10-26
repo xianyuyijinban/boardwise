@@ -70,8 +70,17 @@ PROV = "verified_recipe"
 #: text box is part of the picture the digest states. Parts, segments, junctions,
 #: labels and power symbols are byte-identical (`evidence/201h/`), so §5.2's
 #: promise — a proposal command cannot move the layout — is untouched.
+#: 542 re-pinned it again (`565ab76d…` → `9bae9deb…`) and **this one is a layout
+#: change, of exactly one island**: `FB_SENSE` no longer takes the channel inside
+#: `U4`'s frame (S-10), so its long run moves from `y = 360` to `y = 370` in the
+#: feedback island's own frame and the `SEC_GND` boundary stub — a name stub drawn
+#: after the wiring — turns with its flag (`610,375` rot 180 → `610,315` rot 0).
+#: The other four islands' parts, segments, junctions, labels, flags and texts are
+#: unchanged, `page.bbox()`/`page.offsets` do not move, and §5.2's promise still
+#: holds: the digest changed because a conductor moved in the *layout*, not because
+#: anything a proposal command does could move it.
 FLYBACK_ISLAND_PAGE_SHA256 = (
-    "565ab76d0093f83c2d1053eb8d3dc60f85963a982c9137befe10e01e7f2112bd"
+    "9bae9deb73e2ad25bbeb1f2e90de3d44d55e9370a079ac57a72a623760e68654"
 )
 
 

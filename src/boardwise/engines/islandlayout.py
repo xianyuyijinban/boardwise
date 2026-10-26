@@ -3514,7 +3514,8 @@ def _route(
       gate (`wire-through-body` is a hard violation, `readability.py`).  T3
       exists so a failure can be read, not so a page can pass.
 
-    **The keys**, in order (lower is better)::
+    **The keys**, in order (lower is better) — thirteen slots, and the list is the
+    tuple the loop below actually builds::
 
         1 (crossings)          # a wire through a part: wire-through-body, S-10
         2 (landing+pin_hits)   # a short — ranked second, not fourth
@@ -3522,32 +3523,47 @@ def _route(
         4 (own_tees)           # a vertex on this net's own earlier link: a
                                # junction `_junction_dots` then has to declare
         5 (extent_hits)        # inside another part's pin-tip zone
-        6 (bends)              # S-09: S-09 has no other enforcer now
-        7 (foreign_overlap)    # two nets running along each other, collinear
-        8 (lead_overlap)       # doubling back along the pin it starts from
-        9 (doubled)            # this net's own earlier links
-       10 (row_hits)           # the host's own name row, printed over a part
-       11 (length)             # and only here does length matter
+        6 (text_hits)          # 531: through a row the *host* prints (a part's
+                               # designator/value), i.e. `text-on-wire`
+        7 (bends)              # S-09: S-09 has no other enforcer now
+        8 (foreign_overlap)    # two nets running along each other, collinear
+        9 (lead_overlap)       # doubling back along the pin it starts from
+       10 (doubled)            # this net's own earlier links
+       11 (grazes)            # 542: drawn on or just inside a body's frame —
+                               # S-10's 贴框, which `_crosses`'s margin cannot see
+       12 (row_hits)           # the host's own name row, printed over a part
+       13 (length)             # and only here does length matter
 
     Key 3 is the one that was missing: ``foreign_overlap`` reads collinear runs
     only (:func:`_run_overlap` returns ``0.0`` the moment the runs are not
     parallel), so until 530C two nets crossing at right angles cost nothing at
-    all.  Key 6 is the other: `bends` used to be represented by `length`, which
+    all.  Key 7 is the other: `bends` used to be represented by `length`, which
     is the same number only when nothing detours.  It sits above
     ``foreign_overlap`` on `DESIGN` §6.1's word, and 530B's warning is why that
     is worth saying out loud — a *straight* stub is what 530B's placement bought
     (bends 25 → 10 came from the placement, not from this router), and a key that
     could trade a straight link for a bent one to avoid a collinear overlap would
-    spend it.  Key 6 is above key 7, so it cannot.
+    spend it.  Key 7 is above key 8, so it cannot.
 
     Two keys are 530C's own additions to `DESIGN` §6.1's list, both written down
     here because a key list that grows silently is how a router stops being
     explainable.  **Key 4** is the same-net tee — a legal dot, but one
     :func:`_junction_dots` has to declare, and `bends` outranks `doubled`, so a
-    candidate can now win on its bend count *and* bring a tee.  **Key 10** is the
+    candidate can now win on its bend count *and* bring a tee.  **Key 12** is the
     host's own net-name row: it is the page's commonest legibility finding and it
     is a function of the geometry, so it is choosable here; it sits below every
     electrical key and below `bends`, and above `length` only.
+
+    542 adds one more, **key 11**, between ``doubled`` and ``row_hits``: **a run
+    drawn on or just inside a body's frame** — the half of S-10's 「不穿/贴器件画框」
+    that :func:`_crosses` cannot see, because its 1-unit margin reads "touching an
+    edge" as a clearance opinion (`wire-through-body` has the same tolerance).
+    A reader cannot tell 贴框 from 穿框, which is why this is a legibility key and
+    not a tier: it sits below every electrical key and below `bends`, so it cannot
+    buy a short or a bend, and above `row_hits` and `length`, so extra conductor
+    length is the price of leaving the frame.  201H's page needed it: `FB_SENSE`
+    won key 1 = 0 at 0.5 unit inside `U4`'s lower edge and was the shortest clean
+    candidate (180 against 241 for the first channel below the part).
 
     ``field.bodies`` are the *bodies*, not `drawcompiler._part_box`'s extent: a
     wire that grazes a pin tip is a clearance opinion, one that runs through a
@@ -3646,7 +3662,8 @@ def _route(
             for run in runs
             for index in range(len(other) - 1)
         )
-        # 530C's key 8, widened in 531 from "this path's own two pins" to **every**
+        # 530C's key 8 then, key 9 now (542 shifted every slot past `text_hits`),
+        # widened in 531 from "this path's own two pins" to **every**
         # lead: `readability`'s `wire-on-pin-line` names any pin of any part, and
         # it is one of the nine **electrical** kinds (530F §2.2), so a wire along a
         # foreign pin's lead is the same defect as one along its own. Measured: on
@@ -3669,6 +3686,21 @@ def _route(
             if part_id not in mine_parts
             and any(_crosses(*run, box) for run in runs)
         )
+        # 542: a run drawn **on or just inside a body's frame** — the half of
+        # S-10's 「不穿/贴器件画框」 that `_crosses` cannot see, because its
+        # 1-unit margin deliberately reads "touching an edge" as a clearance
+        # opinion rather than a body crossing.  Measured on 201H's feedback
+        # island: `FB_SENSE` left `R8.1`, turned at `y = 15` — a channel the
+        # detour ladder takes from `U4`'s own value row, 0.5 unit inside that
+        # part's lower edge — and ran 91 units across the frame.  Key 1 read 0,
+        # so the candidate was tier 1, and it was also the shortest of the clean
+        # ones (180 against 241 for the first channel below the part).  Pushed
+        # off that inside channel the router picked the next one, `y = 15.5`,
+        # which is the edge itself — the same misread from the other side, and
+        # the same reason this key is needed rather than a widened `_crosses`.
+        grazes = sum(
+            1 for run in runs for box in field.bodies if _hugs(*run, box)
+        )
         # 531: a run through a **part's own text row**. A different sentence from
         # `extent_hits` above — a wire in a pin-tip zone is a clearance opinion,
         # while `readability` calls this one `text-on-wire` with a ``texts[i]`` as
@@ -3689,7 +3721,7 @@ def _route(
         text_hits = sum(
             1 for run in runs for box in field.rows if _crosses(*run, box)
         )
-        # Key 9, the second-to-last: where the host prints this link's own **net
+        # Key 12, the second-to-last: where the host prints this link's own **net
         # name**.  Like the boundary stub's row (`_name_one_net`) it is a text
         # nobody placed, and `readability` measures it as `segments[i]` — the
         # commonest finding on this page (530B's §6: 7 of its 9 `text-overlap`).
@@ -3711,7 +3743,7 @@ def _route(
             crossings, landing + pin_hits, true_crossings, own_tees, extent_hits,
             text_hits,
             _bends(clean), foreign_overlap, lead_overlap, doubled,
-            row_hits, _length(clean),
+            grazes, row_hits, _length(clean),
         )
 
         complaints: list[str] = []
@@ -3807,6 +3839,30 @@ def _crosses(
     return (
         box[0] + margin < x1 and x0 < box[2] - margin
         and box[1] + margin < y1 and y0 < box[3] - margin
+    )
+
+
+def _hugs(
+    a: tuple[float, float], b: tuple[float, float], box: Box
+) -> bool:
+    """Is this run drawn **on or inside** the box, short of a real crossing?
+
+    S-10 forbids both halves of 「导线不穿/贴器件画框」, and the two halves are
+    not the same measurement: `_crosses` deliberately reads a wire that touches a
+    body's edge — or that stays within its 1-unit margin inside it — as a
+    clearance opinion rather than a body crossing, because that is what
+    ``wire-through-body`` means.  A reader cannot tell the difference: the
+    conductor is drawn on the part's own rectangle.  So this predicate is the
+    legibility half, and it is a **key** in :func:`_route`, never a tier — it
+    must never be able to buy a short or a bend.
+
+    The expansion is one micron, so the band is closed at both ends: exactly on
+    an edge is inside, one unit off it is not.  A run that does cross the interior
+    is not "hugging" either — it is key 1's body crossing and a tier of its own.
+    """
+    return (
+        not _crosses(a, b, box)
+        and _crosses(a, b, box, margin=-1e-6)
     )
 
 

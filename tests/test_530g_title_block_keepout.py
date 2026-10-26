@@ -502,6 +502,17 @@ def test_a_page_with_no_sheet_packs_exactly_where_it_did_before() -> None:
     parts are byte-identical (`evidence/201h/`) — which is what keeps this file's
     two rules no-ops without a sheet: `keepouts == ()`, `floor == margin`, no
     conflict.
+
+    **542 re-pinned the digest again** (`565ab76d…` → `9bae9deb…`), and this time a
+    conductor did move: `FB_SENSE` stopped taking the channel 0.5 unit inside `U4`'s
+    frame, so its long run is drawn at `y = 370` instead of `y = 360`, and the
+    `SEC_GND` boundary stub turned with its flag (`610,375` rot 180 → `610,315`
+    rot 0). Two things about that sentence matter here. It is one island's routing,
+    not a packing event: the other four islands are unchanged and `page.offsets`
+    and `page.bbox()` still read the numbers asserted below, which is why this
+    file's no-op guard keeps measuring the same thing. And the 「byte-identical」
+    sentence above is 201H's witness, not this batch's — 542's picture differs by
+    exactly one wire, one stub and one flag.
     """
     circuit, presentation, book = _flyback()
     page = il.island_page(circuit, presentation, book)
@@ -519,11 +530,13 @@ def test_a_page_with_no_sheet_packs_exactly_where_it_did_before() -> None:
         (20.535064572425824, 20.0, 988.1874485165794, 400.5)
     )
     assert page.plan().geometry_sha256() == (
-        "565ab76d0093f83c2d1053eb8d3dc60f85963a982c9137befe10e01e7f2112bd"
+        "9bae9deb73e2ad25bbeb1f2e90de3d44d55e9370a079ac57a72a623760e68654"
     ), (
         "the island page moved again: that is a *layout* batch's business, and this "
         "number is the witness of when — 532 re-pinned it from a797e3af… when the "
-        "rows a part's own drawing occupies started deciding the pitch"
+        "rows a part's own drawing occupies started deciding the pitch; 542 "
+        "re-pinned it from 565ab76d… when `FB_SENSE` left the channel inside `U4`'s "
+        "frame, which is one island's routing and left `offsets`/`bbox()` alone"
     )
 
 

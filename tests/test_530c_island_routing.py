@@ -240,20 +240,28 @@ def test_true_crossings_stay_under_the_pages_own_budget() -> None:
     """S-11, with the design's target and this batch's reading both written down.
 
     `DESIGN` §9.1 #22 asks for ≤ 2 % of segments, which on a 39-segment island
-    page means **zero** crossings.  530C takes the count from 3 to 2 (the key
-    that ranks crossings was missing entirely before it) and does not reach zero:
-    the two left are between links that are pin-to-pin straight lines with no
-    alternative in this family.  So the budget is pinned at this batch's own
-    reading and the gap is reported, rather than the number written to look like
-    the target.
+    page means **zero** crossings.  530C took the count from 3 to 2 (the key
+    that ranks crossings was missing entirely before it), and the two left were
+    links with no alternative in that family — so the budget was pinned at that
+    batch's own reading and the gap was reported rather than the number written
+    to look like the target.
+
+    542 closes the last one, and this is the assertion the old test said to make
+    when it happened (its failing branch read "raise this to an assertion on 0").
+    The crossing was `FB_SENSE`'s run along `U4`'s frame against the `SEC_GND`
+    boundary stub; once the router stopped choosing a channel inside the frame,
+    the page reads **0/39** and the design's 2 % target holds with room to spare.
     """
     page, circuit, presentation, book = _page()
     plan = page.plan()
     checked = rb.check(plan, circuit, presentation, book)
     crossings = checked.soft_metrics["crossings"]
-    assert crossings <= 2.0, crossings
-    assert crossings / len(plan.segments) > 0.02, (
-        "the design's 2 % target is now met — raise this to an assertion on 0"
+    assert crossings == 0.0, (
+        crossings,
+        [
+            (plan.segments[left].net, plan.segments[right].net, point)
+            for left, right, point in rb._crossings(plan)
+        ],
     )
 
 

@@ -1163,27 +1163,49 @@ def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
         "every island's own placement must be on the record, so 'which island "
         f"moved' is answerable: {notes[-600:]}"
     )
-    # **534 收尾（账簿改、病历不改）**：岛闸现在是**两层串联**。先把它量到的软指标
-    # （S-09 弯/根、S-11 交叉占比、S-21 文字净距）跟 spec 自己的地板比
-    # （`drawcompiler.py:7211` `soft_floor_violations`；534 R5 把软指标从「读数」
-    # 变成「地板」），软底线一破就带着**规格条款与实测数字**拒绝，不再往下走硬闸；
-    # 硬闸那句 `the island page was refused by the readability checker`
-    # （`drawcompiler.py:7242`）只在软底线放行之后才会出现。
-    # 这份手搓库（`_library_from`：没有 text anchors、没有 declared poses）量出来的
-    # 正是 45 段里 2 个交叉 = 4.44%，超过 2%（本板允许 1 个），所以这一页现在是被
-    # 软底线拦下的，拒绝语换成了那一句。
-    # 530F 钉的**硬闸**措辞一个字没丢——它由
-    # `tests/test_530f_gate_tolerance.py:284` 钉在一条真的会走到硬闸的页上；软底线
-    # 这一层由 `tests/test_534_soft_floor.py` 钉着。这里仍按本条的本意钉
-    # 「拒绝点名：哪一层、哪一条规格、量到什么」。
-    assert "the island page is over the style spec's soft floor" in joined, (
-        "the refusal must name the layer that now refuses the page: since 534 R5 the "
-        "island page is measured against the style-spec floor before the hard gate, "
-        f"and that layer reports in its own words — got: {joined[:400]}"
+    # **542 重钉（账簿改、病历不改）**：542 让 `FB_SENSE` 离开 `U4` 的框内通道，
+    # 这个手搓库的页也照做——feedback 岛的交叉 **2 → 1**（45 条边：4.44% → 2.2%），
+    # 而 S-11 在地板上的允许值就是 `max(1, ceil(0.02 * 45)) = 1`，于是 534 R5 的
+    # **软底线第一次放行**，两层串联里下面那层硬闸
+    # （`drawcompiler.py:7242`）第一次开口。
+    #
+    # 它报的**不是新病**：`[netlist-partition-mismatch]` 与 `[undeclared-junction]`
+    # 在 542 之前就在。旁证是绕过软底线、直接拿 `readability.check` 量同一页
+    # （`.tmp_542_v1_113/probe.py`）：两侧的硬违规 **3 条逐字相同**，而这段
+    # loader 的页在两侧都是 `ok=False` / 0 候选——判决与交付状态一个字没变，
+    # 变的只是「谁拒的」，且换成了**更重**的一层（软底线 → 硬闸）。软底线从 534
+    # 起一直先拒、硬闸从没跑到，所以这两条电学账在 113 的账簿里被遮住了。
+    #
+    # 那条短接是**真的**，而且**不在 542 动的那个岛上**：它属于 **bridge** 岛
+    # （542 之后该岛 8 段与之前逐段相同）——`LED_A` 的竖段
+    # `(460,70) → (460,40)` 穿过 `U5.2` 的脚端 `(460,50)`，而 `LED_K` 正从这一点
+    # 起步，编辑器就在此把两个网并成一个；`netlist-partition-mismatch`（四个脚
+    # 并成一个节点）与 `undeclared-junction`（顶点切进另一根线的中段且没声明）
+    # 是**同一个点**的两种说法，不是两条独立缺陷。它是这个 loader 的产物：
+    # `_library_from` 丢引脚 `length`、无 declared poses，`U5.1`/`U5.2` 于是被排在
+    # 同一条 `x = 460` 上；真库同页 `readability.check` 是 `ok=True` / `hard=0`，
+    # bridge 岛的 `LED_A`/`LED_K` 走完全不同的两段。
+    #
+    # 所以这里钉的仍是本条的本意「拒绝点名：哪一层、哪两个对象、为什么」。
+    # 软底线那一层的措辞与上限不是丢了，而是搬回了它自己的测试
+    # （`tests/test_534_soft_floor.py` 用 ch340 页 6/27 = 22% 真的越过地板）；
+    # 硬闸的对象级措辞另由 `tests/test_530f_gate_tolerance.py:284` 钉着。
+    assert "the island page was refused by the readability checker" in joined, (
+        "the refusal must name the layer that refuses the page: 542 dropped this "
+        "page's crossings onto S-11's own allowance (1 in 45), so the soft floor "
+        f"passes and the hard gate speaks — got: {joined[:400]}"
     )
-    assert "S-11" in joined and "crossing(s) in" in joined, (
-        "the refusal must name the spec clause it walked into and what it measured "
-        f"there, not merely that something is off — got: {joined[:400]}"
+    assert "netlist-partition-mismatch" in joined and "undeclared-junction" in joined, (
+        "the hard gate must name the *kinds* it refuses for, and on this loader they "
+        f"are the two electrical ones — got: {joined[:400]}"
+    )
+    assert all(token in joined for token in (
+        "pins[R9.2]", "pins[U4.2]", "pins[U5.1]", "pins[U5.2]",
+        "segments[34]", "segments[33]", "(460, 50)",
+    )), (
+        "a refusal owes the *objects* it merged, not only a category: the four pins "
+        "on `LED_A`/`LED_K`, the two bridge segments, and the point where the editor "
+        f"would draw the joining dot — got: {joined[:600]}"
     )
     # **531 重钉**: the kinds this asserts moved, and both the reason and the
     # consequence are this batch's subject. `_library_from` — this test's own
@@ -1215,15 +1237,12 @@ def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
     #       拒因才是可读性（11 条 `text-overlap`，**没有一条是电学的**）。电学拒因
     #       只在**岛路**上出现，而岛路在 HEAD 上不存在——它属于 520m 以来的岛路
     #       本身，不属于 531 的文字量尺。
-    # **534 收尾**：`[kind] objects[...]` 那种「点名相撞的两件东西」的措辞属于软底线
-    # **下面**的硬闸（`drawcompiler.py:7242`），这一页走不到那儿，所以这里改钉同一层
-    # 欠下的另一半账：拒绝必须给出它被量的**上限**，读者才知道超了多少。对象级措辞
-    # 仍由 `tests/test_530f_gate_tolerance.py:284` 钉着，不是放弃这条要求。
-    assert "the style spec allows 2%" in joined, (
-        "the soft-floor refusal owes the limit it was measured against, so a reader "
-        "can see how far over the page is — got: "
-        f"{joined[:400]}"
-    )
+    # **542 收尾（替换 534 的「上限」那半条账）**：这里原来还钉着软底线的另一半
+    # 要求——「拒绝必须给出它被量的上限」，即 `the style spec allows 2%`。542 之后
+    # 这一页不再走到软底线（它的交叉正落在允许值上，见上），那句话在这条路径上
+    # **不存在了**，留着就是要求一句本页不再产生的文本。要求本身没有丢：软底线的
+    # 上限措辞由 `tests/test_534_soft_floor.py` 钉着，它用的是一条真的越过地板的页
+    # （ch340：6 交叉 / 27 段 = 22%），断言 `S-11:` 前缀、允许值那句与两层顺序。
     assert placed.label_fallbacks == [], (
         "the island path names no net by downgrading a wire obligation: the "
         "crossing nets are expressed by their own name in each island at "
