@@ -1,8 +1,9 @@
-# issue #87 / #88 候选验收矩阵与未关闭边界
+# issue #87 / #88 验收矩阵与边界
 
 > 日期：2026-10-26。候选代码：`3398e8adc911ba3658c58948eaccbf997fcf881b`
-> （`3398e8a`，父提交 `bd5809f`）。两个 issue 在核对时均为 **OPEN**。
-> 本文是验收记录，不是关单声明；issue 由提出人实测后决定关闭或拆分。
+> （`3398e8a`，父提交 `bd5809f`）。初次核对时两个 issue 均为 **OPEN**；提出人随后
+> 确认 #88 的 1/295 验收锚并授权关单，#88 现为 **CLOSED**，#87 仍为 **OPEN**。
+> 本文是验收记录；最终关单状态以 issue 与评论回执为准。
 
 ## 1. 结论先行
 
@@ -13,11 +14,11 @@
 | #87③ summary 重跑合并 | **已实现，真实 CLI 重跑证据通过** | 不把 finalize 校验当成整板结论 |
 | #87④ finding 元素身份 | **部分完成，结构化目标未达成** | 不能宣称所有 finding 或 kind+component+pin+layer 已结构化 |
 | #87⑤ readback value/mpn | **离线归档替代已完成**；在线取档未复测 | `sch.readback` 本身未新增 value/mpn |
-| #88 rings / void / 性能 | **代码主体与候选集成证据完成，待提出人验收** | 不把测试通过直接写成 issue 已关闭 |
-| #88 岛数锚 | **四视图：pre-#83 15=281+14 / bd5809f 50 / rings 边+弦 containment 56 / HEAD 1=295；差账 55=14+35+6** | 15 不是 rings 原型值；不把 1 悄悄当成 issue 原文的 15 |
+| #88 rings / void / 性能 | **代码主体与集成证据完成，提出人已验收并授权关单** | element_ids 唯一性另立，不混入本项 |
+| #88 岛数锚 | **已接受 1 岛 / 295 成员及四视图**：pre-#83 15=281+14 / bd5809f 50 / rings 边+弦 containment 56 / HEAD 1=295；差账 55=14+35+6 | 15 不是 rings 原型值；历史更正已显式确认，不是暗中改锚 |
 
-#87 整单不能关闭：②、④仍开放，⑤只完成离线替代。#88 可进入提出人验收，但
-必须连同居数差异一起确认。
+#87 整单不能关闭：②、④仍开放，⑤只完成离线替代。#88 的 1/295 验收锚和四视图
+已获提出人确认，issue 已按授权关闭；`element_ids` 唯一性另立。
 
 ## 2. 基准、范围与证据纪律
 
@@ -157,7 +158,7 @@ Rust **45 passed / 4 ignored** + fmt/clippy；Python/Rust 5 case 的 normalized 
 > UNKNOWN 行无 measurement，其他规则也未形成统一覆盖。因此①③⑤（⑤仅离线）可验收，
 > ②④继续开放，整单不关闭。
 
-### [#88 —— 代码主体完成，15→1 与四视图待提出人确认，保持 OPEN](https://github.com/xianyuyijinban/boardwise/issues/88#issuecomment-6415806004)
+### [#88 —— 代码主体完成与四视图证据](https://github.com/xianyuyijinban/boardwise/issues/88#issuecomment-6415806004)
 
 > 候选 `3398e8a`：三组实板净空逐位复现（F `+12V↔GND` **11.213162658**、
 > F `GND↔VCC` **3.538172961**、B `PGND↔AGND` **14.095168282** mil）；rings/void
@@ -169,12 +170,16 @@ Rust **45 passed / 4 ignored** + fmt/clippy；Python/Rust 5 case 的 normalized 
 > 所以 15→1 不是「14 个 via 直接并回」，15 也不是 rings 视图的读数；请确认以
 > 1/295 为验收锚并接受该历史更正。确认前不关单。
 
+随后提出人明确接受 **1 岛 / 295 成员**及四视图为新验收依据，并裁定
+`element_ids` 唯一性另立。[验收确认与关单评论](https://github.com/xianyuyijinban/boardwise/issues/88#issuecomment-6417112874)
+已发布，#88 已按授权关闭（2026-10-26T13:25:03Z）；#87 未受影响，仍为 OPEN。
+
 ## 7. 后续边界
 
 1. #87②：授权测试 PCB + 可复现宿主上的 render/视觉验证；不能拿 readback 或 SOP 替代。
 2. #87④：若要达到 issue 建议的结构化目标，另立合同批定义 element 对象、pin/layer
    字段及 UNKNOWN 行的身份边界；本批不以文字说明冒充结构变更。
 3. #87⑤：在线取档单独立项复测；不修改 `sch.readback` 的既有结论。
-4. #88：提出人确认候选读数，尤其是 **15 → 1** 的验收锚修正；确认前不关单。
-5. 两条“待验证/边界确认”评论已按授权发布，两个 issue 均保持 OPEN；未关单、未 push。
+4. #88：1/295 与四视图已获确认并已关单；`element_ids` 唯一性另立，不在本关单中扩改。
+5. 三条评论已按授权发布：#88 已按明确授权关闭，#87 仍为 OPEN；未 push。
    后续评论、关闭、推送或新 git 提交仍按各自授权执行。

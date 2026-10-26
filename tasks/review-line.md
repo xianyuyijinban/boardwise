@@ -41,9 +41,9 @@ import review。Finding、severity、mode 与报告措辞仍归 review；B1–B3
   shared 边界改动另跑 `tests/test_540_shared_{naming,connectivity,decap}.py`。
 - 最终串行验收包含全量 Python、connector、DSH 和（540C 后）Rust；邻域读数不能写成全量。
 - 交接写清：行为基线、实际命令与读数、变异及 SHA-256 恢复、未覆盖项、后续依赖。
-- #87/#88 候选验收矩阵与四视图锚见 `tasks/issue-87-88-acceptance.md`；#87②未解决、
-  ④仅字符串级部分完成、⑤仅离线替代，**整单不关**；#88 的 15→1 与 55=14+35+6 账
-  须提出人确认，确认前不关单。
+- #87/#88 验收矩阵与四视图锚见 `tasks/issue-87-88-acceptance.md`；#87②未解决、
+  ④仅字符串级部分完成、⑤仅离线替代，**整单不关**；#88 的 1/295、四视图及
+  55=14+35+6 已获提出人确认并关单，`element_ids` 唯一性另立。
 - 当前路线债：0.6.0 的 200A/B/C 仍按 `tasks/528_060_gate.md` 验收；540B 不替它们报完成。
 - Rust 顺序：shared 纯函数/几何与 parser/model 之后才是 review；不在本线提前批量翻译。
 

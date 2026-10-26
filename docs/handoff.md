@@ -48,10 +48,10 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 - **行为与证据**：B 组 `evidence/540/b-behavior-equivalence.md`，C 组 `evidence/540/c-acceptance.md`，
   两轮全量 `final-regression.md` / `final-regression-adversarial.md`；**最终候选读数以
   `evidence/540/candidate-regression.md` 为准**（后续步骤产生，未产生不算通过）。构建见 `docs/rust-platform.md`。
-- **#87/#88 候选验收**：矩阵与 #88 四视图实测见 `tasks/issue-87-88-acceptance.md`
+- **#87/#88 验收与边界**：矩阵与 #88 四视图实测见 `tasks/issue-87-88-acceptance.md`
   （#88：pre-#83 15=281+14 / bd5809f 50 / rings 边+弦 containment 56 / HEAD 1=295，
   55=14+35+6）。#87②仍开放、④仅字符串级部分完成、⑤仅离线替代，**#87 整单不关**；
-  #88 的 15→1 与四视图待提出人确认，确认前不关单；评论只报待验证，关单由提出人决定。
+  提出人已接受 #88 的 1/295 与四视图并授权关单，`element_ids` 唯一性另立。
 - **下一段**：回到 0.6.0 原有的 200A/B/C 与人工反激视觉锚，或按岳的新派单执行；
   平台完成不等于这些门槛关闭。0.6.x 与 0.7.0 边界见 `docs/roadmap.md` §10。
 
