@@ -19,6 +19,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 CLI = REPO / "src" / "boardwise" / "cli.py"
+COMMAND_SRC = REPO / "src" / "boardwise" / "commands"
 PLUGIN_SRC = REPO / "dsh-plugin" / "src"
 REVIEW_FINALIZE_MODULE = PLUGIN_SRC / "review-finalize.ts"
 PLUGIN_PKG = REPO / "dsh-plugin" / "package.json"
@@ -42,9 +43,14 @@ REVIEW_FINALIZE_HANDLER = "_cmd_review_finalize("
 
 
 def _cli_commands() -> set[str]:
-    text = CLI.read_text(encoding="utf-8")
-    # `add_parser("name"` — the name may sit on the next line (\s spans it).
-    return set(re.findall(r"add_parser\(\s*[\"']([\w-]+)[\"']", text))
+    commands = set()
+    # 540B4: registration may live in a line-owned command module, not only in
+    # the assembly entry. Scan both rather than mistaking extraction for removal.
+    for source in [CLI, *sorted(COMMAND_SRC.rglob("*.py"))]:
+        text = source.read_text(encoding="utf-8")
+        # `add_parser("name"` — the name may sit on the next line (\s spans it).
+        commands.update(re.findall(r"add_parser\(\s*[\"']([\w-]+)[\"']", text))
+    return commands
 
 
 def _plugin_modules() -> list[Path]:
@@ -71,10 +77,13 @@ def _wrapped_commands() -> set[str]:
 def test_every_command_the_dsh_plugin_spawns_exists_in_the_cli():
     wrapped = _wrapped_commands()
     assert wrapped, "guard vacuous: no argv arrays found under dsh-plugin/src/*.ts"
-    missing = wrapped - _cli_commands()
+    available = _cli_commands()
+    assert "draw" in available, "command discovery must include commands/draw.py"
+    missing = wrapped - available
     assert not missing, (
         f"dsh-plugin wraps CLI commands that no longer exist: {sorted(missing)} — "
-        "a rename in cli.py must be mirrored in dsh-plugin (045 §7 sync discipline)"
+        "a rename in a CLI command module must be mirrored in dsh-plugin "
+        "(045 §7 sync discipline)"
     )
 
 

@@ -1,0 +1,27 @@
+{
+  "page": "<OUT>/lint-snapshot.json",
+  "source": "replay",
+  "findings": [],
+  "counts": {
+    "ERROR": 0,
+    "WARN": 0,
+    "INFO": 0
+  },
+  "exitCode": 0,
+  "textReadable": false,
+  "notes": [
+    "the render arrived but carried no text node this reader can classify, so the text predicates (L1 text half, L2, L3, L7) judged nothing — only wire/flag geometry is judged, and the page is not called clean"
+  ],
+  "thresholds": {
+    "L1_TEXT_WIRE_PENETRATION": 10.0,
+    "L2_TEXT_OVERLAP": 5.0,
+    "L5_DUPLICATE_NET_GAP": 20.0,
+    "L7_LABEL_WIRE_GAP": 3.0,
+    "L9_FILL_RATIO": 0.04,
+    "L6_CLUSTER_GAP": 20.0,
+    "L6_CLUSTER_WARN": 3,
+    "L6_CLUSTER_SPREAD": 8.0,
+    "L6_PAGE_WARN": 3,
+    "L10_EDGE_EPS": 0.5
+  }
+}

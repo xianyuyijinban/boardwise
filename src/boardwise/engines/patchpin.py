@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..core.changeplan import ATTACHMENT_NETLABEL, ATTACHMENT_WIRE
+from ..core.connectivity import nc_violation, pin_net
 from ..core.model import DesignModel, Net
 
 #: How close a coordinate has to be to count as "the same point" on the canvas.
@@ -440,22 +441,6 @@ def overlay_live_nets(
     return model
 
 
-def pin_net(model: DesignModel, designator: str, pin: str) -> str | None:
-    """The net name a pin sits on in a parsed model, or ``None``.
-
-    Reads the component's own pins (the same source `rules/facts.py` uses), so a
-    plan's `before_net` and this check cannot disagree about what "the pin is on
-    that net" means.
-    """
-    component = model.components.get(designator)
-    if component is None:
-        return None
-    for item in component.pins:
-        if item.number == pin:
-            return item.net
-    return None
-
-
 def pin_group(model: DesignModel, designator: str, pin: str) -> frozenset[tuple[str, str]]:
     """Every pin that shares a net with this one (itself included, when known).
 
@@ -539,12 +524,10 @@ def readback_verdict(
     # shape the editor leaves for a pin that reaches nothing, so that one is a
     # success — and reading it the same way here and in the rule is what makes
     # "the repair worked" and "the rule is satisfied" the same statement.
-    from ..rules import facts as facts_rules
-
     component = model.components.get(designator)
     if component is None:
         return f"{designator} is not in the re-exported project at all"
-    connected, how = facts_rules.nc_violation(model, component, pin)
+    connected, how = nc_violation(model, component, pin)
     if connected:
         return f"{designator} pin{pin} is still connected — it {how}"
     return ""

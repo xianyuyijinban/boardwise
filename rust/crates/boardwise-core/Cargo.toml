@@ -1,0 +1,16 @@
+[package]
+name = "boardwise-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+# `arbitrary_precision` keeps every number literal as written, so this crate can
+# read it with Rust's correctly-rounded `f64` parser. serde_json's own fast path
+# accumulates long integer literals in f64 and can land one ulp away from
+# Python's `float(int_literal)` — measured: `123456789012345678900` parses to
+# 1.2345678901234567e+20 here but 1.2345678901234568e+20 in Python.
+serde_json = { workspace = true, features = ["arbitrary_precision"] }
+sha2.workspace = true
+regex.workspace = true

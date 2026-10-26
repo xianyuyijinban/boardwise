@@ -572,9 +572,11 @@ def _projects_seen(windows: list[dict[str, Any]]) -> str:
 def client_headers(websocket: Any) -> dict[str, str | None]:
     """``Origin`` / ``User-Agent`` of the WebSocket handshake, missing → ``None``.
 
-    Recorded because a browser can open a WebSocket to loopback and we have no
-    measurement yet of what the editor's ``sys_WebSocket`` sends. See
-    :func:`check_origin`.
+    Recorded because a browser can open a WebSocket to loopback, so the audit
+    log has to be able to say which handshake it was. The editor's own value is
+    not a guess any more: EasyEDA Pro 3.2.186's extension host sends
+    ``Origin: https://client`` (0.2.5's acceptance run, docs/bridge.md §12 item
+    4; measured again in 540). See :func:`check_origin`.
     """
     request = getattr(websocket, "request", None)
     headers = getattr(request, "headers", None)
@@ -598,11 +600,14 @@ def client_headers(websocket: Any) -> dict[str, str | None]:
 def check_origin(headers: Any) -> bool:
     """Whether to accept a handshake carrying these headers.
 
-    **Always true, on purpose, and only until task 004d.** The rule that will
-    replace this body (refuse ``http(s)://`` origins, allow a missing origin and
-    the extension host's own) cannot be written from evidence we do not have
-    yet: whether ``eda.sys_WebSocket`` sends an ``Origin`` at all, and what
-    value it carries, is unmeasured. So 004c records and 004d decides.
+    **Always true, on purpose, and only until task 004d.** What the editor's
+    socket sends is no longer unmeasured: EasyEDA Pro 3.2.186's extension host
+    sends ``Origin: https://client`` (0.2.5's acceptance run, docs/bridge.md
+    §12 item 4; measured again in 540). What a *general* rule still waits for is
+    the other sample — a deliberate connection from a browser console — so the
+    replacement body (refuse ``http(s)://`` origins, allow a missing origin and
+    the extension host's own) is written from a measured pair rather than from
+    inference. So 004c records and 004d decides.
 
     One function, one decision: 004d changes this body and nothing else. The
     *narrower* question this module now answers elsewhere (#57 security note) is
@@ -613,23 +618,65 @@ def check_origin(headers: Any) -> bool:
     return True
 
 
+#: The one ``Origin`` measured on the editor's own socket, and the only
+#: ``http(s)`` value the pairing-write gate lets through. EasyEDA Pro 3.2.186's
+#: extension host sends exactly this — 0.2.5's acceptance run recorded
+#: ``origin: "https://client"`` (docs/bridge.md §12 item 4), and 540 measured it
+#: again on the same build.
+_EASYEDA_EDITOR_ORIGIN = "https://client"
+
+
+def _is_editor_host_origin(origin: Any) -> bool:
+    """Whether ``origin`` is exactly the editor's measured Origin — and nothing near it.
+
+    Compared as an origin rather than as a string: scheme and host are
+    case-insensitive in a URL (``HTTPS://Client`` is the same origin). The
+    measured value carries no credentials, no port, no path, no query and no
+    fragment, and this matches only that shape. Everything else is a spelling
+    nobody measured and stays on the refusing side of the gate, including
+    ``https://client:443`` (whose default port a URL parser would normalise
+    away), ``https://client/`` (the same origin only *looks* inert with a
+    trailing slash) and ``https://client.evil.example`` (a different host).
+    """
+    if not isinstance(origin, str) or not origin:
+        return False
+    scheme, sep, rest = origin.partition("://")
+    if not sep:
+        return False
+    # An origin is a scheme, a host and (optionally) a port — nothing else. The
+    # measured value has no credentials, no port, no path, no query and no
+    # fragment, so anything that introduces one of those, including the bare
+    # trailing slash of `https://client/`, is a spelling nobody measured.
+    if any(mark in rest for mark in "/?#@:"):
+        return False
+    return f"{scheme.lower()}://{rest.lower()}" == _EASYEDA_EDITOR_ORIGIN
+
+
 def _origin_is_a_web_page(origin: Any) -> bool:
-    """Whether a handshake's ``Origin`` says it came from a page in a browser.
+    """Whether a handshake's ``Origin`` is a page we must not let write a pairing.
 
     The one control that tells a browser page apart from the editor's own
-    socket at this layer, and the only one available before 004d measures what
-    ``eda.sys_WebSocket`` sends: **a browser always sends ``Origin`` on a
-    WebSocket handshake**, while ``curl``-class clients and ``websockets``
-    itself send none (asserted in the suite).
+    socket at this layer. **A browser always sends ``Origin`` on a WebSocket
+    handshake**, while ``curl``-class clients and ``websockets`` itself send
+    none (asserted in the suite).
 
     Deliberately narrow, and the narrowness is the rule:
 
-    - a **missing** ``Origin`` passes — the editor may send none, and refusing
-      it would refuse the editor itself;
-    - every **non-``http(s)``** scheme passes (``chrome-extension://…``, or
-      whatever 004d measures) for the same reason;
-    - only ``http(s)://`` is refused, because that is what a page served over
-      the web always carries.
+    - a **missing** ``Origin`` passes — refusing it would refuse the editor
+      itself (and it is what a ``websockets``-based caller sends);
+    - every **non-``http(s)``** scheme passes (``chrome-extension://…``): a page
+      served over the web cannot carry one, and 004d owns whatever the editor
+      might send;
+    - ``http(s)://`` is refused, with exactly one measured exception:
+      :data:`_EASYEDA_EDITOR_ORIGIN`, the value the editor's extension host
+      really sends, matched as narrowly as :func:`_is_editor_host_origin` does.
+
+    The exception exists because the gate guards the **pairing write**, and the
+    editor itself has to be able to perform it: #57 refused every ``http(s)``
+    Origin, so the editor's *first* pairing (no token on file yet, which is why
+    the known-token early return in :meth:`BridgeDaemon._authenticate_connector`
+    never covered it) and every re-pair after a storage reset were refused with
+    ``UNAUTHENTICATED``. Found on the machine in 540, on 3.2.186.
 
     Two honest limits, stated rather than implied. ``Origin: null`` passes: it
     is what a sandboxed frame sends, and it is also what a client with no origin
@@ -638,6 +685,8 @@ def _origin_is_a_web_page(origin: Any) -> bool:
     omits the header; that boundary is the token (docs/bridge.md §9).
     """
     if not isinstance(origin, str) or not origin:
+        return False
+    if _is_editor_host_origin(origin):
         return False
     scheme = origin.split("://", 1)[0].strip().lower() if "://" in origin else ""
     return scheme in ("http", "https")
@@ -1100,10 +1149,11 @@ class BridgeDaemon:
         browser, which would then hold the pairing the real connector cannot
         take back (``UNAUTHENTICATED``, dressed up as a heartbeat timeout until
         #12). The origin is the only thing that tells the two apart here, so it
-        is required to be absent-or-non-``http(s)`` before either pairing write
-        happens. The refusal is deliberately the *same* code — this connector
-        did not prove it may write the pairing — with ``detail.origin`` so the
-        log says which handshake it was.
+        is required to be absent, non-``http(s)``, or the editor's own measured
+        ``https://client`` (see :func:`_origin_is_a_web_page`) before either
+        pairing write happens. The refusal is deliberately the *same* code —
+        this connector did not prove it may write the pairing — with
+        ``detail.origin`` so the log says which handshake it was.
         """
         paired = load_connector_token(self.home)
         # A caller that already presents the pairing secret is the paired

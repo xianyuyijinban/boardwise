@@ -48,7 +48,7 @@ stating a rule nobody checks is how a constitution becomes decoration.
 | `engines` | `core`, `parsers`, `rules` | `bridge`, `render` |
 | `bridge` | itself | the brain — it is a transport, not a caller |
 | `render` | `core` | everything else |
-| `cli`, `boardwise/__init__` | anything | nothing (this is the assembly layer) |
+| `cli`, `commands`, `boardwise/__init__` | anything | nothing (this is the assembly layer; the finer owner guard still applies inside `commands`) |
 
 Two consequences worth stating outright, because both have been violated:
 
@@ -61,6 +61,119 @@ Two consequences worth stating outright, because both have been violated:
    boundary is being worked around. A helper two layers genuinely share is part
    of the lower layer's *interface* — publish it there (`field_of`,
    `as_float` in `core/candidate.py` are public for exactly this reason).
+
+### Module owners and the import guard (540B0.1; 540B1–B6)
+
+The layer table above is a picture of six directories; the boundary that keeps a
+drawing chain from reaching into a reviewer's rule objects cuts *inside* them. So
+every production module under `src/boardwise` has exactly one owner, written down
+per module in [`contracts/module-owners.json`](../contracts/module-owners.json)
+(142 modules at 540B6: 45 shared, 49 review, 42 draw, 6 assembly). A module with
+no line there is a failing test, never a silent default.
+
+| Owner | May import | Covers |
+|---|---|---|
+| `shared` | `shared` | `parsers/**`, `bridge/**`, `render/**`, `resources.py`, `pdf_text.py`, `rules.base`/`rules.values` (the published contract and its forwarding shell), `engines/assemble.py`, and `core/**` except the two sets below |
+| `review` | `shared`, `review` | `rules/**` except the two shells, `core.annotations`, `core.railquery`, and the review engines (`review`, `checkup`, `drc`, `pcbreview`, `review_eval`, `reviewread`, `reviewfinalize`, `evidence`, `liveevidence`, `canvasrender`, `bom`, `select`, `catalog`, `harvest`, `datasheet`, `hunt`) |
+| `draw` | `shared`, `draw` | the drawing model in `core/**` (`presentationspec`, `layoutplan`, `pagelayoutplan`, `islands`, `archipelago`, `candidate`, `verify`, `pageframe`, `textmetrics`) and every engine not named above |
+| `assembly` | any owner | `boardwise/__init__.py`, `cli.py`, `skill_install.py`, `engines/__init__.py` — where the layers are wired together |
+
+[`tests/test_owner_rules.py`](../tests/test_owner_rules.py) parses every import of
+every module and rejects the ones that cross an owner the table does not allow.
+Four things it has to get right, each with a test of its own:
+
+1. **Depth.** A module-level import and a function-local one are the same
+   violation, so nothing is skipped for being out of sight. B0.1's function-local
+   `patchpin → rules.facts` edge was exactly the shape that hid the 006c
+   violation; 540B2 removed it by moving the pin-connectivity questions to
+   `core/connectivity.py`. (`drawapply → rules.facts` was the other function-local
+   edge until 540B1 moved the auto-net test to `core/netdomains.py`.)
+2. **Packages versus modules.** `from boardwise.core import values` is the module
+   `core.values`, not the assembly `__init__`; reading only the first dotted
+   segment would blame assembly for an ordinary shared import.
+3. **Relative forms.** `from . import addcomponent` resolves inside the file's own
+   package, so `engines/grammar/__init__.py` reaches `grammar/base.py` and never
+   `engines/base.py`.
+4. **The root package is metadata, not a business edge.** `from .. import __version__`
+   resolves to `boardwise/__init__.py`, which the manifest owns as assembly, but
+   it is not a business edge: that file is a docstring and one string literal and
+   imports nothing. The test pins that shape, so the exemption dies the day real
+   API moves into the root package.
+
+Inside one owner a `_private` name may be imported freely — this guard is about
+direction, not about naming, and no refactor is opened for it; the private-name
+rule of the section above still applies at *layer* boundaries.
+
+No cross-owner import is exempt by name at 540B3: `LEGACY_EDGES` is empty and
+compared verbatim, so a new edge cannot arrive unnoticed; `shared → review/draw`
+and `review → draw` never had an exception list. 540B1 removed the first three
+legacy edges by moving the ground-domain and auto-net vocabularies from
+`rules/pcb/focground.py` and `rules/facts.py` to `core/netdomains.py`, so
+`drawcompiler`, `islandlayout` and `drawapply` read `core`, not `rules`. 540B2
+moved `pin_net` / `pin_company` / `nc_violation` / `pin_dangles` to
+`core/connectivity.py`, removing `patchpin → rules.facts`. That module has one net
+reading, `component_net`: the component the caller holds is the authority,
+`pin_net` is only the model lookup that then delegates to it, and
+`rules.facts._pin_net` is that same object as an alias. `patchpin` no longer
+defines a local `pin_net` — it imports the shared one, so `patchpin.pin_net is
+connectivity.pin_net`; public compatibility is object identity
+(`facts.nc_violation is connectivity.nc_violation`), and the deleted wrapper was
+never a second decision. The readback/stable-net patch points that used to hide a
+draw → review edge now read `core`: `patchpin.readback_verdict` (shared `pin_net` /
+`nc_violation`), and `drawapply._stable_net` through `core.netdomains.is_auto_net`;
+that direction must not be restored. 540B3 moved the
+capacitor inventory, gated classification, value recovery and `CapDecision` to
+`core/decap.py`, removing `addcomponent → rules.decap`; review still owns
+Findings, severity, mode handling and same-net wrappers, while review and apply
+consume the same inventory and decision.
+
+540B4 starts the same separation at the CLI surface. `commands/draw.py` owns only
+the draw domain's parser registration and dispatch (`draw`, `edit`, layout `lint`,
+`pintable` and spec `validate`); it never imports `cli.py` and makes no drawing judgement.
+The assembly entry supplies the historical `DRAW_COMMANDS` / `EDIT_COMMANDS`
+registries and direct handlers at call time, while handler bodies and their helpers
+stay put, so existing monkeypatch targets do not silently move. The command
+module cannot bind a second business implementation. `commands/__init__.py` is
+assembly-owned. The complete argparse tree, help text, defaults and representative
+namespaces were compared byte for byte across this extraction.
+
+540B5 applies the same rule to `commands/review.py`: review/checkup/triage/
+evidence/review-mark/parts/BOM registration lives with the review owner, nine
+direct handlers and the two subcommand registries are resolved at call time, and
+the module imports only the review engine constants its parser needs. The
+`review finalize` branch and every handler body remain untouched in assembly, so
+its source guard and all existing monkeypatch surfaces keep their old meaning.
+
+540B6 completes the 24-command extraction. `commands/shared.py` registers bridge,
+doctor, compare, persistence, arch, intent and config without any in-package
+import: the bridge help renderer and editor floor are supplied by assembly, and
+all handlers/registries resolve at call time. `commands/assembly.py` owns only
+install-skill and may use the existing assembly-owned `skill_install` module.
+`build_parser` now has 24 registration calls and no command-specific
+`add_parser`; `main` has 24 routes and no direct `_cmd_*` call. Tests pin those
+structural facts as well as the behavior, so this is registration **and**
+dispatch extraction, not a file-name-only move.
+
+The DSH surface follows the same owners at 540B7. Its `index.ts` only assembles
+review/shared/draw registrations and the delivery gate: checkup stays first,
+arch/doctor/bridge keep their old positions, review-read/evidence/triage/finalize
+remain the old 5–8, and offline `boardwise_draw_compile` / `boardwise_draw_lint`
+are appended as tools 9–10. Both new tools return the CLI's complete `--json`
+file, and `draw compile` has two payload shapes named by Python: a single-module
+presentation answers `candidates` (+ `failureRounds`), a page presentation
+(`document: "page"`) answers `pages` (+ `moduleFailureRounds`). An accepted exit
+is not enough on its own — compile accepts 0 and 5, lint accepts 0 and 1, but the
+transport returns only when the CLI actually wrote the JSON file; an accepted
+exit with no file is an error. Neither tool exposes a live page or apply, and
+TypeScript performs no candidate, finding, severity or verdict judgement.
+
+One owner is decided here rather than inherited from the layer table:
+**`engines/assemble.py` is shared.** It turns a `BoardSpec` into the public model
+and imports only `core.blocks`, `core.geometry`, `core.model` and
+`parsers.schematic` — no layout, no replay, no compiler — so the BOM and the draw
+chain both consume the same public artifact instead of one reaching into the
+other. The rule is executable: the test fails if the assembler ever grows a
+non-shared import, which is the signal that its owner is wrong.
 
 ### One reading of what a part *is* (190, 192B)
 

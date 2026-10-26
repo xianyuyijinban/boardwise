@@ -1,0 +1,2115 @@
+{
+  "schema": "boardwise.checkup/7",
+  "generatedAt": "<GENERATED_AT>",
+  "source": {
+    "tier": "file",
+    "tierLabel": "离线文件（--file）：不连编辑器",
+    "project": null,
+    "pageUuid": null,
+    "pageType": null,
+    "hostVersion": "",
+    "connectorVersion": "",
+    "file": "<FIXTURES>/ch340_golden.epro2",
+    "parseStats": {
+      "source": "<FIXTURES>/ch340_golden.epro2",
+      "total_records": 2580,
+      "records_by_type": {
+        "ACTIVE_LAYER": 18,
+        "ARC": 5,
+        "ATTR": 880,
+        "BLOB": 1,
+        "CANVAS": 47,
+        "CIRCLE": 3,
+        "COMPONENT": 35,
+        "DOCHEAD": 80,
+        "ELE_PLACEHOLDER": 310,
+        "ELLIPSE": 1,
+        "FILL": 151,
+        "LAYER": 350,
+        "LINE": 128,
+        "META": 79,
+        "OBJ": 1,
+        "PAD": 72,
+        "PART": 29,
+        "PIN": 82,
+        "POLY": 262,
+        "RECT": 8,
+        "RULE": 2,
+        "TABLE": 1,
+        "TEXT": 1,
+        "UNIVERSAL": 1,
+        "WIRE": 33
+      },
+      "unknown_types": {
+        "TABLE": 1,
+        "UNIVERSAL": 1
+      },
+      "unconsumed_types": {},
+      "document_types": {},
+      "pcb_records": 0,
+      "pads_without_net": 0,
+      "empty_body_records": 41,
+      "malformed_records": 0,
+      "pins_dropped_no_number": 0,
+      "components_without_symbol": 0,
+      "attrs_attached_by_parent_id": 0,
+      "instances_without_designator": 0,
+      "poured_with_parent": 0,
+      "poured_orphans": 0,
+      "poured_without_fill": 0,
+      "edit_version": null,
+      "editor_version": "3.2.149.88089769"
+    },
+    "moduleBasis": "connectivity",
+    "pageAttribution": "archive",
+    "moduleCount": 1,
+    "pageCount": 1,
+    "pagesWithComponents": 1,
+    "boards": [
+      {
+        "uuid": "545d73493d913ad1",
+        "title": "Board1",
+        "pages": [
+          "6e27da4006bdba32"
+        ],
+        "components": 17,
+        "nets": 13
+      }
+    ],
+    "modulesOrderedBy": "warnings-first",
+    "attempts": [
+      {
+        "tier": "file",
+        "ok": true,
+        "path": "<FIXTURES>/ch340_golden.epro2",
+        "components": 17,
+        "nets": 13
+      }
+    ],
+    "notes": [
+      "页数带器件的只有 1 页，不足以按页分模块，改按非地网连通性聚类（地网把一切都连起来，用它聚类只会得到一块）",
+      "其中最大一块含 17/17 个器件：非地网连通性基本连成一块，本节的划分信息量有限（要模块级结构得看画布与页结构）",
+      "模块按「含警告优先」排序，含警告的模块：接口"
+    ]
+  },
+  "model": {
+    "view": "schematic",
+    "components": 17,
+    "nets": 13,
+    "designators": [
+      "C1",
+      "C25",
+      "C3",
+      "C4",
+      "C5",
+      "C6",
+      "C7",
+      "C9",
+      "H1",
+      "LED1",
+      "R24",
+      "R27",
+      "U1",
+      "U3",
+      "U5",
+      "USB1",
+      "X1"
+    ],
+    "boards": [
+      {
+        "uuid": "545d73493d913ad1",
+        "title": "Board1",
+        "pages": [
+          "6e27da4006bdba32"
+        ],
+        "components": 17,
+        "nets": 13
+      }
+    ],
+    "duplicateDesignators": [],
+    "crossPageDesignators": {},
+    "crossBoardDesignators": {}
+  },
+  "summary": {
+    "errorCount": 0,
+    "warnCount": 1,
+    "infoCount": 1,
+    "errors": [],
+    "warnings": [
+      {
+        "section": "findings",
+        "source": "rules",
+        "severity": "WARN",
+        "ruleId": "decap-required-caps",
+        "message": "U1 pin4 must sit on net 'VCC' in mode '3.3V' but is on 'NET1' — the datasheet's wiring for the active mode is not what the board does",
+        "count": 1,
+        "ref": "findings[0]",
+        "refs": [
+          "U1"
+        ]
+      }
+    ],
+    "countsIncomplete": false,
+    "exitCode": 3,
+    "unreviewedParts": 2,
+    "unreviewedByReason": {
+      "供应商字段为空": 2,
+      "无 MPN": 2
+    },
+    "unreviewedByClass": {
+      "真缺资料": 2
+    },
+    "mayClaimPassed": false,
+    "conclusion": "DRC/连接性已审，2 颗器件缺手册未审；另有 1 条 warning 待分诊"
+  },
+  "pending": {},
+  "drc": {
+    "schematic": {
+      "checked": false,
+      "source": "offline-not-available",
+      "reason": "离线路径（--file）不连编辑器，因此没有主机 ERC；这一段的空是「没查」，不是「零错误」",
+      "note": "离线路径不连编辑器，故没有主机 DRC；要它就给一个在线的 test/test2 工程"
+    },
+    "pcb": {
+      "checked": false,
+      "source": "offline-not-available",
+      "reason": "离线路径（--file）不连编辑器，因此没有主机 PCB DRC；要它就给一个在线工程",
+      "note": "离线路径不连编辑器，故没有主机 DRC；要它就给一个在线的 test/test2 工程"
+    },
+    "ruleset": {
+      "checked": false,
+      "source": "offline-not-available",
+      "reason": "离线路径（--file）不连编辑器，因此没有主机 DRC 规则集；离线也读不到规则集（它在编辑器里，不在归档里）",
+      "note": "离线路径不连编辑器，故没有主机 DRC；要它就给一个在线的 test/test2 工程"
+    }
+  },
+  "modules": [
+    {
+      "name": "接口",
+      "basis": "接口：4/12 条非地网是对外接口网（RX、TX、D+、D-）",
+      "components": [
+        "C1",
+        "C25",
+        "C3",
+        "C4",
+        "C5",
+        "C6",
+        "C7",
+        "C9",
+        "H1",
+        "LED1",
+        "R24",
+        "R27",
+        "U1",
+        "U3",
+        "U5",
+        "USB1",
+        "X1"
+      ],
+      "findings": [
+        0,
+        1
+      ],
+      "board": "Board1",
+      "warningFindings": [
+        0
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "decap-required-caps",
+      "severity": "WARN",
+      "message": "U1 pin4 must sit on net 'VCC' in mode '3.3V' but is on 'NET1' — the datasheet's wiring for the active mode is not what the board does",
+      "level": "L2-facts",
+      "evidence": [
+        "U1 pin4 @ NET1"
+      ],
+      "target": {
+        "component_ref": "U1",
+        "primitive_id": "",
+        "pin_refs": [
+          "4"
+        ],
+        "net_refs": [],
+        "expected_before": "",
+        "suggested_after": "",
+        "counterpart_ref": "",
+        "measurement": null
+      },
+      "board": "Board1",
+      "refs": [
+        "U1"
+      ]
+    },
+    {
+      "rule_id": "sel-ldo-fixed-output",
+      "severity": "INFO",
+      "message": "U5 的固定输出是 3.3 V（货架条目 ic.rt9013_33gb 的 Output Voltage = '3.3V'），但它输出轨 VCC 的轨压读不出，所以对拍无从做起：这条轨 'VCC' 的电压只从被审的 U5 自己推出来（U5 RT9013-33GB output, decoded from the MPN suffix — a guess: no datasheet fact declares it），拿它对拍 U5 的规格等于拿零件自己的名字验零件自己；intent-missing: 写进合同 requirements.rails[net=VCC].targetVoltage，或让轨名自己写着电压",
+      "level": "L2-facts",
+      "evidence": [
+        "U5 pin5 @ VCC",
+        "U5 固定输出 3.3 V —— 来源：货架条目 ic.rt9013_33gb 的 Output Voltage = '3.3V'"
+      ],
+      "target": {
+        "component_ref": "U5",
+        "primitive_id": "",
+        "pin_refs": [],
+        "net_refs": [],
+        "expected_before": "",
+        "suggested_after": "",
+        "counterpart_ref": "",
+        "measurement": null
+      },
+      "board": "Board1",
+      "refs": [
+        "U5"
+      ]
+    }
+  ],
+  "unreviewed_parts": [
+    {
+      "designator": "R24",
+      "name": "Res_0402",
+      "value": "5.1K",
+      "footprint": "0402",
+      "mpn": "",
+      "supplier": "",
+      "reasons": [
+        "无 MPN",
+        "供应商字段为空"
+      ],
+      "question": "核对该器件周边配置是否符合规格书典型应用（去耦/上下拉/限流/耐压），并确认可用型号",
+      "isIc": false,
+      "onShelf": false,
+      "shelfKey": "",
+      "shelfMatchedBy": "",
+      "factsVerified": null,
+      "factsTrust": "",
+      "factsPresent": [],
+      "missingFacts": [],
+      "channels": {
+        "engineer": {
+          "ok": false,
+          "detail": ".tmp_datasheets/ 下没有这颗料的 PDF（工程师给手册用 `parts fetch --file`）",
+          "path": "",
+          "matchedBy": ""
+        },
+        "lcsc": {
+          "ok": false,
+          "detail": "库条目没有任何 datasheet 链接",
+          "datasheetPdfUrl": "",
+          "datasheetUrl": "",
+          "shelfKey": ""
+        },
+        "official": {
+          "ok": null,
+          "by": "ai",
+          "detail": "CLI 不搜官网：这一通道由 AI 用 WebSearch 走，报告只给建议查询词与厂商名",
+          "suggestedQueries": [
+            "5.1K datasheet pdf",
+            "5.1K 数据手册 规格书"
+          ]
+        }
+      },
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "",
+          "name": "Res_0402",
+          "value": "5.1K"
+        }
+      ]
+    },
+    {
+      "designator": "R27",
+      "name": "Res_0402",
+      "value": "5.1K",
+      "footprint": "0402",
+      "mpn": "",
+      "supplier": "",
+      "reasons": [
+        "无 MPN",
+        "供应商字段为空"
+      ],
+      "question": "核对该器件周边配置是否符合规格书典型应用（去耦/上下拉/限流/耐压），并确认可用型号",
+      "isIc": false,
+      "onShelf": false,
+      "shelfKey": "",
+      "shelfMatchedBy": "",
+      "factsVerified": null,
+      "factsTrust": "",
+      "factsPresent": [],
+      "missingFacts": [],
+      "channels": {
+        "engineer": {
+          "ok": false,
+          "detail": ".tmp_datasheets/ 下没有这颗料的 PDF（工程师给手册用 `parts fetch --file`）",
+          "path": "",
+          "matchedBy": ""
+        },
+        "lcsc": {
+          "ok": false,
+          "detail": "库条目没有任何 datasheet 链接",
+          "datasheetPdfUrl": "",
+          "datasheetUrl": "",
+          "shelfKey": ""
+        },
+        "official": {
+          "ok": null,
+          "by": "ai",
+          "detail": "CLI 不搜官网：这一通道由 AI 用 WebSearch 走，报告只给建议查询词与厂商名",
+          "suggestedQueries": [
+            "5.1K datasheet pdf",
+            "5.1K 数据手册 规格书"
+          ]
+        }
+      },
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "",
+          "name": "Res_0402",
+          "value": "5.1K"
+        }
+      ]
+    }
+  ],
+  "reviewedByShelf": [
+    {
+      "designator": "LED1",
+      "shelfKey": "led.emerald_green_0603",
+      "shelfMatchedBy": "mpn",
+      "category": "led",
+      "factsVerified": true,
+      "factsTrust": "verified",
+      "factsPresent": [
+        "led"
+      ],
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "GL0603UG01",
+          "name": "GL0603UG01",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "designator": "U1",
+      "shelfKey": "ic.ch340g",
+      "shelfMatchedBy": "mpn",
+      "category": "ic.usb-uart",
+      "factsVerified": true,
+      "factsTrust": "verified",
+      "factsPresent": [
+        "must_connect",
+        "required_caps",
+        "supply_pins"
+      ],
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "CH340G",
+          "name": "CH340G",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "designator": "U5",
+      "shelfKey": "ic.rt9013_33gb",
+      "shelfMatchedBy": "mpn",
+      "category": "ic.ldo",
+      "factsVerified": true,
+      "factsTrust": "verified",
+      "factsPresent": [
+        "ldo",
+        "nc_pins",
+        "required_caps",
+        "supply_pins"
+      ],
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "RT9013-33GB",
+          "name": "RT9013-33GB",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "designator": "USB1",
+      "shelfKey": "conn.type_c_16pin_2md_073",
+      "shelfMatchedBy": "mpn",
+      "category": "connector",
+      "factsVerified": true,
+      "factsTrust": "verified",
+      "factsPresent": [
+        "pull_required"
+      ],
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "TYPE-C 16PIN 2MD(073)",
+          "name": "TYPE-C 16PIN 2MD(073)",
+          "value": ""
+        }
+      ]
+    }
+  ],
+  "accepted_unknown": [],
+  "declaredPassiveExempt": [
+    {
+      "designator": "U3",
+      "kind": "resistor",
+      "basis": "metadata",
+      "reason": "its 立创 metadata says resistor ('电阻')",
+      "pins": 2,
+      "value": "1kΩ",
+      "footprint": "0805",
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "FRC0805J471 TS",
+          "name": "FRC0805J471 TS",
+          "value": "1kΩ"
+        }
+      ]
+    }
+  ],
+  "metadataValueConfirmed": [
+    {
+      "designator": "C1",
+      "kind": "capacitor",
+      "archive": "100nF ±10% 50V",
+      "value": 1e-07,
+      "confirmedBy": [
+        "archive",
+        "board",
+        "mpn"
+      ],
+      "readings": {
+        "value": {
+          "state": "confirmed",
+          "readings": {
+            "archive": 1.0000000000000001e-07,
+            "board": 1.0000000000000001e-07,
+            "mpn": 1e-07
+          },
+          "evidence": {
+            "archive": "100nF",
+            "board": "100nF",
+            "mpn": "104"
+          }
+        },
+        "tolerance": {
+          "state": "single",
+          "readings": {
+            "archive": 0.1
+          },
+          "evidence": {
+            "archive": "±10%"
+          }
+        },
+        "voltage": {
+          "state": "single",
+          "readings": {
+            "archive": 50.0
+          },
+          "evidence": {
+            "archive": "50V"
+          }
+        }
+      },
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "CC0603KRX7R9BB104",
+          "name": "CC0603KRX7R9BB104",
+          "value": "100nF"
+        }
+      ]
+    },
+    {
+      "designator": "C25",
+      "kind": "capacitor",
+      "archive": "30pF ±5% 50V",
+      "value": 3e-11,
+      "confirmedBy": [
+        "archive",
+        "board",
+        "mpn"
+      ],
+      "readings": {
+        "value": {
+          "state": "confirmed",
+          "readings": {
+            "archive": 3e-11,
+            "board": 3e-11,
+            "mpn": 3e-11
+          },
+          "evidence": {
+            "archive": "30pF",
+            "board": "30pF",
+            "mpn": "300"
+          }
+        },
+        "tolerance": {
+          "state": "single",
+          "readings": {
+            "archive": 0.05
+          },
+          "evidence": {
+            "archive": "±5%"
+          }
+        },
+        "voltage": {
+          "state": "single",
+          "readings": {
+            "archive": 50.0
+          },
+          "evidence": {
+            "archive": "50V"
+          }
+        }
+      },
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "CC0402JRNPO9BN300",
+          "name": "CC0402JRNPO9BN300",
+          "value": "30pF"
+        }
+      ]
+    },
+    {
+      "designator": "C3",
+      "kind": "capacitor",
+      "archive": "30pF ±5% 50V",
+      "value": 3e-11,
+      "confirmedBy": [
+        "archive",
+        "board",
+        "mpn"
+      ],
+      "readings": {
+        "value": {
+          "state": "confirmed",
+          "readings": {
+            "archive": 3e-11,
+            "board": 3e-11,
+            "mpn": 3e-11
+          },
+          "evidence": {
+            "archive": "30pF",
+            "board": "30pF",
+            "mpn": "300"
+          }
+        },
+        "tolerance": {
+          "state": "single",
+          "readings": {
+            "archive": 0.05
+          },
+          "evidence": {
+            "archive": "±5%"
+          }
+        },
+        "voltage": {
+          "state": "single",
+          "readings": {
+            "archive": 50.0
+          },
+          "evidence": {
+            "archive": "50V"
+          }
+        }
+      },
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "CC0402JRNPO9BN300",
+          "name": "CC0402JRNPO9BN300",
+          "value": "30pF"
+        }
+      ]
+    },
+    {
+      "designator": "C4",
+      "kind": "capacitor",
+      "archive": "1uF ±10% 50V",
+      "value": 1e-06,
+      "confirmedBy": [
+        "archive",
+        "mpn"
+      ],
+      "readings": {
+        "value": {
+          "state": "confirmed",
+          "readings": {
+            "archive": 1e-06,
+            "mpn": 1e-06
+          },
+          "evidence": {
+            "archive": "1uF",
+            "mpn": "105"
+          }
+        },
+        "tolerance": {
+          "state": "confirmed",
+          "readings": {
+            "archive": 0.1,
+            "mpn": 0.1
+          },
+          "evidence": {
+            "archive": "±10%",
+            "mpn": "105K500JT"
+          }
+        },
+        "voltage": {
+          "state": "confirmed",
+          "readings": {
+            "archive": 50.0,
+            "mpn": 50.0
+          },
+          "evidence": {
+            "archive": "50V",
+            "mpn": "105K500"
+          }
+        }
+      },
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "CGA0603X5R105K500JT",
+          "name": "CGA0603X5R105K500JT",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "designator": "C5",
+      "kind": "capacitor",
+      "archive": "2.2uF ±10% 25V",
+      "value": 2.2e-06,
+      "confirmedBy": [
+        "archive",
+        "mpn"
+      ],
+      "readings": {
+        "value": {
+          "state": "confirmed",
+          "readings": {
+            "archive": 2.2e-06,
+            "mpn": 2.2e-06
+          },
+          "evidence": {
+            "archive": "2.2uF",
+            "mpn": "225"
+          }
+        },
+        "tolerance": {
+          "state": "single",
+          "readings": {
+            "archive": 0.1
+          },
+          "evidence": {
+            "archive": "±10%"
+          }
+        },
+        "voltage": {
+          "state": "single",
+          "readings": {
+            "archive": 25.0
+          },
+          "evidence": {
+            "archive": "25V"
+          }
+        }
+      },
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "CL10A225KA8NNNC",
+          "name": "CL10A225KA8NNNC",
+          "value": ""
+        }
+      ]
+    },
+    {
+      "designator": "C6",
+      "kind": "capacitor",
+      "archive": "100nF ±10% 50V",
+      "value": 1e-07,
+      "confirmedBy": [
+        "archive",
+        "board",
+        "mpn"
+      ],
+      "readings": {
+        "value": {
+          "state": "confirmed",
+          "readings": {
+            "archive": 1.0000000000000001e-07,
+            "board": 1.0000000000000001e-07,
+            "mpn": 1e-07
+          },
+          "evidence": {
+            "archive": "100nF",
+            "board": "100nF",
+            "mpn": "104"
+          }
+        },
+        "tolerance": {
+          "state": "single",
+          "readings": {
+            "archive": 0.1
+          },
+          "evidence": {
+            "archive": "±10%"
+          }
+        },
+        "voltage": {
+          "state": "single",
+          "readings": {
+            "archive": 50.0
+          },
+          "evidence": {
+            "archive": "50V"
+          }
+        }
+      },
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "CC0603KRX7R9BB104",
+          "name": "CC0603KRX7R9BB104",
+          "value": "100nF"
+        }
+      ]
+    },
+    {
+      "designator": "C7",
+      "kind": "capacitor",
+      "archive": "10nF ±10% 50V",
+      "value": 1e-08,
+      "confirmedBy": [
+        "archive",
+        "board",
+        "mpn"
+      ],
+      "readings": {
+        "value": {
+          "state": "confirmed",
+          "readings": {
+            "archive": 1e-08,
+            "board": 1e-08,
+            "mpn": 1e-08
+          },
+          "evidence": {
+            "archive": "10nF",
+            "board": "10nF",
+            "mpn": "103"
+          }
+        },
+        "tolerance": {
+          "state": "single",
+          "readings": {
+            "archive": 0.1
+          },
+          "evidence": {
+            "archive": "±10%"
+          }
+        },
+        "voltage": {
+          "state": "single",
+          "readings": {
+            "archive": 50.0
+          },
+          "evidence": {
+            "archive": "50V"
+          }
+        }
+      },
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "CC0603KRX7R9BB103",
+          "name": "CC0603KRX7R9BB103",
+          "value": "10nF"
+        }
+      ]
+    },
+    {
+      "designator": "C9",
+      "kind": "capacitor",
+      "archive": "2.2uF ±10% 25V",
+      "value": 2.2e-06,
+      "confirmedBy": [
+        "archive",
+        "mpn"
+      ],
+      "readings": {
+        "value": {
+          "state": "confirmed",
+          "readings": {
+            "archive": 2.2e-06,
+            "mpn": 2.2e-06
+          },
+          "evidence": {
+            "archive": "2.2uF",
+            "mpn": "225"
+          }
+        },
+        "tolerance": {
+          "state": "single",
+          "readings": {
+            "archive": 0.1
+          },
+          "evidence": {
+            "archive": "±10%"
+          }
+        },
+        "voltage": {
+          "state": "single",
+          "readings": {
+            "archive": 25.0
+          },
+          "evidence": {
+            "archive": "25V"
+          }
+        }
+      },
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "CL10A225KA8NNNC",
+          "name": "CL10A225KA8NNNC",
+          "value": ""
+        }
+      ]
+    }
+  ],
+  "metadataValueConflicts": [],
+  "metadataStates": {
+    "元数据已确认": 8,
+    "元数据缺失": 2
+  },
+  "needs_datasheet": [
+    {
+      "part": "R24",
+      "pins": [],
+      "trigger": "facts",
+      "reason": "无 MPN；供应商字段为空",
+      "dependentFindings": [],
+      "factSeed": true,
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "",
+          "name": "Res_0402",
+          "value": "5.1K"
+        }
+      ],
+      "channels": {
+        "engineer": {
+          "ok": false,
+          "detail": ".tmp_datasheets/ 下没有这颗料的 PDF（工程师给手册用 `parts fetch --file`）",
+          "path": "",
+          "matchedBy": ""
+        },
+        "lcsc": {
+          "ok": false,
+          "detail": "库条目没有任何 datasheet 链接",
+          "datasheetPdfUrl": "",
+          "datasheetUrl": "",
+          "shelfKey": ""
+        },
+        "official": {
+          "ok": null,
+          "by": "ai",
+          "detail": "CLI 不搜官网：这一通道由 AI 用 WebSearch 走，报告只给建议查询词与厂商名",
+          "suggestedQueries": [
+            "5.1K datasheet pdf",
+            "5.1K 数据手册 规格书"
+          ]
+        }
+      },
+      "mpn": "",
+      "supplier": "",
+      "missingFacts": [],
+      "shelfMatchedBy": ""
+    },
+    {
+      "part": "R27",
+      "pins": [],
+      "trigger": "facts",
+      "reason": "无 MPN；供应商字段为空",
+      "dependentFindings": [],
+      "factSeed": true,
+      "boards": [
+        {
+          "board": "Board1",
+          "mpn": "",
+          "name": "Res_0402",
+          "value": "5.1K"
+        }
+      ],
+      "channels": {
+        "engineer": {
+          "ok": false,
+          "detail": ".tmp_datasheets/ 下没有这颗料的 PDF（工程师给手册用 `parts fetch --file`）",
+          "path": "",
+          "matchedBy": ""
+        },
+        "lcsc": {
+          "ok": false,
+          "detail": "库条目没有任何 datasheet 链接",
+          "datasheetPdfUrl": "",
+          "datasheetUrl": "",
+          "shelfKey": ""
+        },
+        "official": {
+          "ok": null,
+          "by": "ai",
+          "detail": "CLI 不搜官网：这一通道由 AI 用 WebSearch 走，报告只给建议查询词与厂商名",
+          "suggestedQueries": [
+            "5.1K datasheet pdf",
+            "5.1K 数据手册 规格书"
+          ]
+        }
+      },
+      "mpn": "",
+      "supplier": "",
+      "missingFacts": [],
+      "shelfMatchedBy": ""
+    }
+  ],
+  "warning_triage": [
+    {
+      "key": "boardwise-rule:decap-required-caps:U1,pin:4",
+      "source": "boardwise-rule",
+      "rule_id": "decap-required-caps",
+      "severity": "WARN",
+      "count": 1,
+      "text": "U1 pin4 must sit on net 'VCC' in mode '3.3V' but is on 'NET1' — the datasheet's wiring for the active mode is not what the board does",
+      "textUnavailable": "",
+      "attribution": {
+        "scope": "finding",
+        "page": null,
+        "net": "",
+        "module": "接口"
+      },
+      "verdict": "",
+      "reason": "",
+      "evidence": [
+        "findings[0] rule decap-required-caps",
+        "U1"
+      ]
+    }
+  ],
+  "ai_slots": {
+    "unknown_parts": [
+      {
+        "designator": "R24",
+        "name": "Res_0402",
+        "value": "5.1K",
+        "footprint": "0402",
+        "mpn": "",
+        "supplier": "",
+        "reasons": [
+          "无 MPN",
+          "供应商字段为空"
+        ],
+        "question": "核对该器件周边配置是否符合规格书典型应用（去耦/上下拉/限流/耐压），并确认可用型号",
+        "isIc": false,
+        "onShelf": false,
+        "shelfKey": "",
+        "shelfMatchedBy": "",
+        "factsVerified": null,
+        "factsTrust": "",
+        "factsPresent": [],
+        "missingFacts": [],
+        "channels": {
+          "engineer": {
+            "ok": false,
+            "detail": ".tmp_datasheets/ 下没有这颗料的 PDF（工程师给手册用 `parts fetch --file`）",
+            "path": "",
+            "matchedBy": ""
+          },
+          "lcsc": {
+            "ok": false,
+            "detail": "库条目没有任何 datasheet 链接",
+            "datasheetPdfUrl": "",
+            "datasheetUrl": "",
+            "shelfKey": ""
+          },
+          "official": {
+            "ok": null,
+            "by": "ai",
+            "detail": "CLI 不搜官网：这一通道由 AI 用 WebSearch 走，报告只给建议查询词与厂商名",
+            "suggestedQueries": [
+              "5.1K datasheet pdf",
+              "5.1K 数据手册 规格书"
+            ]
+          }
+        },
+        "boards": [
+          {
+            "board": "Board1",
+            "mpn": "",
+            "name": "Res_0402",
+            "value": "5.1K"
+          }
+        ]
+      },
+      {
+        "designator": "R27",
+        "name": "Res_0402",
+        "value": "5.1K",
+        "footprint": "0402",
+        "mpn": "",
+        "supplier": "",
+        "reasons": [
+          "无 MPN",
+          "供应商字段为空"
+        ],
+        "question": "核对该器件周边配置是否符合规格书典型应用（去耦/上下拉/限流/耐压），并确认可用型号",
+        "isIc": false,
+        "onShelf": false,
+        "shelfKey": "",
+        "shelfMatchedBy": "",
+        "factsVerified": null,
+        "factsTrust": "",
+        "factsPresent": [],
+        "missingFacts": [],
+        "channels": {
+          "engineer": {
+            "ok": false,
+            "detail": ".tmp_datasheets/ 下没有这颗料的 PDF（工程师给手册用 `parts fetch --file`）",
+            "path": "",
+            "matchedBy": ""
+          },
+          "lcsc": {
+            "ok": false,
+            "detail": "库条目没有任何 datasheet 链接",
+            "datasheetPdfUrl": "",
+            "datasheetUrl": "",
+            "shelfKey": ""
+          },
+          "official": {
+            "ok": null,
+            "by": "ai",
+            "detail": "CLI 不搜官网：这一通道由 AI 用 WebSearch 走，报告只给建议查询词与厂商名",
+            "suggestedQueries": [
+              "5.1K datasheet pdf",
+              "5.1K 数据手册 规格书"
+            ]
+          }
+        },
+        "boards": [
+          {
+            "board": "Board1",
+            "mpn": "",
+            "name": "Res_0402",
+            "value": "5.1K"
+          }
+        ]
+      }
+    ],
+    "canvas_images": [],
+    "canvas_images_note": "离线路径（--file）没有 PCB 文档（或 PCB 审查未出结果），没有可渲染的版面几何；要编辑器截图需在线工程",
+    "summary_template": "【结论先行】这台板子<可以直接投板 / 需要先改 N 处 / 问题较多建议重审>：\n  主机 ERC <warn/error 计数>，PCB DRC <分组计数>，boardwise 规则 <ERROR/WARN/INFO 计数>。\n\n【错误与归因】（逐条说清是哪一类，不要合并成一句）\n  - <位号/规则>: <现象> —— 归因：<设计意图不符 / 器件选型 / 布局布线 / 网表与实物不一致>\n  - ...\n\n【警告提醒】（不阻塞投板，但要有人知道）\n  - <位号/规则>: <现象> —— 建议：<改 / 可接受，理由>\n\n【建议动作】（给用户的下一步，按优先级）\n  1. 先改 <条目>：<怎么做>\n  2. 再确认 <条目>：<找谁/查什么>\n  3. 存疑项：<unknown_parts 里需要查规格书的器件，逐条写结论>\n\n【本报告依赖的未知项】（needs_datasheet；**这一节空着才允许写\"通过\"**）\n  - <位号/管脚>：<为什么解释不了> —— 需要：<哪份手册的哪一节，或找谁要>\n  - 清单非空时，依赖它的条目只能写「无法确认（等资料）」，不许写「通过/不符合」\n\n<可选一段：读画布图看到的问题（摆放、位号可读性、网络标识、区分度）>\n",
+    "warning_triage_note": "逐条用 `boardwise triage --out <OUT>/checkup --key <key> --verdict 有益|有害|无害|needs-manual --reason …` 填（槽位的 key 写在每条 warning_triage[] 里——它是这条警告的身份；写完命令会重算 completion 并重渲染 report.md）。主机 ERC 的条目没有逐条文本，只能对着计数与画布图判（xianyuyijinban的审查三步之②）；`text` 为空的槽位不能用三词关闭，只能标 `needs-manual`——它仍计待分诊，并单列进 completion.manualReviewRequired",
+    "aesthetics": {
+      "enabled": false,
+      "source": "config",
+      "section": "",
+      "note": "审美评分未开（默认关）。要看就 `checkup --aesthetics`，或 `boardwise config set review.aesthetics on`"
+    },
+    "review_summary": {
+      "file": "review-summary.md",
+      "entries": 2,
+      "note": "逐条 finding 的定位链已预填进 `review-summary.md`，「分析」「建议」两栏留空给模型（docs/review-sop.md §3.1 收尾死一步：必须补全，工程师只看这一份）"
+    }
+  },
+  "shelfPath": "blocklib/parts.json",
+  "environment": {
+    "tier": "file",
+    "expectedConnectorVersion": "0.5.22",
+    "runningConnectorVersion": null,
+    "connectorVersionStatus": "not-applicable",
+    "writeAllowed": false,
+    "allowedNextActions": [
+      {
+        "id": "offline-plan",
+        "mode": "offline",
+        "description": "生成离线 ChangePlan；不连接编辑器、不修改设计"
+      },
+      {
+        "id": "engineer-manual",
+        "mode": "manual",
+        "description": "由工程师在编辑器中核对并手动修改"
+      },
+      {
+        "id": "authorized-test-project",
+        "mode": "explicit-authorization",
+        "projects": [
+          "test",
+          "test2"
+        ],
+        "description": "仅在任务明确授权且完成工程身份核对后，按测试工程流程执行"
+      }
+    ],
+    "limitations": [
+      {
+        "code": "offline-no-live-evidence",
+        "affects": [
+          "liveSchematic",
+          "livePcb"
+        ],
+        "message": "离线文件（--file）没有实时编辑器证据：原理图与 PCB 读数都来自归档，不是实时检查成功；受影响的实时结论不得当作已确认。"
+      }
+    ]
+  },
+  "evidence": {
+    "schema": "boardwise.review-evidence/1",
+    "channels": {
+      "liveSchematic": {
+        "status": "missing",
+        "source": "live-sch",
+        "detail": "离线文件（--file）：没有连编辑器，模型来自归档而不是实时回读，实时原理图证据未采集。",
+        "artifacts": [],
+        "errors": [],
+        "steps": []
+      },
+      "archivePcb": {
+        "status": "not-applicable",
+        "source": "archive",
+        "detail": "已确认没有 PCB 文档（pcb_had_documents=false 且没有 pcb_review 一节）：没有可审的 PCB 版面，归档 PCB 通道不适用。",
+        "artifacts": [],
+        "errors": [],
+        "steps": []
+      },
+      "livePcb": {
+        "status": "not-applicable",
+        "source": "live-pcb",
+        "detail": "已确认没有 PCB：没有可实时回读的 PCB，本通道不适用。",
+        "artifacts": [],
+        "errors": [],
+        "steps": []
+      },
+      "schematicImage": {
+        "status": "missing",
+        "source": "image",
+        "detail": "离线文件（--file）：离线几何 SVG 画的是 PCB 版面几何，不是实时原理图图，不能当作原理图视觉复核。",
+        "artifacts": [],
+        "errors": [],
+        "steps": []
+      },
+      "pcbImage": {
+        "status": "not-applicable",
+        "source": "image",
+        "detail": "已确认没有 PCB：没有可复核的 PCB 版面，本通道不适用。",
+        "artifacts": [],
+        "errors": [],
+        "steps": []
+      },
+      "datasheets": {
+        "status": "unavailable",
+        "source": "datasheet",
+        "detail": "手册证据未齐/待核：未审 2 条 / 工程师接受未审（本轮缺口）0 条 / 审查者标记 0 个器件（三类是不同来源的欠账，不相加，也不等于手册已核）；相关规格结论只能待核。",
+        "artifacts": [],
+        "errors": [],
+        "steps": []
+      }
+    },
+    "coverage": {
+      "liveSchematic": "missing",
+      "archivePcb": "not-applicable",
+      "livePcb": "not-applicable",
+      "schematicImage": "missing",
+      "pcbImage": "not-applicable",
+      "datasheets": "unavailable"
+    },
+    "delivery": {
+      "status": "partial",
+      "note": "delivery 只描述证据/交付覆盖，不是板级通过或不通过；它不改变 completion.verdict、summary.exitCode 或进程退出码。",
+      "requiredDisclosures": [
+        {
+          "code": "live-schematic-evidence",
+          "channel": "liveSchematic",
+          "status": "missing",
+          "message": "未采集实时原理图证据：本次只取得归档或离线文件，archive 不等于 live。"
+        },
+        {
+          "code": "schematic-visual-review",
+          "channel": "schematicImage",
+          "status": "missing",
+          "message": "未采集实时原理图图：离线几何图是 PCB 版面几何，不是实时原理图图。"
+        },
+        {
+          "code": "datasheet-evidence",
+          "channel": "datasheets",
+          "status": "unavailable",
+          "message": "手册证据未齐/待核：仍有器件缺已核验的手册事实（含工程师接受未审、审查者标记与空模型），相关规格结论只能待核，不能写成已与手册核对。"
+        }
+      ]
+    }
+  },
+  "architecture": {
+    "file": "architecture.md",
+    "intent": {
+      "file": "design-intent.md",
+      "present": false,
+      "projectUuid": "file-871d6d74ad8a",
+      "projectSource": "离线档按文件名折叠（ch340_golden.epro2）",
+      "filled": 0,
+      "stale": 0,
+      "orphans": 0
+    },
+    "boards": [
+      {
+        "title": "Board1",
+        "components": 17,
+        "nets": 13,
+        "rails": 2,
+        "analogChains": 0,
+        "controlChains": 0,
+        "buses": 2,
+        "unclassifiedNets": 6,
+        "gatedClassifications": []
+      }
+    ],
+    "totals": {
+      "rails": 2,
+      "analogChains": 0,
+      "controlChains": 0,
+      "buses": 2,
+      "unclassifiedNets": 6,
+      "intentObjects": 2,
+      "slots": 16,
+      "filled": 0,
+      "stale": 0,
+      "todoSlots": 16
+    },
+    "slots": [
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/power:+5V/voltage",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "power:+5V",
+        "sectionKind": "power",
+        "object": "+5V",
+        "key": "voltage",
+        "label": "电压",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:936aae090fa41748",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/power:+5V/source",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "power:+5V",
+        "sectionKind": "power",
+        "object": "+5V",
+        "key": "source",
+        "label": "来源（哪颗器件/哪个接插件把它供起来的）",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:936aae090fa41748",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/power:VCC/voltage",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "power:VCC",
+        "sectionKind": "power",
+        "object": "VCC",
+        "key": "voltage",
+        "label": "电压",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:fb9316aeed329b50",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/power:VCC/source",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "power:VCC",
+        "sectionKind": "power",
+        "object": "VCC",
+        "key": "source",
+        "label": "来源（哪颗器件/哪个接插件把它供起来的）",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:fb9316aeed329b50",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/bus:UART/completeness",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "bus:UART",
+        "sectionKind": "bus",
+        "object": "UART",
+        "key": "completeness",
+        "label": "成员完整性（终端 / 上下拉 / 收发器 / 方向）",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:f76f9bd874641237",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/bus:UART/consistency",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "bus:UART",
+        "sectionKind": "bus",
+        "object": "UART",
+        "key": "consistency",
+        "label": "端到端自洽性（这条链是干什么的、能不能闭合）",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:f76f9bd874641237",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/bus:USB/completeness",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "bus:USB",
+        "sectionKind": "bus",
+        "object": "USB",
+        "key": "completeness",
+        "label": "成员完整性（终端 / 上下拉 / 收发器 / 方向）",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:3c03b65c5e91d966",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/bus:USB/consistency",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "bus:USB",
+        "sectionKind": "bus",
+        "object": "USB",
+        "key": "consistency",
+        "label": "端到端自洽性（这条链是干什么的、能不能闭合）",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:3c03b65c5e91d966",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:+5V/targetVoltage",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "intent:+5V",
+        "sectionKind": "intent",
+        "object": "+5V",
+        "key": "targetVoltage",
+        "label": "目标电压",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:936aae090fa41748",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:+5V/continuousCurrent",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "intent:+5V",
+        "sectionKind": "intent",
+        "object": "+5V",
+        "key": "continuousCurrent",
+        "label": "连续电流",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:936aae090fa41748",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:+5V/peakCurrent",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "intent:+5V",
+        "sectionKind": "intent",
+        "object": "+5V",
+        "key": "peakCurrent",
+        "label": "峰值电流",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:936aae090fa41748",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:+5V/operatingCases",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "intent:+5V",
+        "sectionKind": "intent",
+        "object": "+5V",
+        "key": "operatingCases",
+        "label": "关键工况",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:936aae090fa41748",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:VCC/targetVoltage",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "intent:VCC",
+        "sectionKind": "intent",
+        "object": "VCC",
+        "key": "targetVoltage",
+        "label": "目标电压",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:fb9316aeed329b50",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:VCC/continuousCurrent",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "intent:VCC",
+        "sectionKind": "intent",
+        "object": "VCC",
+        "key": "continuousCurrent",
+        "label": "连续电流",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:fb9316aeed329b50",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:VCC/peakCurrent",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "intent:VCC",
+        "sectionKind": "intent",
+        "object": "VCC",
+        "key": "peakCurrent",
+        "label": "峰值电流",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:fb9316aeed329b50",
+        "recordedSignature": ""
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:VCC/operatingCases",
+        "board": "Board1",
+        "boardUuid": "545d73493d913ad1",
+        "section": "intent:VCC",
+        "sectionKind": "intent",
+        "object": "VCC",
+        "key": "operatingCases",
+        "label": "关键工况",
+        "value": "TODO",
+        "source": "",
+        "filled": false,
+        "stale": false,
+        "staleReason": "",
+        "orphan": false,
+        "signature": "sha256:fb9316aeed329b50",
+        "recordedSignature": ""
+      }
+    ],
+    "slotKeys": {
+      "power": [
+        "voltage",
+        "source"
+      ],
+      "analog": [
+        "quantity",
+        "range",
+        "polarity",
+        "reference",
+        "gainStage",
+        "filter",
+        "sourceImpedance",
+        "consistency"
+      ],
+      "control": [
+        "endpointConsistency",
+        "consistency"
+      ],
+      "bus": [
+        "completeness",
+        "consistency"
+      ],
+      "intent": [
+        "targetVoltage",
+        "continuousCurrent",
+        "peakCurrent",
+        "operatingCases"
+      ]
+    },
+    "chains": {
+      "rails": [
+        {
+          "board": "Board1",
+          "net": "+5V",
+          "voltage": 5.0,
+          "loads": 6,
+          "sourceCandidates": [
+            "U5（ic.ldo）",
+            "USB1（connector）"
+          ]
+        },
+        {
+          "board": "Board1",
+          "net": "VCC",
+          "voltage": 3.3,
+          "loads": 6,
+          "sourceCandidates": [
+            "U5（ic.ldo）"
+          ]
+        }
+      ],
+      "analog": [],
+      "control": [],
+      "bus": [
+        {
+          "board": "Board1",
+          "family": "UART",
+          "nets": [
+            "RX",
+            "TX"
+          ]
+        },
+        {
+          "board": "Board1",
+          "family": "USB",
+          "nets": [
+            "D+",
+            "D-"
+          ]
+        }
+      ]
+    },
+    "generator": "boardwise.core.architecture（044 M1：骨架；053 §2.2：设计意图合并视图）"
+  },
+  "intent": {
+    "contract": {
+      "file": "<HOME>/design-intent/file-871d6d74ad8a.json",
+      "present": false,
+      "readError": "",
+      "state": "absent",
+      "intentVersion": 1,
+      "declaredIntentVersion": null,
+      "regenerate": "boardwise arch <FIXTURES>/ch340_golden.epro2 --intent <HOME>/design-intent/file-871d6d74ad8a.json"
+    },
+    "projectUuid": "file-871d6d74ad8a",
+    "provenance": "ai_asserted",
+    "draft": true,
+    "draftReasons": [
+      "buses 'UART': ai_asserted — an unconfirmed requirement may only be read as a hint (052 §4), never as the yardstick a rule judges a board against",
+      "buses 'USB': ai_asserted — an unconfirmed requirement may only be read as a hint (052 §4), never as the yardstick a rule judges a board against",
+      "rails '+5V': ai_asserted — an unconfirmed requirement may only be read as a hint (052 §4), never as the yardstick a rule judges a board against",
+      "rails 'VCC': ai_asserted — an unconfirmed requirement may only be read as a hint (052 §4), never as the yardstick a rule judges a board against"
+    ],
+    "totals": {
+      "slots": 16,
+      "filled": 0,
+      "missing": 16,
+      "requiredMissing": 2,
+      "newlyStale": 0,
+      "staleTotal": 0,
+      "addedEntries": 4,
+      "unregisteredAnswers": 0,
+      "hints": 0
+    },
+    "missing": [
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/power:+5V/voltage",
+        "section": "rails",
+        "object": "+5V",
+        "key": "voltage",
+        "label": "电压",
+        "where": "轨 `+5V`",
+        "write": "requirements.rails[net=+5V].voltage",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/power:+5V/source",
+        "section": "rails",
+        "object": "+5V",
+        "key": "source",
+        "label": "来源（哪颗器件/哪个接插件把它供起来的）",
+        "where": "轨 `+5V`",
+        "write": "requirements.rails[net=+5V].source",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:+5V/targetVoltage",
+        "section": "rails",
+        "object": "+5V",
+        "key": "targetVoltage",
+        "label": "目标电压",
+        "where": "轨 `+5V`",
+        "write": "requirements.rails[net=+5V].targetVoltage",
+        "required": true
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:+5V/continuousCurrent",
+        "section": "rails",
+        "object": "+5V",
+        "key": "continuousCurrent",
+        "label": "连续电流",
+        "where": "轨 `+5V`",
+        "write": "requirements.rails[net=+5V].continuousCurrent",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:+5V/peakCurrent",
+        "section": "rails",
+        "object": "+5V",
+        "key": "peakCurrent",
+        "label": "峰值电流",
+        "where": "轨 `+5V`",
+        "write": "requirements.rails[net=+5V].peakCurrent",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:+5V/operatingCases",
+        "section": "rails",
+        "object": "+5V",
+        "key": "operatingCases",
+        "label": "关键工况",
+        "where": "轨 `+5V`",
+        "write": "requirements.rails[net=+5V].operatingCases",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/power:VCC/voltage",
+        "section": "rails",
+        "object": "VCC",
+        "key": "voltage",
+        "label": "电压",
+        "where": "轨 `VCC`",
+        "write": "requirements.rails[net=VCC].voltage",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/power:VCC/source",
+        "section": "rails",
+        "object": "VCC",
+        "key": "source",
+        "label": "来源（哪颗器件/哪个接插件把它供起来的）",
+        "where": "轨 `VCC`",
+        "write": "requirements.rails[net=VCC].source",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:VCC/targetVoltage",
+        "section": "rails",
+        "object": "VCC",
+        "key": "targetVoltage",
+        "label": "目标电压",
+        "where": "轨 `VCC`",
+        "write": "requirements.rails[net=VCC].targetVoltage",
+        "required": true
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:VCC/continuousCurrent",
+        "section": "rails",
+        "object": "VCC",
+        "key": "continuousCurrent",
+        "label": "连续电流",
+        "where": "轨 `VCC`",
+        "write": "requirements.rails[net=VCC].continuousCurrent",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:VCC/peakCurrent",
+        "section": "rails",
+        "object": "VCC",
+        "key": "peakCurrent",
+        "label": "峰值电流",
+        "where": "轨 `VCC`",
+        "write": "requirements.rails[net=VCC].peakCurrent",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:VCC/operatingCases",
+        "section": "rails",
+        "object": "VCC",
+        "key": "operatingCases",
+        "label": "关键工况",
+        "where": "轨 `VCC`",
+        "write": "requirements.rails[net=VCC].operatingCases",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/bus:UART/completeness",
+        "section": "buses",
+        "object": "UART",
+        "key": "completeness",
+        "label": "成员完整性（终端 / 上下拉 / 收发器 / 方向）",
+        "where": "总线 `UART`（bus）",
+        "write": "requirements.buses[family=UART].completeness",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/bus:UART/consistency",
+        "section": "buses",
+        "object": "UART",
+        "key": "consistency",
+        "label": "端到端自洽性（这条链是干什么的、能不能闭合）",
+        "where": "总线 `UART`（bus）",
+        "write": "requirements.buses[family=UART].consistency",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/bus:USB/completeness",
+        "section": "buses",
+        "object": "USB",
+        "key": "completeness",
+        "label": "成员完整性（终端 / 上下拉 / 收发器 / 方向）",
+        "where": "总线 `USB`（bus）",
+        "write": "requirements.buses[family=USB].completeness",
+        "required": false
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/bus:USB/consistency",
+        "section": "buses",
+        "object": "USB",
+        "key": "consistency",
+        "label": "端到端自洽性（这条链是干什么的、能不能闭合）",
+        "where": "总线 `USB`（bus）",
+        "write": "requirements.buses[family=USB].consistency",
+        "required": false
+      }
+    ],
+    "required": [
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:+5V/targetVoltage",
+        "section": "rails",
+        "object": "+5V",
+        "key": "targetVoltage",
+        "label": "目标电压",
+        "where": "轨 `+5V`",
+        "write": "requirements.rails[net=+5V].targetVoltage",
+        "required": true
+      },
+      {
+        "id": "file-871d6d74ad8a/545d73493d913ad1/intent:VCC/targetVoltage",
+        "section": "rails",
+        "object": "VCC",
+        "key": "targetVoltage",
+        "label": "目标电压",
+        "where": "轨 `VCC`",
+        "write": "requirements.rails[net=VCC].targetVoltage",
+        "required": true
+      }
+    ],
+    "intentMissing": [
+      "intent-missing: 轨 `+5V` 的 `targetVoltage`（目标电压） 没声明 —— 写进 `<HOME>/design-intent/file-871d6d74ad8a.json` 的 `requirements.rails[net=+5V].targetVoltage`（槽位 id `file-871d6d74ad8a/545d73493d913ad1/intent:+5V/targetVoltage`）；工具只提问，不改写",
+      "intent-missing: 轨 `VCC` 的 `targetVoltage`（目标电压） 没声明 —— 写进 `<HOME>/design-intent/file-871d6d74ad8a.json` 的 `requirements.rails[net=VCC].targetVoltage`（槽位 id `file-871d6d74ad8a/545d73493d913ad1/intent:VCC/targetVoltage`）；工具只提问，不改写"
+    ],
+    "requiredNote": "`intent-missing`（与 `facts-missing` 同族）：这些是**必填槽**，合同里没有声明；工具不会替人补，也不会因此拒绝读合同——它只点名缺哪一句、该写进哪个文件哪个键。",
+    "hints": [],
+    "stale": [],
+    "staleEntries": [],
+    "added": [
+      "rails:+5V",
+      "rails:VCC",
+      "buses:UART",
+      "buses:USB"
+    ],
+    "unregistered": [],
+    "unmapped": [],
+    "note": "工具只校验与提问，永不改写：本节点名缺哪一句、写进哪个文件哪个键；填的人是工程师或模型。缺槽**不**抬 verdict（A1 只报告，评级归 A2/A3）——重生成契约用 `boardwise arch <export> --intent <path>`（已有答案逐字节保留）。"
+  },
+  "completion": {
+    "scope": {
+      "rules": 23,
+      "boards": 1,
+      "pages": 1
+    },
+    "errors": 0,
+    "unreviewedParts": 2,
+    "unreviewedByReason": {
+      "供应商字段为空": 2,
+      "无 MPN": 2
+    },
+    "unreviewedByClass": {
+      "真缺资料": 2
+    },
+    "needsDatasheet": 0,
+    "reviewerMarked": 0,
+    "needsDatasheetTotal": 2,
+    "warningsPendingTriage": 1,
+    "warningsNeedsManual": 0,
+    "manualReviewRequired": [],
+    "architectureSlots": {
+      "total": 16,
+      "filled": 0,
+      "stale": 0
+    },
+    "openTodos": 16,
+    "acceptedUnknown": 0,
+    "acceptedUnknownTotal": 0,
+    "acceptedUnknownStale": 0,
+    "acceptedUnknownStaleElsewhere": 0,
+    "declaredPassiveExempt": 1,
+    "metadataStateCounts": {
+      "元数据已确认": 8,
+      "元数据缺失": 2
+    },
+    "sidecarNeedsDatasheet": {
+      "merged": 0,
+      "unmatched": 0
+    },
+    "factsTrust": {
+      "verified": 4,
+      "machineVerified": 0,
+      "candidate": 0
+    },
+    "coverage": {
+      "parseIncomplete": false,
+      "modelEmpty": false,
+      "boardsEmpty": 0,
+      "boardsEmptyNames": [],
+      "pagesDropped": 0,
+      "rulesRefused": 0,
+      "recordsDropped": 0,
+      "rulesErrored": [],
+      "pcbReviewMissing": false
+    },
+    "sourceVersions": {
+      "ruleset": "a0c5e0a0",
+      "rulebody": "25b7de70"
+    },
+    "verdict": "incomplete",
+    "verdictWhy": [
+      "2 颗器件缺手册未审",
+      "1 条 warning 待分诊"
+    ]
+  },
+  "location_chains": [
+    {
+      "index": 0,
+      "rule_id": "decap-required-caps",
+      "severity": "WARN",
+      "project": "<FIXTURES>/ch340_golden.epro2",
+      "board": "Board1",
+      "page": "未标注",
+      "refs": "U1",
+      "problem": "U1 pin4 must sit on net 'VCC' in mode '3.3V' but is on 'NET1' — the datasheet's wiring for the active mode is not what the board does",
+      "missing": [
+        "page"
+      ]
+    },
+    {
+      "index": 1,
+      "rule_id": "sel-ldo-fixed-output",
+      "severity": "INFO",
+      "project": "<FIXTURES>/ch340_golden.epro2",
+      "board": "Board1",
+      "page": "未标注",
+      "refs": "U5",
+      "problem": "U5 的固定输出是 3.3 V（货架条目 ic.rt9013_33gb 的 Output Voltage = '3.3V'），但它输出轨 VCC 的轨压读不出，所以对拍无从做起：这条轨 'VCC' 的电压只从被审的 U5 自己推出来（U5 RT9013-33GB output, decoded from the MPN suffix — a guess: no datasheet fact declares it），拿它对拍 U5 的规格等于拿零件自己的名字验零件自己；intent-missing: 写进合同 requirements.rails[net=VCC].targetVoltage，或让轨名自己写着电压",
+      "missing": [
+        "page"
+      ]
+    }
+  ],
+  "board_report": {
+    "order": "严重度（ERROR → WARN → INFO）× 模块权重（同级内 PCB 模块级 > 器件级 > 通用）",
+    "weights": [
+      {
+        "key": "pcb-module",
+        "label": "PCB 模块级",
+        "rank": 0,
+        "why": "路线图第二步（按模块检查）＝重中之重：DRC 过只说明「能造」，模块级决定「好不好活」（噪声/发热/EMI/寿命）——权重最高"
+      },
+      {
+        "key": "device",
+        "label": "器件级",
+        "rank": 1,
+        "why": "路线图第三步（器件检查）＝收口：封装一致性/极性/丝印/降额，逐颗器件的物理可实现性——居中"
+      },
+      {
+        "key": "generic",
+        "label": "通用",
+        "rank": 2,
+        "why": "第一步 DRC 与原理图侧 ERC／连通性：门票与电路正确性——最轻"
+      }
+    ],
+    "note": "本表给人读：ERC + DRC + 模块规则 + 器件规则合成一份，按「板 → 模块/规则族」分组，每条一句话（位号/网/问题/依据）。机器细节（完整 message、evidence、定位链、规则等级）留在 `report.json` 的 findings[]，本表一个字都不新增结论。",
+    "drc": {
+      "erc": {
+        "checked": false,
+        "summary": "未检查 —— 离线路径（--file）不连编辑器，因此没有主机 ERC；这一段的空是「没查」，不是「零错误」"
+      },
+      "pcb": {
+        "checked": false,
+        "summary": "未检查 —— 离线路径（--file）不连编辑器，因此没有主机 PCB DRC；要它就给一个在线工程"
+      },
+      "ruleset": {
+        "checked": false,
+        "name": "",
+        "summary": "未读 —— 离线路径（--file）不连编辑器，因此没有主机 DRC 规则集；离线也读不到规则集（它在编辑器里，不在归档里）"
+      }
+    },
+    "boards": [
+      {
+        "board": "Board1",
+        "pcb": "",
+        "components": 17,
+        "copperLayers": null,
+        "outlineNote": null,
+        "netIdNote": null,
+        "counts": {
+          "ERROR": 0,
+          "WARN": 1,
+          "INFO": 1
+        },
+        "groups": [
+          {
+            "name": "原理图连通性",
+            "weight": "generic",
+            "weightLabel": "通用",
+            "counts": {
+              "ERROR": 0,
+              "WARN": 1,
+              "INFO": 0
+            },
+            "findings": [
+              {
+                "index": 0,
+                "severity": "WARN",
+                "rule_id": "decap-required-caps",
+                "level": "L2-facts",
+                "board": "Board1",
+                "refs": [
+                  "U1"
+                ],
+                "line": "U1 —— U1 pin4 must sit on net 'VCC' in mode '3.3V' but is on 'NET1' — the datasheet's wiring for the active mode is not what t… 〔原理图连通性 / decap-required-caps〕"
+              }
+            ]
+          },
+          {
+            "name": "元件参数/选型",
+            "weight": "generic",
+            "weightLabel": "通用",
+            "counts": {
+              "ERROR": 0,
+              "WARN": 0,
+              "INFO": 1
+            },
+            "findings": [
+              {
+                "index": 1,
+                "severity": "INFO",
+                "rule_id": "sel-ldo-fixed-output",
+                "level": "L2-facts",
+                "board": "Board1",
+                "refs": [
+                  "U5"
+                ],
+                "line": "U5 —— U5 的固定输出是 3.3 V（货架条目 ic.rt9013_33gb 的 Output Voltage = '3.3V'），但它输出轨 VCC 的轨压读不出，所以对拍无从做起：这条轨 'VCC' 的电压只从被审的 U5 自己推出来（U5… 〔元件参数/选型 / sel-ldo-fixed-output〕"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "unassigned": [],
+    "totals": {
+      "ERROR": 0,
+      "WARN": 1,
+      "INFO": 1
+    },
+    "verdict": {
+      "canShip": false,
+      "line": "不能写「通过」（completion.verdict = incomplete）：2 颗器件缺手册未审；1 条 warning 待分诊——缺手册、有待分诊项时一律不许写「通过」（口径同 `summary.mayClaimPassed` 与 `completion.verdict`）",
+      "blockers": [],
+      "completionVerdict": "incomplete",
+      "mayClaimPassed": false,
+      "basis": "completion.verdict / verdictWhy（唯一权威闸，本函数不重算）"
+    }
+  },
+  "conclusion": {
+    "verdict": "incomplete",
+    "exitCode": 3,
+    "mayClaimPassed": false,
+    "mayQuotePassed": false,
+    "oneLiner": "不能写「通过」（completion.verdict = incomplete）：2 颗器件缺手册未审；1 条 warning 待分诊——缺手册、有待分诊项时一律不许写「通过」（口径同 `summary.mayClaimPassed` 与 `completion.verdict`）",
+    "blockers": [
+      "2 颗器件缺手册未审",
+      "1 条 warning 待分诊"
+    ]
+  }
+}

@@ -347,7 +347,7 @@ Crypto is unusable (see §9, and `connector/src/random.ts`):
 | present, token matches | accepts |
 | present, token differs, **a connector is attached** | `UNAUTHENTICATED` |
 | present, token differs, **nothing is attached** | **re-pairs**: overwrites the record, audits `re-pairing`, announces the replacement (004f) |
-| either pairing row, and the handshake carries `Origin: http(s)://…` | `UNAUTHENTICATED` — **no pairing is written** (#57 security note) |
+| either pairing row, and the handshake carries an `http(s)` `Origin` other than the editor's own `https://client` | `UNAUTHENTICATED` — **no pairing is written** (#57 security note; the exception is 540) |
 
 The last row is a precondition on **both** rows that write a pairing record. The rule those rows key
 on — "no connector is attached" — is exactly the state between `bridge start` and the editor
@@ -355,12 +355,20 @@ attaching, and again every time the editor's windows all close; with no Origin c
 user's browser could pair itself in that window and hold a pairing the real connector cannot take
 back (it is then refused with `UNAUTHENTICATED`, which #12 used to hide behind "heartbeat timed out").
 A browser **always** sends `Origin` on a WebSocket handshake, and `curl`-class clients never do, so
-the gate is: the Origin must be **absent or non-`http(s)`** before a pairing is written. A missing
-Origin passes — the editor's own socket may send none, and refusing it would refuse the editor
-(`check_origin` still allows everything; this is a narrower, separate decision). What it is *not* is
-a boundary against local processes: a non-browser attacker omits the header, and that boundary is
-the token (§9). A caller that already presents the stored token is accepted whatever its Origin says
-— the gate guards the write, and a page cannot learn the secret.
+the gate is: before a pairing is written the Origin must be **absent, non-`http(s)`, or exactly the
+editor's own `https://client`**. The editor's value is measured, not inferred — EasyEDA Pro
+3.2.186's extension host sends `Origin: https://client` (0.2.5's acceptance run, §12 item 4;
+measured again in 540 on the same build) — and it has to be admitted, or the editor's *first*
+pairing (no token on file yet, so the known-token early return never covers it) and every re-pair
+after a storage reset are refused with `UNAUTHENTICATED` for ever. The exemption is that one exact
+origin: `http://client`, an explicit port, userinfo, a path (including `https://client/`), a query
+or fragment, and lookalike hosts such as `https://client.evil.example` are all still refused,
+because none of them was measured. A missing Origin passes, and so does any non-`http(s)` scheme
+(`chrome-extension://…`). `check_origin` still allows every socket through — that is a separate,
+broader decision still owned by 004d. What this is *not* is a boundary against local processes: a
+non-browser attacker omits the header, and that boundary is the token (§9). A caller that already
+presents the stored token is accepted whatever its Origin says — the gate guards the write, and a
+page cannot learn the secret.
 
 The fourth row is the sideload self-heal. **Sideloading a connector build resets
 the editor's extension storage**, so the new build generates a fresh token and
@@ -1348,16 +1356,20 @@ Stated plainly because it is the whole threat model:
   `Math.random` pairing — which is why the source is displayed rather than assumed.
 - **What is *not* yet enforced: `Origin` on the socket itself.** The daemon records the `Origin` and
   `User-Agent` of every handshake (task 004c is evidence-gathering) and `check_origin()` still allows
-  everything: whether `eda.sys_WebSocket` sends an `Origin` at all, and what value, is unmeasured, and
-  a rule written without that measurement could refuse the editor itself. 004d owns that decision.
-  What **is** enforced since 0.4.27 is the narrower control the compound gap in issue #57 made
-  unavoidable: a handshake carrying `Origin: http(s)://…` may not **write a pairing record** (§3.4),
-  so a browser page can no longer pair itself first during the window in which no connector is
-  attached. It is not a general origin check and must not be described as one: a socket with an
-  `http(s)` Origin that presents the stored token is still accepted (a page cannot learn it), and a
-  non-browser client simply omits the header. `Origin: null` also passes, deliberately, because it is
-  both what a sandboxed frame sends and what a client with no origin to name sends — 004d decides
-  that one with measurements.
+  everything. The editor's own value is no longer unmeasured — EasyEDA Pro 3.2.186's extension host
+  sends `Origin: https://client` (§12 item 4; measured again in 540) — but a general socket-level
+  rule still wants the other half of the pair, a **deliberate connection from a browser console**, so
+  004d owns that decision. What **is** enforced since 0.4.27 is the narrower control the compound gap
+  in issue #57 made unavoidable: a handshake carrying `Origin: http(s)://…` may not **write a
+  pairing record** (§3.4), so a browser page can no longer pair itself first during the window in
+  which no connector is attached. The one exception is the editor's measured origin itself,
+  `https://client` — without it the editor could not pair at all (540) — and it is matched exactly:
+  other `http(s)` origins, including `http://client`, any explicit port, a trailing slash or
+  `https://client.evil.example`, are still refused. It is not a general origin check and must not be
+  described as one: a socket with an `http(s)` Origin that presents the stored token is still
+  accepted (a page cannot learn it), and a non-browser client simply omits the header.
+  `Origin: null` also passes, deliberately, because it is both what a sandboxed frame sends and what
+  a client with no origin to name sends — 004d decides that one with measurements.
 
 ## 10. Known limitations (v0)
 
@@ -1802,6 +1814,7 @@ machine-readable. Two deliberate differences:
 | A token never reaches the audit log, the console or About… | `test_the_token_itself_never_reaches_the_audit_log` greps every audit line for the token *and* for its first 8 characters; `connector/tests/wiring.test.mjs` asserts the About box and log panel hold the fingerprint and not the token; the CLI test asserts `status` prints the fingerprint only |
 | `connect` records `Origin` / `User-Agent`, absent → `null` | `test_connect_audit_records_origin_and_user_agent`, `test_a_missing_origin_is_recorded_as_null` |
 | `check_origin` currently allows everything | `test_check_origin_allows_everything_for_now` — written as an assertion so 004d cannot inherit "always allow" without deleting it on purpose |
+| The pairing-write gate admits the editor's measured Origin, and nothing near it | `test_the_editor_origin_pairs_on_first_use` (a first pairing with `Origin: https://client` writes the token and audits `pairing`), `test_the_editor_origin_re_pairs_over_a_pairing_nobody_is_using` (replaces the record and audits `re-pairing` with the fingerprint it superseded), `test_lookalike_origins_are_still_web_pages` (13 spellings: wrong scheme, an explicit port, a path and a bare trailing slash, userinfo, query, fragment, `client.evil.example`, a trailing dot), and `test_a_lookalike_origin_cannot_pair_over_the_wire` (`https://client.evil.example` on a real handshake leaves no pairing file). The earlier refusals stand: `test_a_web_page_cannot_pair_itself_before_the_editor_attaches`, `test_a_web_page_cannot_re_pair_over_a_pairing_nobody_is_using` |
 | The extension wires the editor's socket into the transport | `connector/tests/wiring.test.mjs` — with an injected facade: `activate()` registers the socket, a banner produces a `hello` carrying a generated 64-hex token, and the token is persisted |
 | Every authenticated window is registered, none refused (023) | `test_every_window_that_authenticates_is_registered` (two windows, one shared token, both `ok`, both in `ping`), `test_two_live_sockets_claiming_one_instance_id_both_stay_visible` (the second under `inst-…~2`), and `test_the_refusal_machinery_is_gone_and_its_code_is_retired` (`refuse_if_held`, `RejectionNotice`, `active_instance`, `recent_rejections`, `on_rejection` all gone; no `connector_rejected` record is written) |
 | A project hint reaches exactly the window that has it, and only it | `test_a_project_hint_routes_to_the_window_that_has_it` — by name *and* by uuid; each fake window records what it received, and the other receives nothing. `test_call_project_hint_reaches_that_window_from_the_cli` drives the same thing through a real `bridge call --project` subprocess against a real daemon |
@@ -1878,10 +1891,13 @@ Five claims are **not** automated (four only reproducible by hand, one still ope
    its own empty copy, and it no longer arms a connection of its own — the observation that the
    editor re-evaluates the bundle per menu click is exactly what the shared runtime exists for.
    See §13 for the box's current shape.)
-5. What `Origin` / `User-Agent` the editor's socket actually sends — **this is task 004c's
-   outstanding deliverable**, and the reason `check_origin` still returns `true`. The two samples
-   (one editor connection, one deliberate browser connection) belong in the run report; until
-   they exist, no rule is written.
+5. ~~What `Origin` / `User-Agent` the editor's socket actually sends~~ — **settled for the editor,
+   half of the pair still missing.** The editor's socket sends `Origin: https://client` with a
+   `JLCEDAPro/3.2.186` User-Agent: 0.2.5's acceptance run recorded it (§12 item 4) and 540 measured
+   the same value again on the same build. That measurement is why the pairing-write gate can admit
+   that one origin (§3.4). The deliberate **browser-console** sample is still the missing half, and
+   it is what a general socket-level rule would need, so `check_origin` still returns `true` and
+   004d owns it. The editor side is no longer "unmeasured" and must not be described that way.
 
 ## 13. Manual verification checklist
 

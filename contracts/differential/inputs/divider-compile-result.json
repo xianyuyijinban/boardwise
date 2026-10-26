@@ -1,0 +1,68 @@
+{
+  "command": "compile",
+  "ok": true,
+  "labelFallbacks": [],
+  "candidates": [
+    {
+      "index": 0,
+      "key": "legality=0, findings=0, crossings=0, bends=0, wire_length=110, compactness=22752",
+      "metrics": {
+        "crossings": 0.0,
+        "bends": 0.0,
+        "wire_length": 110.0,
+        "unaligned_part_pairs": 0.0,
+        "min_text_gap": 5.0,
+        "occupied_ratio": 0.0026434984293193715,
+        "whitespace_ratio": 0.9973565015706807
+      },
+      "geometrySha256": "62a272b1968a1d037a6854f38299223f8597ab4acd06fed25f11d7476ca056b1",
+      "verdict": "pass"
+    },
+    {
+      "index": 1,
+      "key": "legality=0, findings=0, crossings=0, bends=0, wire_length=130, compactness=24192",
+      "metrics": {
+        "crossings": 0.0,
+        "bends": 0.0,
+        "wire_length": 130.0,
+        "unaligned_part_pairs": 0.0,
+        "min_text_gap": 5.0,
+        "occupied_ratio": 0.0026434984293193715,
+        "whitespace_ratio": 0.9973565015706807
+      },
+      "geometrySha256": "763774234dda4324f06fc5fe7fab9bb7adb7092e2de1e4e59040738b44f78e20",
+      "verdict": "pass"
+    },
+    {
+      "index": 2,
+      "key": "legality=0, findings=0, crossings=0, bends=0, wire_length=160, compactness=26352",
+      "metrics": {
+        "crossings": 0.0,
+        "bends": 0.0,
+        "wire_length": 160.0,
+        "unaligned_part_pairs": 0.0,
+        "min_text_gap": 5.0,
+        "occupied_ratio": 0.0026434984293193715,
+        "whitespace_ratio": 0.9973565015706807
+      },
+      "geometrySha256": "0240a956a0899d49001b681e927fd6ff3a3ac9bde4b94f0830fa81239781051d",
+      "verdict": "pass"
+    }
+  ],
+  "failures": [],
+  "failureRounds": [],
+  "categories": [],
+  "rejected": [],
+  "notes": [
+    "boardwise-drawcompiler/1: lattice 5 units; spacing ladder 1x, 1.5x, 2.2x",
+    "3 legal candidate(s) from 3 variant(s) built; the gate was the independent readability checker, and the ranking compares its layers without summing them"
+  ],
+  "previews": [
+    "<OUT>/compile/cand1.svg",
+    "<OUT>/compile/cand1.layout.json",
+    "<OUT>/compile/cand2.svg",
+    "<OUT>/compile/cand2.layout.json",
+    "<OUT>/compile/cand3.svg",
+    "<OUT>/compile/cand3.layout.json"
+  ]
+}

@@ -19,6 +19,9 @@ connector/*.eext
 dsh-plugin/node_modules/
 dsh-plugin/*.tgz
 
+# Rust contract workspace (540C): Cargo output is reproducible from the locked sources.
+rust/target/
+
 # PyInstaller's output for the single-file friend build (028 batch 3a). The
 # artifact is a release attachment, not a source file: `packaging/build_exe.py`
 # rebuilds it byte-for-byte from the sources plus the connector bundle.
@@ -41,9 +44,12 @@ rb.json
 # standalone — a gitlink entry would only pretend to be recoverable.
 inputs/smart_pillbox/firmware/
 
-# Live-session output scratch. Acceptance evidence cited by task books is
-# force-added (`git add -f`) and stays tracked; everything else here is
-# one-shot probe output that would only add noise to `git status`.
+# Live-session evidence and output scratch. Both default to local-only:
+# existing tracked files stay tracked, and a new acceptance artifact enters git
+# only after explicit review/approval (the mechanical add is `git add -f`).
+# Untracked evidence is NOT a deletion candidate merely because it is ignored.
+# See docs/workspace-conventions.md (540A).
+evidence/
 outputs/
 
 # Local private-source drop box (2026-10-15 history scrub). These are real

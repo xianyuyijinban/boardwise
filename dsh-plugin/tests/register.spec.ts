@@ -58,6 +58,8 @@ const STRUCTURED_TOOLS = [
   'boardwise_review_read',
   'boardwise_triage_batch',
   'boardwise_review_finalize',
+  'boardwise_draw_compile',
+  'boardwise_draw_lint',
 ] as const
 
 describe('boardwise-dsh: plugin registration contract', () => {
@@ -72,7 +74,7 @@ describe('boardwise-dsh: plugin registration contract', () => {
     expect(typeof apply).toBe('function')
   })
 
-  it('registers exactly the eight boardwise tools, in order', () => {
+  it('keeps the eight old tools in order, then appends offline draw compile/lint', () => {
     expect([...registered().keys()]).toEqual([
       'boardwise_checkup',
       'boardwise_arch',
@@ -82,6 +84,8 @@ describe('boardwise-dsh: plugin registration contract', () => {
       'boardwise_review_evidence',
       'boardwise_triage_batch',
       'boardwise_review_finalize',
+      'boardwise_draw_compile',
+      'boardwise_draw_lint',
     ])
   })
 
@@ -193,5 +197,29 @@ describe('boardwise-dsh: plugin registration contract', () => {
     expect(tool.description).toMatch(/report\.conclusion/)
     expect(tool.description).toMatch(/not a board verdict/)
     expect(tool.description).toMatch(/plugin:boardwise-dsh\/review-finalized/)
+  })
+
+  it('declares only offline draw compile/lint, with no live-page or apply surface', () => {
+    const tools = registered()
+    const compile = tools.get('boardwise_draw_compile') as CapturedTool
+    expect(Object.keys(compile.parameters)).toEqual([
+      'circuit', 'presentation', 'profiles', 'pageBox', 'intent', 'out',
+    ])
+    for (const field of ['circuit', 'presentation', 'profiles']) {
+      expect(compile.parameters[field]?.required).toBe(true)
+    }
+    expect(compile.timeoutMs).toBe(600_000)
+    expect(compile.description).toMatch(/offline/)
+
+    const lint = tools.get('boardwise_draw_lint') as CapturedTool
+    expect(Object.keys(lint.parameters)).toEqual(['snapshot', 'render', 'bodies'])
+    expect(lint.parameters['snapshot']?.required).toBe(true)
+    expect(lint.parameters['render']?.required).toBe(true)
+    expect(lint.parameters['page']).toBeUndefined()
+    expect(lint.parameters['project']).toBeUndefined()
+    expect(lint.parameters['instance']).toBeUndefined()
+    expect(lint.timeoutMs).toBe(120_000)
+    expect(lint.description).toMatch(/offline/)
+    expect(tools.has('boardwise_draw_apply')).toBe(false)
   })
 })

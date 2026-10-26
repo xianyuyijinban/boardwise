@@ -3,7 +3,7 @@
 > **这份文件是路由，不是规格。** 它只回答三件事：这是什么项目、三条线现在各在哪、
 > 干活要去读哪份权威文件。细节一律不在这里复制；两处说法冲突时以它指的文件为准。
 > 写它的场合：从 Kimi Code 迁到 DeepSeek Harness（dsh）这类**换 harness**、开新会话、
-> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-10-23**。
+> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-10-25**。
 
 ## 1. 一句话
 
@@ -32,7 +32,26 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 [`docs/draw.md`](draw.md)｜桥协议全表 [`docs/bridge.md`](bridge.md)｜真机坑全表
 [`docs/pits.md`](pits.md)｜测试与保密闸地图 [`docs/testing-doctrine.md`](testing-doctrine.md)。
 
-## 3. 三条线的当前状态（核对日期 2026-10-23）
+## 3. 三条线的当前状态（核对日期 2026-10-25）
+
+### 3.0 540 平台后的派单路由（先看这里）
+
+- **539 已收口**：commit `0f638deaa5d089194e8addf2d400cb7422d422bf`，其后 0.5.22 的
+  `63df468`/`23f030f` 已包含它；真机为
+  `completion=incomplete / delivery=partial`，不是板子通过。
+- **540 已完成、未提交**：A/B/C + 对抗修复 + 只读真机验收；142 模块/0 legacy、24 CLI 命令、
+  DSH 10 工具。首轮 Python 7876/21/5、connector 536、DSH 122/1、Rust 7、4 case；对抗后首轮
+  为 Python **8206/19/5/1 failed**（rulebody 钉已按 B2 补）、DSH **127/1**、Rust **45+显式4**、5 case。
+- **独立派单**：审查读 `tasks/review-line.md`，绘制读 `tasks/draw-line.md`，shared/CLI/bridge/
+  parser/model 的集成改动读 `tasks/shared-platform.md`。两线可独立派小批，shared、全量、真机串行；
+  算法与迁移不同批，没有为三条线创建专用 worktree。
+- **行为与证据**：B 组 `evidence/540/b-behavior-equivalence.md`，C 组 `evidence/540/c-acceptance.md`，
+  两轮全量 `final-regression.md` / `final-regression-adversarial.md`；**最终候选读数以
+  `evidence/540/candidate-regression.md` 为准**（后续步骤产生，未产生不算通过）。构建见 `docs/rust-platform.md`。
+- **下一段**：回到 0.6.0 原有的 200A/B/C 与人工反激视觉锚，或按岳的新派单执行；
+  平台完成不等于这些门槛关闭。0.6.x 与 0.7.0 边界见 `docs/roadmap.md` §10。
+
+> 以下 3.1–3.4 保留 2026-10-23/24 的业务与发布历史；当前派单和平台状态以 §3.0 为准。
 
 > **2026-10-23 已合并提交到 `17893f4`（version 0.5.20）**：绘图线 worktree 已并回 main
 > （merge `534d21f`），审查线 #83–#86、插件线 shim、记忆交接均已 commit。工作树另有一笔
@@ -79,6 +98,10 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
 
 ### 3.3 插件线 —— boardwise-dsh（发给 dsh 用户的产品面）
 
+- **540B7 当前工作树**：根 shim 与 `dsh-plugin/package.json` 为 0.5.22；`index.ts` 仅组装
+  review/shared/draw 注册，旧 8 工具顺序不变，新增离线 `boardwise_draw_compile` /
+  `boardwise_draw_lint` 共 10 工具。**127 passed / 1 skipped** + typecheck + build，离线 smoke 为
+  3 candidates/6 artifacts + page 8 pages/16 artifacts + lint replay 0；未热加载、未发布（下列为 0.1.3 历史）。
 - `dsh-plugin/package.json` 0.1.2 → **0.1.3**（commit `23b2a53`）：`npm run check` 全绿
   （50 passed / 1 skipped + typecheck + build），`npm pack` 出 `boardwise-dsh-0.1.3.tgz`，
   `npm publish --dry-run` exit 0。
@@ -157,10 +180,13 @@ cd dsh-plugin && npm run typecheck && npm test && npm run build
   （两小时黑箱 + 大上下文 = 幻觉与返工，060 实测被 timeout 斩）。整机全量并发槽只有 2
   （`tests/_process_guards.py` 在机器侧兜底，理由见 `AGENTS.md` §子代理纪律）；探针/脚本
   单进程；长命令带 timeout；交卷前收干净自己起的 daemon 与后台任务。
-- **证据惯例**：`evidence/<批号>/`（报告 + `probes/` + `raw/` + 产物 sha256）、`outputs/`、
-  `.tmp_*`——后两者与 `evidence/` 均 gitignore。变异验证 ≥2（**`cp` 备份 + `sha256`/`cmp`
-  还原，禁用 `git checkout --`**：它拉回 HEAD，会把未提交的改动整个冲掉）；append 落盘后
-  立刻 `grep -c` 独立计数防双执行。
+- **证据与目录惯例**：长期依据放 `evidence/<批号>/`（报告 + `probes/` + `raw/` + 产物 sha256），
+  可重跑审查产物放 `outputs/review/<批号>/`，一次性探针放 `.tmp_<批号>/`，pytest 用独立
+  `.tmp_pt_<批号>`。`evidence/`、`outputs/`、`.tmp_*` 默认 gitignore，既有跟踪文件不动；
+  未跟踪/ignored 不等于可回收。实验与 worktree 边界见
+  [`docs/workspace-conventions.md`](workspace-conventions.md)（540A）。
+  变异验证 ≥2（**`cp` 备份 + `sha256`/`cmp` 还原，禁用 `git checkout --`**：它拉回 HEAD，
+  会把未提交的改动整个冲掉）；append 落盘后立刻 `grep -c` 独立计数防双执行。
 
 ## 6. 还没定的（换会话/换 harness 时别自作主张）
 

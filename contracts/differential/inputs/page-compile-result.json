@@ -1,0 +1,580 @@
+{
+  "command": "compile",
+  "document": "page",
+  "ok": true,
+  "pages": [
+    {
+      "index": 0,
+      "key": "legality=0, findings=1, backflow=0, crossings=0, bends=0, cross_wire_length=0, area=184240",
+      "metrics": {
+        "page_cross_module_wire_length": 0,
+        "page_backflow_length": 0.0,
+        "page_crossings": 0.0,
+        "page_bends": 0.0,
+        "page_min_module_gap": 44.0,
+        "page_area": 184240.0
+      },
+      "geometrySha256": "59fff31b711e16d8ec591b8cabd85313a83c668c75cacf331dfa1cdf314285be",
+      "planGeometrySha256": "b76bce82bfe97c9f12967dc2aeea8682173276dd80dbfe33de49ee0cce556e1c",
+      "verdict": "pass",
+      "modules": [
+        {
+          "id": "pwr",
+          "origin": [
+            150.0,
+            735.0
+          ],
+          "frame": [
+            2.0,
+            592.0,
+            336.0,
+            818.5
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "sense"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "sense"
+            }
+          ]
+        },
+        {
+          "id": "sense",
+          "origin": [
+            410.0,
+            705.0
+          ],
+          "frame": [
+            380.0,
+            447.0,
+            492.0,
+            823.0
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "pwr"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "pwr"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "key": "legality=0, findings=1, backflow=0, crossings=0, bends=0, cross_wire_length=0, area=193640",
+      "metrics": {
+        "page_cross_module_wire_length": 0,
+        "page_backflow_length": 0.0,
+        "page_crossings": 0.0,
+        "page_bends": 0.0,
+        "page_min_module_gap": 69.0,
+        "page_area": 193640.0
+      },
+      "geometrySha256": "66e1eb3a2ad0c4b67824ae48bcc68d3a7aa4e9b47f01d148dc1875b069ee80d8",
+      "planGeometrySha256": "76087c75837b4d9cac467684a3f32945eb3852ca32f51c512a11606274fe2bd4",
+      "verdict": "pass",
+      "modules": [
+        {
+          "id": "pwr",
+          "origin": [
+            150.0,
+            735.0
+          ],
+          "frame": [
+            2.0,
+            592.0,
+            336.0,
+            818.5
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "sense"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "sense"
+            }
+          ]
+        },
+        {
+          "id": "sense",
+          "origin": [
+            435.0,
+            705.0
+          ],
+          "frame": [
+            405.0,
+            447.0,
+            517.0,
+            823.0
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "pwr"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "pwr"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "key": "legality=0, findings=1, backflow=0, crossings=0, bends=0, cross_wire_length=0, area=217224",
+      "metrics": {
+        "page_cross_module_wire_length": 0,
+        "page_backflow_length": 0.0,
+        "page_crossings": 0.0,
+        "page_bends": 0.0,
+        "page_min_module_gap": 44.0,
+        "page_area": 217224.0
+      },
+      "geometrySha256": "5a70773c897ce9c088824ade17150f5c4fb1046f36cd8a055efd097d7bb2c435",
+      "planGeometrySha256": "e78f98b52d67c07d284f564dd0a56e73d0e5ca9bd7682637fe5b3f37c8fa773b",
+      "verdict": "pass",
+      "modules": [
+        {
+          "id": "pwr",
+          "origin": [
+            150.0,
+            740.0
+          ],
+          "frame": [
+            2.0,
+            597.0,
+            336.0,
+            823.5
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "sense"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "sense"
+            }
+          ]
+        },
+        {
+          "id": "sense",
+          "origin": [
+            30.0,
+            435.0
+          ],
+          "frame": [
+            0.0,
+            177.0,
+            112.0,
+            553.0
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "pwr"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "pwr"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "key": "legality=0, findings=1, backflow=0, crossings=0, bends=0, cross_wire_length=0, area=217800",
+      "metrics": {
+        "page_cross_module_wire_length": 0,
+        "page_backflow_length": 0.0,
+        "page_crossings": 0.0,
+        "page_bends": 0.0,
+        "page_min_module_gap": 44.0,
+        "page_area": 217800.0
+      },
+      "geometrySha256": "f42f0dc82c4d21aac9482511e66f079bfe5b929676b23088bebdb4aa82c2008c",
+      "planGeometrySha256": "b3891eca1579b8478dfb16a3878be003c213303244174984a690965317911de7",
+      "verdict": "pass",
+      "modules": [
+        {
+          "id": "pwr",
+          "origin": [
+            180.0,
+            735.0
+          ],
+          "frame": [
+            2.0,
+            592.0,
+            396.0,
+            818.5
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "sense"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "sense"
+            }
+          ]
+        },
+        {
+          "id": "sense",
+          "origin": [
+            470.0,
+            705.0
+          ],
+          "frame": [
+            440.0,
+            427.0,
+            552.0,
+            823.0
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "pwr"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "pwr"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "key": "legality=0, findings=1, backflow=0, crossings=0, bends=0, cross_wire_length=0, area=225624",
+      "metrics": {
+        "page_cross_module_wire_length": 0,
+        "page_backflow_length": 0.0,
+        "page_crossings": 0.0,
+        "page_bends": 0.0,
+        "page_min_module_gap": 69.0,
+        "page_area": 225624.0
+      },
+      "geometrySha256": "0b8f8356dff506d611f7a6041221ae50df49b3d6b596eff55756ac05bb71fe3b",
+      "planGeometrySha256": "78b6baf4ec3cd25c6147e465128fd2a8334466e935b1bc26d91e0ec5c010e616",
+      "verdict": "pass",
+      "modules": [
+        {
+          "id": "pwr",
+          "origin": [
+            150.0,
+            740.0
+          ],
+          "frame": [
+            2.0,
+            597.0,
+            336.0,
+            823.5
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "sense"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "sense"
+            }
+          ]
+        },
+        {
+          "id": "sense",
+          "origin": [
+            30.0,
+            410.0
+          ],
+          "frame": [
+            0.0,
+            152.0,
+            112.0,
+            528.0
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "pwr"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "pwr"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "key": "legality=0, findings=1, backflow=0, crossings=0, bends=0, cross_wire_length=0, area=227700",
+      "metrics": {
+        "page_cross_module_wire_length": 0,
+        "page_backflow_length": 0.0,
+        "page_crossings": 0.0,
+        "page_bends": 0.0,
+        "page_min_module_gap": 69.0,
+        "page_area": 227700.0
+      },
+      "geometrySha256": "19a3849641e9fb508916986e28645f48dab38a041774734299a1a886c5aa5432",
+      "planGeometrySha256": "5f821165c4e3af74e1b02c49d3ef1fff57eaa04af8ce99c954b24fd791dcce4c",
+      "verdict": "pass",
+      "modules": [
+        {
+          "id": "pwr",
+          "origin": [
+            180.0,
+            735.0
+          ],
+          "frame": [
+            2.0,
+            592.0,
+            396.0,
+            818.5
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "sense"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "sense"
+            }
+          ]
+        },
+        {
+          "id": "sense",
+          "origin": [
+            495.0,
+            705.0
+          ],
+          "frame": [
+            465.0,
+            427.0,
+            577.0,
+            823.0
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "pwr"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "pwr"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "key": "legality=0, findings=1, backflow=0, crossings=0, bends=0, cross_wire_length=0, area=263934",
+      "metrics": {
+        "page_cross_module_wire_length": 0,
+        "page_backflow_length": 0.0,
+        "page_crossings": 0.0,
+        "page_bends": 0.0,
+        "page_min_module_gap": 44.0,
+        "page_area": 263934.0
+      },
+      "geometrySha256": "a9016d28c9c7f5bd60e04a0e82679a46514a9b66eb5f781d2aa765a7778ffdcc",
+      "planGeometrySha256": "dbe236dc6f3c46dd5f60ab63da18270d20fc753edaa6ba699a1dde998999eb27",
+      "verdict": "pass",
+      "modules": [
+        {
+          "id": "pwr",
+          "origin": [
+            180.0,
+            740.0
+          ],
+          "frame": [
+            2.0,
+            597.0,
+            396.0,
+            823.5
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "sense"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "sense"
+            }
+          ]
+        },
+        {
+          "id": "sense",
+          "origin": [
+            30.0,
+            435.0
+          ],
+          "frame": [
+            0.0,
+            157.0,
+            112.0,
+            553.0
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "pwr"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "pwr"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "key": "legality=0, findings=1, backflow=0, crossings=0, bends=0, cross_wire_length=0, area=273834",
+      "metrics": {
+        "page_cross_module_wire_length": 0,
+        "page_backflow_length": 0.0,
+        "page_crossings": 0.0,
+        "page_bends": 0.0,
+        "page_min_module_gap": 69.0,
+        "page_area": 273834.0
+      },
+      "geometrySha256": "9466a3f63eab534a070a24723bbfb920b5621707eed2129816c7600789da0cb1",
+      "planGeometrySha256": "fbd65233538e10806b7716559ed8107791fe4f978121ba4c91ab10f62c3b4f77",
+      "verdict": "pass",
+      "modules": [
+        {
+          "id": "pwr",
+          "origin": [
+            180.0,
+            740.0
+          ],
+          "frame": [
+            2.0,
+            597.0,
+            396.0,
+            823.5
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "sense"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "sense"
+            }
+          ]
+        },
+        {
+          "id": "sense",
+          "origin": [
+            30.0,
+            410.0
+          ],
+          "frame": [
+            0.0,
+            132.0,
+            112.0,
+            528.0
+          ],
+          "ports": [
+            {
+              "net": "GND",
+              "kind": "flag",
+              "partner": "pwr"
+            },
+            {
+              "net": "VIN",
+              "kind": "flag",
+              "partner": "pwr"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "failures": [],
+  "categories": [],
+  "rejected": [],
+  "moduleFailureRounds": {},
+  "moduleLabelFallbacks": {},
+  "modules": {
+    "pwr": {
+      "ok": true,
+      "categories": []
+    },
+    "sense": {
+      "ok": true,
+      "categories": []
+    }
+  },
+  "notes": [
+    "boardwise-pagecompiler/1: lattice 5 units, module gap 40 (ladder 1x, 1.6x), frame padding 20",
+    "8 legal page(s) from 8 variant(s) built; the gate was the independent readability checker (the nine on the merged drawing, the page domain on the frames), and the ranking compares its layers without summing them"
+  ],
+  "previews": [
+    "<OUT>/compile-page/cand1.svg",
+    "<OUT>/compile-page/cand1.page.json",
+    "<OUT>/compile-page/cand2.svg",
+    "<OUT>/compile-page/cand2.page.json",
+    "<OUT>/compile-page/cand3.svg",
+    "<OUT>/compile-page/cand3.page.json",
+    "<OUT>/compile-page/cand4.svg",
+    "<OUT>/compile-page/cand4.page.json",
+    "<OUT>/compile-page/cand5.svg",
+    "<OUT>/compile-page/cand5.page.json",
+    "<OUT>/compile-page/cand6.svg",
+    "<OUT>/compile-page/cand6.page.json",
+    "<OUT>/compile-page/cand7.svg",
+    "<OUT>/compile-page/cand7.page.json",
+    "<OUT>/compile-page/cand8.svg",
+    "<OUT>/compile-page/cand8.page.json"
+  ]
+}

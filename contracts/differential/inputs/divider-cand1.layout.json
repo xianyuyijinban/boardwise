@@ -1,0 +1,220 @@
+{
+  "kind": "boardwise-layout-plan",
+  "planVersion": 1,
+  "source": {
+    "circuitSha256": "c983a3883c3ee9af595c932f42e0e7b1060849e3682691ce29924e9646f63758",
+    "presentationSha256": "69269aee0b1e1fb65fddc3625e6c3623543ce3c5c6a9a290974ad576e5207ac3"
+  },
+  "parts": [
+    {
+      "partId": "R1",
+      "reference": "R1",
+      "symbolRef": "R0402",
+      "symbolHash": "234ca8a7ff6a800fe421aa7f2dd548874d90550e9dc54fd53216eb5b616f7da0",
+      "x": 95.0,
+      "y": -130.0,
+      "rotation": 0.0,
+      "mirror": false
+    },
+    {
+      "partId": "R2",
+      "reference": "R2",
+      "symbolRef": "R0402",
+      "symbolHash": "234ca8a7ff6a800fe421aa7f2dd548874d90550e9dc54fd53216eb5b616f7da0",
+      "x": 95.0,
+      "y": -270.0,
+      "rotation": 0.0,
+      "mirror": false
+    }
+  ],
+  "segments": [
+    {
+      "net": "VIN",
+      "points": [
+        [
+          95.0,
+          -80.0
+        ],
+        [
+          95.0,
+          -70.0
+        ]
+      ]
+    },
+    {
+      "net": "TAP",
+      "points": [
+        [
+          95.0,
+          -200.0
+        ],
+        [
+          125.0,
+          -200.0
+        ]
+      ]
+    },
+    {
+      "net": "TAP",
+      "points": [
+        [
+          95.0,
+          -220.0
+        ],
+        [
+          95.0,
+          -180.0
+        ]
+      ]
+    },
+    {
+      "net": "GND",
+      "points": [
+        [
+          95.0,
+          -320.0
+        ],
+        [
+          95.0,
+          -350.0
+        ]
+      ]
+    }
+  ],
+  "junctions": [
+    {
+      "net": "TAP",
+      "x": 95.0,
+      "y": -200.0
+    }
+  ],
+  "labels": [
+    {
+      "net": "TAP",
+      "text": "TAP",
+      "x": 125.0,
+      "y": -200.0,
+      "rotation": 0.0,
+      "bbox": [
+        133.0,
+        -204.5,
+        157.0,
+        -195.5
+      ]
+    }
+  ],
+  "powerSymbols": [
+    {
+      "symbolRef": "PWR-VIN",
+      "symbolHash": "06bc430da05f4d0de3f63acd0304e8225fa49ded13cac6df3d2d7fb7f7b3bf3a",
+      "net": "VIN",
+      "x": 95.0,
+      "y": -70.0,
+      "rotation": 0.0
+    },
+    {
+      "symbolRef": "PWR-GND",
+      "symbolHash": "cf0b073bf168fc101c5a19d53218fa9f2471b74c976d853894310831ae699deb",
+      "net": "GND",
+      "x": 95.0,
+      "y": -350.0,
+      "rotation": 0.0
+    }
+  ],
+  "texts": [
+    {
+      "kind": "reference",
+      "text": "R1",
+      "partId": "R1",
+      "x": 120.5,
+      "y": -123.0,
+      "rotation": 0.0,
+      "bbox": [
+        113.0,
+        -127.5,
+        128.0,
+        -118.5
+      ]
+    },
+    {
+      "kind": "value",
+      "text": "10k",
+      "partId": "R1",
+      "x": 124.0,
+      "y": -137.0,
+      "rotation": 0.0,
+      "bbox": [
+        113.0,
+        -141.5,
+        135.0,
+        -132.5
+      ]
+    },
+    {
+      "kind": "reference",
+      "text": "R2",
+      "partId": "R2",
+      "x": 120.5,
+      "y": -263.0,
+      "rotation": 0.0,
+      "bbox": [
+        113.0,
+        -267.5,
+        128.0,
+        -258.5
+      ]
+    },
+    {
+      "kind": "value",
+      "text": "10k",
+      "partId": "R2",
+      "x": 124.0,
+      "y": -277.0,
+      "rotation": 0.0,
+      "bbox": [
+        113.0,
+        -281.5,
+        135.0,
+        -272.5
+      ]
+    }
+  ],
+  "target": {
+    "projectUuid": "",
+    "boardUuid": "",
+    "pageUuid": "",
+    "hostVersion": "",
+    "connectorVersion": "",
+    "snapshotSha256": ""
+  },
+  "evidence": {
+    "checker": "boardwise-readability/1",
+    "hardViolations": [],
+    "grammarFindings": [],
+    "softMetrics": {
+      "crossings": 0.0,
+      "bends": 0.0,
+      "wire_length": 110.0,
+      "unaligned_part_pairs": 0.0,
+      "min_text_gap": 5.0,
+      "occupied_ratio": 0.0026434984293193715,
+      "whitespace_ratio": 0.9973565015706807
+    },
+    "softReasons": {
+      "wire_length": "4 segment(s); longest segments[2] = 40 units | 4 segment(s); longest segments[1] = 30 units | 4 segment(s); longest segments[3] = 30 units",
+      "min_text_gap": "closest pair texts[0] and texts[1]: 5 units apart (canvas units, edge to edge)",
+      "whitespace_ratio": "page 1200 x 1000 = 1.2e+06 units^2; 11 box(es) cover 3172.2 units^2 = 0.26% | whitespace = 1 - 0.0026 = 0.9974"
+    },
+    "notes": [
+      "candidate from boardwise-drawcompiler/1 variant spacing=1 pose-variant=0"
+    ]
+  },
+  "verdict": "pass",
+  "geometrySha256": "62a272b1968a1d037a6854f38299223f8597ab4acd06fed25f11d7476ca056b1",
+  "notes": [
+    "compiled by boardwise-drawcompiler/1: spacing=1 pose-variant=0; axis column, grid 5",
+    "references are the CircuitSpec's own ids: an offline plan has not landed, so the designator is assigned when it does",
+    "net TAP: tap stub 30 units right with the net's label at its end (053 sec.3: 抽头直接可见)",
+    "net TAP: trunk along the chain's own pins, then every other pin attached"
+  ]
+}

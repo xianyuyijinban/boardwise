@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boardwise.dev/contracts/review-report-v1.schema.json",
+  "title": "boardwise ReviewReport (boardwise.checkup/7)",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema", "generatedAt", "source", "model", "summary", "pending", "drc",
+    "modules", "findings", "unreviewed_parts", "reviewedByShelf",
+    "accepted_unknown", "declaredPassiveExempt", "metadataValueConfirmed",
+    "metadataValueConflicts", "metadataStates", "needs_datasheet",
+    "warning_triage", "ai_slots", "shelfPath", "environment", "evidence",
+    "completion", "board_report"
+  ],
+  "properties": {
+    "schema": {"const": "boardwise.checkup/7"},
+    "generatedAt": {"type": "string"},
+    "source": {
+      "type": "object",
+      "required": ["tier", "tierLabel", "attempts", "notes"],
+      "properties": {
+        "tier": {"type": "string"},
+        "tierLabel": {"type": "string"},
+        "attempts": {"type": "array"},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["view", "components", "nets", "designators", "boards"],
+      "properties": {
+        "view": {"type": "string"},
+        "components": {"type": "integer", "minimum": 0},
+        "nets": {"type": "integer", "minimum": 0},
+        "designators": {"type": "array", "items": {"type": "string"}},
+        "boards": {"type": "array"}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": ["errorCount", "warnCount", "infoCount", "exitCode", "mayClaimPassed"],
+      "properties": {
+        "errorCount": {"type": "integer", "minimum": 0},
+        "warnCount": {"type": "integer", "minimum": 0},
+        "infoCount": {"type": "integer", "minimum": 0},
+        "exitCode": {"type": "integer", "enum": [0, 1, 2, 3]},
+        "mayClaimPassed": {"type": "boolean"},
+        "conclusion": {"type": "string"}
+      }
+    },
+    "pending": {"type": "object"},
+    "drc": {"type": "object"},
+    "modules": {"type": "array"},
+    "findings": {"type": "array"},
+    "unreviewed_parts": {"type": "array"},
+    "reviewedByShelf": {"type": "array"},
+    "accepted_unknown": {"type": "array"},
+    "declaredPassiveExempt": {"type": "array"},
+    "metadataValueConfirmed": {"type": "array"},
+    "metadataValueConflicts": {"type": "array"},
+    "metadataStates": {"type": "object"},
+    "needs_datasheet": {"type": "array"},
+    "warning_triage": {"type": "array"},
+    "ai_slots": {"type": "object"},
+    "shelfPath": {"type": "string"},
+    "environment": {
+      "type": "object",
+      "required": ["writeAllowed"],
+      "properties": {"writeAllowed": {"const": false}}
+    },
+    "evidence": {
+      "type": "object",
+      "required": ["schema", "channels", "coverage", "delivery"],
+      "properties": {
+        "schema": {"const": "boardwise.review-evidence/1"},
+        "channels": {"type": "object"},
+        "coverage": {"type": "object"},
+        "delivery": {
+          "type": "object",
+          "required": ["status", "note", "requiredDisclosures"],
+          "properties": {
+            "status": {"enum": ["complete", "partial"]},
+            "note": {"type": "string"},
+            "requiredDisclosures": {"type": "array"}
+          }
+        }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "required": ["coverage", "sourceVersions", "verdict", "verdictWhy"],
+      "properties": {
+        "coverage": {"type": "object"},
+        "sourceVersions": {"type": "object"},
+        "verdict": {"enum": ["complete", "complete-with-open-items", "incomplete"]},
+        "verdictWhy": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "layout_review": {
+      "type": "object",
+      "x-presence": "Optional; absent when the aesthetics switch is off, not an empty object."
+    },
+    "architecture": {
+      "type": "object",
+      "x-presence": "Optional; absent when no skeleton was generated."
+    },
+    "intent": {
+      "type": "object",
+      "x-presence": "Optional; accompanies architecture when intent enumeration exists."
+    },
+    "pcb_review": {
+      "type": "object",
+      "x-presence": "Optional; absent means the runner produced no section, never an empty review."
+    },
+    "board_report": {"type": "object"},
+    "conclusion": {
+      "type": "object",
+      "x-presence": "Usually derived; may be absent when derivation fails, so not unconditionally required."
+    },
+    "renderErrors": {
+      "type": "array",
+      "items": {"type": "string"},
+      "x-presence": "Optional additive list used when a derived section fails."
+    }
+  }
+}

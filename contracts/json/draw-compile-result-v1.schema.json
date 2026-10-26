@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boardwise.dev/contracts/draw-compile-result-v1.schema.json",
+  "title": "boardwise draw compile --json result",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["command", "ok", "labelFallbacks", "candidates", "failures", "failureRounds", "categories", "rejected", "notes", "previews"],
+  "properties": {
+    "command": {"const": "compile"},
+    "ok": {"type": "boolean", "x-meaning": "Compiler result, not a board review verdict."},
+    "labelFallbacks": {"type": "array"},
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["index", "key", "metrics", "geometrySha256", "verdict"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "key": {"type": "string"},
+          "metrics": {"type": "object"},
+          "geometrySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "verdict": {"enum": ["pass", "fail", "not-run"]}
+        }
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["category", "detail", "action"],
+        "properties": {
+          "category": {"enum": ["facts-missing", "circuit-invalid", "layout-unsat", "presentation-poor"]},
+          "detail": {"type": "string"},
+          "action": {"type": "string"}
+        }
+      }
+    },
+    "failureRounds": {"type": "array"},
+    "categories": {
+      "type": "array",
+      "items": {"enum": ["facts-missing", "circuit-invalid", "layout-unsat", "presentation-poor"]}
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["variant", "reason"],
+        "properties": {
+          "variant": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "notes": {"type": "array", "items": {"type": "string"}},
+    "previews": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?:.*[/\\\\])?(?:[^./\\\\]|[^./\\\\][^/\\\\]+|\\.[^./\\\\][^/\\\\]*|\\.\\.[^/\\\\]+)$",
+        "x-meaning": "A preview must name a file: its last path segment — the text after the last separator, with '/' and a backslash read alike on every host — must be non-empty and must not be exactly '.' or '..'. A middle './' segment is ordinary path text and stays legal, and a name that merely begins with dots ('.hidden', '..x') is a file both runners name the same way. A trailing separator, or a final '.'/'..', made the two runners disagree on the basename, so the schema refuses it instead. The pattern is deliberately lookahead/backreference-free: it is validated by Python's re and Rust's regex."
+      }
+    }
+  }
+}

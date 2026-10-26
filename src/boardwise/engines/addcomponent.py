@@ -10,8 +10,8 @@ Three rules the rest of the slice leans on:
 
 * **The idempotence probe is the rule's own judgement** (§二.5). It is not
   re-implemented here: :func:`probe_already_applied` calls
-  `rules.decap.cap_candidates_on` (the rule's inventory of grounded capacitors
-  on a net) and `rules.decap.decide_required_cap` (the rule's comparison). A
+  `core.decap.cap_candidates_on` (the rule's inventory of grounded capacitors
+  on a net) and `core.decap.decide_required_cap` (the rule's comparison). A
   second, similar-looking judgement is exactly what the task book forbids, and
   "the two agreed last week" is not a property either of them can hold.
 * **Determinism, never convenience.** The designator is the lowest free number
@@ -44,7 +44,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from ..rules.decap import CapDecision, CapCandidate, cap_candidates_on, decide_required_cap
+from ..core.decap import CapDecision, CapCandidate, cap_candidates_on, decide_required_cap
 
 #: The landing ladder's step, in canvas units. Deliberately the same 5-unit grid
 #: `engines/layout.py` routes on (asserted in the tests): placing a part off the

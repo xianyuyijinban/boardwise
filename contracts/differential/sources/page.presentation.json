@@ -1,0 +1,9 @@
+{
+  "modules": [
+    {"id":"pwr","parts":["U1","C1","C2"],"role":"regulator","grammarRef":"ldo"},
+    {"id":"sense","parts":["R1","R2"],"role":"divider","grammarRef":"voltage-divider"}
+  ],
+  "flow": [["pwr","sense"]],
+  "portRoles": {"VIN":"input","3V3":"output"},
+  "directWiringObligations": [{"nets":["VIN","3V3"],"note":"the regulator rails are wired"}]
+}

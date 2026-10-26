@@ -69,3 +69,22 @@
 
 - **两份过时 DRAFT 标注归档**：051 早有「已被 052 取代」横幅；088b-deltas 三条偏差已由岳 10-02 逐条裁定并随 followups 落账，本轮加归档横幅，只留作裁决原文。
 - **189A1 不改**：`read_stackup.used_copper_layer_ids` 维持「文档声明口径」。改读 `effective_layer_ids` 会把通孔盘的内层带进 used 集，与 `test_125_pcb_measure.py::test_foc_main_board_used_layers` 的实读 `[1,2,16]`（岳 2026-10-07 亲裁值）冲突；裁决注释已在 `core/measure.py:321`。
+
+## 540 平台准备与后续双主线（2026-10-25）
+
+| 工作 | 当前状态 | 下一步 / 锁 |
+|---|---|---|
+| 540A 工作区约定 | 完成；批准的回收站清理与目录守卫均有记录 | 新探针按固定目录，不扩大清理 |
+| 540B1–B7 | 完成；142 模块/0 legacy、24 CLI 命令、DSH 10 工具（DSH 现 **127 passed / 1 skipped**）；行为矩阵见 `evidence/540/b-behavior-equivalence.md` | 不提交、不发布；shared/CLI/bridge 改动走集成锁 |
+| 540B8 派单与路线 | 完成；行为矩阵、review/draw/shared 三入口与集成锁已建立 | 文档/owner/layer/workspace/CLI 联合复核 85 passed |
+| 540B 对抗修复 | 完成；B2 权威化（caller-held component 为准，detached/key-mismatch/stale-copy 不再误判），指纹 direct `ea1d06e0` / recursive `25b7de70`（**源码位置变化，非判决改变**），`test_126a` + `test_540_shared_connectivity` **28 passed**；bridge/doc 邻域 **160 passed**，Origin 只豁免精确 `https://client`、lookalike 有安全负例 | 旧值 `7e3ac51a`/`43979be9` 留作历史；`rm -rf` 删除纪律偏差已在 540B 留痕 |
+| 540C Rust 平台 | 完成；8 个合同文件 **346 passed**、Rust **45 passed / 4 ignored** + 显式 **4 passed**、真实差分 **5 case**（新增 `compile-page-result-projection`）双侧 normalized SHA `5230498…` 相同（caseBook `7df2c400…`），fmt/clippy 零警告；旧 LayoutPlan golden `62a272b1…` 不变 | 证据 `evidence/540/c-acceptance.md`、`c-differential-comparison-adversarial.json`；不批量翻译、不全局安装 |
+| 真机追加验收（只读） | 完成但**不通过**：R1 friendlyName `test` / 活动页 P1 / `consistent=true`；doctor **8/9**（运行 connector 0.5.21 ≠ 仓库 0.5.22，未热更新）；checkup **exit 3** / `conclusion=incomplete`（0 器件 0 网络）、`delivery=partial`；finalize 两次 exit 0、15 文件幂等；`livePcb=ok` 只是读数通道，视觉复核未完成、`netlist=missing` | 证据 `evidence/540/real-machine-instance-20261025-233933/25-final-report.md` 与 `outputs/review/540/`；环境修复（daemon 重启 / revoke）仅经明确授权后执行，本轮未热更新、未写设计 |
+| 最终集成验收 | 分层记：首轮 `evidence/540/final-regression.md`（Python 7876/21/5、connector 536、DSH 122/1、Rust 7、4 case）；对抗后首轮 `final-regression-adversarial.md`（Python **8206/19/5/1 failed**，唯一红为 rulebody 指纹钉、已按 B2 下沉补钉；connector 536、DSH 127/1、Rust 45+显式 4、5 case） | **最终候选结果以 `evidence/540/candidate-regression.md` 为准（由后续步骤产生，未产生前不算通过）**；540 未提交，不得声称全绿 |
+
+- 审查线派单：`tasks/review-line.md`；绘制线派单：`tasks/draw-line.md`；shared 集成锁：
+  `tasks/shared-platform.md`。两线可独立派小批，shared/全量/真机串行，算法与迁移不同批。
+- 0.6.x：绘制算法与 Rust strangler 并行；新工具/引擎默认 Rust，旧工具垂直迁移。
+- 0.7.0：Rust 接管全部受支持主流程，不是逐行翻译全部 Python；connector/DSH 薄适配可留 TS。
+- 539 已 commit `0f638de`，其后随 0.5.22 的 `63df468`/`23f030f` 历史一并包含；
+  540 仍未提交。0.6.0 的 200A/B/C 与人工反激视觉锚不因平台准备而关闭。

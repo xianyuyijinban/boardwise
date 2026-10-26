@@ -1,7 +1,7 @@
 {
   "name": "boardwise-dsh",
   "version": "0.5.22",
-  "description": "DeepSeek Harness (dsh) tools for boardwise: checkup / arch / doctor / bridge, spawned from the local boardwise CLI. Thin adapter — every judgement stays in the Python side.",
+  "description": "DeepSeek Harness tools for boardwise review, shared diagnostics and offline draw compile/lint. Thin CLI/JSON adapters — every judgement stays in Python.",
   "license": "MIT",
   "type": "module",
   "main": "dsh-plugin/lib/index.js",

@@ -24,6 +24,23 @@
 怎么干活（命令/子代理纪律/证据惯例）。**换 harness、开新会话、或换人接手时先读它**，
 它只做路由，细节一律指到上面那几份权威文件。
 
+## 业务线派单（540B8）
+
+- 审查线从 [`tasks/review-line.md`](tasks/review-line.md) 派单；绘制线从
+  [`tasks/draw-line.md`](tasks/draw-line.md) 派单。两者共享一个模块化单体，不复制业务逻辑。
+- shared parser/model/bridge/core/CLI 的改动一律走
+  [`tasks/shared-platform.md`](tasks/shared-platform.md) 的**集成锁**，不得夹在规则或算法批里。
+- shared、全量测试与真机串行；算法与迁移不得同批。当前没有为三条线创建专用 worktree，
+  任何 `git worktree add/remove/prune` 仍逐次问岳。
+
+## 工作区落点
+
+- 一次性探针/中间态放 `.tmp_<批号>/`，pytest 用独立 `.tmp_pt_<批号>`；**不在仓库根散放临时文件**。
+- 长期依据放 `evidence/<批号>/`，可重跑审查产物放 `outputs/review/<批号>/`；两者默认本地，
+  未跟踪/ignored 不等于可回收。实验说明与生成物分别按 `experiments/`、`outputs/experiments/` 落位。
+- 分类、保留/归档/回收判据和 worktree 边界见
+  [`docs/workspace-conventions.md`](docs/workspace-conventions.md)；移动/删除与 git 写仍逐次问岳。
+
 ## 红线
 
 1. **不动 git**：不 `commit` / `add` / `checkout` / `restore` / `push`。任何 git 变更逐次经用户点头。
@@ -36,9 +53,11 @@
    .venv/Scripts/python.exe -m pytest tests/ -q -n 4 --dist loadfile --basetemp=.tmp_pt_home
    cd connector && npm test && npm run typecheck
    cd dsh-plugin && npm run typecheck && npm test && npm run build
+   cd rust && cargo fmt --check && cargo clippy -- -D warnings && cargo test
    ```
 
-   四线（pytest / connector / dsh-plugin / tsc）全绿才交卷。
+   既有四线（pytest / connector / dsh-plugin / tsc）与 540C Rust workspace 全绿才交卷；
+   Rust 构建/差分与迁移派单见 [`docs/rust-platform.md`](docs/rust-platform.md)。
 3. **真机只碰 `test` / `test2`**：动手前先 `boardwise bridge status`（daemon 会自行死亡），
    `doc.list` 报的焦点工程名与任务书**逐字一致**才算对上身份。**禁地**：毕设FOC驱动板、
    `CH340G.eprj2`、`ROBOT ctrl FOC.eprj2`，以及一切真实工程；任务书没点名 = 不许写。

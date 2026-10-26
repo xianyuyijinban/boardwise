@@ -1367,8 +1367,40 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # **公式与阈值未改**，判决语义的锚是 `tests/test_094_sense_bias.py`（最终
     # 41 passed）；两个值都是在**当前这棵工作树**上按本文件上方 171 条同一配方直接
     # 量得（direct 走 `*.py` 直读、recursive 走 `rulebody_fingerprint`）。
-    assert old_digest == "cda23a06"
-    assert recursive == "83d0e91c", (
+    # **540B1–B3 moved BOTH** — direct cda23a06 -> 7e3ac51a，recursive 83d0e91c ->
+    # 43979be9。相对 539 提交，`rules/` 只有三个文件变化：`pcb/focground.py` 的
+    # 地网域词表下移 `core/netdomains.py`（B1）；`facts.py` 的自动网名与引脚连通
+    # 原语分别下移 `core/netdomains.py` / `core/connectivity.py`（B1/B2）；
+    # `decap.py` 的候选库存、门控电容识别、值恢复与 CapDecision 下移
+    # `core/decap.py`（B3）。旧导入面仍 re-export 同一对象；Finding、严重度、
+    # 模式和同网检查包装留在 review。摘要是源码位置指纹，不是行为指纹：这里的
+    # 位移来自源码下沉，三个 `core/` 新文件按本配方定义不进摘要；行为锚是
+    # `tests/test_540_shared_{naming,connectivity,decap}.py` 及各自邻域回归。
+    # 两个值均在当前树上直接量得，没有改判规则、公式或阈值。
+    # **540B2 adversarial hardening moved BOTH** — direct 7e3ac51a -> **ea1d06e0**，
+    # recursive 43979be9 -> **25b7de70**。原因是**权威化**而非判决变化：修复让
+    # `component_net(comp, pin)` 成为调用方所持 component 的**唯一**连通读数，
+    # `facts._pin_net` 直接别名它（`facts._pin_net is connectivity.component_net`，
+    # 见 `test_facts_pin_net_is_the_shared_reading_not_a_second_copy`），于是
+    # **detached**（模型里没有这颗）、**key-mismatch**（字典键不是位号）、
+    # **stale-copy**（模型里是同位的旧副本）三种输入不再被 model lookup 覆盖，
+    # 一律按调用方手里那个对象的引脚作答。落点仍是源码位置：直读面只有
+    # `rules/facts.py`（别名收口），其余在 `core/connectivity.py` 等
+    # `core/` 下沉文件里 —— 后者按本配方定义（只读 `rules/` 的 `*.py` 直读 /
+    # `rules/` 下递归）本来就不进 direct 摘要，recursive 只随 `rules/` 内变化移动。
+    # **这里没有改公式、阈值或 verdict**：摘要移动是源码位置指纹的预期结果。
+    # 行为锚是 `tests/test_540_shared_connectivity.py` 的五条：上面那条身份断言
+    # 加 `test_a_detached_component_answers_about_its_own_pins` /
+    # `test_a_component_under_a_different_key_still_answers_about_itself` /
+    # `test_a_stale_copy_is_judged_on_its_own_pins_not_the_models` /
+    # `test_an_attached_component_keeps_the_frozen_answer_and_one_net`（attached
+    # 时三路读数同网且判决保持冻结）；变异与 SHA-256 恢复证据见
+    # `evidence/540/b-behavior-equivalence.md` 与
+    # `evidence/540/final-mutation-restoration-check.log`。两个值同样在**当前这棵
+    # 工作树**上按上方同一配方直接量得，recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody` 一致。
+    assert old_digest == "ea1d06e0"
+    assert recursive == "25b7de70", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

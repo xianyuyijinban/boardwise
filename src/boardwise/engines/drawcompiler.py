@@ -128,10 +128,12 @@ from boardwise.core.layoutplan import (
 )
 from boardwise.core import textmetrics
 from boardwise.core.presentationspec import LABEL_LABEL, PresentationSpec
-#: 173/C: the isolation-domain word list is a **rule's** (133c), and the drawing
-#: reads it instead of keeping a second one. Read-only: `domain_of` is a pure
-#: name test, and importing it here does not make this engine a rules consumer.
-from boardwise.rules.pcb.focground import domain_of
+#: 540B1: the isolation-domain word list now lives in the shared vocabulary
+#: (``core/netdomains.py``), so the drawing chain and the reviewer read one copy
+#: of it without this engine importing the rules layer. Read-only: `domain_of`
+#: is a pure name test, and importing it here does not make this engine a rules
+#: consumer — the rules import set below is empty by construction.
+from boardwise.core.netdomains import domain_of
 from boardwise.core.symbolprofile import (
     FLAG_GLYPH_KIND_GND,
     FLAG_GLYPH_ROTATION_OFFSETS,
@@ -6426,12 +6428,13 @@ def _flag_rotation(direction: tuple[float, float], kind: str) -> float:
 def _ground_domain(net_id: str) -> str:
     """Which ground domain a net's **name** puts it in, keyed as 155/173 read it.
 
-    ``focground.domain_of`` is the word list (it is the one this repo audits the
-    isolation domains with), and it answers ``power`` / ``logic`` / ``""``.
-    ``""`` is not a domain — it is 「this drawing spells its ground something the
-    word list does not carry」 (``SEC_GND``, whose name 145a taught the *ground*
-    vocabulary but not this table's two prefixes) — so an unclassified ground
-    keys on its own name rather than being filed under a domain it is not in.
+    ``core.netdomains.domain_of`` is the word list (it is the one this repo
+    audits the isolation domains with), and it answers ``power`` / ``logic`` /
+    ``""``. ``""`` is not a domain — it is 「this drawing spells its ground
+    something the word list does not carry」 (``SEC_GND``, whose name 145a
+    taught the *ground* vocabulary but not this table's two prefixes) — so an
+    unclassified ground keys on its own name rather than being filed under a
+    domain it is not in.
     """
     return domain_of(net_id) or net_id
 

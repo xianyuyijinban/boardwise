@@ -152,9 +152,16 @@ def test_holdout_evidence_and_the_readme_stay_consistent():
         )
 
 
+def _cli_registration_text() -> str:
+    """All argparse registration sources, after the 540 command-surface split."""
+    package = REPO / "src" / "boardwise"
+    sources = [package / "cli.py", *sorted((package / "commands").rglob("*.py"))]
+    return "\n".join(path.read_text(encoding="utf-8") for path in sources)
+
+
 def test_the_harness_default_stays_leak_proof():
     """审计确认过的机制钉死：`--split` 默认 `dev`（holdout 不显式给就进不了分母）。"""
-    source = (REPO / "src" / "boardwise" / "cli.py").read_text(encoding="utf-8")
+    source = _cli_registration_text()
     split_block = re.search(
         r'add_argument\(\s*"--split",.*?default="(?P<default>[a-z]+)"', source, re.DOTALL
     )
@@ -166,13 +173,13 @@ def test_the_harness_default_stays_leak_proof():
 
 
 # ============================================================ issue #58-#60
-#: 命令面抽取：README/SKILL 提到的命令必须与 cli.py 的注册表**双向**对拍（issue #60
+#: 命令面抽取：README/SKILL 提到的命令必须与 cli.py + commands/ 的注册表**双向**对拍（issue #60
 #: 的「contract-drift 同一把尺子对准自己」+ issue #62 的反向那一半）。只数**首词是真
 #: 命令**的序列——散文里的「boardwise daemon」不是命令提及（:data:`PROSE_AFTER_BOARDWISE`
 #: 逐个声明）；真命令的第二个词必须是它注册过的子命令。
 def _cli_commands() -> tuple[set[str], dict[str, set[str]]]:
-    """（顶层命令集, 顶层 -> 子命令集），全部从 cli.py 的 argparse 注册处直读。"""
-    source = (REPO / "src" / "boardwise" / "cli.py").read_text(encoding="utf-8")
+    """（顶层命令集, 顶层 -> 子命令集），从 assembly 与 commands/ 注册处直读。"""
+    source = _cli_registration_text()
     tops = dict(re.findall(r'(\w+)\s*=\s*sub\.add_parser\(\s*"([^"]+)"', source))
     subparsers = dict(re.findall(r'(\w+)_sub\s*=\s*(\w+)\.add_subparsers', source))
     tree: dict[str, set[str]] = {name: set() for name in tops.values()}

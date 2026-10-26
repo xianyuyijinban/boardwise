@@ -20,7 +20,7 @@ spaces"). The rules below are what keeps the next one from happening quietly.
 
 The layering graph (allowed imports, arrows point one way):
 
-    cli / __init__   (assembly — may import anything)
+    cli / commands / __init__   (assembly — may import anything)
       └── engines    → core, parsers, rules
       └── bridge     → itself only
       └── parsers    → core
@@ -48,7 +48,8 @@ ALLOWED = {
     # daemon's imports, not by importing engines from inside a frame handler.
     "bridge": frozenset(),
     "render": frozenset({"core"}),
-    # cli.py and the package __init__ are where the layers are assembled.
+    # cli.py, commands/ and the package __init__ are where layers are assembled.
+    # The finer 540 owner guard restricts line-owned modules inside commands/.
     "(top)": frozenset(LAYERS),
 }
 
@@ -57,6 +58,8 @@ SELF = object()  # sentinel: an import that stays inside its own layer
 
 def _layer_of(path: Path) -> str:
     relative = path.relative_to(PACKAGE)
+    if len(relative.parts) > 1 and relative.parts[0] == "commands":
+        return "(top)"
     return relative.parts[0] if len(relative.parts) > 1 else "(top)"
 
 

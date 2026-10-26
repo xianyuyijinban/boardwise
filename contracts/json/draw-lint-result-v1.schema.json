@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boardwise.dev/contracts/draw-lint-result-v1.schema.json",
+  "title": "boardwise draw lint --json result",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["page", "source", "findings", "counts", "exitCode", "textReadable", "notes", "thresholds"],
+  "properties": {
+    "page": {"type": "string"},
+    "source": {"enum": ["replay", "live"]},
+    "findings": {"type": "array"},
+    "counts": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["ERROR", "WARN", "INFO"],
+      "properties": {
+        "ERROR": {"type": "integer", "minimum": 0},
+        "WARN": {"type": "integer", "minimum": 0},
+        "INFO": {"type": "integer", "minimum": 0}
+      }
+    },
+    "exitCode": {"type": "integer", "enum": [0, 1]},
+    "textReadable": {
+      "type": "boolean",
+      "x-meaning": "False means text predicates were unreadable or skipped, not a clean page."
+    },
+    "notes": {"type": "array", "items": {"type": "string"}},
+    "thresholds": {"type": "object"}
+  }
+}

@@ -16,7 +16,6 @@ should recognise the other.
 from __future__ import annotations
 
 import json
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -114,6 +113,22 @@ def located(component_obj: Component, designator: str = "U1") -> "hunt.Located":
     )
 
 
+def _audit_path_in(audit_dir: Path | None) -> Path:
+    """`hunt-audit.jsonl` under a directory the *caller* named, or fail closed.
+
+    No fallback to the process tempdir: that is how a helper that was asked for
+    nothing wrote 168 directories into the repository root, and a test that
+    cannot say where its evidence belongs is a test whose evidence is not
+    evidence. The `ValueError` names both ways to satisfy the requirement.
+    """
+    if audit_dir is None:
+        raise ValueError(
+            "run_one needs an explicit audit location: pass audit=<hunt.AuditLog> "
+            "or audit_dir=<tmp_path>; there is no process-tempdir fallback"
+        )
+    return Path(audit_dir) / "hunt-audit.jsonl"
+
+
 def run_one(
     recorder: Recorder,
     component_obj: Component,
@@ -126,16 +141,52 @@ def run_one(
     force_download: bool = False,
     audit_dir: Path | None = None,
 ) -> tuple["hunt.Outcome", "hunt.AuditLog"]:
+    """Run one part through `hunt.execute`, with an audit log this test can name.
+
+    An audit file is evidence, so its location is always the caller's decision:
+    either a log is handed in (`audit=`), or a directory is (`audit_dir=`, which
+    is `tmp_path` in every test here). There is deliberately no third option —
+    a process-global tempdir meant that whatever TEMP pointed at got a
+    `hunt520-*` directory per call, and with TEMP pointed at the checkout that
+    was the repository root.
+    """
     item = located(component_obj, designator)
     item.url = url
     item.force_download = force_download
-    log = audit or hunt.AuditLog(
-        (audit_dir or Path(tempfile.mkdtemp(prefix="hunt520-"))) / "hunt-audit.jsonl"
+    log = audit if audit is not None else hunt.AuditLog(
+        _audit_path_in(audit_dir)
     )
     outcome = hunt.execute(
         item, recorder.executor(), cache=cache, audit=log, offline=offline
     )
     return outcome, log
+
+
+# --------------------------------------------------------------------------
+# §0 the helper's own hygiene — no audit location, no run
+# --------------------------------------------------------------------------
+
+
+def test_run_one_refuses_to_invent_an_audit_directory(monkeypatch):
+    """A call naming neither `audit=` nor `audit_dir=` fails before it writes.
+
+    The property is not "the audit file lands somewhere" but "the test said
+    where it lands": the helper used to fall back to
+    `tempfile.mkdtemp(prefix="hunt520-")`, and with the harness's TEMP pointed at
+    the checkout that scattered 168 directories across the repository root —
+    evidence nobody asked for, in the one place a stray directory is mistaken
+    for a deliverable.
+
+    `mkdtemp` is made to raise, so the old fallback would fail *instead of*
+    creating a directory: even the RED form of this test leaves the root alone.
+    """
+
+    def no_implicit_directory(*_args, **_kwargs):
+        raise AssertionError("run_one must not invent its own audit directory")
+
+    monkeypatch.setattr("tempfile.mkdtemp", no_implicit_directory)
+    with pytest.raises(ValueError, match="audit"):
+        run_one(Recorder(), component(lcsc="C2977777"), cache=None)
 
 
 # --------------------------------------------------------------------------
@@ -158,7 +209,7 @@ def test_nothing_usable_is_no_identity():
     assert hunt.judge_channel(component(lcsc="   ")) == hunt.CHANNEL_NO_IDENTITY
 
 
-def test_a_part_number_in_the_c_number_field_becomes_mpn_only():
+def test_a_part_number_in_the_c_number_field_becomes_mpn_only(tmp_path):
     """Measured on the LLC fixture: 4 of 27 `lcsc_part` values hold an MPN.
 
     The strong assertion is the *absence* of the call: the guard exists so the
@@ -168,7 +219,7 @@ def test_a_part_number_in_the_c_number_field_becomes_mpn_only():
     """
     recorder = Recorder()
     dirty = component(lcsc="ACME-MOSFET-60V", mpn="")
-    outcome, log = run_one(recorder, dirty, cache=None)
+    outcome, log = run_one(recorder, dirty, cache=None, audit_dir=tmp_path)
     assert hunt.judge_channel(dirty) == hunt.CHANNEL_MPN_ONLY
     assert outcome.outcome == hunt.NEEDS_SEARCH
     assert recorder.detail_calls == [], "a non-C-number must never reach the detail API"
@@ -190,7 +241,8 @@ def test_a_c_number_with_a_pdf_url_is_downloaded_and_extracted(tmp_path):
     recorder = Recorder()
     recorder.detail_answers["C2977777"] = detail_with_pdf()
     outcome, log = run_one(
-        recorder, component(lcsc="C2977777", mpn="ACME1"), cache=hunt.Cache(tmp_path)
+        recorder, component(lcsc="C2977777", mpn="ACME1"), cache=hunt.Cache(tmp_path),
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.EXTRACTED
     assert recorder.detail_calls == ["C2977777"], "the request is the C-number alone"
@@ -212,7 +264,8 @@ def test_result_null_is_service_unknown_and_not_no_pdf_url(tmp_path):
     recorder = Recorder()
     recorder.detail_answers["C9900000001"] = detail_unknown()
     outcome, _log = run_one(
-        recorder, component(lcsc="C9900000001"), cache=hunt.Cache(tmp_path)
+        recorder, component(lcsc="C9900000001"), cache=hunt.Cache(tmp_path),
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.SERVICE_UNKNOWN
     assert outcome.outcome != hunt.NO_PDF_URL
@@ -222,7 +275,9 @@ def test_result_null_is_service_unknown_and_not_no_pdf_url(tmp_path):
 def test_an_answered_product_without_a_pdf_url_is_pdf_unavailable(tmp_path):
     recorder = Recorder()
     recorder.detail_answers["C160183"] = detail_without_pdf()
-    outcome, _log = run_one(recorder, component(lcsc="C160183"), cache=hunt.Cache(tmp_path))
+    outcome, _log = run_one(
+        recorder, component(lcsc="C160183"), cache=hunt.Cache(tmp_path), audit_dir=tmp_path
+    )
     assert outcome.outcome == hunt.PDF_UNAVAILABLE
     assert outcome.outcome != hunt.SERVICE_UNKNOWN
     assert recorder.download_calls == []
@@ -231,7 +286,9 @@ def test_an_answered_product_without_a_pdf_url_is_pdf_unavailable(tmp_path):
 def test_an_unanswered_product_is_no_pdf_url(tmp_path):
     recorder = Recorder()
     recorder.detail_answers["C55555"] = {"code": 500, "result": None}
-    outcome, _log = run_one(recorder, component(lcsc="C55555"), cache=hunt.Cache(tmp_path))
+    outcome, _log = run_one(
+        recorder, component(lcsc="C55555"), cache=hunt.Cache(tmp_path), audit_dir=tmp_path
+    )
     assert outcome.outcome == hunt.NO_PDF_URL
     assert recorder.download_calls == []
 
@@ -239,7 +296,9 @@ def test_an_unanswered_product_is_no_pdf_url(tmp_path):
 def test_a_missing_pdf_url_field_is_no_pdf_url(tmp_path):
     recorder = Recorder()
     recorder.detail_answers["C55666"] = {"code": 200, "result": {"productModel": "X"}}
-    outcome, _log = run_one(recorder, component(lcsc="C55666"), cache=hunt.Cache(tmp_path))
+    outcome, _log = run_one(
+        recorder, component(lcsc="C55666"), cache=hunt.Cache(tmp_path), audit_dir=tmp_path
+    )
     assert outcome.outcome == hunt.NO_PDF_URL
 
 
@@ -265,7 +324,8 @@ def test_an_html_landing_page_is_download_failed_and_never_extracted(tmp_path):
         status=200,
     )
     outcome, _log = run_one(
-        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path)
+        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path),
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.DOWNLOAD_FAILED
     assert recorder.extract_calls == [], "the extractor must not see an HTML page"
@@ -283,7 +343,8 @@ def test_html_bytes_with_a_lying_content_type_are_still_refused(tmp_path):
         status=200,
     )
     outcome, _log = run_one(
-        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path)
+        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path),
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.DOWNLOAD_FAILED
     assert recorder.extract_calls == []
@@ -297,7 +358,8 @@ def test_pdf_bytes_with_a_silent_content_type_are_accepted(tmp_path):
         ok=True, payload=b"%PDF-1.4 real body", content_type="", status=200
     )
     outcome, _log = run_one(
-        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path)
+        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path),
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.EXTRACTED
     assert recorder.extract_calls == [tmp_path / "C2977777" / "C2977777.pdf"]
@@ -310,7 +372,8 @@ def test_a_transport_failure_is_download_failed(tmp_path):
         ok=False, note="下载失败：connection reset"
     )
     outcome, _log = run_one(
-        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path)
+        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path),
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.DOWNLOAD_FAILED
     assert recorder.extract_calls == []
@@ -329,7 +392,8 @@ def test_a_pdf_the_extractor_reads_to_nothing_is_no_facts_not_a_parse_failure(tm
     recorder.marked = "<<<page 1>>>\nnothing here\n"
     recorder.detail_answers["C2977777"] = detail_with_pdf()
     outcome, _log = run_one(
-        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path)
+        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path),
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.NO_FACTS
     assert outcome.facts == {}
@@ -348,7 +412,8 @@ def test_a_text_reader_that_raises_is_the_only_parse_failure(tmp_path):
 
     recorder.pdf_text = refuse  # type: ignore[method-assign]
     outcome, _log = run_one(
-        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path)
+        recorder, component(lcsc="C2977777"), cache=hunt.Cache(tmp_path),
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.PARSE_FAILED
     assert any("提取失败" in note for note in outcome.notes)
@@ -363,12 +428,14 @@ def test_a_second_run_is_cached_and_does_not_download_again(tmp_path):
     cache = hunt.Cache(tmp_path)
     recorder = Recorder()
     recorder.detail_answers["C2977777"] = detail_with_pdf()
-    first, _log = run_one(recorder, component(lcsc="C2977777"), cache=cache)
+    first, _log = run_one(recorder, component(lcsc="C2977777"), cache=cache, audit_dir=tmp_path)
     assert first.outcome == hunt.EXTRACTED
     downloads_after_first = list(recorder.download_calls)
 
     second_recorder = Recorder()
-    second, _log = run_one(second_recorder, component(lcsc="C2977777"), cache=cache)
+    second, _log = run_one(
+        second_recorder, component(lcsc="C2977777"), cache=cache, audit_dir=tmp_path
+    )
     assert second.outcome == hunt.CACHED
     assert second.facts == first.facts, "the cached run hands over the same facts"
     assert second_recorder.detail_calls == [], "the address came from the cache's meta"
@@ -381,7 +448,7 @@ def test_a_cached_run_still_reports_the_url_it_came_from(tmp_path):
     cache = hunt.Cache(tmp_path)
     recorder = Recorder()
     recorder.detail_answers["C2977777"] = detail_with_pdf("https://example.invalid/a.pdf")
-    run_one(recorder, component(lcsc="C2977777"), cache=cache)
+    run_one(recorder, component(lcsc="C2977777"), cache=cache, audit_dir=tmp_path)
     second = hunt.execute(
         located(component(lcsc="C2977777")),
         Recorder().executor(),
@@ -397,7 +464,7 @@ def test_force_download_bypasses_the_cache(tmp_path):
     cache = hunt.Cache(tmp_path)
     recorder = Recorder()
     recorder.detail_answers["C2977777"] = detail_with_pdf()
-    run_one(recorder, component(lcsc="C2977777"), cache=cache)
+    run_one(recorder, component(lcsc="C2977777"), cache=cache, audit_dir=tmp_path)
 
     hand = Recorder()
     hand.bodies["https://example.invalid/hand.pdf"] = hunt.Download(
@@ -409,6 +476,7 @@ def test_force_download_bypasses_the_cache(tmp_path):
         cache=cache,
         url="https://example.invalid/hand.pdf",
         force_download=True,
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.EXTRACTED
     assert hand.download_calls == ["https://example.invalid/hand.pdf"]
@@ -449,6 +517,7 @@ def test_offline_makes_no_call_at_all(tmp_path, monkeypatch):
         component(lcsc="C2977777", mpn="ACME1"),
         cache=hunt.Cache(tmp_path),
         offline=True,
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.DEFERRED_ONLINE
     assert log.entries == []
@@ -469,6 +538,7 @@ def test_an_offline_c_number_part_is_not_a_search_work_item(tmp_path):
             component(lcsc="C2977777", mpn="ACME1"),
             cache=hunt.Cache(tmp_path),
             offline=True,
+            audit_dir=tmp_path,
         )[0]
     ]
     rows, notes = hunt.plan_rows(outcomes)
@@ -481,11 +551,12 @@ def test_offline_still_answers_from_a_warm_cache(tmp_path):
     cache = hunt.Cache(tmp_path)
     recorder = Recorder()
     recorder.detail_answers["C2977777"] = detail_with_pdf()
-    run_one(recorder, component(lcsc="C2977777"), cache=cache)
+    run_one(recorder, component(lcsc="C2977777"), cache=cache, audit_dir=tmp_path)
 
     offline = Recorder()
     outcome, log = run_one(
-        offline, component(lcsc="C2977777"), cache=cache, offline=True
+        offline, component(lcsc="C2977777"), cache=cache, offline=True,
+        audit_dir=tmp_path,
     )
     assert outcome.outcome == hunt.CACHED
     assert offline.detail_calls == [] and offline.download_calls == []

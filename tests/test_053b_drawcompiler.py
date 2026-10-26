@@ -3976,18 +3976,17 @@ def test_the_spacing_ladder_stops_when_more_room_cannot_change_the_answer(monkey
 def test_the_compiler_imports_nothing_above_its_layer():
     """engines may use core and the standard library — never connector or cli.
 
-    **One named exception, added by 173/C and deliberately not generalised.**
-    The drawing engine now reads exactly one thing from the rules layer:
-    ``focground.domain_of``, the word list that decides which isolation domain a
-    ground net's name spells. The batch's instruction was 「词表复用
-    rules/pcb/focground.py 的 domain_of 口径，只读 import」 — reuse that one
-    function rather than grow a second copy of the word list — so the exception
-    is that single module and nothing else: every other ``boardwise.rules``
-    module, and connector / cli / bridge / parsers, is still refused by name.
-    The read is safe by construction: ``rules`` imports no engine (checked), so
-    this edge cannot close a cycle, and ``domain_of`` is a pure name test.
+    **173/C's named exception is gone, and this batch is why.** The drawing
+    engine used to read ``focground.domain_of`` — the word list that decides
+    which isolation domain a ground net's name spells — straight from the rules
+    layer. 540B1 moved that word list (and the auto-net regex) down into
+    ``core/netdomains.py``, a **shared** module, so the compiler and the
+    reviewer now read one copy without any draw → review import. The allowed
+    rules set is empty: every ``boardwise.rules`` module, and connector / cli /
+    bridge / parsers, is refused by name. (The equivalent scan for the island
+    layout and the apply path lives in ``tests/test_540_shared_naming.py``.)
     """
-    allowed = {"boardwise.rules.pcb.focground"}
+    allowed: set[str] = set()
     source = Path(dc.__file__).read_text(encoding="utf-8")
     imported = set(re.findall(r"^\s*(?:from|import)\s+([\w.]+)", source, re.M))
     forbidden = {

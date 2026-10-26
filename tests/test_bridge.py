@@ -35,6 +35,7 @@ from boardwise.bridge.daemon import (
     WindowConnection,
     _bound_port,
     _clock,
+    _origin_is_a_web_page,
     check_origin,
     connector_fingerprint,
     connector_token_path,
@@ -2119,8 +2120,11 @@ def test_check_origin_allows_everything_for_now():
 # (`websockets` itself sends none, asserted above). A non-browser attacker
 # merely has to omit the header, so this is *not* a boundary against local
 # processes: that boundary is the token (§9). 004d still owns what the editor's
-# own socket sends, which is why the rule refuses only `http(s)` and lets
-# everything else — including a missing Origin — through.
+# own socket sends, and that is now measured rather than assumed: the EasyEDA
+# Pro extension host sends `Origin: https://client` (0.2.5's acceptance run on
+# 3.2.186, §12 item 4; measured again in 540). The rule therefore refuses
+# `http(s)` EXCEPT that one exact origin, and lets everything else — including a
+# missing Origin — through.
 
 
 def test_a_web_page_cannot_pair_itself_before_the_editor_attaches(tmp_path):
@@ -2245,6 +2249,137 @@ def test_a_paired_connector_sending_an_http_origin_is_still_accepted(tmp_path):
     run(scenario())
 
     assert load_connector_token(tmp_path) == "real-token"
+
+
+# The editor's own Origin, measured twice rather than assumed: 0.2.5's
+# acceptance run recorded `origin: "https://client"` on EasyEDA Pro 3.2.186
+# (§12 item 4), and 540 measured the same value again on the same build. Without
+# this one exemption the gate refuses the editor's FIRST pairing — and every
+# re-pair after the extension storage was reset — with `UNAUTHENTICATED`,
+# forever. The known-token early return is why historical runs looked fine, and
+# it cannot help a daemon that has no token on file yet.
+EDITOR_ORIGIN = "https://client"
+
+
+def test_the_measured_editor_origin_is_not_a_web_page():
+    """The measured editor Origin is the host itself, not a page in a browser."""
+    assert _origin_is_a_web_page(EDITOR_ORIGIN) is False
+    # Scheme and host are case-insensitive in a URL. The editor sends lowercase
+    # and that stays the norm; case is not what makes an origin a different one.
+    assert _origin_is_a_web_page("HTTPS://Client") is False
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://client",  # wrong scheme: an http server on this host, not the host
+        "https://client.evil.example",  # merely starts with `client`
+        "https://sub.client",
+        "https://clientx",
+        "https://client:443",  # an explicit port is an unmeasured spelling
+        "https://client:8443",
+        "https://client/",  # a path, including the bare trailing slash
+        "https://client/eda",
+        "https://user@client",  # credentials in the authority
+        "https://client?x=1",
+        "https://client#frag",
+        "https://client.",  # a trailing dot is a different host
+        "https://client example",
+    ],
+)
+def test_lookalike_origins_are_still_web_pages(origin):
+    """The exemption is one exact origin; everything near it stays refused."""
+    assert _origin_is_a_web_page(origin) is True, (
+        f"{origin!r} is not the measured editor origin and must stay refused"
+    )
+
+
+def test_the_editor_origin_pairs_on_first_use(tmp_path):
+    """540's regression: the measured Origin must be able to write a FIRST pairing.
+
+    This is the state right after `bridge start`, with the editor not attached
+    yet — the state the #57 gate was added for, and the one where the editor's
+    own socket and a lookalike page must still be told apart (next test).
+    """
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            ws, reply = await _hello(
+                port, "connector", token="editor-token",
+                headers={"Origin": EDITOR_ORIGIN},
+            )
+            assert reply["ok"] is True, reply
+            await ws.close()
+
+    run(scenario())
+
+    assert load_connector_token(tmp_path) == "editor-token", (
+        "the editor's own handshake must be able to pair"
+    )
+    pairings = [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_PAIRING]
+    assert len(pairings) == 1
+    assert pairings[0]["fingerprint"] == connector_fingerprint("editor-token")
+
+
+def test_the_editor_origin_re_pairs_over_a_pairing_nobody_is_using(tmp_path):
+    """The other write path: a storage reset with no live connector (004f).
+
+    Both pairing writes have to accept the measured Origin. Exempting only the
+    first would leave a sideloaded connector looping on `UNAUTHENTICATED` — the
+    exact failure 540 hit on the machine.
+    """
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            real_ws, first = await _hello(port, "connector", token="before-sideload")
+            assert first["ok"] is True
+            await real_ws.close()
+            await _until(lambda: not daemon.has_connector())
+
+            ws, reply = await _hello(
+                port, "connector", token="after-sideload",
+                headers={"Origin": EDITOR_ORIGIN},
+            )
+            assert reply["ok"] is True, reply
+            await ws.close()
+
+    run(scenario())
+
+    assert load_connector_token(tmp_path) == "after-sideload", (
+        "a re-pair from the editor's own handshake must overwrite the record"
+    )
+    repairs = [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_REPAIRING]
+    assert len(repairs) == 1
+    assert repairs[0]["replacedFingerprint"] == connector_fingerprint("before-sideload")
+
+
+def test_a_lookalike_origin_cannot_pair_over_the_wire(tmp_path):
+    """The exemption is one exact origin, proven on the real handshake path.
+
+    `https://client.evil.example` is what a page on an attacker-named host would
+    carry; it must be refused exactly like any other http(s) page, and the
+    pairing file must stay absent.
+    """
+    async def scenario():
+        daemon = _daemon(tmp_path)
+        server, port = await _start(daemon)
+        async with server:
+            ws, reply = await _hello(
+                port, "connector", token="page-token",
+                headers={"Origin": "https://client.evil.example"},
+            )
+            assert reply["ok"] is False, "a lookalike must not be able to pair"
+            assert reply["error"]["code"] == ErrorCodes.UNAUTHENTICATED
+            await ws.close()
+
+    run(scenario())
+
+    assert load_connector_token(tmp_path) is None, (
+        "a lookalike's token must not become the pairing"
+    )
+    assert not [r for r in _audit_records(tmp_path) if r["action"] == AUDIT_PAIRING]
 
 
 def test_daemon_speaks_first_with_a_banner(tmp_path):

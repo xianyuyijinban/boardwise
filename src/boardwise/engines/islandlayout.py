@@ -125,10 +125,12 @@ from ..core.textmetrics import (
     symbol_rows,
     wire_name_box,
 )
-#: The ground-domain word list 173/C keys a ground net's own flag by.  The same
-#: import `drawcompiler` makes of it, for the same reason: an island page and a
-#: single-module page of one document must not name the same ground two ways.
-from ..rules.pcb.focground import domain_of
+#: 540B1: the ground-domain word list moved to the shared vocabulary
+#: (`core/netdomains.py`), the same import `drawcompiler` makes of it, for the
+#: same reason: an island page and a single-module page of one document must
+#: not name the same ground two ways — and neither engine imports the rules
+#: layer to do it.
+from ..core.netdomains import domain_of
 
 __all__ = [
     "ISLAND_LAYOUT_KIND",
@@ -4521,11 +4523,11 @@ def _flag_rotation(direction: tuple[float, float], kind: str) -> float:
 def _ground_domain(net_id: str) -> str:
     """Which ground domain a net's **name** puts it in — `drawcompiler._ground_domain`.
 
-    ``focground.domain_of`` answers ``power`` / ``logic`` / ``""``, and ``""`` is
-    not a domain: it is 「this drawing spells its ground something the word list
-    does not carry」 (the flyback's `SEC_GND`, which the *ground* vocabulary knows
-    as of 145a but this two-prefix table does not), so such a net is keyed by its
-    own name rather than filed under a domain it is not in.
+    ``core.netdomains.domain_of`` answers ``power`` / ``logic`` / ``""``, and
+    ``""`` is not a domain: it is 「this drawing spells its ground something the
+    word list does not carry」 (the flyback's `SEC_GND`, which the *ground*
+    vocabulary knows as of 145a but this two-prefix table does not), so such a
+    net is keyed by its own name rather than filed under a domain it is not in.
     """
     return domain_of(net_id) or net_id
 

@@ -93,10 +93,14 @@ export async function executeCli(
  *
  * dsh truncates stdout at 32 KiB, so a structured answer can never come from
  * there: `--json PATH` (or a receipt the CLI signs in `--out`) is read in full,
- * and only a successful run plus a complete, parsed object is an answer. A
- * non-zero exit is loud and carries {@link formatOutcome}; a missing file,
- * broken JSON or non-object root is equally loud — there is no stale, partial
- * or stdout fallback path.
+ * and only an accepted run plus a complete, parsed object is an answer. A
+ * non-zero exit is loud and carries {@link formatOutcome} unless the caller
+ * explicitly names it as a domain result (draw compile 5 / draw lint 1). A
+ * missing file, broken JSON or non-object root is equally loud — there is no
+ * stale, partial or stdout fallback path. Existing callers keep the exit-0 default.
+ * A missing file names the exit code that was actually accepted: a documented
+ * non-zero answer (draw compile 5) may legitimately come without a file when the
+ * CLI could not read its input, and saying "exit 0" there would be a false report.
  */
 export async function runStructuredCli(
   tool: string,
@@ -104,6 +108,7 @@ export async function runStructuredCli(
   timeoutMs: number,
   exec: Cancellable,
   jsonPath: string,
+  acceptedExitCodes: readonly number[] = [0],
 ): Promise<StructuredResult> {
   const result = await runBoardwise({ argv, timeoutMs, signal: exec.signal })
   if (result.timedOut || result.aborted) {
@@ -113,10 +118,9 @@ export async function runStructuredCli(
       `command: ${result.commandLine}. Last stdout: ${tailOf(result.stdout) || '(none)'}`,
     )
   }
-  if (result.code !== 0) {
-    const code = result.code === null ? 'none (killed)' : String(result.code)
+  if (result.code === null || !acceptedExitCodes.includes(result.code)) {
     throw new Error(
-      `${tool}: the boardwise CLI did not succeed (exit ${code}); no structured result may be read from a ` +
+      `${tool}: the boardwise CLI did not succeed (exit ${exitText(result)}); no structured result may be read from a ` +
       'failed run, so no stale or partial JSON is returned.\n' +
       formatOutcome(tool, result, []),
     )
@@ -127,13 +131,22 @@ export async function runStructuredCli(
     raw = await readFile(jsonPath, 'utf8')
   } catch (error) {
     throw new Error(
-      `${tool}: exit 0 but the CLI did not write the JSON file it was told to write (${jsonPath}): ` +
-      `${(error as Error).message}. The truncated stdout is not a fallback.\n` +
+      `${tool}: exit ${exitText(result)} but the CLI did not write the JSON file it was told to write ` +
+      `(${jsonPath}): ${(error as Error).message}. The truncated stdout is not a fallback.\n` +
       formatOutcome(tool, result, []),
     )
   }
 
   return parseJsonObject(tool, jsonPath, raw)
+}
+
+/**
+ * The exit code as an error spells it. `result.code === null` is already refused
+ * by the caller, so the killed spelling is here only to keep the two messages
+ * and their wording in one place.
+ */
+function exitText(result: CliResult): string {
+  return result.code === null ? 'none (killed)' : String(result.code)
 }
 
 /** Parse a complete JSON document whose root must be an object. */

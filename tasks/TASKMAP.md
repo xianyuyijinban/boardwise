@@ -16,33 +16,38 @@
 
 ---
 
-## §0 当前在做（截至 2026-10-19）
+## §0 当前在做（截至 2026-10-25）
 
-- **刚发**：`v0.5.18`（内测，2026-10-19）—— **527 收口批**：0.6.0 之前必须落地的四件尾巴
-  （527A `IntentSource` 转发 / 527B connector 读回页型守卫 + 信封文档 / 527C 189A2 分类裁定 /
-  527D `parts classify` + `category_trust`）+ 527E 文档收口（189A1 结案不改、088b DRAFT 归档）。
-  任务书 `tasks/527_pre060_loose_ends.md`；三闸读数与产物 sha256 记在 `PROGRESS.md`
-  与 release notes（tag `v0.5.18`）。
-- **在途**：无。
-- **工作树（已完成未提交）**：无。
-- **下一批**：`v0.6.0`（正式）—— **四个阻塞项，缺一不发**（岳 2026-10-19 重定门槛，任务书
-  `tasks/528_060_gate.md`）：① `200A/200B/200C`（122 E 阶段 + 高速 A 档 1~3）；
-  ② **绘图线过锚**（反激 `draw compile` 出 `ok=True` + 岳亲眼看 SVG「一眼认出反激」+ roadmap §8 三条）；
-  ③ `527D3`（`entry.category` 14 处直读绕过闸）；④ `527D2`（`classify` 的证据落货架）。
-- **关键路径是绘图线**：顺序 `201E` A\* 效率 → router 进针方向 → 文字行可移动性 → 回锚验收。
-- **0.5.x 线剩下的**：只有 `v0.5.19` 那个槽位（R4 真热更阶段二），等岳裁「stub 立不立项」；
-  其余 0.5.x 版本均已发。
-- **搁置/踢出**：`201C`（150 落地页回归实锤，备份 `.tmp_201c_hold/`）；`121b`（10-06 暂停）；
-  `text_overlap` 代价项（526 撤回：只做一半的约束比不做更差）；`R4` 真热更阶段二（待岳裁）。
-- **发版**：`v0.5.15` 正式（10-17）· `v0.5.16` / `v0.5.17` / `v0.5.18` 内测（10-18 / 10-19）。
-
-> **2026-10-21 追加（岛系列，工作树未提交）**：`520k`–`520v` + `530A`–`530G` 是**同一条线**——
-> 把「一个功能模块一张局部图」的**多岛原理图**从设计（`evidence/523/DESIGN.md`，岳 2026-10-20
-> 六条裁定）做到验收。**530F 是收口批**：闸降级口径落地 + 5 条老红销账（全量 0 红）+
-> `LayoutIsland.name` + **真机总验收**（`draw compile` 真反激岛页 `ok=True`，1 条主机自印行
-> 被点名容忍；落 `test` 新页回读 0 失配 / 10 旗标 / 标题栏零相交；删页存盘）。
-> 索引见本文件 530A–530G 七行，细节在 `evidence/530f/report.md`。
-> **这一批未 commit**（AGENTS.md 红线：git 变更逐次经岳点头）。
+- **已完成、未提交**：`540`（0.6.0 前平台准备）——540A/B/C 已验收，并在对抗修复与
+  只读真机追加验收后收口；142 模块/0 legacy、24 个 CLI 命令和 DSH 10 工具面保持兼容，
+  Rust 合同、差分与最小 workspace 已实际运行。**读数要分层，别混用**：
+  - 首轮全量 `evidence/540/final-regression.md`：Python **7876/21/5**、connector **536**、
+    DSH **122/1**、Rust **7**、4 case；
+  - 对抗后首轮 `evidence/540/final-regression-adversarial.md`：Python
+    **8206 passed / 19 skipped / 5 xfailed / 1 failed**（唯一红是 rulebody 源码指纹钉，
+    已按 B2 下沉补钉）、connector 536、DSH **127/1**、Rust **45 + 显式 4**、5 case；
+  - **最终候选读数以 `evidence/540/candidate-regression.md` 为准**（该文件由后续步骤
+    产生，未产生前**不算通过**）；本轮收口摘要 `evidence/540/final-regression-followup.md`。
+  - 真机只读：`evidence/540/real-machine-instance-20261025-233933/25-final-report.md`
+    与 `outputs/review/540/`——`conclusion=incomplete`（0 器件 0 网络）、`delivery=partial`，
+    **不是板级通过**。
+- **已验收、已提交**：`537` 审查流程与 `538` 块级独立子岛编译，随 `539` 的
+  `0f638de` 一并入库，并含在 0.5.22 历史中。其 2026-10-25 基线复跑为
+  Python **7708 passed / 19 skipped / 5 xfailed**，connector **536 passed** + typecheck，
+  DSH **113 passed / 1 skipped** + typecheck + build；不把这些旧读数冒充 540 最终全量。
+- **已验收、已提交**：`539` 的 F1–F9、对抗审查、只读真机与全量复核，
+  commit `0f638deaa5d089194e8addf2d400cb7422d422bf`；其后 0.5.22 的
+  `63df468`/`23f030f` 已包含它。真机结论为
+  `completion=incomplete / delivery=partial`，不是板子通过，也不是 540 的提交。
+- **工作树**：只剩 `540` 与少量 2026-10-24 插件安装/版本策略文档残渣；
+  `537/538/534/536` 与 `539` 均已在 `0f638de`（并含在 0.5.22 历史中）。
+  按各任务书归属，不把整棵脏树算进 540；旧 `520k–533` 岛系列的状态见下方各行与
+  `docs/handoff.md`。
+- **0.6.0 阻塞项**：原有 `200A/200B/200C` 与绘图线过锚仍未关闭，`527D2/D3` 已完成；
+  岳 2026-10-25 新增 540 三组平台准备。发布候选必须先报证据，何时发布仍由岳决定。
+- **0.6.0 后**：绘制算法与 Rust strangler 双主线并行；共享底座、全量测试与真机串行。
+  0.6.x / 0.7.0 的验收边界由 540 同步进 roadmap、SCHEDULE 与 handoff。
+- **既有搁置不变**：`201C`、`121b`、`text_overlap` 与 `R4` 阶段二；540 不顺手复活。
 
 ---
 
@@ -357,10 +362,11 @@
 | 530F | **多岛总验收**：① 闸降级口径落地——电学类硬拒，被容忍的**主机自印行**每页有上限且**逐条点名**（`ISLAND_GATE_TOLERATED_LIMITS`）；② 5 条老红销账（201b/551a 换夹具、113/119 改账簿、145a 改账簿）后全量 0 红；③ `LayoutIsland.name`（加性）+ `apply` 写入 + 岛页 notes 报名字；④ 真机落图终验：`draw compile` ok=True（1 条被容忍且点名）→ 落 `test` 新页 → 连通 0 失配 / 12 根带名导线=标签 / 10 旗标 / 标题栏零相交 → PNG + plan SVG → 删页存盘 | 工作树 | evidence/530f/（报告 + probes + raw + 落图 PNG/SVG） |
 | 530G | **标题栏 keepout 进岛打包**（S-01）：矩形是**图页符号自己的 `TABLE`**（700×180，锚在角上、不随图幅缩放，`core.pageframe`）+ 下方留白 15%；真反激岛页对真矩形零相交；无 page_box 的岛页摘要仍冻结 | 工作树 | evidence/530g/ |
 | 533 | **岛页落图强制保护**（补 530G 的缺口：`--page-box` 是可选的，不带就没有 keepout → 530F 偏离 4 与 532 页 A 两次落进标题栏）：① 真机探明页面图幅**读得出来**——`sys.get_document_source` 的记录流里图纸符号自己带 `Width/Height/Blade Width/Title Block Position`（`document.current` 的 `schematicPage` 盒是 `{}`，读不出），接进 `parsers.schematic.sheet_attrs_from_text` → `pageframe.title_block_from_sheet_attrs`；② `draw plan` 绑活页 + 多岛时**自动**读图幅推 page_box+keepouts，读不到又没给 `--page-box` 则 exit 5；③ `draw apply` 核对 plan 自己记的 keep-out（`keep_out_note`）与目标页图幅，没记/对不上/读不到则 exit 5，**绝不静默落进标题栏**；④ 真机回归：新建 test 页自动读图幅 → 落图 → 标题栏矩形内 **0** 图元（同口径 532 页 A 仍 32）→ 连通 0 失配 → 删页存盘 | 工作树 | evidence/533/（报告 + probes + raw + 落图 PNG/SVG） |
-| 536 | 岛群→子岛：schema、plan 身份与 hard 校验（不含装配/多群页级） | 工作树 | tasks/536_archipelago_schema.md；tests/test_536_archipelago_schema.py；tests/test_archipelago_contract.py |
-| 537 | 审查流程环境/证据/权限/交付硬闸，含已复现的采样值输入与 Windows 编码缺口 | 工作树 | tasks/537_review_workflow_gates.md；Python 7650 passed；connector 536 passed；dsh-plugin 113 passed/1 skipped |
-| 538 | archipelago 独立子岛编译与局部回滚（不含组装配/页级 pack/整页交付） | 工作树 | tasks/538_island_compile.md；Python 7708 passed；connector 536 passed；dsh-plugin 113 passed/1 skipped |
-| 539 | 537/538 对抗审查、真机只读验收与交付证据修复（F1–F9） | 工作树 | tasks/539_adversarial_real_acceptance.md；岛编译 127 passed；画布/证据 131 passed；真机 incomplete/partial 如实交付 |
+| 536 | 岛群→子岛：schema、plan 身份与 hard 校验（不含装配/多群页级） | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/536_archipelago_schema.md；tests/test_536_archipelago_schema.py；tests/test_archipelago_contract.py |
+| 537 | 审查流程环境/证据/权限/交付硬闸，含已复现的采样值输入与 Windows 编码缺口 | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/537_review_workflow_gates.md；Python 7650 passed；connector 536 passed；dsh-plugin 113 passed/1 skipped |
+| 538 | archipelago 独立子岛编译与局部回滚（不含组装配/页级 pack/整页交付） | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/538_island_compile.md；Python 7708 passed；connector 536 passed；dsh-plugin 113 passed/1 skipped |
+| 539 | 537/538 对抗审查、真机只读验收与交付证据修复（F1–F9） | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/539_adversarial_real_acceptance.md；真机 incomplete/partial 如实交付；最终 Python 7731 / connector 536 / DSH 113+1 |
+| 540 | 0.6.0 前工作区整理、审查/绘制解耦、Rust 迁移平台准备；不改业务算法、不批量翻译 | 完成、未提交（A/B/C + 对抗修复 + 只读真机追加验收；候选读数待 `candidate-regression.md`） | tasks/540_pre060_platform.md；tasks/540b_review_draw_decoupling.md；tasks/540c_rust_platform.md；evidence/540/final-regression.md；evidence/540/final-regression-adversarial.md；evidence/540/final-regression-followup.md；evidence/540/real-machine-instance-20261025-233933/25-final-report.md；outputs/review/540/ |
 | V4 | **立创 EDA Pro 4.x 适配**（岳 2026-10-19 裁：**11 月起（0.6.x）做**）。四件事：① 在真 V4 上复跑 `doctor` + 一块板的 `checkup`，逐字段对拍 0.4.26 那次的结果包（当年结论：`.epro2` 归档与 V3 同格式、零适配；之后 0.5.x 六七个版本未在 V4 复测）；② 在线 connector-on-V4 探针重跑（当年 8/8 arity 一致、V4 是纯超集）；③ `.eprj3` 文件夹工程的真样本终验（yAxisDirection / NC 引脚 id / CANVAS 缺失，仍挂着）；④ `.eprj2` 导出引导在 V4 菜单里逐字核（V4 本地保存仍是 `.eprj2` SQLite 壳） | 规划（11 月开） | tasks/038-eprj3-tierA.md §V4.1.60 实测 |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）

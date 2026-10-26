@@ -3270,7 +3270,7 @@ def _stable_net(row: Mapping[str, Any]) -> str:
     intent and stays in the comparison — the same rule the findings signature
     applies (`cli._finding_signature`).
     """
-    from ..rules.facts import is_auto_net
+    from ..core.netdomains import is_auto_net
 
     net = row.get("net") or ""
     return "(auto)" if row.get("kind") == "wire" and is_auto_net(net) else net

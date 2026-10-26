@@ -1,0 +1,15 @@
+{
+  "parts": [
+    {"id":"U1","symbolRef":"AMS1117-3.3","value":"AMS1117-3.3","lcsc":"C6186","provenance":"verified_recipe"},
+    {"id":"C1","symbolRef":"C0402","value":"10uF","lcsc":"C15525","provenance":"verified_recipe"},
+    {"id":"C2","symbolRef":"C0402","value":"22uF","lcsc":"C45783","provenance":"verified_recipe"},
+    {"id":"R1","symbolRef":"R0402","value":"10k","lcsc":"C25744","provenance":"verified_recipe"},
+    {"id":"R2","symbolRef":"R0402","value":"10k","lcsc":"C25744","provenance":"verified_recipe"}
+  ],
+  "nets": [
+    {"id":"VIN","class":"power","members":["U1.3","C1.1","R1.1"],"provenance":"verified_recipe"},
+    {"id":"3V3","class":"power","members":["U1.2","C2.1"],"provenance":"verified_recipe"},
+    {"id":"TAP","class":"signal","members":["R1.2","R2.1"],"provenance":"verified_recipe"},
+    {"id":"GND","class":"gnd","members":["U1.1","C1.2","C2.2","R2.2"],"provenance":"verified_recipe"}
+  ]
+}

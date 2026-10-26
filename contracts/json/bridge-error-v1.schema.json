@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boardwise.dev/contracts/bridge-error-v1.schema.json",
+  "title": "boardwise bridge error object (error.code / error.message)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["code", "message"],
+  "properties": {
+    "code": {
+      "enum": [
+        "UNAUTHENTICATED", "PROTOCOL_VIOLATION", "VERSION_MISMATCH", "BAD_REQUEST",
+        "UNKNOWN_ACTION", "NOT_IMPLEMENTED", "CONFIRMATION_REQUIRED",
+        "WRITE_PROJECT_FORBIDDEN", "NO_CONNECTOR", "PROJECT_NOT_CONNECTED",
+        "PROJECT_AMBIGUOUS", "WINDOW_NOT_CONNECTED", "INSTANCE_STALE",
+        "WINDOW_UNSPECIFIED", "CONNECTOR_ALREADY_ACTIVE", "CONNECTOR_ERROR",
+        "TIMEOUT", "DISCONNECTED", "INTERNAL", "NOT_SUPPORTED", "DOC_NOT_ACTIVE"
+      ]
+    },
+    "message": {"type": "string"},
+    "detail": {
+      "x-presence": "Optional and may be any JSON value; emitted only when not null."
+    }
+  }
+}

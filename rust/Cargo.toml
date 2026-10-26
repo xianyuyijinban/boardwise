@@ -1,0 +1,16 @@
+[workspace]
+members = ["crates/boardwise-core", "crates/boardwise-cli"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+# `pattern` in the contract schemas is Python `re` (via `re.search`); the regex
+# crate is the closest compatible engine, and the one known dialect gap (Python
+# `$` also matches before a final newline) is emulated in `schema.rs`.
+regex = "1"

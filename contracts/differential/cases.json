@@ -1,0 +1,99 @@
+{
+  "schema": "boardwise.differential-cases/1",
+  "normalization": {
+    "keyOrder": "lexicographic in report comparisons; input object order is preserved where the contract requires it",
+    "paths": "previews are compared by basename; timestamps and machine paths are sanitized",
+    "numbers": "JSON numbers are preserved; LayoutPlan geometry uses canonical compact JSON sorted by key"
+  },
+  "cases": [
+    {
+      "id": "review-report-projection",
+      "kind": "review-report-projection",
+      "input": "contracts/differential/inputs/review-report.json",
+      "expected": {
+        "schema": "boardwise.checkup/7",
+        "completionVerdict": "incomplete",
+        "summaryExitCode": 3,
+        "findingCount": 2,
+        "errorCount": 0,
+        "warnCount": 1,
+        "infoCount": 1,
+        "evidenceDelivery": "partial"
+      }
+    },
+    {
+      "id": "layout-plan-geometry",
+      "kind": "layout-plan-geometry",
+      "input": "contracts/differential/inputs/divider-cand1.layout.json",
+      "expected": {
+        "geometrySha256": "62a272b1968a1d037a6854f38299223f8597ab4acd06fed25f11d7476ca056b1",
+        "partCount": 2,
+        "segmentCount": 4,
+        "junctionCount": 1,
+        "labelCount": 1,
+        "powerSymbolCount": 2,
+        "textCount": 4
+      }
+    },
+    {
+      "id": "compile-result-projection",
+      "kind": "compile-result-projection",
+      "input": "contracts/differential/inputs/divider-compile-result.json",
+      "expected": {
+        "command": "compile",
+        "ok": true,
+        "candidateCount": 3,
+        "failureCount": 0,
+        "previewNames": [
+          "cand1.svg",
+          "cand1.layout.json",
+          "cand2.svg",
+          "cand2.layout.json",
+          "cand3.svg",
+          "cand3.layout.json"
+        ]
+      }
+    },
+    {
+      "id": "compile-page-result-projection",
+      "kind": "compile-page-result-projection",
+      "input": "contracts/differential/inputs/page-compile-result.json",
+      "expected": {
+        "command": "compile",
+        "ok": true,
+        "pageCount": 8,
+        "failureCount": 0,
+        "previewNames": [
+          "cand1.svg",
+          "cand1.page.json",
+          "cand2.svg",
+          "cand2.page.json",
+          "cand3.svg",
+          "cand3.page.json",
+          "cand4.svg",
+          "cand4.page.json",
+          "cand5.svg",
+          "cand5.page.json",
+          "cand6.svg",
+          "cand6.page.json",
+          "cand7.svg",
+          "cand7.page.json",
+          "cand8.svg",
+          "cand8.page.json"
+        ]
+      }
+    },
+    {
+      "id": "lint-result-projection",
+      "kind": "lint-result-projection",
+      "input": "contracts/differential/inputs/empty-page-lint-result.json",
+      "expected": {
+        "source": "replay",
+        "exitCode": 0,
+        "errorCount": 0,
+        "findingCount": 0,
+        "textReadable": false
+      }
+    }
+  ]
+}

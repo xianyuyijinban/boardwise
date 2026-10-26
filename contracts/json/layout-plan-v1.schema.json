@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boardwise.dev/contracts/layout-plan-v1.schema.json",
+  "title": "boardwise LayoutPlan writer contract (boardwise-layout-plan, planVersion 1)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind", "planVersion", "source", "target", "parts", "segments", "junctions",
+    "labels", "powerSymbols", "texts", "evidence", "verdict", "geometrySha256", "notes"
+  ],
+  "properties": {
+    "kind": {"const": "boardwise-layout-plan", "x-reader-default": "boardwise-layout-plan"},
+    "planVersion": {"const": 1, "x-reader-default": 1},
+    "source": {"$ref": "#/$defs/source"},
+    "target": {"$ref": "#/$defs/target", "x-reader-default": "empty offline LayoutTarget"},
+    "parts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/part"},
+      "x-cross-field": "partId and each non-empty reference are unique."
+    },
+    "segments": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/segment"},
+      "x-reader-default": []
+    },
+    "junctions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/junction"},
+      "x-reader-default": []
+    },
+    "labels": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/label"},
+      "x-reader-default": []
+    },
+    "powerSymbols": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/powerSymbol"},
+      "x-reader-default": []
+    },
+    "texts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/text"},
+      "x-reader-default": []
+    },
+    "evidence": {"$ref": "#/$defs/evidence", "x-reader-default": "unchecked LayoutEvidence"},
+    "verdict": {"enum": ["pass", "fail", "not-run"], "x-derived": "Computed from evidence, never chosen."},
+    "geometrySha256": {"$ref": "#/$defs/sha256", "x-derived": "Recomputed and checked against the geometry payload."},
+    "notes": {"type": "array", "items": {"type": "string"}, "x-reader-default": []}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "emptyOrSha256": {"type": "string", "pattern": "^$|^[0-9a-f]{64}$"},
+    "number": {"type": "number"},
+    "nullableNumber": {"type": ["number", "null"]},
+    "point": {
+      "type": "array",
+      "prefixItems": [{"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "box": {
+      "type": "array",
+      "prefixItems": [
+        {"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"},
+        {"$ref": "#/$defs/number"}, {"$ref": "#/$defs/number"}
+      ],
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "stringArray": {"type": "array", "items": {"type": "string"}},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["circuitSha256", "presentationSha256"],
+      "properties": {
+        "circuitSha256": {"$ref": "#/$defs/sha256"},
+        "presentationSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectUuid", "boardUuid", "pageUuid", "hostVersion", "connectorVersion", "snapshotSha256"],
+      "properties": {
+        "projectUuid": {"type": "string", "x-reader-default": ""},
+        "boardUuid": {"type": "string", "x-reader-default": ""},
+        "pageUuid": {"type": "string", "x-reader-default": ""},
+        "hostVersion": {"type": "string", "x-reader-default": ""},
+        "connectorVersion": {"type": "string", "x-reader-default": ""},
+        "snapshotSha256": {"$ref": "#/$defs/emptyOrSha256", "x-reader-default": ""}
+      }
+    },
+    "part": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["partId", "reference", "symbolRef", "symbolHash", "x", "y", "rotation", "mirror"],
+      "properties": {
+        "partId": {"type": "string", "minLength": 1},
+        "reference": {"type": "string", "x-reader-default": ""},
+        "symbolRef": {"type": "string", "minLength": 1},
+        "symbolHash": {"$ref": "#/$defs/sha256"},
+        "x": {"$ref": "#/$defs/number"},
+        "y": {"$ref": "#/$defs/number"},
+        "rotation": {"enum": [0, 90, 180, 270], "x-reader-default": 0},
+        "mirror": {"type": "boolean", "x-reader-default": false},
+        "valueVisible": {"type": "boolean", "x-reader-default": true, "x-writer": "Emitted only when false."},
+        "group": {"type": "string", "x-reader-default": "", "x-writer": "Emitted only when non-empty."},
+        "island": {"type": "string", "x-reader-default": "", "x-writer": "Emitted only when non-empty."}
+      }
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["net", "points"],
+      "properties": {
+        "net": {"type": "string", "minLength": 1},
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"$ref": "#/$defs/point"},
+          "x-cross-field": "Consecutive points must differ; no zero-length segment."
+        }
+      }
+    },
+    "junction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["net", "x", "y"],
+      "properties": {
+        "net": {"type": "string", "minLength": 1},
+        "x": {"$ref": "#/$defs/number"},
+        "y": {"$ref": "#/$defs/number"}
+      }
+    },
+    "label": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["net", "text", "x", "y", "rotation", "bbox"],
+      "properties": {
+        "net": {"type": "string", "minLength": 1},
+        "text": {"type": "string", "minLength": 1},
+        "partId": {"type": "string", "x-reader-default": "", "x-writer": "Present only for an owned pin label."},
+        "x": {"$ref": "#/$defs/number"},
+        "y": {"$ref": "#/$defs/number"},
+        "rotation": {"enum": [0, 90, 180, 270], "x-reader-default": 0},
+        "bbox": {"$ref": "#/$defs/box"}
+      }
+    },
+    "powerSymbol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbolRef", "symbolHash", "net", "x", "y", "rotation"],
+      "properties": {
+        "symbolRef": {"type": "string", "minLength": 1},
+        "symbolHash": {"$ref": "#/$defs/sha256"},
+        "net": {"type": "string", "minLength": 1},
+        "x": {"$ref": "#/$defs/number"},
+        "y": {"$ref": "#/$defs/number"},
+        "rotation": {"enum": [0, 90, 180, 270], "x-reader-default": 0}
+      }
+    },
+    "text": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "text", "partId", "x", "y", "rotation", "bbox"],
+      "properties": {
+        "kind": {"type": "string", "minLength": 1},
+        "text": {"type": "string", "minLength": 1},
+        "partId": {"type": "string", "x-reader-default": ""},
+        "x": {"$ref": "#/$defs/nullableNumber"},
+        "y": {"$ref": "#/$defs/nullableNumber"},
+        "rotation": {"type": "number", "x-reader-default": 0},
+        "bbox": {"$ref": "#/$defs/box"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checker", "hardViolations", "grammarFindings", "softMetrics", "softReasons", "notes"],
+      "properties": {
+        "checker": {"type": "string", "x-reader-default": ""},
+        "hardViolations": {"$ref": "#/$defs/stringArray", "x-reader-default": []},
+        "grammarFindings": {"$ref": "#/$defs/stringArray", "x-reader-default": []},
+        "softMetrics": {
+          "type": "object",
+          "additionalProperties": {"type": "number"},
+          "x-reader-default": {}
+        },
+        "softReasons": {
+          "type": "object",
+          "additionalProperties": {"type": "string"},
+          "x-reader-default": {},
+          "x-cross-field": "Every reason key must also exist in softMetrics."
+        },
+        "notes": {"$ref": "#/$defs/stringArray", "x-reader-default": []}
+      }
+    }
+  }
+}

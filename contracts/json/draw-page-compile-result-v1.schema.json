@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://boardwise.dev/contracts/draw-page-compile-result-v1.schema.json",
+  "title": "boardwise draw compile --json page result",
+  "description": "The page document `draw compile` writes when the presentation declares several islands: it states `pages`, not `candidates`. Kept apart from draw-compile-result-v1.schema.json on purpose — the two shapes cannot both be required of one instance, and the supported schema subset has no `oneOf` to say so.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["command", "document", "ok", "pages", "failures", "categories", "rejected", "moduleFailureRounds", "notes", "previews"],
+  "properties": {
+    "command": {"const": "compile"},
+    "document": {
+      "const": "page",
+      "x-meaning": "Which document this result is. A module compile omits it; a page compile must state exactly `page`."
+    },
+    "ok": {"type": "boolean", "x-meaning": "Compiler result, not a board review verdict."},
+    "pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["index", "key", "metrics", "geometrySha256", "planGeometrySha256", "verdict", "modules"],
+        "properties": {
+          "index": {"type": "integer", "minimum": 0},
+          "key": {"type": "string"},
+          "metrics": {"type": "object"},
+          "geometrySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "planGeometrySha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "verdict": {"enum": ["pass", "fail", "not-run"]},
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": ["id", "origin", "frame", "ports"],
+              "properties": {
+                "id": {"type": "string", "minLength": 1},
+                "origin": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {"type": "number"}
+                },
+                "frame": {
+                  "type": "array",
+                  "minItems": 4,
+                  "maxItems": 4,
+                  "items": {"type": "number"}
+                },
+                "ports": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "required": ["net", "kind", "partner"],
+                    "properties": {
+                      "net": {"type": "string"},
+                      "kind": {"type": "string"},
+                      "partner": {"type": "string"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["category", "detail", "action"],
+        "properties": {
+          "category": {"enum": ["facts-missing", "circuit-invalid", "layout-unsat", "presentation-poor"]},
+          "detail": {"type": "string"},
+          "action": {"type": "string"}
+        }
+      }
+    },
+    "categories": {
+      "type": "array",
+      "items": {"enum": ["facts-missing", "circuit-invalid", "layout-unsat", "presentation-poor"]}
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["variant", "reason"],
+        "properties": {
+          "variant": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      }
+    },
+    "moduleFailureRounds": {
+      "type": "object",
+      "x-meaning": "Per-module refusal rounds on the page path; the module compile states the flat `failureRounds` array instead."
+    },
+    "notes": {"type": "array", "items": {"type": "string"}},
+    "previews": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?:.*[/\\\\])?(?:[^./\\\\]|[^./\\\\][^/\\\\]+|\\.[^./\\\\][^/\\\\]*|\\.\\.[^/\\\\]+)$",
+        "x-meaning": "A preview must name a file: its last path segment — the text after the last separator, with '/' and a backslash read alike on every host — must be non-empty and must not be exactly '.' or '..'. A middle './' segment is ordinary path text and stays legal, and a name that merely begins with dots ('.hidden', '..x') is a file both runners name the same way. A trailing separator, or a final '.'/'..', made the two runners disagree on the basename, so the schema refuses it instead. The pattern is deliberately lookahead/backreference-free: it is validated by Python's re and Rust's regex, and it is the same rule draw-compile-result-v1 states."
+      }
+    }
+  }
+}

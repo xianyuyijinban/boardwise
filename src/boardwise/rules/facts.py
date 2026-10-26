@@ -34,6 +34,23 @@ import re
 from dataclasses import dataclass, field
 
 from ..core.model import Component, DesignModel, Net
+#: 540B1: the auto-net word test moved down to :mod:`boardwise.core.netdomains`
+#: (the shared vocabulary the drawing chain can import without crossing into
+#: this rule module). Imported by name, so `facts.is_auto_net` keeps resolving
+#: to this one object for every existing caller.
+from ..core.netdomains import is_auto_net
+#: 540B2: the pin-connection reading is shared with the draw-side repair
+#: readback.  Re-exported by name so every historical rules.facts caller keeps
+#: resolving the same function object instead of a second decision.
+#: `component_net` is the one net reading of a component this file is handed
+#: (540B fix of the B2 false pass: the rule's evidence net and its verdict must
+#: come from the same object, and `_pin_net` below is that very function).
+from ..core.connectivity import (
+    component_net,
+    nc_violation,
+    pin_company,
+    pin_dangles,
+)
 from ..core.partkind import (
     KIND_IC,
     classify_part,
@@ -734,11 +751,13 @@ class FactsRule(OutcomeRule):
         return findings
 
 
-def _pin_net(comp: Component, number: str) -> str | None:
-    for pin in comp.pins:
-        if pin.number == number:
-            return pin.net
-    return None
+#: 540B fix (F4, same root as the B2 false pass): this *is* the shared reading,
+#: not a second copy of it.  `pin_ruling` reads the pin's net through this name
+#: to phrase its evidence and `_nc_target`, and `nc_violation` reads it through
+#: `core.connectivity.component_net`; one object, so the judgement and the
+#: repair target cannot name two different nets.  Kept as an alias because the
+#: historical private name is imported by neighbours and tests.
+_pin_net = component_net
 
 
 def _nc_target(designator: str, pin: str, net: str) -> FindingTarget:
@@ -848,100 +867,6 @@ class PinRuling:
     evidence: list[str] = field(default_factory=list)
     target: FindingTarget | None = None
     missing_fact: str = ""
-
-
-#: What the editor calls a net nobody named. Two spellings, measured 2026-09-24:
-#:
-#: * ``NET1``, ``NET2``, … — how an island with nothing to name it gets stored, and
-#:   how the *export* spells the net of a pin that reaches nothing;
-#: * ``$57N2`` — the editor's **internal id**, which is what its own netlist
-#:   (`sch.netlist`) reports for a wire **nobody named**. Measured on the same
-#:   board: the very same unnamed wire read `NET3` through the export and `$57N2`
-#:   through `sch.netlist`, which is what made a plan built on the export answer
-#:   `stale_before` for a board that had not moved.
-#:
-#: Both carry **no intent** — that is the whole test — so the judgements that ask
-#: "did a person name this?" must not be fooled by which spelling they are handed.
-_AUTO_NET_RE = re.compile(r"^(NET\d+|\$\S+)$", re.IGNORECASE)
-
-
-def is_auto_net(name: str | None) -> bool:
-    """Is this an editor-generated net name? (the ones that mean nothing)"""
-    return bool(name) and bool(_AUTO_NET_RE.match(str(name).strip()))
-
-
-def nc_violation(model: DesignModel, comp: Component, pin: str) -> tuple[bool, str]:
-    """Is a declared-NC pin connected, and to what (035 round 2, ruling A)?
-
-    Two ways to be connected, and they are the two ways a *named* intent can show
-    up on a board:
-
-    * the pin **shares its net with ≥2 pins** — something else is wired here;
-    * the pin sits **alone on a net somebody named** (``GND``, ``NCNET``, …).
-      Naming is intent: a hand-drawn net called ``GND`` that ends on an NC pin is
-      a mistake to fix, not an island to ignore.
-
-    A single-member **auto** net (``NET7``) is *not* a connection: it is the shape
-    the editor leaves behind for a pin that reaches nothing — measured 035 on
-    3.2.186, where deleting the wire off an NC pin left it alone on ``NET6``. Both
-    the rule and the repair read this function, so "the repair worked" and "the
-    rule is satisfied" cannot disagree (029's rule, round-2 ruling A).
-    """
-    net = _pin_net(comp, pin)
-    company = pin_company(model, comp, pin)
-    if company:
-        mates = ", ".join(f"{name}.{number}" for name, number in sorted(company))
-        return True, f"sits on net {net!r} with {mates}"
-    if net and not is_auto_net(net):
-        return True, f"sits alone on the named net {net!r}"
-    return False, f"touches no net" + (f" (alone on {net!r})" if net else "")
-
-
-def pin_dangles(model: DesignModel, comp: Component, pin: str) -> tuple[bool, str]:
-    """Does this pin reach **nothing**? The same reading as `nc_violation`, inverted.
-
-    Added 035 round 3, because the two directions need one vocabulary. The export
-    gives a pin that reaches nothing a single-member auto net (measured
-    2026-09-24: a dangling U3 pin5 reads ``NET5 [('U3','5')]``), so a
-    `must_connect` judgement that only asked "does the pin's net equal the target?"
-    called a *dangling* pin "on the wrong net 'NET5'" and built a reconnect — a
-    removal, of which there was nothing to remove: the plan refused with "nothing
-    recognisable attaches the pin" and the connect form could not run at all.
-
-    Ruling A's measurement is why one reading serves both directions: a
-    single-member auto net *is* the shape of a pin that reaches nothing, and being
-    alone on a net somebody **named** is still being somewhere. Both the NC
-    judgement and the must_connect one call this, so they cannot disagree.
-    """
-    connected, how = nc_violation(model, comp, pin)
-    return (not connected), how
-
-
-def pin_company(model: DesignModel, comp: Component, pin: str) -> list[tuple[str, str]]:
-    """Every *other* pin that shares this pin's net (035, measured on the machine).
-
-    Why "shares" rather than "has a net name": a real export can carry a pin that
-    *looks* connected and is not. Measured 2026-09-24 on 3.2.186: deleting the
-    wire off a declared-NC pin left the pin sitting alone on a single-member
-    auto-net (`NET6 [('U3','4')]`) — the editor kept the net object after its wire
-    was gone. A rule that asked "is the pin's net set?" would call that connected
-    and refuse to believe a repair it had just watched succeed (035's
-    real-machine leg hit exactly this: apply's own readback said disconnected
-    while the re-review said "still sits on net 'NET6'").
-
-    Counting company is the reading that holds in both directions: a pin alone on
-    its net is connected to nothing, whether that net is auto-named or the old
-    name — and a pin that shares a net with others is connected, whatever the net
-    is called.
-    """
-    node = (model.nets or {}).get(_pin_net(comp, pin) or "")
-    if node is None:
-        return []
-    return [
-        (str(name), str(number))
-        for name, number in node.pins
-        if not (str(name) == comp.designator and str(number) == str(pin))
-    ]
 
 
 def pin_obligation(entry: PartEntry, pin: str) -> tuple[str, str] | None:

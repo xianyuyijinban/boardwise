@@ -2,7 +2,7 @@
 
 DeepSeek Harness（dsh）的 boardwise 插件：在 dsh 里直接调 boardwise 的审查工具面 ——
 `checkup`（一次审查出报告）、`arch`（架构骨架）、`doctor`（本机安装体检）、
-`bridge`（连接器动作逃生舱），不用切窗口。
+`bridge`（连接器动作逃生舱），以及离线 `draw compile` / `draw lint` 回放，不用切窗口。
 
 **薄适配层，零逻辑复制**：插件只 spawn 本机 boardwise CLI，把 stdout / exit code /
 产物路径包装成 tool 返回值。解析器、规则引擎、报告——全在 Python 侧；
@@ -26,6 +26,8 @@ TS 里不重算任何审查结论（任务书 045 §1）。
 | `boardwise_review_evidence` | `review-evidence --out D [--project P] [--page U ...] [--pcb U ...]` | `out` 必填，`page`/`pcb` 可重复 | 600 000 |
 | `boardwise_triage_batch` | `triage-batch --out D --input BATCH --json RESULT` | `out` / `entries` 必填，整批原子应用 | 120 000 |
 | `boardwise_review_finalize` | `review finalize --out D` | `out` 必填，签发当前 Session 的交付收据 | 120 000 |
+| `boardwise_draw_compile` | `draw compile --circuit C --presentation P --profiles S --out D --json J` | 三个输入必填，`pageBox`/`intent`/`out` 可选；整份 JSON 返回：单模块 `candidates`，页级 `pages`（见下） | 600 000 |
+| `boardwise_draw_lint` | `draw lint --snapshot S --render R [--bodies B] --json J` | `snapshot`/`render` 必填，仅离线回放；完整 JSON 返回 | 120 000 |
 
 统一约定：
 
@@ -39,6 +41,17 @@ TS 里不重算任何审查结论（任务书 045 §1）。
   非零 exit 是**结果**不是失败（doctor / checkup 就用 exit 报告状态）；
   `checkup` 的 `3` = **说不清**（在线状态读不出来，或 `completion.verdict` 是 `incomplete`——
   审查没看全：空模型 / 器件缺手册未审 / 骨架没生成 / 覆盖有缺口），**不是通过**（073）。
+- **离线 draw 的结构化结果**：`boardwise_draw_compile` 在 CLI exit 0（有候选）和 5（编译拒绝）
+  都读取并返回整份 `--json` 文件——**前提是 CLI 真写出了这个文件**；`draw compile` 在
+  "输入读不出" 时同样 exit 5 但不写文件，那种情况是错误（报错里显示实际 exit code）。
+  `boardwise_draw_lint` 在 exit 0 / 1 同样返回整份文件。
+  `draw compile` 有两种负载：单模块 presentation 返回 `candidates` + `failureRounds`，
+  页级 presentation（CLI 标 `document: "page"`，即多模块 / 有 `flow` / 模块自带 `grammarRef` /
+  page lock）返回 `pages` + `moduleFailureRounds`；两者都带 `failures` / `categories` /
+  `rejected` / `notes` / `previews`。页级 presentation 需要 `pageBox`（CLI 自己会拒绝没有画布盒的页）。
+  exit 2、文件缺失或 JSON 损坏都是错误，不从 stdout 拼凑答案。lint 工具没有 live page 参数，
+  两个工具都不提供 apply，也不在 TS 重算候选、finding、severity 或 verdict——`document` 只用来
+  选校验哪一种传输形状，不用来判断图是否合法。
 - **stdout 截断**：超过 32KB 时留头 16KB + 尾 16KB，中间标出丢了多少字节；stdout/stderr 里
   任何 token 形状的值一律打码（`token=***`）——daemon token 永不进日志或返回值。
 - 运行时**零依赖**（只用 node 内置模块）；`@deepseek-ai/cordis` 与 `@deepseek-ai/dsh-tools`
@@ -106,6 +119,9 @@ npm install
 npm run typecheck && npm test && npm run build
 npm pack                       # 产出 boardwise-dsh-<version>.tgz
 ```
+
+构建后可用 `npm run smoke:draw` 对真实本机 CLI 做**纯离线**验收：公开 divider 夹具编译 +
+合成空页 lint 回放；不连接编辑器、不调用 apply，产物保留并打印目录。
 
 ### 装进 profile
 
@@ -216,7 +232,7 @@ dsh plugin add github:xianyuyijinban/boardwise
 
 仓库根现在补了一份**纯 shim** `package.json`（`"name": "boardwise-dsh"`、版本与插件同步、
 `main` / `types` 指进 `dsh-plugin/lib/`、`dsh.bundle.patch` 指向
-`dsh-plugin/cordis.patch.yml`），装上它就能真正挂上 bundle、注册 8 工具。
+`dsh-plugin/cordis.patch.yml`），装上它就能真正挂上 bundle、注册 10 工具。
 shim **不是** npm 工程：没有 `scripts`、没有 `dependencies`，根目录不跑构建。
 
 **shim 必须提交进 HEAD 才会生效**：pnpm 的 git 依赖物化的是**提交树**，

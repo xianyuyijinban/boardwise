@@ -138,6 +138,19 @@ from ...core.measure import (
     return_path_projection,
 )
 from ...core.model import GROUND_NET_PREFIXES, is_ground_net
+#: 540B1: the ground-domain word list and its name test moved down to
+#: :mod:`boardwise.core.netdomains`, the shared vocabulary the drawing chain can
+#: import without crossing into this rule module. Imported **by name** and
+#: re-exported unchanged, so every historical ``focground.domain_of`` /
+#: ``GROUND_DOMAIN_*_PREFIXES`` import keeps resolving to this one object.
+#: Listed rather than derived is still the point of the two tuples: they are the
+#: vocabulary's own declaration of which family lands on which side, and they
+#: are not the same set in either direction.
+from ...core.netdomains import (
+    GROUND_DOMAIN_LOGIC_PREFIXES,
+    GROUND_DOMAIN_POWER_PREFIXES,
+    domain_of,
+)
 from ...core.values import parse_resistance_ohms
 from ..facts import (
     category_absent_reason,
@@ -178,48 +191,6 @@ __all__ = [
     "zero_ohm_resistors_of",
 ]
 
-
-#: The net-name prefixes that put a ground-class net in the **power** domain.
-#:
-#: **This is a name test and it is the fragile step the module docstring
-#: declares.** Measured on the corpus: 毕设FOC 1.0.0's PCB1 carries exactly one
-#: power-domain ground (``PGND``), 1.1.0's PCB1 the same, ROBOT and 药箱 carry
-#: **none** — so R1/R1b are structurally silent on those two boards and say so
-#: with one INFO row rather than filing a finding about a missing domain.
-#: ``POWER_GROUND_PREFIXES`` in :mod:`boardwise.core.model` is deliberately
-#: narrower (``PGND`` only) and this list widens it to the ``P``-prefix family,
-#: which is where a naming convention puts a power ground — ``P_GND`` /
-#: ``POWER_GND`` / ``EARTH`` included, so a board that spells its power ground
-#: ``EARTH`` lands in the power domain **by this module's own declaration** and is
-#: judged like any other power ground (D2: until that was fixed the outer sieve
-#: dropped such a name before this list was consulted — see
-#: :func:`split_ground_domains`). A ground-class name this list does **not**
-#: carry (``SEC_GND``, ``ISO_VSS``) is **UNKNOWN**, not 「logic ground」, and lands
-#: in :attr:`GroundDomainSplit.unclassified` so the R1b row can name it.
-GROUND_DOMAIN_POWER_PREFIXES: tuple[str, ...] = ("PGND", "P_GND", "POWER_GND", "EARTH")
-
-#: The net-name prefixes that put a ground-class net in the **logic / analog**
-#: domain: the corpus's own ground vocabulary minus the power family. That
-#: vocabulary is :data:`boardwise.core.model.GROUND_NET_PREFIXES` — ``GND`` /
-#: ``AGND`` / ``DGND`` / ``PGND`` / ``EGND`` / ``SGND`` / ``VSS``, plus ``EARTH``
-#: as of 171 — and removing :data:`GROUND_DOMAIN_POWER_PREFIXES` leaves the six
-#: words below.
-#:
-#: Listed rather than derived, and that is the point: the two lists are this
-#: module's own **declaration** of which side each family lands on, and 171 grew
-#: the shared vocabulary instead of this file. The two are not the same set in
-#: either direction — ``P_GND`` / ``POWER_GND`` are power-side words only this
-#: file carries, and a name ``is_ground_net`` knows but neither list holds
-#: (``SEC_GND``, ``ISO_VSS``) is placed on **neither** side, by name, in
-#: :attr:`GroundDomainSplit.unclassified`.
-GROUND_DOMAIN_LOGIC_PREFIXES: tuple[str, ...] = (
-    "GND",
-    "AGND",
-    "DGND",
-    "EGND",
-    "SGND",
-    "VSS",
-)
 
 #: The ``LAYER`` ``layerType`` that makes a reference layer a **plane**.
 #:
@@ -268,27 +239,6 @@ TIE_PER_PAIR_RULING = (
     "岳 2026-10-11 裁：三域（PGND / GND / AGND）两两之间，**每对地域各一颗 0R 即合规**"
     "——推翻 2026-10-08 的「全板恰好一颗」口径；每对域的判定彼此独立，一对缺就报那一对"
 )
-
-
-def _upper(text: object) -> str:
-    return str(text or "").strip().upper()
-
-
-def domain_of(net: str) -> str:
-    """Which ground domain this net name puts it in: ``power`` / ``logic`` / ``""``.
-
-    ``""`` means the name is not ground-class **for this rule's word list** —
-    which is not the same as 「not ground」, and the callers say so rather than
-    quietly filing it under the logic side.
-    """
-    upper = _upper(net)
-    if not upper:
-        return ""
-    if any(upper.startswith(p) for p in GROUND_DOMAIN_POWER_PREFIXES):
-        return "power"
-    if any(upper.startswith(p) for p in GROUND_DOMAIN_LOGIC_PREFIXES):
-        return "logic"
-    return ""
 
 
 @dataclass(frozen=True)
@@ -2247,7 +2197,7 @@ class FocReturnPath(PcbRule):
             ),
             evidence=[
                 "sieve: "
-                f"{_upper('GH|GL')} + optional phase letter + optional digits "
+                "GH|GL + optional phase letter + optional digits "
                 "for gates, plus the "
                 + ", ".join(repr(p) for p in POWER_NET_PREFIXES)
                 + " prefixes (foc.is_power_net) — a **net-name** test, because "

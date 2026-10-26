@@ -1,0 +1,48 @@
+{
+  "schema": "boardwise.differential-manifest/1",
+  "sources": {
+    "tests/fixtures/ch340_golden.epro2": "725d19616499d6883734441cf621f9ccedb0520755a32f90a9add921b01374a7",
+    "tests/fixtures/drawapply/divider.circuit.json": "dd1cc2ef269b316c792cf72a529666db883c1a1b7d7ee40a56d03ff963e84eb3",
+    "tests/fixtures/drawapply/divider.presentation.json": "39d0c390a9e8753c904dfface5cee90d479df59eb6d7ee87014584655ed0d54e",
+    "tests/fixtures/drawapply/library.json": "a4ec679d85c7b40685c9d34dbcf7bc8e3ddc760a4ad441de3b7c1e18c5c9cadc",
+    "contracts/differential/sources/page.circuit.json": "8c60973f358649e730713cc5dd95c3a59a05360504940759593e9c0d2458281b",
+    "contracts/differential/sources/page.presentation.json": "7dabd0640546ced72e0308c23420e3efeaaedd4e1a7ad990ebc3b78d3d4f4892"
+  },
+  "producerVersions": {
+    "ruleset": "a0c5e0a0",
+    "rulebody": "25b7de70"
+  },
+  "schemas": {
+    "contracts/json/review-report-v1.schema.json": "7a3aafd9b01e33198207472045658b4726d64a2e25dd8eac649d6871062f13eb",
+    "contracts/json/layout-plan-v1.schema.json": "7f0d1b54779b0a8457905c6f65926dc48e7c4451cb62d67f1f99ee56e1367e4d",
+    "contracts/json/draw-compile-result-v1.schema.json": "aa6466feffa9fe14d89cd17533fb543a8b68194ac64b27710878e8b994c25464",
+    "contracts/json/draw-page-compile-result-v1.schema.json": "1cb90569888bae967f1a13f691fb395c29ae2b2633790c306a9c360d0153fc6a",
+    "contracts/json/draw-lint-result-v1.schema.json": "8985ab24d1b71d8a0080fa4e87b03df54200363cf871b6c0024fb5193ba5b383"
+  },
+  "producers": [
+    "python -m boardwise.cli checkup --file tests/fixtures/ch340_golden.epro2 --out <OUT>/checkup (accept 0 or 3)",
+    "python -m boardwise.cli draw compile --circuit <FIXTURES>/divider.circuit.json --presentation <FIXTURES>/divider.presentation.json --profiles <FIXTURES>/library.json --page-box 0,-1000,1200,0 --out <OUT>/compile --json <OUT>/compile-result.json",
+    "python -m boardwise.cli draw compile --circuit contracts/differential/sources/page.circuit.json --presentation contracts/differential/sources/page.presentation.json --profiles <FIXTURES>/library.json --page-box 0,0,1169,826 --out <OUT>/compile-page --json <OUT>/page-compile-result.json",
+    "python -m boardwise.cli draw lint --snapshot <OUT>/lint-snapshot.json --render <OUT>/lint-render.svg --json <OUT>/lint-result.json"
+  ],
+  "regenerate": ".venv/Scripts/python.exe -m tools.build_differential_fixtures",
+  "sanitization": [
+    "generatedAt -> <GENERATED_AT>",
+    "repository work paths -> <OUT>",
+    "tests/fixtures paths -> <FIXTURES>",
+    "user .boardwise paths -> <HOME>",
+    "backslashes in strings -> forward slashes",
+    "no real project container is read or copied; inputs come only from the public/synthetic sources above"
+  ],
+  "inputs": {
+    "contracts/differential/inputs/review-report.json": "e3c6c0de4f5b8b2c87be38791dc04fd6f600eed190e948243601af3f3a73b823",
+    "contracts/differential/inputs/divider-cand1.layout.json": "5241c07f5f0417ea8226720cfbd39f74c813c2a0513635fb1d83cf866f48a233",
+    "contracts/differential/inputs/divider-compile-result.json": "6c875501a464b751bd4ea62612b0e744fee71fc028765b375efdb7d4b4dc7606",
+    "contracts/differential/inputs/page-compile-result.json": "e1b32d0b7b6280f411dc0741d97e4091ec0c4ef60251afbad6e2e4ec8bce42ab",
+    "contracts/differential/inputs/empty-page-lint-result.json": "15cc8a152471395e2354a6de6f5fd1c29bb6e671a7d217f62be887e7082fd465"
+  },
+  "caseBook": {
+    "path": "contracts/differential/cases.json",
+    "sha256": "7df2c4009e4382664c7801e2aa5111eaf883d109d73188238ecd7642dbb61430"
+  }
+}

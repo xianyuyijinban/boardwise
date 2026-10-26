@@ -5,3 +5,10 @@
 # `/bin/sh\r: not found`, so the hook stops guarding and says nothing. Pinning
 # these paths to LF is what makes the hooks survive a fresh clone here.
 /.githooks/* text eol=lf
+
+# Contract artifacts are pinned to LF for the same reason the hooks are, with a
+# second one: contracts/differential/manifest.json records SHA-256 hashes of the
+# golden *bytes*, so a checkout that turns '\n' into '\r\n' would pin a different
+# manifest per platform. Every contract JSON is generated through
+# `tools.differential_compare.write_text_lf`, which writes '\n' explicitly.
+/contracts/**/*.json text eol=lf

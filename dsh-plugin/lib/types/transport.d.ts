@@ -63,12 +63,16 @@ export declare function executeCli(tool: string, argv: readonly string[], timeou
  *
  * dsh truncates stdout at 32 KiB, so a structured answer can never come from
  * there: `--json PATH` (or a receipt the CLI signs in `--out`) is read in full,
- * and only a successful run plus a complete, parsed object is an answer. A
- * non-zero exit is loud and carries {@link formatOutcome}; a missing file,
- * broken JSON or non-object root is equally loud — there is no stale, partial
- * or stdout fallback path.
+ * and only an accepted run plus a complete, parsed object is an answer. A
+ * non-zero exit is loud and carries {@link formatOutcome} unless the caller
+ * explicitly names it as a domain result (draw compile 5 / draw lint 1). A
+ * missing file, broken JSON or non-object root is equally loud — there is no
+ * stale, partial or stdout fallback path. Existing callers keep the exit-0 default.
+ * A missing file names the exit code that was actually accepted: a documented
+ * non-zero answer (draw compile 5) may legitimately come without a file when the
+ * CLI could not read its input, and saying "exit 0" there would be a false report.
  */
-export declare function runStructuredCli(tool: string, argv: readonly string[], timeoutMs: number, exec: Cancellable, jsonPath: string): Promise<StructuredResult>;
+export declare function runStructuredCli(tool: string, argv: readonly string[], timeoutMs: number, exec: Cancellable, jsonPath: string, acceptedExitCodes?: readonly number[]): Promise<StructuredResult>;
 /** A short, log-safe name for an unexpected JSON value. */
 export declare function describeValue(value: unknown): string;
 /** A required `out` directory, refused before anything is spawned. */
