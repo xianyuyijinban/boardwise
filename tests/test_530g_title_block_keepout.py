@@ -513,6 +513,18 @@ def test_a_page_with_no_sheet_packs_exactly_where_it_did_before() -> None:
     file's no-op guard keeps measuring the same thing. And the 「byte-identical」
     sentence above is 201H's witness, not this batch's — 542's picture differs by
     exactly one wire, one stub and one flag.
+
+    **542-C11 re-pinned it a third time** (`9bae9deb…` → `bc5e1b1f…`), and again it
+    is routing rather than packing: `secondary`'s `SEC_12V` link bends at `x = 875`
+    instead of `872.4402373472949` (`C11`'s value row's own right edge — a conductor
+    on a text's edge, zero clearance once the host lands two decimals), and
+    `feedback`'s `FB_SENSE` long run moves `y = 370` → `y = 372` in the page's frame
+    (host frame `540 → 542`; `U4`'s reference row's bottom edge was the same zero),
+    with `SEC_12V`'s junction following to `875, 95`. Nothing about the sheet
+    moved: `keepouts == ()`, `floor == margin`, no conflict, and `page.offsets` /
+    `page.bbox()` still read the numbers asserted below — the block extents did not
+    change, only two conductors inside them (and `C11`'s value row is still
+    printed, so no text box vanished from the digest's picture either).
     """
     circuit, presentation, book = _flyback()
     page = il.island_page(circuit, presentation, book)
@@ -530,13 +542,18 @@ def test_a_page_with_no_sheet_packs_exactly_where_it_did_before() -> None:
         (20.535064572425824, 20.0, 988.1874485165794, 400.5)
     )
     assert page.plan().geometry_sha256() == (
-        "9bae9deb73e2ad25bbeb1f2e90de3d44d55e9370a079ac57a72a623760e68654"
+        "bc5e1b1fd528cfb07d4f14cfd5e0ef184db7e6d094e5582bf9403e81f2d0d316"
     ), (
         "the island page moved again: that is a *layout* batch's business, and this "
         "number is the witness of when — 532 re-pinned it from a797e3af… when the "
         "rows a part's own drawing occupies started deciding the pitch; 542 "
         "re-pinned it from 565ab76d… when `FB_SENSE` left the channel inside `U4`'s "
-        "frame, which is one island's routing and left `offsets`/`bbox()` alone"
+        "frame, which is one island's routing and left `offsets`/`bbox()` alone; "
+        "542-C11 re-pinned it from 9bae9deb… when `SEC_12V` stopped bending on "
+        "`C11`'s value row's right edge (`x` 872.440237… → 875) and `FB_SENSE` "
+        "moved off `U4`'s reference row (`y` 370 → 372, host 540 → 542), the "
+        "junction following `SEC_12V` to 875, 95 — two conductors, offsets and bbox "
+        "unmoved, no text row hidden"
     )
 
 

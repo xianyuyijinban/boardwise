@@ -79,8 +79,20 @@ PROV = "verified_recipe"
 #: unchanged, `page.bbox()`/`page.offsets` do not move, and §5.2's promise still
 #: holds: the digest changed because a conductor moved in the *layout*, not because
 #: anything a proposal command does could move it.
+#: 542-C11 re-pinned it a third time (`9bae9deb…` → `bc5e1b1f…`), and this one is
+#: the **text-clearance** rule, again as routing inside two islands and nothing
+#: else: `secondary`'s `SEC_12V` link now bends at `x = 875` instead of
+#: `872.4402373472949` (which *was* `C11`'s value row's right edge, i.e. zero
+#: clearance), and `feedback`'s `FB_SENSE` long run moves from `y = 370` to
+#: `y = 372` in the page's own frame (the host frame reads `540 → 542`; `U4`'s
+#: reference row's bottom edge was the same zero), with `SEC_12V`'s junction
+#: following it to `875, 95`. `C11`'s value is still printed (S-21; no text row is
+#: hidden), all 37 printed rows keep >= 2 units from every conductor, and
+#: `page.offsets`/`page.bbox()` do not move — §5.2's promise holds for the same
+#: reason as the two re-pins above: a conductor moved in the layout, and no
+#: proposal command can move one.
 FLYBACK_ISLAND_PAGE_SHA256 = (
-    "9bae9deb73e2ad25bbeb1f2e90de3d44d55e9370a079ac57a72a623760e68654"
+    "bc5e1b1fd528cfb07d4f14cfd5e0ef184db7e6d094e5582bf9403e81f2d0d316"
 )
 
 

@@ -3330,6 +3330,72 @@ def _hide_value_row(block: IslandBlock, part_id: str, text: str, reason: str) ->
 ROUTE_MAX_BENDS = 2
 
 
+#: How far a conductor keeps off a **text row's own box**, in drawing units (542).
+#:
+#: One unit is the page's own reserve everywhere else (`drawcompiler.PIN_TEXT_WALL`,
+#: `_wire_boxes`' wall), and this is the same number for the same reason: a
+#: conductor *on* a row's edge is legible only because the two share a coordinate,
+#: and the host does not land coordinates at full precision.  The measured case
+#: (`tests/test_542_c11_text_clearance.py`): `secondary`'s `SEC_12V` bent at
+#: ``x = 872.4402373472949``, which is exactly `C11`'s value row's right edge —
+#: the connector lands the wire at ``872.44`` and the conductor is then 0.0002373
+#: unit **inside** the row, which the host's drawlint reports as a chord.  Nothing
+#: is printed through the row, so `TEXT_WIRE_PENETRATION` (10) never saw it: the
+#: drawing was "no ink pressed" and zero clearance at the same time.
+#:
+#: It is not a knee-jerk widening. A row's edge is a **coordinate the router may
+#: bend at** (`_detours`), and the number is what makes the coordinate beside it
+#: (``edge ± (clearance + TEXT_WIRE_LANDING)``, then snapped to the lattice) a
+#: candidate of its own, so the row keeps a corridor instead of a shared line.
+#: `readability`'s own reading is untouched: this is the router declining to draw
+#: on a text's edge, not the gate re-scoring it.
+#:
+#: **What it is not: a guarantee.**  The clearance is a *routing preference* plus
+#: a *candidate offer*, and the router is best-effort by construction — every
+#: electrical key and every `bends` slot outranks it (it is a legibility key, see
+#: :func:`_route`'s table), so when the only clean route would cost a body
+#: crossing, a short or a bend, the page keeps the bend and the row stays closer
+#: than one unit.  A two-pin link whose only route is a one-bend L along a row's
+#: edge is the smallest example: the L keeps the edge and wins on `bends` (key 7)
+#: against the two clear Z routes.  So nothing here may be read as 「all layouts
+#: keep >= 1 unit」: the reading that decides is the landed page (`drawlint`'s
+#: chord, `readability`'s `text-on-wire`), and the measurement that exists is the
+#: flyback page's own — all 37 printed rows at >= 2 units — carried by
+#: `tests/test_542_c11_text_clearance.py`, not by this number.
+TEXT_WIRE_CLEARANCE = 1.0
+
+
+#: How much *more* than :data:`TEXT_WIRE_CLEARANCE` the reserve has to be before
+#: the coordinate is put on the lattice, so the host's own landing cannot eat it.
+#:
+#: The connector writes a conductor at two decimals (`872.4402373472949` →
+#: ``872.44``), so a coordinate exactly one unit off a row's edge arrives as
+#: ``0.9998`` off it — the same zero the batch exists to remove, one rounding
+#: step smaller.  Half a landed digit would be 0.005; this is one digit, because
+#: the reserve is snapped from ``clearance + this`` and the lattice is coarse
+#: (5 units), so the exact excess almost never matters and rounding *up* past it
+#: is never wrong: a conductor on the lattice is the drawing's own convention
+#: anyway ( ``_snap_up``: 「a radius may only grow」).
+TEXT_WIRE_LANDING = 0.01
+
+
+def _snap_down(value: float, grid: float) -> float:
+    """``value`` on the lattice, downward — the mirror of :func:`_snap_up`."""
+    if grid <= 0:
+        return value
+    return math.floor(value / grid) * grid
+
+
+def _run_box(
+    a: tuple[float, float], b: tuple[float, float]
+) -> Box:
+    """The box an axis-aligned run occupies — its own extent, edges included."""
+    return (
+        min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1]),
+    )
+
+
+
 def _bends(path: Sequence[tuple[float, float]]) -> int:
     """How many corners this polyline turns at (S-09's own count)."""
     return max(0, len(path) - 2)
@@ -3391,7 +3457,7 @@ def _wire_net(
     if len(pinned) < 2:
         return
     pinned = _chain_order(pinned, tips)
-    detours = _detours(radius, budget, index, [*field.bodies, *field.rows])
+    detours = _detours(radius, budget, index, field.bodies, field.rows)
     links: list[list[tuple[float, float]]] = []
     for position in range(len(pinned) - 1):
         first, second = pinned[position], pinned[position + 1]
@@ -3434,6 +3500,7 @@ def _detours(
     budget: IslandBudget,
     index: int,
     obstacles: Sequence[Box] = (),
+    rows: Sequence[Box] = (),
 ) -> list[float]:
     """The coordinates **this** net's links may bend through.
 
@@ -3463,6 +3530,22 @@ def _detours(
     value row is a two-bend path through the four units between that row's right
     edge and `D3`'s body, and every channel-pushed candidate misses it
     (`evidence/532/raw/`).
+
+    542 adds the **clear** side of a row.  The raw edge is not only a corridor,
+    it is also a line a wire can be drawn *on*, and a wire on a text's edge has
+    zero clearance: the host lands conductors at two decimals, so `secondary`'s
+    `SEC_12V` bent at ``872.4402373472949`` — `C11`'s value row's right edge — and
+    arrived on the page as ``872.44``, 0.0002373 unit *inside* the row.  So every
+    row also contributes its four edges pushed out by
+    :data:`TEXT_WIRE_CLEARANCE` (plus :data:`TEXT_WIRE_LANDING`) and put on the
+    lattice, and :func:`_route`'s `row_chords` key prefers those over the raw
+    edge.  The clearance has to be the *snapped* distance rather than the exact
+    one: the host lands conductors at two decimals, so a coordinate exactly one
+    unit off a row's edge can arrive 0.9998 off it, which is the same zero in a
+    smaller unit.  The raw edges stay offered, for the same reason the
+    channel-pushed ones do: a corridor narrower than the clearance still needs a
+    way to bend, and the router ranks the two instead of this function dropping
+    one.
     """
     out: list[float] = []
     for box in obstacles:
@@ -3470,6 +3553,25 @@ def _detours(
         for value in (box[0] - budget.channel, box[2] + budget.channel,
                       box[1] - budget.channel, box[3] + budget.channel):
             out.append(value)
+    #: 542: a **row** is not just another box to bend around.  Its edges are the
+    #: coordinates a Z route wants (532's corridor between a row and a body), and
+    #: the raw edge is a zero-clearance line — so the corridor's far side is
+    #: offered as well, one `TEXT_WIRE_CLEARANCE` out.  The raw edges stay: a
+    #: corridor narrower than the clearance still needs somewhere to bend, and
+    #: dropping them would remove routes rather than re-rank them.  What changes
+    #: is that a clear coordinate now exists beside every edge, and `_route`'s
+    #: `row_chords` key picks it over two units of conductor.
+    for box in rows:
+        out.extend((box[0], box[1], box[2], box[3]))
+        for value in (box[0] - budget.channel, box[2] + budget.channel,
+                      box[1] - budget.channel, box[3] + budget.channel):
+            out.append(value)
+        out.extend((
+            _snap_down(box[0] - TEXT_WIRE_CLEARANCE - TEXT_WIRE_LANDING, budget.grid),
+            _snap_up(box[2] + TEXT_WIRE_CLEARANCE + TEXT_WIRE_LANDING, budget.grid),
+            _snap_down(box[1] - TEXT_WIRE_CLEARANCE - TEXT_WIRE_LANDING, budget.grid),
+            _snap_up(box[3] + TEXT_WIRE_CLEARANCE + TEXT_WIRE_LANDING, budget.grid),
+        ))
     for step in (1, 2, 3):
         value = radius + budget.channel * (index + step)
         out.extend([value, -value])
@@ -3514,7 +3616,7 @@ def _route(
       gate (`wire-through-body` is a hard violation, `readability.py`).  T3
       exists so a failure can be read, not so a page can pass.
 
-    **The keys**, in order (lower is better) — thirteen slots, and the list is the
+    **The keys**, in order (lower is better) — fourteen slots, and the list is the
     tuple the loop below actually builds::
 
         1 (crossings)          # a wire through a part: wire-through-body, S-10
@@ -3531,8 +3633,11 @@ def _route(
        10 (doubled)            # this net's own earlier links
        11 (grazes)            # 542: drawn on or just inside a body's frame —
                                # S-10's 贴框, which `_crosses`'s margin cannot see
-       12 (row_hits)           # the host's own name row, printed over a part
-       13 (length)             # and only here does length matter
+       12 (row_chords)        # 542: within one unit of a row's own box — the
+                               # zero-clearance line the host's two-decimal
+                               # landing turns into a conductor inside the row
+       13 (row_hits)           # the host's own name row, printed over a part
+       14 (length)             # and only here does length matter
 
     Key 3 is the one that was missing: ``foreign_overlap`` reads collinear runs
     only (:func:`_run_overlap` returns ``0.0`` the moment the runs are not
@@ -3549,7 +3654,7 @@ def _route(
     here because a key list that grows silently is how a router stops being
     explainable.  **Key 4** is the same-net tee — a legal dot, but one
     :func:`_junction_dots` has to declare, and `bends` outranks `doubled`, so a
-    candidate can now win on its bend count *and* bring a tee.  **Key 12** is the
+    candidate can now win on its bend count *and* bring a tee.  **Key 13** is the
     host's own net-name row: it is the page's commonest legibility finding and it
     is a function of the geometry, so it is choosable here; it sits below every
     electrical key and below `bends`, and above `length` only.
@@ -3564,6 +3669,15 @@ def _route(
     length is the price of leaving the frame.  201H's page needed it: `FB_SENSE`
     won key 1 = 0 at 0.5 unit inside `U4`'s lower edge and was the shortest clean
     candidate (180 against 241 for the first channel below the part).
+
+    **Key 12** is the same batch's second reading, one object over: **a run within
+    `TEXT_WIRE_CLEARANCE` of a text row's own box** — a conductor drawn *on* the
+    line the host prints a designator or value in.  It sits directly after
+    ``grazes`` and for the identical reason (a legibility key above `row_hits` and
+    `length` only, below every electrical key and below `bends`), and it is the
+    reason `_detours` offers a row's edges pushed out by the clearance as well as
+    the raw edges: the router has to have somewhere clear to bend before it can
+    decline the zero-clearance line.
 
     ``field.bodies`` are the *bodies*, not `drawcompiler._part_box`'s extent: a
     wire that grazes a pin tip is a clearance opinion, one that runs through a
@@ -3721,7 +3835,33 @@ def _route(
         text_hits = sum(
             1 for run in runs for box in field.rows if _crosses(*run, box)
         )
-        # Key 12, the second-to-last: where the host prints this link's own **net
+        # 542: the same host rule as `text_hits`, one unit shallower.  A conductor
+        # **on** a row's edge penetrates nothing — `_crosses` reads a shared edge
+        # as no crossing — so the route that hugs a row scored 0 above, and the
+        # host lands the wire at two decimals: `secondary`'s `SEC_12V` bent at
+        # `C11`'s value row's right edge (872.4402373472949), became 872.44 on the
+        # page, and the conductor sat 0.0002373 unit *inside* the printed row.
+        # Where it ranks (the tuple below is the authority): **after** `bends`,
+        # after the overlap keys and after `doubled` — beside `grazes`, the same
+        # reading one object over — and above `row_hits`/`length` only.  It is a
+        # legibility key and it may not buy a bend or a short for 531's measured
+        # reason: the row model is deviant at rotated poses, so the hard part of
+        # the promise stays with the gate that reads the landed page.
+        #
+        # The threshold is the **offer's** number, `clearance + landing`, not the
+        # clearance alone: `_detours` hands the router coordinates that far out,
+        # so a coordinate in ``[clearance, clearance + landing)`` is one the host
+        # can land *inside* the row.  Measured: a run at ``x = 873.4422373472949``
+        # off a row whose right edge is ``872.4402373472949`` is 1.002 unit away on
+        # the model — clear by the naked clearance — and lands at ``873.44``,
+        # i.e. 0.99976 away.  ``tests/test_542_c11_text_clearance.py``'s threshold
+        # regression is that case.
+        row_chords = sum(
+            1 for run in runs for box in field.rows
+            if box_gap(_run_box(*run), box)
+            < TEXT_WIRE_CLEARANCE + TEXT_WIRE_LANDING
+        )
+        # Key 13, the second-to-last: where the host prints this link's own **net
         # name**.  Like the boundary stub's row (`_name_one_net`) it is a text
         # nobody placed, and `readability` measures it as `segments[i]` — the
         # commonest finding on this page (530B's §6: 7 of its 9 `text-overlap`).
@@ -3743,7 +3883,7 @@ def _route(
             crossings, landing + pin_hits, true_crossings, own_tees, extent_hits,
             text_hits,
             _bends(clean), foreign_overlap, lead_overlap, doubled,
-            grazes, row_hits, _length(clean),
+            grazes, row_chords, row_hits, _length(clean),
         )
 
         complaints: list[str] = []
@@ -3754,6 +3894,13 @@ def _route(
                 f"it is printed through {text_hits} row(s) of a part's own "
                 "designator/value, which the readability gate refuses as "
                 "`text-on-wire` — a row the *compiler* placed, not one the host did"
+            )
+        if row_chords and not text_hits:
+            complaints.append(
+                f"it runs within {TEXT_WIRE_CLEARANCE + TEXT_WIRE_LANDING:g} unit "
+                f"of {row_chords} row(s) "
+                "of a part's own designator/value, so the host's own two-decimal "
+                "landing puts it inside a row it shares a coordinate with"
             )
         if pin_hits:
             complaints.append(

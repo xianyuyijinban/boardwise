@@ -110,7 +110,8 @@ def test_the_real_page_names_every_blob_exactly_once() -> None:
     one piece, so the count is also the witness that 530D's finer rule changed the
     *statement* and not the picture — while the geometry digest below is the witness
     of every later batch that moved the *drawing*: 532 (row pitch), 201H (the
-    transformer's value row) and 542 (`FB_SENSE`'s channel off `U4`'s frame).
+    transformer's value row), 542 (`FB_SENSE`'s channel off `U4`'s frame) and
+    542-C11 (two conductors off two text rows' own edges).
     """
     circuit, presentation, book = _flyback()
     page = il.island_page(circuit, presentation, book)
@@ -118,7 +119,7 @@ def test_the_real_page_names_every_blob_exactly_once() -> None:
     assert (names, blobs) == (22, 22), (names, blobs)
     assert names - blobs == 0
     assert page.plan().geometry_sha256() == (
-        "9bae9deb73e2ad25bbeb1f2e90de3d44d55e9370a079ac57a72a623760e68654"
+        "bc5e1b1fd528cfb07d4f14cfd5e0ef184db7e6d094e5582bf9403e81f2d0d316"
     ), (
         "the island picture moved again — that is a *layout* batch's business and "
         "this digest is the witness of when: 532 re-pinned it from a797e3af… when "
@@ -130,7 +131,15 @@ def test_the_real_page_names_every_blob_exactly_once() -> None:
         "are unchanged). The count this test owns (22 = 22) did not move. The "
         "「parts, segments, junctions, labels and flags are byte-identical」 sentence "
         "that stood here belongs to 201H's re-pin, not to this one: 542's edit is "
-        "exactly one wire, one stub and one flag"
+        "exactly one wire, one stub and one flag. 542-C11 re-pinned it again from "
+        "9bae9deb… and the mover is again a conductor, not a name: `secondary`'s "
+        "`SEC_12V` link bends at `x = 875` instead of `872.4402373472949` — which "
+        "was `C11`'s value row's own right edge, i.e. zero clearance once the host "
+        "lands two decimals — and `feedback`'s `FB_SENSE` run moves `y = 370` → "
+        "`y = 372` (host frame 540 → 542; `U4`'s reference row's bottom edge was "
+        "the same zero), with `SEC_12V`'s junction following to `875, 95`. `C11`'s "
+        "value is still printed (S-21; 37 printed rows, all >= 2 units from every "
+        "conductor), so this test's reading is untouched at 22 names for 22 blobs"
     )
 
 
