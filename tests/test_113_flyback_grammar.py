@@ -1176,15 +1176,24 @@ def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
     # 变的只是「谁拒的」，且换成了**更重**的一层（软底线 → 硬闸）。软底线从 534
     # 起一直先拒、硬闸从没跑到，所以这两条电学账在 113 的账簿里被遮住了。
     #
-    # 那条短接是**真的**，而且**不在 542 动的那个岛上**：它属于 **bridge** 岛
-    # （542 之后该岛 8 段与之前逐段相同）——`LED_A` 的竖段
-    # `(460,70) → (460,40)` 穿过 `U5.2` 的脚端 `(460,50)`，而 `LED_K` 正从这一点
-    # 起步，编辑器就在此把两个网并成一个；`netlist-partition-mismatch`（四个脚
-    # 并成一个节点）与 `undeclared-junction`（顶点切进另一根线的中段且没声明）
-    # 是**同一个点**的两种说法，不是两条独立缺陷。它是这个 loader 的产物：
-    # `_library_from` 丢引脚 `length`、无 declared poses，`U5.1`/`U5.2` 于是被排在
-    # 同一条 `x = 460` 上；真库同页 `readability.check` 是 `ok=True` / `hard=0`，
-    # bridge 岛的 `LED_A`/`LED_K` 走完全不同的两段。
+    # 那条短接是**真的**，而且**不在 542 动的那个岛上**：它属于 **bridge** 岛。
+    # 542-B1 之前该岛 8 段与更早逐段相同；542-B1 之后**仍是 8 段，但变了一段**，
+    # 变的正是本批的题材：`LED_A` 的载体从一根竖段变成**带一弯的两段**
+    # `(520,90) → (520,28) → (453,28)`（它 `U5.1` 那一脚的脚下两侧都被别的件封住，
+    # 平名要靠这个弯），`LED_K` 仍是一根直横段 `(520,70) → (550,70)`。
+    #
+    # 于是这个手搓库上的合流点从 `(460,50)` 移到 **`(520,70)`**：`LED_K` 直横段的
+    # **起点顶点**正落在 `LED_A` 那段竖腿的中段里（该竖腿现在长 62，贯穿 `U5.1`/
+    # `U5.2` 两脚之间），编辑器就在此把两个网并成一个。所以病因一个字没变——
+    # `netlist-partition-mismatch`（四个脚并成一个节点）与 `undeclared-junction`
+    # （顶点切进另一根线的中段且没声明）仍是**同一个点**的两种说法，不是两条独立
+    # 缺陷；变的是这个点被 B1 的弯**推到了哪里**（x 460 → 520，y 50 → 70）。
+    #
+    # 它仍是这个 loader 的产物：`_library_from` 丢引脚 `length`、无 declared poses，
+    # `U5.1`/`U5.2` 于是被排在同一条 `x = 520` 上（bridge 岛整体也随本批页包从
+    # `(505,60)` 移到 `(565,80)`，所以两个坐标都动了）；真库同页
+    # `readability.check` 是 `ok=True` / `hard=0`，bridge 岛的 `LED_A`/`LED_K`
+    # 走完全不同的两段。
     #
     # 所以这里钉的仍是本条的本意「拒绝点名：哪一层、哪两个对象、为什么」。
     # 软底线那一层的措辞与上限不是丢了，而是搬回了它自己的测试
@@ -1201,7 +1210,7 @@ def test_the_flyback_page_is_refused_and_says_which_relations_are_left():
     )
     assert all(token in joined for token in (
         "pins[R9.2]", "pins[U4.2]", "pins[U5.1]", "pins[U5.2]",
-        "segments[34]", "segments[33]", "(460, 50)",
+        "segments[34]", "segments[33]", "(520, 70)",
     )), (
         "a refusal owes the *objects* it merged, not only a category: the four pins "
         "on `LED_A`/`LED_K`, the two bridge segments, and the point where the editor "

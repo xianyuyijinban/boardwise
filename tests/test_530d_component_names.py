@@ -110,8 +110,9 @@ def test_the_real_page_names_every_blob_exactly_once() -> None:
     one piece, so the count is also the witness that 530D's finer rule changed the
     *statement* and not the picture — while the geometry digest below is the witness
     of every later batch that moved the *drawing*: 532 (row pitch), 201H (the
-    transformer's value row), 542 (`FB_SENSE`'s channel off `U4`'s frame) and
-    542-C11 (two conductors off two text rows' own edges).
+    transformer's value row), 542 (`FB_SENSE`'s channel off `U4`'s frame),
+    542-C11 (two conductors off two text rows' own edges) and 542-B1 (four
+    horizontal label carriers).
     """
     circuit, presentation, book = _flyback()
     page = il.island_page(circuit, presentation, book)
@@ -119,7 +120,7 @@ def test_the_real_page_names_every_blob_exactly_once() -> None:
     assert (names, blobs) == (22, 22), (names, blobs)
     assert names - blobs == 0
     assert page.plan().geometry_sha256() == (
-        "bc5e1b1fd528cfb07d4f14cfd5e0ef184db7e6d094e5582bf9403e81f2d0d316"
+        "bb1a6732c2ada7dead56a54eae853d654327d0a1d5d1ce2d29526d5d27766c64"
     ), (
         "the island picture moved again — that is a *layout* batch's business and "
         "this digest is the witness of when: 532 re-pinned it from a797e3af… when "
@@ -139,7 +140,24 @@ def test_the_real_page_names_every_blob_exactly_once() -> None:
         "`y = 372` (host frame 540 → 542; `U4`'s reference row's bottom edge was "
         "the same zero), with `SEC_12V`'s junction following to `875, 95`. `C11`'s "
         "value is still printed (S-21; 37 printed rows, all >= 2 units from every "
-        "conductor), so this test's reading is untouched at 22 names for 22 blobs"
+        "conductor), so this test's reading is untouched at 22 names for 22 blobs. "
+        "542-B1 re-pinned it a fourth time (`bc5e1b1f…` → `bb1a6732…`) and the "
+        "movers are **exactly four signal carriers** — S-20's horizontal-word rule, "
+        "read off the wire a label hangs on rather than off its text box: `LED_K` in "
+        "`feedback` and in `bridge` each gain **one bend** (a 30-unit vertical leg on "
+        "the clear stub plus a 35-unit horizontal one, so the host's longest run — "
+        "and therefore the row it prints — is the horizontal leg), and `LED_A` in "
+        "`feedback` and `VFB_NF` in `control` become **straight horizontal** stubs. "
+        "No connection moved: 22 names for 22 blobs, all 44 source pin feet are "
+        "still endpoints of a run of their own net, 37 printed rows all >= 2 units "
+        "from every conductor, 0 crossings, no diagonal, and the ten rail flags keep "
+        "their nets and rotations. The rest of the digest's increment is **rigid "
+        "translation**: `primary`'s offset is unchanged, the other four blocks are "
+        "packed elsewhere because two of them grew by the bend — which is why "
+        "`page.offsets`/`page.bbox()` move here for the first time in this file's "
+        "history (530G holds those numbers); island-normalised, `primary` and "
+        "`secondary` are unchanged and `feedback`/`bridge`/`control` differ only in "
+        "those carriers' labels and segments"
     )
 
 

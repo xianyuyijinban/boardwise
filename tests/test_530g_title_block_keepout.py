@@ -525,24 +525,49 @@ def test_a_page_with_no_sheet_packs_exactly_where_it_did_before() -> None:
     `page.bbox()` still read the numbers asserted below — the block extents did not
     change, only two conductors inside them (and `C11`'s value row is still
     printed, so no text box vanished from the digest's picture either).
+
+    **542-B1 re-pinned it a fourth time** (`bc5e1b1f…` → `bb1a6732…`), and this is
+    the first re-pin in this file's history where `page.offsets` and `page.bbox()`
+    move too — so the numbers below are re-pinned *with* their reason, not merely
+    re-read. The picture changes in **four signal carriers** (S-20's
+    horizontal-word rule, applied to the wire a label hangs on: the host rows a name
+    along its wire's longest straight run): `LED_K` in `feedback` and in `bridge`
+    each take **one bend** — a clear 30-unit vertical leg plus a 35-unit horizontal
+    leg, the horizontal being strictly the longer run — and `LED_A` in `feedback`
+    and `VFB_NF` in `control` become **straight horizontal** stubs. Two of those
+    blocks grew by the bend, so the packer laid the row out again: `primary` keeps
+    its `(140, 125)` and the other four move (below), and the page's own right edge
+    follows `secondary` to `1023.19` (`988.19` before). Nothing else in the picture
+    moved: island-normalised, `primary` and `secondary` are identical and
+    `feedback`/`bridge`/`control` differ only in those carriers' labels and their
+    segments; the 37 printed rows, the 10 rail flags (nets and rotations), the 22
+    names for 22 blobs, all 44 source pin feet and the 0 crossings read exactly as
+    before. The two rules this file owns are still no-ops without a sheet, which is
+    what the assertions below keep measuring.
     """
     circuit, presentation, book = _flyback()
     page = il.island_page(circuit, presentation, book)
     assert page.keepouts == ()
     assert page.floor == il.PageBudget().margin == 20.0
     assert page.keepout_conflicts == []
+    # 542-B1: `primary` holds its `(140, 125)` (no carrier changed inside it); the
+    # other four blocks are packed again because `feedback` and `bridge` grew by one
+    # bend each — measured, not adjusted: `secondary` +35 in x, `feedback` +55 in x,
+    # `bridge` +20 in x and -45 in y, `control` +40 in x. The blocks themselves are
+    # rigid, so these are translations of unchanged island interiors (`secondary`
+    # normalises to zero difference), and the page's right edge follows `secondary`.
     assert page.offsets == {
         "primary": (140.0, 125.0),
-        "secondary": (900.0, 95.0),
-        "feedback": (550.0, 345.0),
-        "bridge": (580.0, 110.0),
-        "control": (100.0, 350.0),
+        "secondary": (935.0, 95.0),
+        "feedback": (605.0, 345.0),
+        "bridge": (600.0, 65.0),
+        "control": (140.0, 350.0),
     }
     assert page.bbox() == pytest.approx(
-        (20.535064572425824, 20.0, 988.1874485165794, 400.5)
+        (20.535064572425824, 20.0, 1023.1874485165794, 400.5)
     )
     assert page.plan().geometry_sha256() == (
-        "bc5e1b1fd528cfb07d4f14cfd5e0ef184db7e6d094e5582bf9403e81f2d0d316"
+        "bb1a6732c2ada7dead56a54eae853d654327d0a1d5d1ce2d29526d5d27766c64"
     ), (
         "the island page moved again: that is a *layout* batch's business, and this "
         "number is the witness of when — 532 re-pinned it from a797e3af… when the "
@@ -553,7 +578,14 @@ def test_a_page_with_no_sheet_packs_exactly_where_it_did_before() -> None:
         "`C11`'s value row's right edge (`x` 872.440237… → 875) and `FB_SENSE` "
         "moved off `U4`'s reference row (`y` 370 → 372, host 540 → 542), the "
         "junction following `SEC_12V` to 875, 95 — two conductors, offsets and bbox "
-        "unmoved, no text row hidden"
+        "unmoved, no text row hidden; 542-B1 re-pinned it from that digest when four "
+        "signal carriers changed (LED_K x2: one bend, 30 vertical + 35 horizontal; "
+        "LED_A and VFB_NF: straight horizontal) and, for the first time here, "
+        "`offsets`/`bbox()` moved with them — `primary` unchanged, the other four "
+        "blocks packed again because two grew by the bend. Island interiors are "
+        "rigid: normalised, primary and secondary are identical and only those "
+        "carriers differ in the other three; the 37 rows, 10 flags, 22 names, 44 "
+        "pin feet and 0 crossings are unchanged"
     )
 
 

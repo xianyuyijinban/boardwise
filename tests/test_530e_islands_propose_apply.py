@@ -91,8 +91,24 @@ PROV = "verified_recipe"
 #: `page.offsets`/`page.bbox()` do not move — §5.2's promise holds for the same
 #: reason as the two re-pins above: a conductor moved in the layout, and no
 #: proposal command can move one.
+#: 542-B1 re-pinned it a fourth time (`bc5e1b1f…` → `bb1a6732…`), and the movers
+#: are **four signal carriers and nothing else** — S-20's horizontal-word rule,
+#: applied to the wire a label hangs on (the host rows a name along its wire's
+#: longest straight run, so the carrier is the only lever): `LED_K` in `feedback`
+#: and in `bridge` each take **one bend** (clear 30-unit vertical leg + 35-unit
+#: horizontal leg, the horizontal being strictly the longer run), `LED_A` in
+#: `feedback` and `VFB_NF` in `control` take a **straight horizontal** stub. The
+#: electrical readings are unchanged — 22 names for 22 blobs, 44 source pin feet
+#: still endpoints of their own net's runs, 37 printed rows all >= 2 units from
+#: every conductor, no crossing, no diagonal — and the ten rail flags keep their
+#: nets and rotations. `page.offsets`/`page.bbox()` **do** move this time (530G
+#: pins them): `primary`'s offset is unchanged and the other four blocks are packed
+#: elsewhere because two grew by the bend, so the digest's increment is four
+#: carriers plus a rigid translation. §5.2's promise is untouched for the same
+#: reason as every re-pin above: a batched layout decision moved the picture, and
+#: no proposal command can move a carrier.
 FLYBACK_ISLAND_PAGE_SHA256 = (
-    "bc5e1b1fd528cfb07d4f14cfd5e0ef184db7e6d094e5582bf9403e81f2d0d316"
+    "bb1a6732c2ada7dead56a54eae853d654327d0a1d5d1ce2d29526d5d27766c64"
 )
 
 

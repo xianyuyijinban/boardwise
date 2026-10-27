@@ -4474,6 +4474,89 @@ def _add_boundary_names(
                 single_pin=single_pin,
             )
 
+def _stub_leg_hits(
+    legs: Sequence[tuple[tuple[float, float], tuple[float, float]]],
+    far: tuple[float, float],
+    *,
+    foreign_runs: Sequence[tuple[tuple[float, float], tuple[float, float]]],
+    foreign_tips: Sequence[tuple[str, tuple[float, float]]],
+    own_runs: Sequence[tuple[tuple[float, float], tuple[float, float]]],
+    hard_boxes: Sequence[Box],
+    others: Sequence[tuple[str, Box]],
+    texts: Sequence[object],
+) -> tuple[bool, ...]:
+    """The **electrical and clearance** refusals a stub path trips, one flag each.
+
+    Six rules, applied to every leg of the path and to the point it ends on (see
+    :func:`_name_one_net` for what each one is and why it ranks where it does).
+    Pulled out of that function as a module-level name for two reasons:
+
+    * a **bent** carrier (S-20's repair, below) has to be judged leg by leg — the
+      first leg is the one the drawn answer already used, so it may not be waved
+      through just because the second one is clear (542-B1 review, point 2);
+    * a test can hand this function a path where one leg is *not* clear and prove
+      that the repair refuses it (`tests/test_542_horizontal_label_carriers.py`).
+
+    It is deliberately the *whole* electrical/clearance half and nothing else: the
+    box, the occupancy count and the host's own row key stay with
+    :func:`_name_one_net`, because they are about the name's seat rather than the
+    conductor.
+    """
+    return (
+        any(_on_run(a, b, far) for a, b in foreign_runs),
+        any(_on_run(a, b, point) for a, b in legs for _name, point in foreign_tips),
+        any(
+            _run_overlap(a, b, s, t) > 0.0 for a, b in legs for s, t in own_runs
+        ),
+        any(_crosses(a, b, body) for a, b in legs for body in hard_boxes),
+        any(
+            _crosses(a, b, extent, 0.0) for a, b in legs for _id, extent in others
+        ),
+        any(
+            _crosses(a, b, other.bbox, 0.0)      # type: ignore[attr-defined]
+            for a, b in legs for other in texts
+        ),
+    )
+
+
+def _longest_run(
+    points: Sequence[tuple[float, float]],
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """The run `wire_name_box` rows a wire's name along: the longest, first wins.
+
+    `core.textmetrics.wire_name_box` anchors a wire's name at the midpoint of the
+    wire's **longest straight piece** (collinear touching pieces merged) and rows
+    the text along that piece, and `max` keeps the first of two equals.  That is
+    the fact a page has to read to know whether a name prints flat — and the text
+    box's **shape** is not a substitute for it: `wire_name_box` returns a
+    ``ROW``-by-``width`` box for a vertical run, so a one-character name on a
+    vertical run looks "wider than tall" and would be called flat.
+    """
+    runs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for a, b in zip(points, points[1:]):
+        if runs:
+            pa, pb = runs[-1]
+            collinear = abs(
+                (pb[0] - pa[0]) * (b[1] - pb[1]) - (pb[1] - pa[1]) * (b[0] - pb[0])
+            ) <= 1e-6
+            touching = abs(pb[0] - a[0]) <= 1e-6 and abs(pb[1] - a[1]) <= 1e-6
+            if collinear and touching:
+                runs[-1] = (pa, b)
+                continue
+        runs.append((a, b))
+    if not runs:
+        return None
+    return max(
+        runs,
+        key=lambda run: abs(run[1][0] - run[0][0]) + abs(run[1][1] - run[0][1]),
+    )
+
+
+def _run_is_horizontal(run: tuple[tuple[float, float], tuple[float, float]]) -> bool:
+    """A run drawn along x.  A wire run here is always Manhattan, so ``dy == 0``."""
+    return abs(run[1][1] - run[0][1]) <= 1e-9 and abs(run[1][0] - run[0][0]) > 1e-9
+
+
 def _name_one_net(
     block: IslandBlock,
     net: IslandNet,
@@ -4591,10 +4674,75 @@ def _name_one_net(
     best: tuple[tuple[float, ...], tuple[tuple[float, float], tuple[float, float], Box, float]] | None = None
     clear: list[
         tuple[tuple[float, ...],
-              tuple[tuple[float, float], tuple[float, float], Box, float]]
+              tuple[tuple[float, float], tuple[float, float], Box, float],
+              int]
     ] = []
-    for reach in reaches:
-        for direction in candidates:
+    #: **S-20 (542): a name the host draws as text reads horizontally**, and the only
+    #: thing that can make it do so is its **carrier** — the run its anchor sits on.
+    #: The name's own box carries no orientation (it is the same wide row whichever
+    #: way the stub went), so a label hanging on a vertical stub is printed
+    #: ``rotate(-90)`` by the host and no typography setting can undo it.  Measured
+    #: on the landed page: twelve labels, eight flat, and the four upright ones were
+    #: exactly the labels whose stub left a pin pointing up or down.
+    #:
+    #: The order of the two passes is therefore **the drawing's own first**: pass 0 is
+    #: the full compass, unchanged, so a name that already reads flat keeps the stub
+    #: every earlier batch measured.  The horizontal-only pass is a **repair** — it is
+    #: consulted only when pass 0's answer came out vertical (see the selection
+    #: below) — which is what keeps this batch's diff to the names that were upright
+    #: instead of re-deciding the eight that were already right.
+    #:
+    #: A **flag** is a library symbol whose glyph `_flag_seat` already draws upright,
+    #: not a word, so it has one pass and its compass is untouched: S-20 is a rule
+    #: about text.
+    passes: list[list[tuple[float, float]]] = [candidates]
+    if flag is None:
+        passes.append([
+            item for item in candidates if abs(item[1]) <= 1e-9
+        ])
+    #: The ladder the search below walks: per **pass**, the old ``reach``-then-
+    #: direction order.  Pass **0** is the full compass — the drawing's own answer,
+    #: unchanged — and pass **1** (labels only) is a **repair** that is consulted
+    #: only when pass 0's answer came out vertical, never ahead of it.
+    def _stub_cost(
+        path: list[tuple[float, float]], box: Box, row: Box | None,
+    ) -> tuple[float, ...]:
+        """The nine ranking keys for a whole **stub path** — one leg, or two.
+
+        Same keys, same order, same measured predicates the gate uses.  The path
+        is a list because S-20's repair (below) may need a carrier with one bend:
+        a label whose pin level is walled in on both sides can still read flat at
+        the end of a second, horizontal leg, and it has to be ranked by exactly the
+        ranking a straight carrier is ranked by, or "clear" would mean two things.
+        """
+        legs = list(zip(path, path[1:]))
+        far = path[-1]
+        leg_hits = _stub_leg_hits(
+            legs, far,
+            foreign_runs=foreign_runs, foreign_tips=foreign_tips,
+            own_runs=own_runs, hard_boxes=hard_boxes, others=others,
+            texts=block.texts,
+        )
+        return (
+            1.0 if leg_hits[0] else 0.0,
+            1.0 if leg_hits[1] else 0.0,
+            1.0 if leg_hits[2] else 0.0,
+            1.0 if leg_hits[3] else 0.0,
+            1.0 if leg_hits[4] else 0.0,
+            1.0 if any(_overlaps(box, extent) for _id, extent in others) else 0.0,
+            1.0 if leg_hits[5] else 0.0,
+            float(sum(1 for other in occupied if _overlaps(box, other))),
+            float(
+                sum(1 for _id, extent in others if _overlaps(row, extent))
+                + sum(1 for other in occupied if _overlaps(row, other))
+                + sum(1 for other in block.texts if _overlaps(row, other.bbox))
+            ) if row is not None else 0.0,
+        )
+
+    for index, group in enumerate(passes):
+        for reach, direction in (
+            (reach, direction) for reach in reaches for direction in group
+        ):
             end = (
                 tip[0] + direction[0] * reach,
                 tip[1] + direction[1] * reach,
@@ -4629,24 +4777,7 @@ def _name_one_net(
             row = (
                 wire_name_box([tip, end], net.net_id) if flag is None else None
             )
-            key = (
-                1.0 if any(_on_run(start, stop, end) for start, stop in foreign_runs) else 0.0,
-                1.0 if any(
-                    _on_run(tip, end, point)
-                    for name, point in foreign_tips
-                ) else 0.0,
-                1.0 if any(_run_overlap(tip, end, s, t) > 0.0 for s, t in own_runs) else 0.0,
-                1.0 if any(_crosses(tip, end, body) for body in hard_boxes) else 0.0,
-                1.0 if any(_crosses(tip, end, extent, 0.0) for _id, extent in others) else 0.0,
-                1.0 if any(_overlaps(box, extent) for _id, extent in others) else 0.0,
-                1.0 if any(_crosses(tip, end, other.bbox, 0.0) for other in block.texts) else 0.0,
-                float(sum(1 for other in occupied if _overlaps(box, other))),
-                float(
-                    sum(1 for _id, extent in others if _overlaps(row, extent))
-                    + sum(1 for other in occupied if _overlaps(row, other))
-                    + sum(1 for other in block.texts if _overlaps(row, other.bbox))
-                ) if row is not None else 0.0,
-            )
+            key = _stub_cost([tip, end], box, row)
             if best is None or key < best[0]:
                 best = (key, (direction, end, box, rotation))
             if not any(key[:-1]):
@@ -4658,9 +4789,104 @@ def _name_one_net(
                 # the shortest reach instead was measured: it gives the same page
                 # as having no row key at all, because on the flyback no
                 # direction at the first rung is clear.
-                clear.append((key, (direction, end, box, rotation)))
+                clear.append((key, (direction, end, box, rotation), index))
+    repaired: list[tuple[float, float]] | None = None
     if clear:
-        chosen = min(clear, key=lambda item: item[0])[1]
+        # Pass 0 is the answer this search has always given (the full key — the
+        # host's row first, the stub's own length last), so an upright candidate
+        # among its clears is picked exactly as before.
+        chosen = min(
+            (item for item in clear if item[2] == 0), key=lambda item: item[0],
+        )[1]
+        if flag is None and abs(chosen[0][1]) > 1e-9:
+            # That answer is a **vertical** stub, which the host prints as rotated
+            # text.  A **straight** horizontal way out is tried first and, when one
+            # is clear, S-20 outranks the legibility keys that rank between equally
+            # clear candidates: a flat name is worth the longer stub.
+            flat = [item for item in clear if item[2] == 1]
+            if flat:
+                chosen = min(flat, key=lambda item: item[0])[1]
+            else:
+                # The pin's own level is walled in on both sides, so the name can
+                # still be carried flat one bend later: the clear vertical leg runs
+                # on to a **clear** corner, and the name hangs on a horizontal leg
+                # out of that corner.  One bend is inside the page's own limit
+                # (two), it adds no branch and no net, and it is the only lever
+                # left for such a pin.
+                #
+                # Three rules keep this a repair and not a way around the search:
+                #
+                # 1. **Only on an answer the search already called clear.**  This
+                #    block sits under `if clear:` on purpose: an island whose every
+                #    straight way out is a fault keeps the least-damaging fallback
+                #    it always had, cannot be rescued by bending out of a refused
+                #    stub, and still says so in the note below.
+                # 2. **The first leg is judged too** (:func:`_stub_leg_hits`), so a
+                #    corner whose own leg is not clean is skipped — the longer
+                #    corners are still tried, because a fault inside a shorter leg
+                #    is not necessarily inside a longer one.
+                # 3. **The horizontal leg must be strictly the longer run**, and the
+                #    reading is the host's: `wire_name_box` rows a wire's name along
+                #    its **longest straight run** (`_longest_run`), keeping the first
+                #    of two equals.  Measured on this batch's first attempt: a `94`
+                #    vertical leg and a `94` horizontal one leave the vertical run
+                #    longest, so the name still prints ``rotate(-90)``.  The ladder
+                #    starts at *that corner's* span plus one grid step — not at the
+                #    first answer's span, which would buy a longer wire than the
+                #    corner needs — and the shortest qualified path wins.
+                upright = chosen[0]
+                bent: tuple[
+                    tuple[float, ...],
+                    tuple[tuple[float, float], tuple[float, float], Box, float],
+                    list[tuple[float, float]],
+                    float,
+                ] | None = None
+                for corner_reach in reaches:
+                    corner = (
+                        tip[0] + upright[0] * corner_reach,
+                        tip[1] + upright[1] * corner_reach,
+                    )
+                    corner_span = abs(corner[0] - tip[0]) + abs(corner[1] - tip[1])
+                    if any(_stub_leg_hits(
+                        [(tip, corner)], corner,
+                        foreign_runs=foreign_runs, foreign_tips=foreign_tips,
+                        own_runs=own_runs, hard_boxes=hard_boxes, others=others,
+                        texts=block.texts,
+                    )):
+                        continue
+                    for flat_dir in (
+                        item for item in candidates if abs(item[1]) <= 1e-9
+                    ):
+                        for extra in (
+                            corner_span + budget.grid + step * budget.channel
+                            for step in range(budget.slot_rungs)
+                        ):
+                            far = (
+                                corner[0] + flat_dir[0] * extra,
+                                corner[1] + flat_dir[1] * extra,
+                            )
+                            path2 = [tip, corner, far]
+                            run = _longest_run(path2)
+                            if run is None or not _run_is_horizontal(run):
+                                # The host would row this name along the vertical
+                                # leg: the carrier is not flat, however the text box
+                                # happens to be shaped.
+                                continue
+                            box2 = _name_box(net.net_id, far, flat_dir, budget)
+                            key2 = _stub_cost(
+                                path2, box2, wire_name_box(path2, net.net_id),
+                            )
+                            if any(key2[:-1]):
+                                continue
+                            measure = (key2, corner_span + extra)
+                            if bent is None or measure < (bent[0], bent[3]):
+                                bent = (
+                                    key2, (flat_dir, far, box2, 0.0), path2,
+                                    corner_span + extra,
+                                )
+                if bent is not None:
+                    chosen = bent[1]
+                    repaired = bent[2]
     if chosen is None:
         chosen = best[1] if best is not None else (candidates[0], tip, (0.0, 0.0, 0.0, 0.0), 0.0)
         block.notes.append(
@@ -4671,7 +4897,22 @@ def _name_one_net(
             "to be legible"
         )
     _direction, end, box, rotation = chosen
-    block.segments.append(LayoutSegment(net=net.net_id, points=[tip, end]))
+    path = repaired if repaired is not None else [tip, end]
+    if flag is None and abs(_direction[1]) > 1e-9:
+        # S-20 is not met here, and saying so is the honest half of the fix: an
+        # island whose only clear ways out are vertical — and whose clear leg has no
+        # clear corner to bend at — keeps a rotated name, and this note is what
+        # stops the page from counting it as flattened.  It travels with the block,
+        # so a reader is given the net instead of having to find ``rotate(-90)`` in
+        # the host's SVG.
+        block.notes.append(
+            f"net {net.net_id}: no clear horizontal way out of {attach} for its "
+            "boundary label, so the stub runs vertically and the host prints the "
+            "name rotated — S-20's horizontal-word rule is not met for this net "
+            "on this page, and the island is reported as an unresolved layout "
+            "rather than counted as flattened"
+        )
+    block.segments.append(LayoutSegment(net=net.net_id, points=path))
     if flag is None:
         block.labels.append(LayoutLabel(
             net=net.net_id, text=net.net_id, bbox=box,
@@ -4680,9 +4921,10 @@ def _name_one_net(
     else:
         _place_flag(block, net.net_id, flag, end, rotation, box)
     occupied.append(box)
-    own_runs.append((tip, end))
+    legs = list(zip(path, path[1:]))
+    own_runs.extend(legs)
     hard_boxes.append(box)
-    foreign_runs.append((tip, end))
+    foreign_runs.extend(legs)
     return bool(clear)
 
 
