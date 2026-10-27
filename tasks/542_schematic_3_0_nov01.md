@@ -18,9 +18,12 @@
   `b0066b440b3eee95` 单次 apply 通过；fresh netlist 19 件/16 网/44 源脚/46 物理脚/0 失配，
   T3.2/T3.5 NC；live 与 captured-pair lint 均 0/0/0；12 个网名最长 run 全水平。
   主代理和独立代理均实际查看宿主 PNG/SVG，独立 verdict=approve；证据 `evidence/542/final-p4.md`。
-- **尚未关闭**：岳「一眼认出反激」的最终人工视觉锚，以及关闭/重开后的 `saved_verified`。
-  当前只到 `saved_unverified`，基线 `evidence/542/final.persistence-baseline.json` 已抓；
-  C9 标题栏薄余量、13 条软 grammarFindings、工程级同名公司等均在最终记录披露。
+- **两项人工门也已关闭（2026-10-27）**：岳对 P4 的最终人眼问题选择“通过”；随后真实关闭/
+  重开 `/test` 并聚焦 P4，`persistence --baseline` exit 0，明确返回 `saved_verified`
+  （39 components / 21 nets / 57 primitives）。基线与重开快照均在 `evidence/542/`。
+- **542 P0 提前完成并冻结候选**：C9 标题栏薄余量、13 条软 grammarFindings、工程级同名公司
+  等只在 `evidence/542/final-p4.md` 保留披露，不再为本里程碑加功能。CH343 未挤占 P0；
+  V4 仍只在 11 月 1 日后按 §7 实施。正式 semver/tag/release/merge 未执行。
 
 ## 2. 范围与优先级
 

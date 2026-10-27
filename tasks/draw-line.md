@@ -22,7 +22,9 @@ CapDecision 只从 shared 公共合同读取；不得靠 import review 或复制
 - DSH：新增的两个工具仅走离线 `draw compile` 与 `draw lint --snapshot --render`；
   旧 8 个工具顺序不变，新工具是第 9/10 个，没有 `boardwise_draw_apply`。
 - 0.6.0 的绘制门槛仍是：反激 `draw compile` 出 `ok=True`，且岳亲眼看 SVG
-  「一眼认出反激」。机器 `ok=True` 不等于这道人的门槛已经关闭。
+  「一眼认出反激」。机器 `ok=True` 不等于这道人的门槛已经关闭。542 的 P4 已于
+  2026-10-27 同时通过逐脚、lint、主代理/独立代理视觉、岳人眼与重开 `saved_verified`；
+  这只关闭该候选，后续新页仍须各自过三关。
 - 任何要交给用户的原理图必须依次过：① 编译/可读性 `ok=True`；② 对照源网表逐脚连通；
   ③ 渲染后逐岛视觉自审。缺一不交付，也不许把失败候选落到真实画布。
 
@@ -46,5 +48,6 @@ CapDecision 只从 shared 公共合同读取；不得靠 import review 或复制
 - CH343/534 等既有工作已在 `0f638de` 提交，按原任务归属，不因 540 解耦而变成 540 成果。
 - Rust 顺序：纯函数/几何、parser/model、review 之后才到 draw；connector/DSH 薄适配可留 TS。
 
-**当前 worktree 状态**：没有为 draw 线创建专用 worktree。需要隔离时先写清路径、分支、
-owner、集成锁和证据保留，再逐次申请；不得自行解释旧档案 worktree 为可写工作区。
+**当前 worktree 状态**：542 经岳批准使用 `E:\boardwise-wt-draw` / `drawing-line`；
+`E:\boardwise` 主工作区及其未提交 201H 文件保留，`E:\boardwise-wt520` 仍是只读证据档案。
+542 P0 已冻结；后续隔离仍须先写清路径、分支、owner、集成锁和证据保留并逐次申请。

@@ -44,7 +44,8 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   为 Python **8206/19/5/1 failed**（rulebody 钉已按 B2 补）、DSH **127/1**、Rust **45+显式4**、5 case。
 - **独立派单**：审查读 `tasks/review-line.md`，绘制读 `tasks/draw-line.md`，shared/CLI/bridge/
   parser/model 的集成改动读 `tasks/shared-platform.md`。两线可独立派小批，shared、全量、真机串行；
-  算法与迁移不同批，没有为三条线创建专用 worktree。
+  算法与迁移不同批。542 经岳批准使用 `E:\boardwise-wt-draw` / `drawing-line`，主工作区及
+  未提交 201H 文件保留；其他线不得把旧档案 worktree 当可写工作区。
 - **行为与证据**：B 组 `evidence/540/b-behavior-equivalence.md`，C 组 `evidence/540/c-acceptance.md`，
   两轮全量 `final-regression.md` / `final-regression-adversarial.md`；**最终候选读数以
   `evidence/540/candidate-regression.md` 为准**（后续步骤产生，未产生不算通过）。构建见 `docs/rust-platform.md`。
@@ -52,8 +53,10 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
   （#88：pre-#83 15=281+14 / bd5809f 50 / rings 边+弦 containment 56 / HEAD 1=295，
   55=14+35+6）。#87②仍开放、④仅字符串级部分完成、⑤仅离线替代，**#87 整单不关**；
   提出人已接受 #88 的 1/295 与四视图并授权关单，`element_ids` 唯一性另立。
-- **下一段**：回到 0.6.0 原有的 200A/B/C 与人工反激视觉锚，或按岳的新派单执行；
-  平台完成不等于这些门槛关闭。0.6.x 与 0.7.0 边界见 `docs/roadmap.md` §10。
+- **下一段**：542 反激 P0 已于 2026-10-27 提前完成并冻结：P4 三关、岳人眼和重开
+  `saved_verified` 全过，证据 `evidence/542/final-p4.md`。11 月 1 日后按
+  `tasks/542_schematic_3_0_nov01.md` §7 开始 V4；CH343 不挤占已完成的 P0。其他 0.6.0
+  阻塞项仍按各自任务验收，0.6.x 与 0.7.0 边界见 `docs/roadmap.md` §10。
 
 > 以下 3.1–3.4 保留 2026-10-23/24 的业务与发布历史；当前派单和平台状态以 §3.0 为准。
 
