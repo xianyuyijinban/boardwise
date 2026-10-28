@@ -193,6 +193,7 @@ from boardwise.core.textmetrics import (
     flag_name_box,
     pin_rows,
     wire_name_box,
+    wire_name_row,
 )
 
 __all__ = [
@@ -203,6 +204,7 @@ __all__ = [
     "KIND_GEOMETRY_OUTSIDE_FRAMES",
     "KIND_MAIN_PATH_EDGE_NOT_WIRED",
     "KIND_MODULE_FRAME_OVERFLOW",
+    "KIND_NAME_ROW_VERTICAL",
     "KIND_PIN_TEXT_PRESSED",
     "KIND_MODULE_FRAME_OVERLAP",
     "KIND_MODULE_PART_UNASSIGNED",
@@ -264,6 +266,12 @@ KIND_WIRE_THROUGH_BODY = "wire-through-body"
 KIND_WIRE_ON_PIN_LINE = "wire-on-pin-line"
 KIND_TEXT_OVERLAP = "text-overlap"
 KIND_TEXT_ON_WIRE = "text-on-wire"
+#: 534 r18: a wire's own name row printed **along a vertical run** — the host
+#: turns the text 90 degrees (`transform="rotate(-90 …)"` in the render) and the
+#: page reads bottom-to-top. A direction defect, not a collision: the row can sit
+#: in free space and still be unreadable, which is why `text-overlap`,
+#: `text-on-wire` and every box test are blind to it.
+KIND_NAME_ROW_VERTICAL = "name-row-vertical"
 #: 532: a **symbol's own pin typography** pressed against that same symbol's own
 #: rows. A distinct kind because it is a distinct sentence: `text-overlap` is about
 #: a *foreign* text landing on a component — the contract's own words, see
@@ -296,6 +304,7 @@ HARD_KINDS: tuple[str, ...] = (
     KIND_WIRE_ON_PIN_LINE,
     KIND_TEXT_OVERLAP,
     KIND_TEXT_ON_WIRE,
+    KIND_NAME_ROW_VERTICAL,
     KIND_PIN_TEXT_PRESSED,
     KIND_OUT_OF_PAGE,
     KIND_USER_LOCK_VIOLATED,
@@ -873,6 +882,7 @@ def check(
     violations.extend(_check_wire_on_pin_line(layout_plan, placed, profile_map))
     violations.extend(_check_text(layout_plan, placed, profile_map))
     violations.extend(_check_text_on_wire(layout_plan, profile_map))
+    violations.extend(_check_named_wire_rows(layout_plan))
     violations.extend(
         _check_page(layout_plan, placed, page, keep, profile_map)
     )
@@ -1744,6 +1754,48 @@ def _named_wire_rows(layout_plan: LayoutPlan) -> list[tuple[str, Box, str, str]]
         box = wire_name_box(list(segment.points), segment.net)
         if box is not None:
             out.append((f"segments[{index}]", box, "", segment.net))
+    return out
+
+
+def _check_named_wire_rows(layout_plan: LayoutPlan) -> list[HardViolation]:
+    """Every wire's **name row must be horizontal** (534 r18, ``name-row-vertical``).
+
+    The host prints a carrier's name *along the run it picks*, and a run can be
+    vertical: on the CH343 sheet two local-label carriers printed `D+`/`D-` as
+    `rotate(-90)` rows that every box test called fine — the row's box is 10 wide
+    by 9.336 tall, i.e. **not** taller than wide, so no ratio test could see it.
+
+    The direction therefore comes from the model that chose the run
+    (`core.textmetrics.wire_name_row`), never from the box's aspect. This is the
+    whole acceptance the drawing line has to meet ("every name row horizontal"),
+    stated where the gate can enforce it: whichever run the host picks on a
+    carrier above three runs is *not* established (534 r18,
+    `textmetrics.wire_name_middle_run`), so a row this model calls vertical is
+    refused rather than explained away, and a horizontal row is untouched.
+
+    The check reads the same carriers `_named_wire_rows` does
+    (`core.layoutplan.label_wire_indices`): a wire that is not the drawing's
+    label carries no name, so it can print no row.
+    """
+    out: list[HardViolation] = []
+    carriers = label_wire_indices(layout_plan)
+    for index, segment in enumerate(layout_plan.segments):
+        if index not in carriers or not segment.net:
+            continue
+        row = wire_name_row(list(segment.points), segment.net)
+        if row is None or row.horizontal:
+            continue
+        name = f"segments[{index}]"
+        (ax, ay), (bx, by) = row.run
+        out.append(HardViolation(
+            KIND_NAME_ROW_VERTICAL,
+            (name,),
+            f"{name} {segment.net!r} {_box_text(row.box)} is printed along the "
+            f"vertical run ({ax:g}, {ay:g})-({bx:g}, {by:g}) — the host names a "
+            "wire along the run it picks, so this name comes out rotated a "
+            "quarter turn and reads bottom-to-top; give the carrier a horizontal "
+            "run to be named on",
+        ))
     return out
 
 

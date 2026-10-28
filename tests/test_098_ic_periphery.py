@@ -889,8 +889,21 @@ def test_a_core_the_partition_cannot_read_names_both_places_to_write_it():
     assert "intent blocks[]" in failure.action
 
 
-def test_a_group_of_two_pin_parts_only_has_no_core_and_says_so():
-    """一个粒子全是外围形状：没有多脚件，所以也没有核心（同样的 facts-missing）。"""
+def test_a_group_of_two_pin_parts_is_a_coreless_shunt_group_not_a_refusal():
+    """534 因果更新：一组全 2 脚件**确实**可以是一组无核并联支路。
+
+    098 原来这条断言写的是「全是外围形状 → 没有 core → facts-missing」。534 的五岛
+    分解实测把这个断言改掉了：`ch343_power=[C1,C3]`（+5V/V3 到 GND）与
+    `vio_power=[C4]`（VCC 到 GND）就是这种组，而它们**本来就没有**「别人挂在它身上」
+    的那一件——把一条真实存在的惯用法当错误，是文法缺一条读法，不是电路的错
+    （证据：`evidence/534/coreless-decoupling.md`）。
+
+    现在的读法只在事实齐全时成立：显式声明的 module、每件都是两脚两网不同、
+    每件恰好一端在同一个 gnd、另一端是 power 或 signal。绑成
+    `shunt`（每件）+ `gnd` + `rail`/`out`（节点），**不绑 core**；其余形状
+    （>2 脚、短接、双地、无地/串联）照旧拒绝，见
+    `tests/test_534_coreless_decoupling.py`。
+    """
     spec = circuit(
         [part("U1", "C0402", "22pF"), part("U2", "C0402", "22pF")],
         [
@@ -901,11 +914,15 @@ def test_a_group_of_two_pin_parts_only_has_no_core_and_says_so():
     sheet = sample_presentation(core=None, module_parts=("U1", "U2"))
     result = bind(spec, sheet)
 
-    assert result.ok is False
-    (failure,) = result.failures
-    assert failure.category == FAILURE_FACTS_MISSING
-    assert "every part here is the shape a peripheral has" in failure.detail
-    assert "a peripheral is what hangs off a core" in failure.detail
+    assert result.ok, result.failures
+    bound = roles(result)
+    assert sorted(bound["shunt"]) == ["U1", "U2"]
+    assert bound["gnd"] == [GND]
+    assert bound["rail"] == [RAIL]
+    assert "core" not in bound
+    assert [item.kind for item in result.obligations] == [UNIFORM_GND]
+    for item in result.bindings:
+        assert "provenance=" in item.evidence
 
 
 # ============================================================ 3. 角色判据（§一）

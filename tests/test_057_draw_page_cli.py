@@ -532,13 +532,28 @@ def test_a_page_label_no_wire_reaches_becomes_a_named_stub(tmp_path, capsys):
     stubs = [wire for wire in plan.change.draw_wires if wire.purpose.startswith("name stub")]
     assert stubs, "a label at a bare pin tip is carried by a named stub"
     for stub in stubs:
-        assert (stub.net, stub.points[0][0], stub.points[0][1]) in labels
-        assert len(stub.points) == 2
-        length = abs(stub.points[1][0] - stub.points[0][0]) + abs(
-            stub.points[1][1] - stub.points[0][1])
-        assert 0 < length <= drawapply.LABEL_STUB_LENGTH
+        # The **causal** statement, not a size cap (534): the stub exists because the
+        # label's anchor has no wire of its net on it, so it starts at that anchor and
+        # runs away from the pin as an orthogonal conductor whose longest leg is the
+        # one the host prints the name along — horizontally. Which shapes and lengths
+        # a stub may take is 099d/099f's and 534's question; 057 does not restate it.
+        assert (stub.net, stub.points[0][0], stub.points[0][1]) in labels, (
+            "the named stub starts at the label's own anchor")
+        assert len(stub.points) >= 2, stub.points
+        for start, end in zip(stub.points, stub.points[1:]):
+            assert start != end, ("every leg of the stub has a length", start, end)
+            assert (abs(start[0] - end[0]) < 1e-9) != (abs(start[1] - end[1]) < 1e-9), (
+                "every leg is orthogonal", start, end)
+        run = drawapply._StubRun(
+            points=tuple(stub.points), side=(1.0, 0.0), shape="", family="",
+        )
+        assert drawapply._stub_row_is_horizontal(run), (
+            "the host prints the name along a horizontal longest run", stub.points)
         assert stub.from_pin, "the stub leaves the pin the label sat on"
-    assert any("stub" in line for line in plan.change.draw_downgrades)
+    assert any("stub" in line and stub_net in line
+               for line in plan.change.draw_downgrades
+               for stub_net in ("VIN",)), (
+        "the plan discloses the name-stub substitution", plan.change.draw_downgrades)
 
 
 # ------------------------------------------------------------ E1: empty page

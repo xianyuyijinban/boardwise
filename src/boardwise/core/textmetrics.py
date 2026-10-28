@@ -42,6 +42,7 @@ Two callers need the same ruler and they must not each keep a copy:
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 __all__ = [
     "CANVAS_TEXT_UNITS",
@@ -53,14 +54,19 @@ __all__ = [
     "TEXT_ADVANCE_EM_FALLBACK",
     "TEXT_ROW_HEIGHT",
     "TEXT_WIRE_PENETRATION",
+    "WIRE_NAME_AXIS_HORIZONTAL",
+    "WIRE_NAME_AXIS_VERTICAL",
     "WIRE_NAME_MODEL_EXCEPTION",
     "WIRE_NAME_ROW",
+    "WireNameRow",
     "flag_name_box",
     "host_row_box",
     "pin_rows",
     "render_width",
     "symbol_rows",
     "wire_name_box",
+    "wire_name_middle_run",
+    "wire_name_row",
 ]
 
 #: The px size the render's canvas text is drawn at — the ``font-size`` every
@@ -292,7 +298,10 @@ def symbol_rows(
     that they say is pressed is hidden rather than moved (`_clear_text_rows`).
 
     A symbol that declares no anchors returns nothing: a box nobody can measure
-    is not a zero-area one, and the caller keeps its own fallback.
+    is not a zero-area one, and the caller keeps its own fallback. The same is
+    true, row by row, of a table that states a pose and is asked for a different
+    one (:func:`_pick_text`): the row was never measured there, so no row is
+    returned and the caller's own side ladder stands.
     """
     declared = getattr(profile, "texts", ())
     rotation = None if pose is None else _pose_field(pose, "rotation")
@@ -331,9 +340,19 @@ def _pick_text(declared, kind: str, rotation, mirror):
     """The entry for this row: the part's own pose first, then "any pose".
 
     A pose-qualified entry wins only on an exact match, and the pose-independent
-    entry is the fallback rather than the last resort: a symbol measured in one
-    pose and drawn in another keeps the declaration 146/147 wrote, which is what
-    every library without 531's measurements still has.
+    entry is the **only** fallback: a symbol measured in one pose and drawn in
+    another keeps the declaration 146/147 wrote, which is what every library
+    without 531's measurements still has.
+
+    A table that holds *only* pose-qualified entries answers nothing for a pose it
+    does not state — it returns ``None`` and the caller keeps its own fallback.
+    534 r1 measured `R0603-5.1k` and `C0805-10uF` at rotation 270 only
+    (``"+10,0"``/``"+15,0"``, not the rigid turning of their upright ``-10,+5``),
+    and a 270 row reused at 90/180 would be an invented measurement dressed as a
+    measured one.  A caller that names **no** pose at all is the older call
+    (``rotation``/``mirror`` both ``None``): there the symbol's own single stated
+    row stays the answer, which is the pre-534 behaviour CH343G / TYPE-C / H1 are
+    drawn with — those three state their pose and nothing else.
     """
     entries = [entry for entry in declared if entry.kind == kind]
     if rotation is not None or mirror is not None:
@@ -347,7 +366,9 @@ def _pick_text(declared, kind: str, rotation, mirror):
     for entry in entries:
         if entry.rotation is None and entry.mirror is None:
             return entry
-    return entries[0] if entries else None
+    if rotation is None and mirror is None:
+        return entries[0] if entries else None
+    return None
 
 #: The one wire whose measured anchor this model does not explain: on the 145e
 #: render FB_SENSE's name sits at the wire's arc-length midpoint, 12.5 units from
@@ -431,19 +452,108 @@ def wire_name_box(points, text: str) -> tuple[float, float, float, float] | None
     is the measured rule, not a bound: a caller that has to be *safe* cannot be.
 
     Returns ``None`` for a wire with no run.
+
+    **534 r18: this is the box half of :func:`wire_name_row`.** The box alone
+    cannot say which way the row runs — D+'s row is 9.336 wide by 10 tall on the
+    horizontal and 10 wide by 9.336 tall on the vertical, a ratio of 1.07, so
+    "taller than wide" is not a direction test (that test is how two rotated rows
+    on the CH343 sheet were called horizontal). A caller that has to *decide*
+    something reads :func:`wire_name_row`; this function keeps the shape every
+    existing caller already handles.
+    """
+    row = wire_name_row(points, text)
+    return None if row is None else row.box
+
+
+#: The two directions a wire's name row can run. Carried explicitly, because a
+#: box cannot carry it (see :func:`wire_name_box`).
+WIRE_NAME_AXIS_HORIZONTAL = "h"
+WIRE_NAME_AXIS_VERTICAL = "v"
+
+
+@dataclass(frozen=True)
+class WireNameRow:
+    """A named wire's row **and the run it was measured on**.
+
+    ``box`` is what :func:`wire_name_box` returns; ``axis`` is the fact that box
+    was losing (``WIRE_NAME_AXIS_HORIZONTAL`` / ``WIRE_NAME_AXIS_VERTICAL``);
+    ``run`` is the two endpoints the row was anchored on, so a caller can argue
+    about the carrier's *shape* (``drawcompiler``'s candidate filter) without
+    re-deriving the merge rule here.
+    """
+
+    box: tuple[float, float, float, float]
+    axis: str
+    run: tuple[tuple[float, float], tuple[float, float]]
+
+    @property
+    def horizontal(self) -> bool:
+        """Is the row printed along a horizontal run (i.e. left to right)?"""
+        return self.axis == WIRE_NAME_AXIS_HORIZONTAL
+
+
+def wire_name_row(points, text: str) -> WireNameRow | None:
+    """The row the host draws this wire's name in, with its **direction**.
+
+    The measurement is :func:`wire_name_box`'s (145e/147): midpoint of the
+    wire's longest straight run, start-anchored along that run. What is new is
+    that the run's direction is returned instead of being flattened into a box,
+    so a vertical row is visible to a caller that must refuse it.
+
+    Which run the host chooses is established for **up to three runs** (the
+    longest, 22 of the 24 named rows on the CH343 sheet) and is **not**
+    established above that: two 5-run carriers landed their name on the *middle*
+    run instead (`local-label-carrier` D+/D-, 534 r18). This function therefore
+    reports the model's own answer and does not claim to know the host's choice;
+    :func:`wire_name_middle_run` exists so a caller can veto a carrier on the
+    second candidate rule as well, without pretending it is the prediction.
     """
     runs = _straight_runs(points)
     if not runs:
         return None
-    a, b = max(
-        runs,
-        key=lambda run: math.hypot(run[1][0] - run[0][0], run[1][1] - run[0][1]),
-    )
+    a, b = _longest_run(runs)
     mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
     width = render_width(text)
     if abs(a[1] - b[1]) <= 1e-6:
-        return (mid[0], mid[1], mid[0] + width, mid[1] + WIRE_NAME_ROW)
-    return (mid[0], mid[1], mid[0] + WIRE_NAME_ROW, mid[1] + width)
+        return WireNameRow(
+            box=(mid[0], mid[1], mid[0] + width, mid[1] + WIRE_NAME_ROW),
+            axis=WIRE_NAME_AXIS_HORIZONTAL,
+            run=(a, b),
+        )
+    return WireNameRow(
+        box=(mid[0], mid[1], mid[0] + WIRE_NAME_ROW, mid[1] + width),
+        axis=WIRE_NAME_AXIS_VERTICAL,
+        run=(a, b),
+    )
+
+
+def wire_name_middle_run(
+    points,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """The **middle** run of an odd-length run table, or ``None``.
+
+    A second, not a replacement: the CH343 sheet's two 5-run carriers printed
+    their name on run 3 while the model names the longest run, and no reading
+    says why (534 r18 — the selection rule above three runs is *not* measured,
+    so nothing here may be used as the prediction). It is a **veto** for a caller
+    choosing a carrier shape: if either the longest run or this one is vertical,
+    the carrier can be named vertically and is not a candidate.
+
+    ``None`` for an even table (no middle run), for fewer than three runs, and
+    for a wire with no run.
+    """
+    runs = _straight_runs(points)
+    if len(runs) < 3 or len(runs) % 2 == 0:
+        return None
+    return runs[len(runs) // 2]
+
+
+def _longest_run(runs):
+    """The run the model anchors a name on: the longest one (first on a tie)."""
+    return max(
+        runs,
+        key=lambda run: math.hypot(run[1][0] - run[0][0], run[1][1] - run[0][1]),
+    )
 
 
 def _straight_runs(points) -> list[tuple[tuple[float, float], tuple[float, float]]]:

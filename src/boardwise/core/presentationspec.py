@@ -19,6 +19,18 @@ Two properties are enforced here rather than trusted:
   义务优先，跨模块/高扇出才许标签". So `local` may only be `wire`; the two
   outer cases may be `wire` (a stricter choice) or `label`.
 
+**The one stated exception to "a local net is wired"** is
+`localLabelObligations`: a net the author *names* is expressed by a name at each
+of its pins even inside a single module. It is a per-net exemption, not a second
+label policy — `labelPolicy.local` is still `wire` for every net nobody named —
+and the reason it has to exist is physical: a reversible connector's pins are
+mirrored, and a wire between two of them is the U-line crossing that makes the
+drawing lie about which pin is which (the Type-C case). One entry lists the nets
+(`nets`) and says why (`note`); duplicate declarations are refused because two
+entries for one net would be two intents for one drawing. Like `flow`, the key
+is written only when stated, so every document that says nothing about it keeps
+its digest — and therefore every plan compiled from it.
+
 **A module is a group on a page, and a page holds several of them.** The module
 list is not decoration: the phase-C page compiler (056) compiles *each module on
 its own* — as a call to the single-module pipeline — and places the resulting
@@ -108,6 +120,7 @@ __all__ = [
     "FlowEdge",
     "LabelPolicy",
     "LayoutIsland",
+    "LocalLabelObligation",
     "PresentationModule",
     "PresentationPath",
     "PresentationSpec",
@@ -171,6 +184,7 @@ _TOP_KEYS = (
     "portRoles",
     "grammarRef",
     "directWiringObligations",
+    "localLabelObligations",
     "labelPolicy",
     "sidePreferences",
     "userLocks",
@@ -303,8 +317,37 @@ class DirectWiringObligation:
 
 
 @dataclass
+class LocalLabelObligation:
+    """A net that must be **named at each of its pins**, even inside one module.
+
+    The exception 053 sec.7's hard-coded rule needs and cannot state: "a key
+    local topology is drawn as a wire" is right for almost every local net, and
+    wrong for the one the author *names* — a reversible connector's mirrored
+    pins, where a wire between two of them is a U-line crossing that says the
+    wrong pin is the right one. It is a per-net exemption, **not** a second
+    label policy: `labelPolicy.local` stays `wire` for every net nobody named
+    here, and a power or ground net may never be listed (a rail is a flag —
+    069 sec.7).
+
+    Stated per net for the same reason `DirectWiringObligation` is: the label
+    decision is per net, and a pin-level obligation would be a second way of
+    saying it that nothing in this document checks.
+    """
+
+    nets: list[str] = field(default_factory=list)
+    note: str = ""
+
+
+@dataclass
 class LabelPolicy:
-    """When a label may stand in for a wire (053 sec.2, hard-coded in sec.7)."""
+    """When a label may stand in for a wire (053 sec.2, hard-coded in sec.7).
+
+    ``local`` is ``wire`` and stays ``wire``: a key local topology is drawn as a
+    wire, and the label exceptions are the two outer cases plus the nets the
+    document **names** in `localLabelObligations` — that key is where a stated
+    local exception lives, not this policy (so a net nobody named cannot become
+    a label by asking this object).
+    """
 
     local: str = LABEL_WIRE
     cross_module: str = LABEL_LABEL
@@ -373,6 +416,11 @@ class PresentationSpec:
     #: Which grammar the drawing follows, or "" when the spec does not choose.
     grammar_ref: str = ""
     direct_wiring_obligations: list[DirectWiringObligation] = field(default_factory=list)
+    #: The stated exception to "a local net is wired": nets named here are
+    #: expressed by a label at each pin even inside one module
+    #: (:class:`LocalLabelObligation`). Empty = the document states none, which
+    #: is the rule every spec written before this key followed.
+    local_label_obligations: list[LocalLabelObligation] = field(default_factory=list)
     label_policy: LabelPolicy = field(default_factory=LabelPolicy)
     side_preferences: dict[str, str] = field(
         default_factory=lambda: dict(DEFAULT_SIDE_PREFERENCES)
@@ -518,6 +566,18 @@ class PresentationSpec:
                 {"nets": list(item.nets), "note": item.note}
                 for item in self.direct_wiring_obligations
             ],
+            # Written only when stated: a spec that names no local-label
+            # exception has to serialise exactly as it did before the key
+            # existed, or the digest a plan pins would move under every
+            # existing document.
+            **(
+                {"localLabelObligations": [
+                    {"nets": list(item.nets), "note": item.note}
+                    for item in self.local_label_obligations
+                ]}
+                if self.local_label_obligations
+                else {}
+            ),
             "labelPolicy": {
                 "local": self.label_policy.local,
                 "crossModule": self.label_policy.cross_module,
@@ -551,6 +611,7 @@ class PresentationSpec:
             port_roles=_port_roles(root),
             grammar_ref=_grammar(root),
             direct_wiring_obligations=_obligations_from(root),
+            local_label_obligations=_local_labels_from(root),
             label_policy=_label_policy(root),
             side_preferences=_side_preferences(root),
             user_locks=_locks_from(root),
@@ -935,20 +996,61 @@ def _path_step(step: str, where: str) -> None:
 
 
 def _obligations_from(root: dict[str, Any]) -> list[DirectWiringObligation]:
-    out: list[DirectWiringObligation] = []
-    for index, item in enumerate(
-        _list(root.get("directWiringObligations"), "directWiringObligations")
-    ):
-        spot = f"directWiringObligations[{index}]"
+    return _obligation_entries(
+        root, "directWiringObligations", DirectWiringObligation,
+        "an obligation with no net obliges nothing "
+        "(the local connection it protects is named by a net)",
+        refuse_duplicates=False,
+    )
+
+
+def _local_labels_from(root: dict[str, Any]) -> list[LocalLabelObligation]:
+    return _obligation_entries(
+        root, "localLabelObligations", LocalLabelObligation,
+        "an exception with no net excepts nothing "
+        "(the net drawn by a name at each pin is named by the net)",
+        refuse_duplicates=True,
+    )
+
+
+def _obligation_entries(
+    root: dict[str, Any],
+    key: str,
+    entry_type: type,
+    empty_nets: str,
+    *,
+    refuse_duplicates: bool,
+) -> list[Any]:
+    """One net-list obligation list, read the same way for both keys.
+
+    The two obligations share their *shape* — ``nets`` plus a ``note`` — and
+    nothing else, so the reader is shared and the two readings stay one rule
+    each: `directWiringObligations` keeps the bytes and the leniency it always
+    had (a net named twice is not this key's question), while
+    `localLabelObligations` refuses a net named twice because two entries for
+    one net are two intents for one drawing, and which one the compiler should
+    honour is exactly what the document has to say.
+    """
+    out: list[Any] = []
+    seen: dict[str, int] = {}
+    for index, item in enumerate(_list(root.get(key), key)):
+        spot = f"{key}[{index}]"
         body = _object(item, spot)
         _check_keys(body, _OBLIGATION_KEYS, spot)
         nets = _text_list(body.get("nets"), f"{spot}.nets")
         if not nets:
-            raise PresentationSpecError(
-                f"{spot}.nets is empty — an obligation with no net obliges nothing "
-                "(the local connection it protects is named by a net)"
-            )
-        out.append(DirectWiringObligation(
+            raise PresentationSpecError(f"{spot}.nets is empty — {empty_nets}")
+        if refuse_duplicates:
+            for net_id in nets:
+                if net_id in seen:
+                    raise PresentationSpecError(
+                        f"{spot}.nets names {net_id!r}, which {key}"
+                        f"[{seen[net_id]}] already names — one net, one "
+                        "statement: two entries would be two intents for one "
+                        "drawing and this document has to say which"
+                    )
+                seen[net_id] = index
+        out.append(entry_type(
             nets=nets, note=_text(body.get("note"), f"{spot}.note")
         ))
     return out
@@ -964,8 +1066,11 @@ def _label_policy(root: dict[str, Any]) -> LabelPolicy:
     if local != LABEL_WIRE:
         raise PresentationSpecError(
             f"labelPolicy.local is {local!r}; it may only be {LABEL_WIRE!r} — a "
-            "key local topology is drawn as a wire, and the label exception "
-            "applies across modules or at high fan-out (053 sec.7, 052 sec.5)"
+            "key local topology is drawn as a wire, and the label exceptions are "
+            "a net the document names in localLabelObligations, a net that "
+            "crosses modules, or a high-fan-out net (053 sec.7, 052 sec.5). A "
+            "local exception is stated per net there, never by loosening this "
+            "policy"
         )
     out = LabelPolicy(local=LABEL_WIRE)
     for key, attribute in (("crossModule", "cross_module"), ("highFanout", "high_fanout")):

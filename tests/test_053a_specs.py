@@ -740,3 +740,83 @@ def test_a_plan_refuses_the_shapes_a_checker_could_not_trust():
     offline = LayoutPlan.from_dict(_layout(target={}))
     assert offline.target.snapshot_sha256 == ""
     assert offline.target.page_uuid == ""
+
+
+# --------------------------------------------- localLabelObligations (534)
+#
+# The stated exception to "a local net is wired": a net named here is expressed
+# by a label at each of its pins inside one module (a reversible connector's
+# mirrored pins, where a wire says the wrong pin is the right one). These tests
+# pin three things a parser can get wrong silently: the key must be **absent**
+# from a document that says nothing (the digest a plan pins), the shape must be
+# closed, and one net must not be stated twice.
+
+#: `_presentation()`'s digest as the **pre-534** source computes it
+#: (`git show HEAD:src/boardwise/core/presentationspec.py`, run in a temp tree).
+#: A pinned number rather than a comparison against itself: the whole point of
+#: the conditional serialisation is that this document's bytes must not move.
+_LOCAL_LABEL_BASE_DIGEST = (
+    "50b112989558bb4b3dff6765d3d3ae67cff6b21228a8d2a18cded25abde3f5ea"
+)
+
+
+def test_a_spec_that_states_no_local_label_exception_keeps_its_digest():
+    spec = PresentationSpec.from_dict(_presentation())
+    canonical = json.dumps(
+        spec.to_jsonable(), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    assert "localLabelObligations" not in canonical, (
+        "the key must not be written when nothing is stated — an empty list in "
+        "the canonical JSON moves every existing spec's digest, and with it every "
+        "LayoutPlan compiled from one"
+    )
+    assert spec.sha256() == _LOCAL_LABEL_BASE_DIGEST, (
+        "an untouched 053 spec has to hash exactly as it did before this key "
+        f"existed (got {spec.sha256()})"
+    )
+
+
+def test_the_local_label_exception_round_trips_and_an_empty_list_is_absence():
+    named = PresentationSpec.from_dict(_presentation(localLabelObligations=[
+        {"nets": ["D+", "D-"], "note": "Type-C 的可逆脚只能按名字读"},
+    ]))
+    assert [item.nets for item in named.local_label_obligations] == [["D+", "D-"]]
+    assert named.local_label_obligations[0].note == "Type-C 的可逆脚只能按名字读"
+    assert named.to_jsonable()["localLabelObligations"] == [
+        {"nets": ["D+", "D-"], "note": "Type-C 的可逆脚只能按名字读"},
+    ]
+    assert named.sha256() != _LOCAL_LABEL_BASE_DIGEST
+    assert PresentationSpec.from_dict(named.to_jsonable()) == named
+    # 顶层 [] 等同缺省：digest 与原文档逐字节一致（canonical 形式里没有这个键）。
+    empty = PresentationSpec.from_dict(_presentation(localLabelObligations=[]))
+    assert empty.local_label_obligations == []
+    assert "localLabelObligations" not in json.dumps(empty.to_jsonable())
+    assert empty.sha256() == _LOCAL_LABEL_BASE_DIGEST
+
+
+@pytest.mark.parametrize("entries, match", [
+    ([{"nets": "D+"}], "must be a list"),
+    ([{"nets": [3]}], "must be a string"),
+    ([{"nets": [""]}], r"\.nets\[0\] is empty"),
+    ([{"nets": ["  "]}], r"\.nets\[0\] is empty"),
+    ([{"nets": []}], "nets is empty"),
+    ([{"nets": ["D+"]}, {"nets": ["D+"]}],
+     r"already names — one net, one\s+statement"),
+    ([{"nets": ["D+", "D+"]}], "already names"),
+    ([{"nets": ["D+"], "colour": "blue"}], "unknown key"),
+])
+def test_malformed_local_label_obligations_are_refused(entries, match):
+    with pytest.raises(PresentationSpecError, match=match):
+        PresentationSpec.from_dict(
+            _presentation(localLabelObligations=entries)
+        )
+
+
+def test_a_net_named_twice_is_refused_while_direct_wiring_keeps_its_leniency():
+    """`directWiringObligations` 的旧行为一字不改：它从来没有查过重。"""
+    lax = PresentationSpec.from_dict(_presentation(directWiringObligations=[
+        {"nets": ["TAP"], "note": "first"}, {"nets": ["TAP"], "note": "second"},
+    ]))
+    assert [item.note for item in lax.direct_wiring_obligations] == [
+        "first", "second",
+    ]

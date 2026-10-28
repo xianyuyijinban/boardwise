@@ -200,6 +200,115 @@ def test_the_shipped_profiles_carry_the_measured_pose_table():
         )
 
 
+def test_a_pose_only_table_answers_nothing_for_a_pose_it_never_measured():
+    """270 is a measurement, not a mode — 90/180 must not borrow it (534 r1).
+
+    The two rot-270 parts of the CH343 page (`R0603-5.1k`, `C0805-10uF`) were
+    measured at 270 and are not a rigid turning of their upright declaration, so
+    the table states 270 and nothing else.  A lookup at any other pose has no
+    measurement to hand back: returning the 270 row would be an invented anchor
+    dressed as a measured one, and the caller's own side ladder is the honest
+    answer it already knows how to take (`symbol_rows` returns no row).
+    """
+    profile = SymbolProfile(
+        symbol_ref="R0603-5.1k",
+        texts=[
+            SymbolText("reference", 10.0, 0.0, rotation=270.0, mirror=False),
+            SymbolText("value", 10.0, -10.0, rotation=270.0, mirror=False),
+        ],
+    )
+
+    def rows(pose=None):
+        return textmetrics.symbol_rows(
+            profile, (0.0, 0.0), reference="R17", value="5.1k", pose=pose,
+        )
+
+    measured = rows(il.SymbolPose(rotation=270.0, mirror=False))
+    assert [(box[0], box[1]) for _kind, _text, box in measured] == [
+        (10.0, 0.0), (10.0, -10.0),
+    ]
+    for rotation in (0.0, 90.0, 180.0):
+        assert rows(il.SymbolPose(rotation=rotation, mirror=False)) == [], (
+            f"rotation {rotation} was never measured on this symbol"
+        )
+    assert rows(il.SymbolPose(rotation=270.0, mirror=True)) == [], (
+        "a mirrored 270 is a different pose, not a synonym"
+    )
+    assert len(rows()) == 2, (
+        "a caller that names no pose keeps the pre-534 reading of the symbol's "
+        "own single stated row"
+    )
+
+
+def test_the_passive_profiles_carry_their_five_measured_poses():
+    """The CH343 page's five passives, pinned to the anchors `actual.svg` draws.
+
+    `534 r1` read these out of the host's own render (sha256 ``743de223…adfb``),
+    attributing each row by its fill colour inside its part group — the plan's
+    own `texts` are 28-43 units off for the rot-0 parts, so they are not a
+    source.  Every entry states its pose, which is why the two rot-270 parts
+    answer at 270 and at no other rotation.
+    """
+    book = _library("ch343_uart")
+    measured = {
+        "LED0603-RED-C2286": (0.0, (-15.0, 20.0), (-15.0, -20.0)),
+        "R0603-5.1k-C23186": (270.0, (10.0, 0.0), (10.0, -10.0)),
+        "R0603-1k-C21190": (0.0, (-10.0, 5.0), (-10.0, -15.0)),
+        "C0805-10uF-C15850": (270.0, (15.0, 0.0), (15.0, -10.0)),
+        "C0603-100nF-C1590": (0.0, (-5.0, 10.0), (-5.0, -20.0)),
+    }
+    for symbol, (rotation, ref_xy, val_xy) in measured.items():
+        profile = book[symbol]
+        drawn = textmetrics.symbol_rows(
+            profile, (100.0, 200.0), reference="R1", value="v",
+            pose=il.SymbolPose(rotation=rotation, mirror=False),
+        )
+        assert [(box[0] - 100.0, box[1] - 200.0) for _kind, _text, box in drawn] == [
+            ref_xy, val_xy,
+        ], f"{symbol} at rotation {rotation}"
+        if rotation == 270.0:
+            for other in (0.0, 90.0, 180.0):
+                assert textmetrics.symbol_rows(
+                    profile, (100.0, 200.0), reference="R1", value="v",
+                    pose=il.SymbolPose(rotation=other, mirror=False),
+                ) == [], f"{symbol} states no row at rotation {other}"
+
+    assert book["LED0603-RED-C2286"].value_row == "KT-0603R"
+    led = textmetrics.symbol_rows(
+        book["LED0603-RED-C2286"], (0.0, 0.0), reference="D5", value="RED",
+        pose=il.SymbolPose(rotation=0.0, mirror=False),
+    )
+    assert led[1][1] == "KT-0603R", "the host prints the device name, not `RED`"
+    assert led[1][2][2] - led[1][2][0] == pytest.approx(
+        textmetrics.render_width("KT-0603R")
+    )
+
+
+def test_the_passive_profiles_declare_only_the_poses_534_measured():
+    """A pose nobody measured is not declared legal: the compiler may not pick it.
+
+    `534 r1` drew these five symbols in exactly one pose each (`.tmp_534/
+    text-profile-measurement-r1/findings.md` sec.2.2).  Declaring the measured set
+    is what keeps the compiler from seating a part where its rows were never
+    measured -- a row nobody measured must not be reserved as if it existed, and a
+    pose nobody measured must not be offered as legal.
+    """
+    book = _library("ch343_uart")
+    measured = {
+        "LED0603-RED-C2286": [(0, False)],
+        "R0603-5.1k-C23186": [(270, False)],
+        "R0603-1k-C21190": [(0, False)],
+        "C0805-10uF-C15850": [(270, False)],
+        "C0603-100nF-C1590": [(0, False)],
+    }
+    for symbol, poses in measured.items():
+        profile = book[symbol]
+        assert sorted(
+            (int(pose.rotation), bool(pose.mirror)) for pose in profile.poses
+        ) == poses, symbol
+        assert profile.pose_source == "declared", symbol
+
+
 # ------------------------------------------------------- B: the string on paper
 
 

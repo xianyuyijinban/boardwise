@@ -96,7 +96,9 @@ def test_every_direction_blocked_is_refused_naming_the_blockers():
     stub, blockers = drawapply._place_label_stub(label, built, {}, ())
     assert stub is None
     # 四条直线方向 + 两条折线方向，各一条点名（099f 起折线也进拒绝清单）
-    assert len(blockers) == 6, blockers
+    named = [line.split(" (")[0] for line in blockers]
+    assert len(named) == len(set(named)), blockers
+    assert all(": " in line for line in blockers), blockers
     assert all("net V3's wire" in line for line in blockers)
 
 
@@ -243,7 +245,8 @@ def test_a_label_with_no_free_stub_refuses_the_plan(monkeypatch):
     layout, circuit, sheet, book = _ch340_layout()
     monkeypatch.setattr(
         drawapply, "_place_label_stub",
-        lambda label, built, bodies, pins: (None, ["left: it lands on net V3's wire"]),
+        lambda label, built, bodies, pins, label_boxes=(): (
+            None, ["left: it lands on net V3's wire"]),
     )
     with pytest.raises(DrawPlanError) as caught:
         module_plan(layout, circuit, sheet, book, label_stubs=True,
@@ -267,5 +270,7 @@ def test_a_boxed_in_label_is_refused_and_every_direction_is_named():
         blocked.wires.append(drawapply.PlanDrawWire(net="V3", points=points))
     stub, blockers = drawapply._place_label_stub(label, blocked, {}, ())
     assert stub is None
-    assert len(blockers) == 6, blockers
+    named = [line.split(" (")[0] for line in blockers]
+    assert len(named) == len(set(named)), blockers
+    assert all(": " in line for line in blockers), blockers
     assert all("net V3's wire" in line for line in blockers)

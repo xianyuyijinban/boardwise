@@ -102,8 +102,17 @@ def main() -> int:
     for tool in TOOLS:
         record = here / f"{tool}.json"
         env = dict(os.environ)
-        env["PYTHONPATH"] = ";".join(
-            (str(here), str(ROOT / "src"), str(ROOT / "tests"))
+        # The probe's own three directories come **first**, and whatever
+        # PYTHONPATH the caller already had is kept behind them. Overwriting it
+        # was measured to break the child: `053b_previews` imports
+        # `test_053b_drawcompiler`, which imports `pytest`, and a caller running
+        # `C:/Python314/python.exe` with the repo's venv site-packages on
+        # PYTHONPATH lost that path here — `ModuleNotFoundError: pytest`, while
+        # the parent imported `boardwise` fine (2026-10-28, 116-pythonpath).
+        inherited = os.environ.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = os.pathsep.join(
+            [str(here), str(ROOT / "src"), str(ROOT / "tests")]
+            + ([inherited] if inherited else [])
         )
         env["NO_MOVE_PROBE"] = str(record)
         env["NO_MOVE_TOOL"] = tool

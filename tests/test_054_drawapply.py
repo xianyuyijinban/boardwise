@@ -41,7 +41,8 @@ from boardwise.core.circuitspec import CircuitSpec
 from boardwise.core.layoutplan import LayoutPlan
 from boardwise.core.presentationspec import PresentationSpec
 from boardwise.core.symbolprofile import SymbolProfile
-from boardwise.engines import drawapply, drawcompiler
+from boardwise.engines import drawapply, drawcompiler, pagecompiler
+from boardwise.engines.drawapply import _Built, _duplicate_carrier_problems
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "drawapply"
 CIRCUIT = FIXTURES / "divider.circuit.json"
@@ -810,3 +811,145 @@ def test_the_grid_the_plan_is_built_on_is_the_lattice(plan: ChangePlan) -> None:
     for wire in plan.change.draw_wires:
         for x, y in wire.points:
             assert x % DRAW_GRID == 0 and y % DRAW_GRID == 0
+
+
+def test_two_carriers_on_one_row_are_two_statements_and_are_refused():
+    """A net's name printed on two wires is one statement only if it is one wire.
+
+    534 final-name-clearance: the floor is 20 units between two carriers of one
+    net.  Two **different** wires whose name rows are the same box are 0 units
+    apart -- the worst case -- and deduplicating by box would silently merge them
+    into one carrier and pass the page.
+    """
+    built = _Built()
+    built.name_carriers = [
+        ("D-", "wire[3]", (100.0, 700.0, 110.0, 710.0)),
+        ("D-", "wire[7]", (100.0, 700.0, 110.0, 710.0)),
+    ]
+    problems = _duplicate_carrier_problems(built)
+    assert len(problems) == 1, problems
+    assert "D-" in problems[0]
+    assert "0 units apart" in problems[0]
+
+
+def test_one_wire_carrying_two_labels_of_its_net_is_one_carrier():
+    """The same wire, twice, is the same statement -- counted once, not twice."""
+    built = _Built()
+    built.name_carriers = [
+        ("D-", "wire[3]", (100.0, 700.0, 110.0, 710.0)),
+        ("D-", "wire[3]", (100.0, 700.0, 110.0, 710.0)),
+    ]
+    assert _duplicate_carrier_problems(built) == []
+
+
+def test_two_rows_under_the_floor_are_refused_and_twenty_apart_is_kept():
+    """The threshold is drawlint's own 20 -- stated once, never a second number."""
+    built = _Built()
+    built.name_carriers = [
+        ("D+", "wire[1]", (180.0, 685.0, 189.336, 695.0)),
+        ("D+", "wire[4]", (207.5, 705.0, 216.836, 715.0)),
+    ]
+    problems = _duplicate_carrier_problems(built)
+    assert len(problems) == 1 and "18.164 units apart" in problems[0], problems
+
+    # The ruler is the distance between the two boxes, not the pitch of their
+    # lower-left corners: 695 -> 725 is 30 clear units, so this pair is kept.
+    built.name_carriers = [
+        ("D+", "wire[1]", (180.0, 685.0, 189.336, 695.0)),
+        ("D+", "wire[9]", (207.5, 725.0, 216.836, 735.0)),
+    ]
+    assert _duplicate_carrier_problems(built) == []
+
+
+def test_the_shipped_page_places_its_carriers_clear_of_the_floor():
+    """534 stub-l5-selection: the page is **chosen** clear, not refused.
+
+    Last batch's measurement: after the modules merged, `D+` printed two carriers
+    18.16 units apart and `D-` two at 17.46 -- readability `ok`, page verdict
+    `pass`, and only the plan-level gate saw it.  Now the carrier pass measures the
+    same floor **while it chooses** (a stub candidate, and the decision to let a
+    label ride a wire at all), so the plan is accepted and every pair of one net's
+    different carriers is at least `L5_DUPLICATE_NET_GAP` apart.
+    """
+    from boardwise.engines.drawapply import _row_gap
+
+    specs = Path(__file__).resolve().parents[1] / "blocklib" / "specs"
+    circuit = CircuitSpec.from_dict(
+        json.loads((specs / "ch343_uart.circuit.json").read_text(encoding="utf-8")))
+    presentation = PresentationSpec.from_dict(
+        json.loads((specs / "ch343_uart.presentation.json").read_text(encoding="utf-8")))
+    book = drawapply.load_library(specs / "ch343_uart.library.json")
+    # The shipped library pins the five passives to the poses 534 r1 measured, and
+    # `C0603-100nF` at its measured pose makes ch343_power unsat (the other finding).
+    # This page-level test therefore lifts that one pinning in memory only.
+    from boardwise.core.symbolprofile import DEFAULT_POSES
+    c0603 = book["C0603-100nF-C1590"]
+    book["C0603-100nF-C1590"] = type(c0603)(
+        **{**c0603.__dict__, "poses": list(DEFAULT_POSES),
+           "pose_source": "unrestricted"})
+    result = pagecompiler.compile_page(
+        circuit, presentation, book,
+        pagecompiler.PageCompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)))
+    assert result.pages, result.failures
+
+    captured: list = []
+    original = drawapply._duplicate_carrier_problems
+
+    def capture(built):
+        captured.extend(list(built.name_carriers))
+        return original(built)
+
+    drawapply._duplicate_carrier_problems = capture
+    try:
+        drawapply.module_plan(
+            result.pages[0].plan, circuit, presentation, book,
+            label_stubs=True, keep_names=True,
+        )
+    finally:
+        drawapply._duplicate_carrier_problems = original
+
+    for net in ("D+", "D-"):
+        rows = [(identity, row) for carrier_net, identity, row in captured
+                if carrier_net == net]
+        assert len(rows) >= 2, (net, rows)
+        for index, (first_id, first) in enumerate(rows):
+            for second_id, second in rows[index + 1:]:
+                gap = _row_gap(first, second)
+                assert gap >= 20.0, (
+                    f"{net}: {first_id} and {second_id} print its name {gap:g} apart"
+                )
+
+
+def test_a_stub_row_too_close_to_its_own_net_is_skipped_while_choosing():
+    """The floor is asked of the **candidates**, before anything is committed.
+
+    A stub whose name row would print 9 units from another carrier of the same net
+    is not a candidate at all: it leaves the ladder with the other carrier and the
+    measured gap named, and the run that is drawn clears the floor.  A post-hoc
+    refusal would have taken the first run and failed the page afterwards, which is
+    the difference this test exists to pin.
+    """
+    import types
+
+    from boardwise.engines.drawapply import (
+        _Built, _place_label_stub, _row_gap, _stub_name_row,
+    )
+
+    label = types.SimpleNamespace(
+        net="D-", part_id="USB1", x=200.0, y=600.0, bbox=(205.0, 600.0, 215.0, 610.0),
+    )
+    built = _Built()
+    # A carrier of the same net one unit under the preferred straight run's row.
+    built.name_carriers = [("D-", "wire[0]", (200.0, 601.0, 240.0, 611.0))]
+    points, blockers = _place_label_stub(
+        label, built, {}, (),
+        label_boxes=[("the layout label box of net D-", (205.0, 600.0, 215.0, 610.0))],
+    )
+    assert points is not None, blockers
+    drawn = type("_Run", (), {"points": [tuple(point) for point in points]})
+
+    row = _stub_name_row(drawn(), "D-")
+    assert row is not None
+    assert _row_gap(row, (200.0, 601.0, 240.0, 611.0)) >= 20.0, row
+    assert any("duplicate-carrier floor" in text for text in blockers), blockers
+

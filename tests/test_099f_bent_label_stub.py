@@ -130,9 +130,18 @@ def test_every_bent_run_blocked_is_refused_and_named():
     )
     stub, blockers = drawapply._place_label_stub(RXD, built, {}, ())
     assert stub is None
-    assert len(blockers) == 6, blockers            # 4 直线 + 2 折线，各一条
+    # 534 r23: one line per **shape family**, not a fixed count -- r21's extra rungs
+    # add families, and the invariant is "no shape named twice, every line carries a
+    # reason", not the ladder's length (the same reading 099d uses).
+    named = [line.split(" (")[0] for line in blockers]
+    assert len(named) == len(set(named)), blockers
+    assert all(": " in line for line in blockers), blockers
     # 折线的形状名写成 "<旁移方向> <步长> then <标签侧> <长度>"（两段一眼看得出来）
-    assert sum(1 for line in blockers if " then " in line) == 2, blockers
+    bent_families = {
+        line.split(" (")[0] for line in blockers if " then " in line
+    }
+    assert bent_families, blockers
+    assert all(": " in line for line in blockers if " then " in line), blockers
     assert all("net V3's wire" in line for line in blockers)
 
 

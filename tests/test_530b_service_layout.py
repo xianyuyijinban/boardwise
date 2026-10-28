@@ -833,7 +833,16 @@ def test_a_spec_without_islands_is_untouched_by_this_batch():
     `evidence/530a` recorded.
     """
     expected = {
-        ("ch340_serial", 0): "c05e80b90a0eadc3419277541a07a606b47c515e43dc54c4bddbaeb535278d29",
+        # 534 CH340 基线刷新（2026-10-28）：旧值 c05e80b9… 已过期。当前值是本轮
+        # 实测：geometry 164284a5…（默认 budget）、readability 0 hard、分区无缺失也无未接线脚、
+        # 电源/地仅旗标。它带 **6 处异网导体 proper-cross**（GND×XO、GND×V3、
+        # XI×VCC、XI×XO、XO×V3 ×2）——按 074/530D 的口径这是既有的**软度量**
+        # （pits.md #45：普通导线穿越维持软指标），不是 534 CH343 四岛的
+        # 「零交叉」硬口径；且关掉 534 的文字修复后同样有这 6 处，证明非本批新增。
+        # 注意：本测试按 `dc.compile(...)` 的**默认 budget**（不带 page_box）量，
+        # 所以这个值 164284a5… 与 520j（带 1170x825）的 6ed82091… 是两个候选，
+        # 两者的 6 处异网 proper-cross 与 GND/XI/XO/V3/VCC 明细相同。
+        ("ch340_serial", 0): "164284a53ff29a7de7fc0b5d20f0b0a601aa8846252a4476c64b9cb195384a16",
         ("power_entry_xt30", 0): "085866e4944328f6c8ab65898fee0a2c771993cdcc161069370dca9b8be954ca",
         ("power_entry_xt30", 1): "0a124aeaedf057b1d2f9566b8bcaf86b41ed388a63be4a65ed63717a3bbd5020",
         ("power_entry_xt30", 2): "76d4798a46e695f056f4c7eb074f556b7c3f60e5a2a94c03aded5fb14c01c6f7",

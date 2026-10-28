@@ -62,8 +62,13 @@ _BEFORE_520J = {
     "ch340_serial.presentation": (
         "4ab8aee132bce116672ce77a3bacf37516c87b54fd0846e3f09433eaa54f5cce"
     ),
+    # 534 CH340 基线刷新（2026-10-28）：977a5b94… 是 534 文字修复**之前**的值，
+    # 现在实测为 6ed82091…（同一份 spec 摘要 4ab8aee1… 未变）。当前 plan 的
+    # readability 0 hard、分区完整、无未接线脚，但带 6 处既有异网 proper-cross
+    # （关掉文字修复后同样 6 处）——按 pits.md #45 属普通导线穿越的**软度量**，
+    # 与 534 CH343 四岛的零交叉口径不同，本行只重钉几何，不改 spec 摘要。
     "ch340_serial.plan.geometry": (
-        "977a5b94570d4333387e9b471d56ec8684b2e27d3637184213c1d417f526fc4b"
+        "6ed82091e2c8fedf3632cb2ed875d6bf77cbd871648d176d809be62082533706"
     ),
     # 530D 重量的一个摘要：ch340 的 plan json 从 637f142e… 变成 e9d20740…。
     # 几何摘要（上面那行）**没变**，变的只有 evidence 里的 occupied_ratio /
@@ -71,8 +76,10 @@ _BEFORE_520J = {
     # `readability` 不再把这些「宿主印的网名行」当文字框（30 个框 → 25 个），
     # 而这两个软指标数的正是框。plan 的**几何**与 spec 摘要仍逐字节相同，
     # 这条测试要证的「本批加的是键、不写这个键的 spec 一律原样」没有被推翻。
+    # 同上：plan json 摘要随几何一起重钉（6ed82091… 的 plan）。旧的 e9d20740…
+    # 属 530D 那次权重（几何当时没变），本轮几何变了，json 摘要随之必变。
     "ch340_serial.plan.json": (
-        "e9d207403acfbdfa786b0017c4ef45d5983643b2d1ee1834a0c591c13f199965"
+        "3757542abe56b2139ccb20481874c2da1d8053b2830441ccd39a37be6dc097f1"
     ),
     "power_entry_xt30.presentation": (
         "e80a85727474ec54dafc3997be45cd0b74133636a38d83299d82557214cfe048"

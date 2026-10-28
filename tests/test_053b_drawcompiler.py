@@ -34,9 +34,13 @@ from xml.etree import ElementTree
 import pytest
 
 from boardwise.core.circuitspec import CircuitSpec
-from boardwise.core.layoutplan import LayoutPlan
+from boardwise.core.layoutplan import (
+    LayoutPlan,
+    LayoutPowerSymbol,
+    label_wire_indices,
+)
 from boardwise.core.presentationspec import PresentationSpec
-from boardwise.core import symbolprofile
+from boardwise.core import symbolprofile, textmetrics
 from boardwise.core.symbolprofile import (
     SymbolPin,
     SymbolPose,
@@ -3996,3 +4000,668 @@ def test_the_compiler_imports_nothing_above_its_layer():
         and name not in allowed
     }
     assert forbidden == set(), forbidden
+
+
+# ------------------------------------------- localLabelObligations (534)
+#
+# The stated exception to "a local net is wired" (053 sec.7). The case this
+# exists for is a reversible connector: its two data pins are mirrored, so the
+# wire that joins them is a U-line that says the wrong pin is the right one. The
+# exception is **per net and stated**, never a loosening of `labelPolicy.local`
+# (which stays `wire`), and these tests pin the two halves: a named signal net
+# really comes out as a label at each pin (and its neighbour is untouched), and
+# every question the document cannot answer is refused at the entry rather than
+# discovered later as a contradiction of something else.
+
+
+def sense_circuit() -> CircuitSpec:
+    """An LDO with its decoupling plus a named RC pair — `SENSE` is not promised.
+
+    `ldo`'s own promises are `VIN5`/`3V3` (direct-wire) and `GND` (uniform-gnd),
+    so `SENSE` is exactly what the exception is for: a signal net inside one
+    module that nothing else says is a wire. The neighbouring nets are the
+    control (`3V3`/`VIN5` must stay wires; the exception must not leak).
+    """
+    return circuit(
+        [
+            part("U1", "AMS1117-3.3", "AMS1117-3.3"),
+            part("C1", "C0805", "10u"),
+            part("C2", "C0402", "22µF"),
+            part("R2", "R0402", "10k"),
+            part("C3", "C0402", "100n"),
+        ],
+        [
+            net("VIN5", "power", ["U1.3", "C1.1"]),
+            net("3V3", "power", ["U1.2", "C2.1", "R2.1"]),
+            net("GND", "gnd", ["U1.1", "C1.2", "C2.2", "C3.2"]),
+            net("SENSE", "signal", ["R2.2", "C3.1"]),
+        ],
+    )
+
+
+def sense_presentation(**overrides) -> PresentationSpec:
+    payload = {
+        "modules": [module("rail", ["U1", "C1", "C2", "R2", "C3"], "regulator")],
+        "portRoles": {"VIN5": "input", "3V3": "output"},
+        "directWiringObligations": [{"nets": ["VIN5", "3V3"],
+                                     "note": "in→core→out is wired"}],
+        "localLabelObligations": [{"nets": ["SENSE"],
+                                   "note": "the pair's pins are mirrored"}],
+    }
+    payload.update(overrides)
+    return presentation("ldo", **payload)
+
+
+def _segments(plan, net_id: str) -> list:
+    return [item for item in plan.segments if item.net == net_id]
+
+
+def _labels(plan, net_id: str) -> list:
+    return [item for item in plan.labels if item.net == net_id]
+
+
+def test_a_named_local_signal_net_is_labelled_at_each_pin_and_its_neighbour_is_wired():
+    """一个多脚 signal 网按名字读：**每脚一段短横线 + 同名标签**，没有 U 形导线。
+
+    534 r4：每个脚一条独立载体 —— 近端是那个脚（名字说的电气事实），远端是同名
+    标签的 anchor。两脚两段，谁也不是跨过两脚的那条 U 形导线；标签靠
+    `core.layoutplan.label_wire_indices` 认出载体（它按 anchor 落在线上判）。
+    """
+    result = dc.compile(sense_circuit(), sense_presentation(), library())
+    assert result.ok, [failure.detail for failure in result.failures]
+    plan = result.best()
+    labels = _labels(plan, "SENSE")
+    carriers = _segments(plan, "SENSE")
+    assert len(labels) == 2, (
+        "localLabelObligations asks for a name at each of the net's two pins"
+    )
+    assert len(carriers) == 2, (
+        "one carrier per pin: the near end is the pin, the far end is that "
+        "label's own anchor — two pins, two short runs"
+    )
+    pins = [
+        pin for pin in (pin_point(plan, member) for member in ("R2.2", "C3.1"))
+        if pin is not None
+    ]
+    assert len(pins) == 2
+    anchors = {(round(item.x, 6), round(item.y, 6)) for item in labels}
+    near_ends = []
+    for carrier in carriers:
+        start, end = carrier.points[0], carrier.points[-1]
+        # 534 r16: the carrier may be **bent** (the one-lattice-step-aside form), so
+        # the rule is not "a straight stub" but "the longest straight run is
+        # horizontal" -- a vertical or diagonal name row is what this refuses.
+        runs = [
+            (a, b) for a, b in zip(carrier.points, carrier.points[1:])
+            if abs(a[0] - b[0]) > 1e-9 or abs(a[1] - b[1]) > 1e-9
+        ]
+        assert runs, f"the carrier draws nothing: {carrier.points}"
+        longest = max(runs, key=lambda run: math.dist(*run))
+        assert abs(longest[0][1] - longest[1][1]) < 1e-6, (
+            "the longest straight run is horizontal, so the host prints the name "
+            f"horizontally at the band that was chosen: {carrier.points}"
+        )
+        assert (round(end[0], 6), round(end[1], 6)) in anchors, (
+            "the label's anchor sits on the carrier's far end"
+        )
+        assert any(
+            abs(pin[0] - start[0]) < 1e-6 and abs(pin[1] - start[1]) < 1e-6
+            for pin in pins
+        ), "the near end is a pin of the named net"
+        assert not any(
+            abs(pin[0] - end[0]) < 1e-6 and abs(pin[1] - end[1]) < 1e-6
+            for pin in pins
+        ), "the run must not end on this net's other pin — that is the U-line"
+        near_ends.append((round(start[0], 6), round(start[1], 6)))
+    assert len(set(near_ends)) == len(near_ends), (
+        "each pin owns its own carrier: two carriers may not leave the same pin"
+    )
+    marked = label_wire_indices(plan)
+    indices = {
+        index for index, segment in enumerate(plan.segments)
+        if any(segment is carrier for carrier in carriers)
+    }
+    assert len(indices) == 2 and indices <= marked, (
+        "both carriers are recognisable as name carriers by "
+        "`label_wire_indices` (the label's anchor lies on the run)"
+    )
+    # 未点名的邻网一字不动：两条电源轨仍是导线，且没有多出标签。
+    assert _segments(plan, "3V3"), "3V3 is the LDO's promise and must stay a wire"
+    assert _labels(plan, "3V3") == []
+    assert _labels(plan, "GND") == [], "a ground is never named by a label"
+
+
+def _box_across_foreign_run(box, segments, net_id: str) -> bool:
+    """Independent geometry: does this box touch another net's run at all?"""
+    for segment in segments:
+        if segment.net == net_id:
+            continue
+        for start, end in zip(segment.points, segment.points[1:]):
+            if (
+                min(start[0], end[0]) <= box[2]
+                and max(start[0], end[0]) >= box[0]
+                and min(start[1], end[1]) <= box[3]
+                and max(start[1], end[1]) >= box[1]
+            ):
+                return True
+    return False
+
+
+def _boxes_overlap(first, second) -> bool:
+    """Independent geometry: do two axis-aligned boxes really overlap?"""
+    return (
+        first[0] < second[2] and second[0] < first[2]
+        and first[1] < second[3] and second[1] < first[3]
+    )
+
+
+def test_a_carrier_name_box_steps_around_the_rows_the_host_prints_on_the_runs():
+    """**label.bbox × 载体自己的 host wire-name row**（534 r7）。
+
+    宿主会把载体线的网名印在它最长直段的中点（`textmetrics.wire_name_box`），
+    这是编译器不摆、却必须避开的第二只盒子。这里把"先定 far、再统一避让所有名字
+    行"这条测量顺序直接钉在通用原语上：紧贴 far 的那只盒子正压在 row 上，带上
+    row 去问就必须换一只不重叠的；不带 row 去问，返回的就是那只压线的盒子。
+    名字行有两行（本载体一行、同一 net 的后落载体一行），两行都不许被压。
+    """
+    from boardwise.core import textmetrics
+
+    point = (0.0, 0.0)
+    far = (10.0, 0.0)
+    own_row = textmetrics.wire_name_box([point, far], "SENSE")
+    later_row = textmetrics.wire_name_box([(0.0, -20.0), (10.0, -20.0)], "SENSE")
+    assert own_row is not None and later_row is not None
+
+    naive = dc._local_label_trial_box(
+        "SENSE", far, (1.0, 0.0), 1, [], [], set(), "R2",
+    )
+    assert naive is not None
+    assert _boxes_overlap(naive.bbox, own_row), (
+        "the nearest box on the run must be the one the host's row prints through, "
+        "or this regression no longer guards the shape it is about"
+    )
+
+    moved = dc._local_label_trial_box(
+        "SENSE", far, (1.0, 0.0), 1, [own_row, later_row], [], set(), "R2",
+    )
+    assert moved is not None
+    assert not _boxes_overlap(moved.bbox, own_row)
+    assert not _boxes_overlap(moved.bbox, later_row)
+    assert moved.bbox != naive.bbox, (
+        "the box has to move once the rows are known — that is the measurement "
+        "order this test exists for"
+    )
+
+
+def test_a_later_carrier_move_sees_the_carriers_laid_before_it(monkeypatch):
+    """r15/r16 ordering: 预留阶段选中的载体就是最终载体，后面的预留看得见它。
+
+    这里证明的不是"最终图上碰巧没碰撞"，而是**预留阶段**（`_take_lane`，localLabel
+    先于 flag）拿到的就是最终 carrier：每个 carrier 的 far 出现在某次 SENSE 预留
+    的 cells 里，且至少一次预留的 cells 覆盖某条名字行的内部格点（名行带也进了障碍）。
+    旧实现（直桩预留 + box 阶段才落载体）下，预留的 far 与最终 carrier 的 far 不是
+    同一个点，这两条都会红。
+    """
+    calls = []
+    original = dc._take_lane
+
+    def spy(taken, cells, tips, own, net_id):
+        owner = dict(taken)
+        ok = original(taken, cells, tips, own, net_id)
+        calls.append({"net": net_id, "cells": set(cells), "taken": owner, "ok": ok})
+        return ok
+
+    monkeypatch.setattr(dc, "_take_lane", spy)
+    result = dc.compile(sense_circuit(), sense_presentation(), library())
+    assert result.ok, [failure.detail for failure in result.failures]
+    plan = result.best()
+    carriers = _segments(plan, "SENSE")
+    assert len(carriers) == 2
+    sense = [item for item in calls if item["net"] == "SENSE" and item["ok"]]
+    assert len(sense) >= 2, "both pins of a localLabel net must be reserved"
+    reserved = set()
+    for item in sense:
+        reserved |= item["cells"]
+    for carrier in carriers:
+        far = carrier.points[-1]
+        assert (round(far[0], 6), round(far[1], 6)) in reserved, (
+            "the far end the drawing carries is the far end the reservation promised: "
+            f"{carrier.points} is not in the reserved cells"
+        )
+    rows = [box for box in (dc.textmetrics.wire_name_box([list(p) for p in c.points], "SENSE")
+                            for c in carriers) if box is not None]
+    assert rows, "each carrier prints a name row"
+    inside = [
+        cell for cell in reserved
+        for box in rows
+        if box[0] + 1e-6 < cell[0] < box[2] - 1e-6
+        and box[1] + 1e-6 < cell[1] < box[3] - 1e-6
+    ]
+    assert inside, (
+        "the name row's interior nodes are part of the reservation, so the rails "
+        "route around the text the host will print"
+    )
+    later = sense[-1]["taken"]
+    assert any(owner == "SENSE" for owner in later.values()), (
+        "a later reservation sees the cells an earlier one already promised"
+    )
+
+
+def test_a_name_box_that_would_sit_across_another_nets_run_is_not_reused():
+    """**旧盒压异网导线时不得复用**：载体盒必须为新的 far 重新测量（534 r4）。
+
+    这个场景里 C3.1 西侧（脚自己的逃逸边，裸标签会取的那一侧）正好压着 GND 的
+    竖直 run；把旧盒原样搬到新 anchor 上、或者要求 far 必须落在旧盒里，都会把
+    这条冲突留在图上（r5 的实测形状）。所以：新 anchor 不在脚上、载体盒不再是
+    那个旧盒、且没有任何名字盒压在异网导体上。
+    """
+    result = dc.compile(sense_circuit(), sense_presentation(), library())
+    assert result.ok, [failure.detail for failure in result.failures]
+    plan = result.best()
+    pin = pin_point(plan, "C3.1")
+    assert pin is not None
+    naive = dc.font_text_box(
+        "SENSE", x=pin[0] - dc.TEXT_GAP - dc.text_width("SENSE") / 2.0, y=pin[1]
+    )
+    assert _box_across_foreign_run(naive, plan.segments, "SENSE"), (
+        "this scene must keep a foreign run under the bare box, or the "
+        "regression shape it guards has been lost"
+    )
+    moved = [item for item in _labels(plan, "SENSE") if (item.x, item.y) != pin]
+    assert moved, "the pin's name must move onto a carrier, not stay on the pin"
+    for label in moved:
+        assert label.bbox != naive, (
+            "the carrier must not reuse the old, colliding box"
+        )
+        assert not _box_across_foreign_run(label.bbox, plan.segments, "SENSE"), (
+            f"label box {label.bbox} sits across another net's run"
+        )
+
+
+
+@pytest.mark.parametrize("entries, category, match", [
+    ([{"nets": ["NOPE"], "note": "x"}], "facts-missing", "does not declare"),
+    ([{"nets": ["3V3"], "note": "x"}], "presentation-poor", "class is 'power'"),
+    ([{"nets": ["GND"], "note": "x"}], "presentation-poor", "class is 'gnd'"),
+])
+def test_the_local_label_questions_a_spec_cannot_answer_are_refused(
+    entries, category, match
+):
+    """未知网、非 signal 网：入口拒绝，不把电源网悄悄变成标签。"""
+    presentation_spec = sense_presentation(localLabelObligations=entries)
+    result = dc.compile(sense_circuit(), presentation_spec, library())
+    assert not result.ok
+    assert category in {failure.category for failure in result.failures}
+    detail = " ".join(failure.detail for failure in result.failures)
+    assert match in detail, detail
+
+
+def test_a_power_net_may_never_be_named_by_the_local_label_exception():
+    """GND/+5V/VCC 一律旗标/导线：这条与上一条分开写，因为它是最坏的那类错。"""
+    for net_id in ("3V3", "GND"):
+        result = dc.compile(
+            sense_circuit(),
+            sense_presentation(localLabelObligations=[{"nets": [net_id], "note": ""}]),
+            library(),
+        )
+        assert not result.ok, f"{net_id} must never be expressible as a label"
+        assert all("label" not in failure.category for failure in result.failures)
+
+
+def test_a_net_the_presentation_promises_as_a_wire_cannot_also_be_named():
+    """同一个网两张嘴：directWiring 与 localLabel 不能同时点名。"""
+    presentation_spec = sense_presentation(
+        directWiringObligations=[{"nets": ["VIN5", "3V3", "SENSE"],
+                                  "note": "the pair is wired"}],
+    )
+    result = dc.compile(sense_circuit(), presentation_spec, library())
+    assert not result.ok
+    assert "presentation-poor" in {failure.category for failure in result.failures}
+    detail = " ".join(failure.detail for failure in result.failures)
+    assert "both directWiringObligations and" in detail
+    action = " ".join(failure.action for failure in result.failures)
+    assert "keep exactly one of the two entries" in action
+
+
+def test_a_one_pin_net_is_not_a_local_connection_to_name():
+    """单脚网没有"每脚"可言：义务落空，入口拒绝而不是静默当标签。"""
+    lone = circuit(
+        [part("R1", "R0402", "10k"), part("R2", "R0402", "10k"),
+         part("R3", "R0402", "10k")],
+        [
+            net("VIN", "power", ["R1.1"]),
+            net("TAP", "signal", ["R1.2", "R2.1"]),
+            net("GND", "gnd", ["R2.2", "R3.2"]),
+            net("SPARE", "signal", ["R3.1"]),
+        ],
+    )
+    presentation_spec = presentation(
+        "voltage-divider",
+        modules=[module("m", ["R1", "R2", "R3"], "divider")],
+        localLabelObligations=[{"nets": ["SPARE"], "note": "a stub"}],
+    )
+    result = dc.compile(lone, presentation_spec, library())
+    assert not result.ok
+    detail = " ".join(failure.detail for failure in result.failures)
+    assert "which has 1 member(s)" in detail
+    assert "no local connection" in detail
+
+
+def test_the_grammar_direct_wire_obligation_refuses_the_local_label_exception():
+    """**grammar 闸**：`voltage-divider` 自己承诺 TAP1 是导线，例外必须被拒绝。
+
+    这条闸是 binding 生成后才有的（义务是 grammar 的答案），它用**该视图**的
+    obligations 判决；没有它，`_expression_style` 会先问 obligation，把作者刚
+    声明的例外画成他要除掉的导线。
+    """
+    presentation_spec = presentation(
+        "voltage-divider",
+        modules=[module("ladder", ["R1", "R2", "R3", "C1"], "resistor ladder")],
+        portRoles={"VIN": "input"},
+        directWiringObligations=[{"nets": ["VIN", "GND"], "note": "trunk wired"}],
+        localLabelObligations=[{"nets": ["TAP1"], "note": "reversible pins"}],
+    )
+    result = dc.compile(ladder_circuit(), presentation_spec, library())
+    assert not result.ok, "the grammar promised TAP1 as a wire; the entry cannot stand"
+    assert "presentation-poor" in {failure.category for failure in result.failures}
+    detail = " ".join(failure.detail for failure in result.failures)
+    assert "localLabelObligations names 'TAP1'" in detail, detail
+    assert "direct-wire obligation promises it as a wire" in detail
+
+
+def test_the_island_layout_path_refuses_the_local_label_exception():
+    """520j/536 的岛路径不读这个键：显式拒绝，不装作没写。"""
+    presentation_spec = presentation(
+        "voltage-divider",
+        modules=[module("m1", ["R1", "R2"], "a"), module("m2", ["R3", "C1"], "b")],
+        islands=[
+            {"id": "a", "parts": ["R1", "R2"], "role": ""},
+            {"id": "b", "parts": ["R3", "C1"], "role": ""},
+        ],
+        localLabelObligations=[{"nets": ["TAP1"], "note": "reversible pins"}],
+    )
+    result = dc.compile(ladder_circuit(), presentation_spec, library())
+    assert not result.ok
+    detail = " ".join(failure.detail for failure in result.failures)
+    assert "several layout islands" in detail
+    action = " ".join(failure.action for failure in result.failures)
+    assert "state the page as modules" in action
+
+
+class _LatticeStub:
+    """The three attributes `_nodes_in_box` reads, and nothing else (534 r17)."""
+
+    grid = 5.0
+    residue = (0.0, 0.0)
+
+    def point(self, index):
+        return (round(index[0] * 5.0, 6), round(index[1] * 5.0, 6))
+
+
+def test_two_name_rows_that_touch_may_share_their_boundary_but_not_their_inside():
+    """r16: 相接（共享边界）的两条名字行是两个声明，可以并存。
+
+    旧的全盒栅格化把边界那排格点也算作占有，于是相邻行永远互斥（r15 的实测阻挡：
+    23 档 `already held by ['D+']`）。内部格点制下两者不相交，且后一条能被预留。
+    """
+    router = _LatticeStub()
+    first = (100.0, 100.0, 110.0, 110.0)
+    second = (100.0, 110.0, 110.0, 120.0)          # touches along y = 110
+    assert dc._nodes_in_box(router, first) & dc._nodes_in_box(router, second), (
+        "the two bands do touch on the boundary — that is the shape this rule is about"
+    )
+    inside_first = dc._interior_nodes_in_box(router, first)
+    inside_second = dc._interior_nodes_in_box(router, second)
+    assert inside_first and inside_second
+    assert not (inside_first & inside_second), (
+        "a shared boundary is not a shared statement"
+    )
+    taken = {cell: "OTHER" for cell in inside_first}
+    assert dc._take_lane(taken, set(inside_second), set(), set(), "SENSE"), (
+        "a row that only touches another net's row must still be reservable"
+    )
+
+
+def test_two_name_rows_that_really_overlap_still_meet_on_an_interior_node():
+    """r16: 真正内部重叠仍然相遇 → 仍被拒（阈值/判据不得被这条规则放宽）。"""
+    router = _LatticeStub()
+    first = (100.0, 100.0, 110.0, 110.0)
+    second = (100.0, 100.0, 110.0, 115.0)         # 15-unit overlap in y
+    inside_first = dc._interior_nodes_in_box(router, first)
+    inside_second = dc._interior_nodes_in_box(router, second)
+    assert inside_first & inside_second, (
+        "a real overlap shares an interior node, or this regression has gone quiet"
+    )
+    taken = {cell: "OTHER" for cell in inside_first}
+    assert dc._take_lane(taken, set(inside_second), set(), set(), "SENSE") is False
+
+
+def test_a_foreign_conductor_point_or_pin_tip_is_never_shared():
+    """r16: 内缩只用于名字行带；导体的端点/段与异网脚尖仍然独占。"""
+    router = _LatticeStub()
+    cells = dc._lattice_nodes(router, (100.0, 100.0), (110.0, 100.0))
+    assert (100.0, 100.0) in cells and (110.0, 100.0) in cells, (
+        "a conductor's endpoints are cells of their own, never 'interior'"
+    )
+    assert dc._take_lane({(105.0, 100.0): "OTHER"}, set(cells), set(), set(),
+                         "SENSE") is False, "another net's run stays exclusive"
+    assert dc._take_lane({}, set(cells), {(110.0, 100.0)}, set(), "SENSE") is False, (
+        "a foreign pin tip stays exclusive"
+    )
+
+
+# ---------------------------------------------------------------- 534 fix r1
+# `_label_at` 的盒判据补上「已落异网导体」：这是 `_local_label_trial_box` 从 r6 起
+# 就有的 `_box_hits_foreign_run`，裸标签那条路一直没接。三枚钉子分别钉：异网线压第一档
+# 就退档、同网线不误拒、不传 segments 时输出逐字节不变。
+
+
+def _label_rung1(net: str, point=(0.0, 0.0), direction=(1.0, 0.0)):
+    half_x = dc.text_width(net) / 2.0 + dc.TEXT_GAP
+    return dc.font_text_box(net, x=point[0] + direction[0] * half_x * 1.0,
+                            y=point[1])
+
+
+def test_a_foreign_run_across_the_first_label_box_steps_to_the_next_rung():
+    """异网导体真穿第一档盒 → 跳过它，选后面同一梯子里的合法档。"""
+    from boardwise.core.layoutplan import LayoutSegment
+
+    net = "SENSE"
+    first = _label_rung1(net)
+    centre_x = (first[0] + first[2]) / 2.0
+    # 一条竖线穿整档盒的内部，但离 anchor 的横行为（y=0）有距离：只切盒，不切桩。
+    wire = LayoutSegment(net="OTHER", points=[(centre_x, first[1] - 5.0),
+                                              (centre_x, first[3] + 5.0)])
+    label = dc._label_at(net, (0.0, 0.0), (1.0, 0.0), [], segments=[wire])
+    assert label.bbox != first, (label.bbox, first)
+    assert not dc._box_across_foreign_run(label.bbox, net, [wire]), label.bbox
+    second = dc.font_text_box(
+        net, x=2.0 * (dc.text_width(net) / 2.0 + dc.TEXT_GAP), y=0.0)
+    assert label.bbox == second, (
+        "the ladder must step to the next rung of the same direction",
+        label.bbox, second)
+
+
+def test_a_conductor_of_the_labels_own_net_never_blocks_its_box():
+    """同网导体不误拒：名字本来就要骑在自己网的导线上（name carrier）。"""
+    from boardwise.core.layoutplan import LayoutSegment
+
+    net = "SENSE"
+    first = _label_rung1(net)
+    centre_x = (first[0] + first[2]) / 2.0
+    wire = LayoutSegment(net=net, points=[(centre_x, first[1] - 5.0),
+                                          (centre_x, first[3] + 5.0)])
+    label = dc._label_at(net, (0.0, 0.0), (1.0, 0.0), [], segments=[wire])
+    assert label.bbox == first, (label.bbox, first)
+
+
+def test_the_bare_label_ladder_is_byte_identical_without_segments():
+    """默认 segments=() 时与原行为逐字节相同：旧页面零影响。"""
+    net = "SENSE"
+    first = _label_rung1(net)
+    occupied: list = []
+    label = dc._label_at(net, (0.0, 0.0), (1.0, 0.0), occupied)
+    assert label.bbox == first, (label.bbox, first)
+    assert occupied == [first]
+
+
+# ---------------------------------------------------------------- 534 fix r3
+# 非法座位必须丢弃并进 notes；`_take_lane` 失败不伪造座位。
+
+
+def _four_island_sheet():
+    """The shipped four-island sheet (formal migration, 534): no local artifact."""
+    root = Path(__file__).resolve().parents[1]
+    from boardwise.engines import drawapply as _apply
+    from boardwise.engines import pagecompiler
+
+    specs = root / "blocklib" / "specs"
+    return (pagecompiler, CircuitSpec.load(specs / "ch343_uart.circuit.json"),
+            PresentationSpec.load(specs / "ch343_uart.presentation.json"),
+            _apply.load_library(specs / "ch343_uart.library.json"))
+
+
+def test_a_seat_that_no_longer_fits_is_dropped_by_name(monkeypatch):
+    """放置期复核不过 → 丢座位、走原梯子，并在 notes 里点名 net/member 与原因。"""
+    pagecompiler, circuit, presentation, book = _four_island_sheet()
+    monkeypatch.setattr(
+        dc, "_vertex_clear",
+        lambda router, point: not (abs(point[0] + 65.0) < 1e-6
+                                   and abs(point[1] + 70.0) < 1e-6))
+    captured: list[list[str]] = []
+    real_pins = dc._flag_pins
+
+    def spy(*args, **kwargs):
+        answer = real_pins(*args, **kwargs)
+        if kwargs.get("notes"):
+            captured.append(list(kwargs["notes"]))
+        return answer
+
+    monkeypatch.setattr(dc, "_flag_pins", spy)
+    result = pagecompiler.compile_page(
+        circuit, presentation, book,
+        pagecompiler.PageCompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)))
+    assert result.pages, [item.detail for item in result.failures]
+    notes = [note for batch in captured for note in batch]
+    dropped = [note for note in notes if "reserved lane of" in note and "dropped" in note]
+    assert dropped, [note[:90] for note in notes][:8]
+    assert any("USB1" in note or "+5V" in note for note in dropped), dropped[:3]
+    assert any("no longer clear" in note or "no longer free" in note
+               or "overlaps" in note or "crosses" in note for note in dropped), dropped[:3]
+
+
+def test_a_refused_lane_never_becomes_a_seat(monkeypatch):
+    """`_take_lane` 拒绝时不存座位（不伪造预留）。"""
+    pagecompiler, circuit, presentation, book = _four_island_sheet()
+    seats: dict = {}
+    real_lanes = dc._lead_lane_reservations
+
+    def lanes(ctx, placed, expressions, order, router, occupied, solids, bodies,
+              ordinary_seats=None):
+        result = real_lanes(ctx, placed, expressions, order, router, occupied, solids,
+                            bodies, ordinary_seats)
+        seats.update(dict(router.flag_seats))
+        return result
+
+    monkeypatch.setattr(dc, "_take_lane", lambda *args, **kwargs: False)
+    monkeypatch.setattr(dc, "_lead_lane_reservations", lanes)
+    pagecompiler.compile_page(
+        circuit, presentation, book,
+        pagecompiler.PageCompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)))
+    assert seats == {}, seats
+
+
+# --------------------------------------- a flag's name row is part of its place
+# 534 r1: `_place_flag` used to record `flag_glyph_box` alone while `_flag_box`
+# (the readability gate, the island seat, this module's own placement) reserved
+# glyph **and** the name row the host prints beside it. The name row could then
+# land on a foreign conductor the placement never asked about — measured on the
+# landed `test/534` page, where VCC's row (712,707)-(728,717) sits on RTS's
+# conductor at y=710.
+
+def _measured_rail_flag(ref: str = "PWR-VCC") -> SymbolProfile:
+    """The 534-measured rail glyph: a 5-unit lead then a 10-wide pennant."""
+    return SymbolProfile(symbol_ref=ref, title=ref, body=(-5.0, 0.0, 5.0, 10.0), pins=[])
+
+
+def _measured_ground_flag(ref: str = "PWR-GND") -> SymbolProfile:
+    return SymbolProfile(symbol_ref=ref, title=ref, body=(-10.0, 0.0, 10.0, 19.0), pins=[])
+
+
+def test_place_flag_reserves_the_name_row_as_well_as_the_glyph():
+    """A decisive flag name row is `occupied`/`solids`, not just its glyph.
+
+    rot 180 at (200,300): the glyph hangs below the connection, `(195,290)-(205,300)`,
+    and the host prints ``VCC`` in the ten units beyond it, `(192.5,280)-(207.5,290)`.
+    """
+    profile = _measured_rail_flag()
+    anchor = (200.0, 300.0)
+    segments: list = []
+    symbols: list = []
+    occupied: list = []
+    solids: list = []
+    dc._place_flag(
+        "VCC", profile, "PWR-VCC", anchor, 180.0, None,
+        segments, symbols, occupied, solids,
+    )
+
+    glyph = dc.flag_glyph_box(profile, rotation=180.0, anchor=anchor)
+    name = dc.textmetrics.flag_name_box(
+        glyph, anchor, "VCC", axis_up=glyph[3] > anchor[1],
+    )
+    assert glyph == (195.0, 290.0, 205.0, 300.0)
+    assert name == pytest.approx((192.454924956, 280.0, 207.545075043, 290.0))
+    # The old glyph is still there (nothing a caller read before was taken away) …
+    assert glyph in occupied and glyph in solids
+    # … and the row the host prints is now in the way of a foreign conductor.
+    assert any(
+        box[1] <= name[1] + 1e-9 and box[3] >= name[3] - 1e-9 for box in occupied
+    ), occupied
+    assert any(
+        dc._segment_hits_box((150.0, 285.0), (250.0, 285.0), box) for box in solids
+    ), solids
+    # A conductor inside the glyph's own band was already refused — unchanged.
+    assert any(
+        dc._segment_hits_box((150.0, 295.0), (250.0, 295.0), box) for box in solids
+    )
+
+
+def test_place_flag_reserves_no_row_for_a_ground_flag():
+    """The ground family prints no name — reserving one would invent a box.
+
+    (`readability._flag_name_row` returns nothing for it, and `_flag_box` falls
+    back to the glyph; 534's capture has 4/4 GND flags with no text node.)
+    """
+    profile = _measured_ground_flag()
+    segments: list = []
+    symbols: list = []
+    occupied: list = []
+    solids: list = []
+    dc._place_flag(
+        "GND", profile, "PWR-GND", (200.0, 300.0), 0.0, None,
+        segments, symbols, occupied, solids,
+    )
+    glyph = dc.flag_glyph_box(profile, rotation=0.0, anchor=(200.0, 300.0))
+    assert glyph == (190.0, 281.0, 210.0, 300.0)
+    assert occupied == [glyph]
+    assert solids == [glyph]
+
+
+def test_plan_bbox_includes_the_flag_name_row():
+    """The page's own extent has to contain the text the page draws (534 r1)."""
+    import types
+
+    profile = _measured_rail_flag()
+    plan = LayoutPlan()
+    plan.power_symbols = [
+        LayoutPowerSymbol(
+            symbol_ref=profile.symbol_ref, symbol_hash=profile.geometry_hash(),
+            net="VCC", x=200.0, y=300.0, rotation=180.0,
+        )
+    ]
+    ctx = types.SimpleNamespace(book={profile.symbol_ref: profile})
+    box = dc._plan_bbox(ctx, plan)
+    glyph = dc.flag_glyph_box(profile, rotation=180.0, anchor=(200.0, 300.0))
+    # The glyph alone would stop at 290; the name row reaches 280.
+    assert box[0] <= 192.46 and box[1] <= 280.0 + 1e-9
+    assert box[2] >= 207.54 and box[3] >= glyph[3]

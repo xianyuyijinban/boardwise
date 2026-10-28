@@ -71,6 +71,13 @@
       "value": "100nF",
       "lcsc": "C1590",
       "provenance": "engineer_confirmed"
+    },
+    {
+      "id": "C4",
+      "symbolRef": "C0603-100nF-C1590",
+      "value": "100nF",
+      "lcsc": "C1590",
+      "provenance": "engineer_confirmed"
     }
   ],
   "nets": [
@@ -91,6 +98,7 @@
         "C1.2",
         "C2.2",
         "C3.2",
+        "C4.2",
         "H1.10"
       ],
       "provenance": "engineer_confirmed"
@@ -112,7 +120,7 @@
     {
       "id": "VCC",
       "class": "power",
-      "members": ["U1.15", "H1.9"],
+      "members": ["U1.15", "H1.9", "C4.1"],
       "provenance": "engineer_confirmed"
     },
     {

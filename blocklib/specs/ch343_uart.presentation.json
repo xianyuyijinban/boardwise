@@ -24,28 +24,55 @@
     "RI": "input"
   },
   "flow": [
-    ["usb_c", "ch343"],
-    ["ch343", "hdr"]
+    [
+      "usb_c",
+      "ch343"
+    ],
+    [
+      "ch343",
+      "hdr"
+    ]
   ],
   "modules": [
     {
       "id": "usb_c",
-      "parts": ["USB1", "R1", "R2", "C2", "D1", "R3"],
+      "parts": [
+        "USB1",
+        "R1",
+        "R2",
+        "C2",
+        "D1",
+        "R3"
+      ],
       "role": "the USB end: the Type-C receptacle with its two CC pulldowns (R1/R2), the VBUS reservoir C2 and the VBUS lamp D1+R3, drawn first because the reader enters the sheet from the connector side",
       "grammarRef": "ic-periphery",
       "core": "USB1"
     },
     {
       "id": "ch343",
-      "parts": ["U1", "C1", "C3"],
-      "role": "the middle: the CH343G bridge U1 with its own-pin passives, C1 on VDD5 and C3 on the V3 regulator output; every signal it carries leaves this island for one of the other two, so the island's boundary nets are all cross-island labels",
+      "parts": [
+        "U1"
+      ],
+      "role": "the middle: the CH343G bridge U1 alone — its own real designator and value rows and the VCC/GND flags it must hang need the room that C1/C3 were taking; every signal it carries still leaves the island for one of the others, so the boundary nets are all cross-island labels",
       "grammarRef": "ic-periphery",
       "core": "U1"
     },
     {
+      "id": "ch343_power",
+      "parts": [
+        "C1",
+        "C3",
+        "C4"
+      ],
+      "role": "U1's own supply decoupling, one island: C1 the 100nF on VDD5 (the +5V rail U1.16 feeds), C3 the 100nF on V3 (the regulator output U1.4 makes) and C4 the 100nF on VCC/VIO (the level rail H1.9 exposes); all three are shunt capacitors from a rail to GND, none is a USB supply and none is a placement claim",
+      "grammarRef": "ic-periphery"
+    },
+    {
       "id": "hdr",
-      "parts": ["H1"],
-      "role": "the far end: the 2x5 header carrying the eight UART/MODEM lines plus the VCC level rail and GND, where the peer board attaches",
+      "parts": [
+        "H1"
+      ],
+      "role": "the far end: the 2x5 header alone, carrying the eight UART/MODEM lines plus the VCC level rail and GND, where the peer board attaches; C4 was drawn here only because VCC enters the sheet here and now has its own island",
       "grammarRef": "ic-periphery",
       "core": "H1"
     }
@@ -57,12 +84,19 @@
   },
   "directWiringObligations": [
     {
-      "nets": ["D+", "D-"],
-      "note": "the USB data pair is a solid conductor from the receptacle's two DP/DN pin pairs to UD+/UD- of the bridge — no series resistor, no stub: the datasheet says the pins connect straight to the bus"
-    },
-    {
-      "nets": ["LED_A"],
+      "nets": [
+        "LED_A"
+      ],
       "note": "the VBUS lamp's cathode and R3 are one conductor inside the usb_c island: labelPolicy.local is 'wire', so naming the lamp's return would be a label where the policy promises a wire (534; the pair is D1 pin 2 to R3 pin 1, nothing else on the net)"
+    }
+  ],
+  "localLabelObligations": [
+    {
+      "nets": [
+        "D+",
+        "D-"
+      ],
+      "note": "Type-C 可逆引脚交错: the receptacle's data pins are mirrored pairs, D+ on USB1.A6/B6 and D- on USB1.A7/B7, so one wire inside usb_c would have to tie the two halves of a pair and draw a U-line that presents one pin as the other; instead each of the four pins takes its own short stub and the golden board's same-name label (D+ on A6 and B6, D- on A7 and B7), and the pair reaches U1.5/U1.6 by the same-named labels there — the name carries the net, no U-line does"
     }
   ]
 }

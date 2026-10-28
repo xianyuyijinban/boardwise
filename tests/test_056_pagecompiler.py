@@ -1376,3 +1376,102 @@ def test_an_unroutable_main_path_edge_is_presentation_poor_with_an_action():
     assert "not downgraded to a name" in detail
     action = " ".join(failure.action for failure in result.failures)
     assert "drop the mainPath mark" in action
+
+
+# ------------------------------------------- localLabelObligations (534)
+#
+# The stated local-label exception at page scale. Two page-only facts are pinned
+# here: the module view must carry the entry **only** to the modules that hold a
+# local connection of that net (one pin is not one), and the page root must
+# refuse the two statements that would otherwise be silently dropped — a net no
+# module holds twice, and a `mainPath` edge that promises the same net as one
+# whole wire. The page asks the same draw-owned checker the single-module entry
+# runs, so this is one verdict and not a second rule.
+
+
+def split_pair_circuit() -> CircuitSpec:
+    """Two divider modules whose `LINK` net has one pin on each side."""
+    return circuit(
+        [part("R1", "R0402", "10k"), part("R2", "R0402", "10k"),
+         part("R3", "R0402", "10k"), part("R4", "R0402", "10k")],
+        [
+            net("VIN", "power", ["R1.1"]),
+            net("TAP1", "signal", ["R1.2", "R2.1"]),
+            net("LINK", "signal", ["R2.2", "R3.1"]),
+            net("TAP2", "signal", ["R3.2", "R4.1"]),
+            net("GND", "gnd", ["R4.2"]),
+        ],
+    )
+
+
+def split_pair_spec(**overrides) -> PresentationSpec:
+    payload = {
+        "modules": [
+            module("a", ["R1", "R2"], "first divider", "voltage-divider"),
+            module("b", ["R3", "R4"], "second divider", "voltage-divider"),
+        ],
+        "flow": [["a", "b"]],
+        "portRoles": {"VIN": "input"},
+        "localLabelObligations": [
+            {"nets": ["TAP1"], "note": "a's own pair"},
+            {"nets": ["LINK"], "note": "one pin on each side of the page"},
+        ],
+    }
+    payload.update(overrides)
+    return spec(**payload)
+
+
+def test_the_module_view_keeps_the_local_label_exception_only_where_a_module_holds_two_members():
+    """一个模块只有共享网的一脚时，视图里这一项被丢掉——不是误拒的理由。"""
+    circuit_spec = split_pair_circuit()
+    presentation_spec = split_pair_spec()
+    first = presentation_spec.modules[0]
+    sub_c, sub_p = pc._module_view(circuit_spec, presentation_spec, first)
+    assert [item.nets for item in sub_p.local_label_obligations] == [
+        ["TAP1"], [],
+    ], "only the net this module holds twice survives; LINK keeps its entry but loses its net"
+    assert dc.local_label_nets(sub_p) == {"TAP1"}
+    # 丢掉之后，这个单脚视图本身过得了单模块入口的闸：没有"1 member"误拒。
+    assert dc.local_label_failures(sub_c, sub_p) == []
+
+
+def test_a_local_label_exception_no_module_holds_twice_is_refused_at_the_page():
+    """静默 no-op：每个模块视图都会丢掉它，页面就会画成没写过这条一样。"""
+    result = pc.compile_page(
+        split_pair_circuit(), split_pair_spec(), library(), PAGE
+    )
+    assert not result.ok
+    assert "presentation-poor" in result.categories()
+    detail = " ".join(failure.detail for failure in result.failures)
+    assert "no module holds two of its members" in detail, detail
+    assert "localLabelObligations names 'LINK'" in detail
+
+
+def test_the_page_refuses_a_main_path_wire_and_a_local_label_obligation_for_one_net():
+    """mainPath 要求"港口到港口一整根"，例外要求"每脚一个名字"：同一根网不能兼得。"""
+    result = pc.compile_page(
+        split_pair_circuit(),
+        split_pair_spec(flow=[{"from": "a", "to": "b", "mainPath": True}]),
+        library(),
+        PAGE,
+    )
+    assert not result.ok
+    detail = " ".join(failure.detail for failure in result.failures)
+    assert "mainPath" in detail, detail
+    assert "the same net cannot be both" in detail
+    action = " ".join(failure.action for failure in result.failures)
+    assert "drop the mainPath mark" in action
+
+
+def test_the_page_asks_the_same_local_label_questions_as_the_module_entry():
+    """未知网在页根也被拒：一份文档两个入口一个判决。"""
+    result = pc.compile_page(
+        split_pair_circuit(),
+        split_pair_spec(localLabelObligations=[{"nets": ["NOPE"], "note": "x"}]),
+        library(),
+        PAGE,
+    )
+    assert not result.ok
+    assert "facts-missing" in result.categories()
+    detail = " ".join(failure.detail for failure in result.failures)
+    assert "localLabelObligations names 'NOPE'" in detail

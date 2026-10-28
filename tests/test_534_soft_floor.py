@@ -184,4 +184,8 @@ def test_the_page_path_records_the_floor_in_its_evidence():
     notes = result.pages[0].plan.evidence.notes
     floor_notes = [note for note in notes if "soft floor" in note]
     assert floor_notes, notes[-3:]
-    assert "S-11" in floor_notes[-1] and "S-09" in floor_notes[-1], floor_notes[-1]
+    # 534 formal migration: the four-island page breaches S-09 (bends) and S-21
+    # (two statements 1 unit apart); S-11 is no longer among them. The note still
+    # has to say "recorded not refused", which is the behaviour under test.
+    assert "recorded not refused" in floor_notes[-1], floor_notes[-1]
+    assert "S-09" in floor_notes[-1] and "S-21" in floor_notes[-1], floor_notes[-1]

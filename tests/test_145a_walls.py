@@ -602,3 +602,80 @@ def test_the_ch340_label_stubs_keep_the_label_side(monkeypatch):
                         f"{segment.net}'s flag lead is cut by {other.net} at "
                         f"{dc._proper_crossing(start, end, a, b)}"
                     )
+
+
+# ---------------------------------------------------------------- 534 fix r3
+# 普通旗标的「成功预留 = 实际落线」：预留的车道是座位，放置时先复核再重放。
+
+
+def _four_island_books(root: pathlib.Path):
+    """The shipped four-island sheet (formal migration, 534): no local artifact."""
+    specs = root / "blocklib" / "specs"
+    return (CircuitSpec.load(specs / "ch343_uart.circuit.json"),
+            PresentationSpec.load(specs / "ch343_uart.presentation.json"),
+            drawapply.load_library(specs / "ch343_uart.library.json"))
+
+
+def _proper_cross_count(segments) -> int:
+    def cross(a, b):
+        def c(o, p_, q):
+            return (p_[0] - o[0]) * (q[1] - o[1]) - (p_[1] - o[1]) * (q[0] - o[0])
+        d1, d2 = c(b[0], b[1], a[0]), c(b[0], b[1], a[1])
+        d3, d4 = c(a[0], a[1], b[0]), c(a[0], a[1], b[1])
+        return (d1 * d2 < 0) and (d3 * d4 < 0)
+
+    legs = [(s.net, (tuple(s.points[i]), tuple(s.points[i + 1])))
+            for s in segments for i in range(len(s.points) - 1)]
+    return sum(1 for i, (na, la) in enumerate(legs) for nb, lb in legs[i + 1:]
+               if na != nb and cross(la, lb))
+
+
+def test_the_reserved_flag_lane_is_replayed_and_the_page_has_no_crossing(monkeypatch):
+    """强集成：+5V/USB1.B4A9 的预留车道逐点重放；候选页 0 交叉、0 hard、CC 完整。"""
+    from boardwise.engines import pagecompiler
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    circuit, presentation, book = _four_island_books(root)
+    seats, drawn = {}, []
+    real_lanes, real_place = dc._lead_lane_reservations, dc._place_flag
+
+    def lanes(ctx, placed, expressions, order, router, occupied, solids, bodies,
+              ordinary_seats=None):
+        result = real_lanes(ctx, placed, expressions, order, router, occupied, solids,
+                            bodies, ordinary_seats)
+        seats.update(dict(router.flag_seats))
+        return result
+
+    def place(net_id, profile, ref, anchor, rotation, lead, *args, **kwargs):
+        if lead:
+            drawn.append((net_id, tuple(anchor), rotation,
+                          tuple(tuple(p) for p in lead)))
+        return real_place(net_id, profile, ref, anchor, rotation, lead, *args, **kwargs)
+
+    monkeypatch.setattr(dc, "_lead_lane_reservations", lanes)
+    monkeypatch.setattr(dc, "_place_flag", place)
+    result = pagecompiler.compile_page(
+        circuit, presentation, book,
+        pagecompiler.PageCompileBudget(page_box=(0.0, 0.0, 1170.0, 825.0)))
+    assert result.pages, [item.detail for item in result.failures]
+    page = result.pages[0]                      # candidate 0 only, never rejected ones
+    plan = page.plan
+    # the seat the reservation promised for the USB VBUS pad is the lead drawn
+    assert ("+5V", "USB1.B4A9") in seats, sorted(seats)[:8]
+    anchor, rotation, lead = seats[("+5V", "USB1.B4A9")]
+    assert ("+5V", tuple(anchor), rotation,
+            tuple(tuple(p) for p in lead)) in drawn, drawn[:6]
+    # candidate 0 judged on its own plan
+    assert _proper_cross_count(plan.segments) == 0
+    check = readability.check(plan, circuit, presentation, book,
+                              page_box=tuple(page.page_box))
+    assert len(check.hard_violations) == 0, [str(v)[:120] for v in check.hard_violations]
+    for net in ("CC1", "CC2", "LED_A"):
+        segments = [segment for segment in plan.segments if segment.net == net]
+        assert len(segments) == 1, (net, len(segments))
+        assert len(segments[0].points) >= 2
+    # every placed part carries its whole pin set: 58 physical pins, 3 of them NC
+    physical = sum(len(book[part.symbol_ref].pins) for part in plan.parts)
+    assert physical == 58, physical
+    members = {member for net in circuit.nets for member in net.members}
+    assert len(members) == 55, len(members)

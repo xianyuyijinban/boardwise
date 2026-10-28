@@ -34,7 +34,17 @@
 `presentation.json` 可声明的（`core/presentationspec.py:198-352`）：
 `modules[]`（含 `side_preferences` / `branch_order` / `core`）、`flow`、
 `main_paths` / `feedback_paths`（每条的 `chain` 器件序列）、`port_roles`（如 `HVDC=input`、`SEC_12V=output`）、
-`direct_wiring_obligations`（哪些网**必须**用真线连、不许用网络标签）、`label_policy`、`user_locks`。
+`direct_wiring_obligations`（哪些网**必须**用真线连、不许用网络标签）、
+`local_label_obligations`（哪些网**必须按名字读**、每脚一个标签——见下）、`label_policy`、`user_locks`。
+
+**默认仍是"局部网走线"**：`label_policy.local` 只许 `wire`，跨模块与高扇出才许标签。唯一的例外是
+`local_label_obligations`：显式点名的一个 signal 网，即使在**同一个模块内**，也按"每个引脚一个网络标签"表达，
+不拉那根线 —— 可逆/镜像引脚（Type-C 连接器 A6/B6 这类成对脚）就是它存在的理由，一根 U 形线会让读者把
+错的脚当成对的脚。它是**逐网义务**，不是放开的策略：没点名的邻网一字不动；GND、+5V、VCC 这类电源/地网
+**永远**是旗标或导线，点名它们直接被拒。冲突在入口就拒、不静默让一方胜出：同一个网既在
+`direct_wiring_obligations`、又被 grammar 的 `direct-wire` 义务承诺、或页级 `mainPath` 要求"港口到港口一整根"，
+都是"一根网两张嘴"，报 `presentation-poor` 并点出那条网；"没有任何模块以 ≥2 个脚持有它"（模块视图会丢掉、
+页面却画成没写过）同样在页根拒绝。多岛（island）路径不读这个键，声明了即拒绝，不装作没写。
 
 ### 1.2 输出
 

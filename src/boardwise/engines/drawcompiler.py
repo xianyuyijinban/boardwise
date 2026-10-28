@@ -127,7 +127,7 @@ from boardwise.core.layoutplan import (
     LayoutText,
 )
 from boardwise.core import textmetrics
-from boardwise.core.presentationspec import LABEL_LABEL, PresentationSpec
+from boardwise.core.presentationspec import LABEL_LABEL, PresentationSpec, main_path_wire
 #: 540B1: the isolation-domain word list now lives in the shared vocabulary
 #: (``core/netdomains.py``), so the drawing chain and the reviewer read one copy
 #: of it without this engine importing the rules layer. Read-only: `domain_of`
@@ -225,6 +225,9 @@ __all__ = [
     "font_text_box",
     "lattice_router",
     "layered_key",
+    "local_label_failures",
+    "local_label_grammar_failures",
+    "local_label_nets",
     "one_bend_route",
     "profile_book",
     "rank_key",
@@ -344,6 +347,19 @@ SIBLING_LEAD = 50.0
 #: it, and `tests/test_145a_walls.py` pins the two constants equal so they cannot
 #: drift apart.
 LABEL_LANE_STEPS = 2
+
+#: How far a **local-label carrier's** straight run may reach before the ladder
+#: turns to a bent shape (534 r18). The run is what the host prints the name
+#: along (`core.textmetrics.wire_name_row`), so its length is what buys the row
+#: its distance from the carrier's *other* name rows: two rows of one net that
+#: sit one text row (10 units) apart need a horizontal separation of
+#: ``hypot(20, 10) = 17.32`` units to make `drawlint`'s
+#: ``L5_DUPLICATE_NET_GAP`` of 20, and on the CH343 sheet's local-label pins that
+#: is a run of 58.32 units — rung 12 on the 5-unit lattice, past
+#: :data:`TEXT_ESCALATION_STEPS`. The ladder's **order** is unchanged: a pin
+#: served by one step still takes one step, and these longer rungs are only
+#: reached after every shorter one measured a row too close to its neighbour.
+LOCAL_LABEL_RUNGS = 12
 
 #: Minimum gap between two boxes that must not touch.
 GAP = 20.0
@@ -905,6 +921,20 @@ def compile(  # noqa: A001 - the name 053 sec.4 fixes for the entry point
         )
         return result
 
+    # 2b. the grammar's own promise against the document's stated exception: a
+    #     `direct-wire` obligation and a `localLabelObligations` entry for one
+    #     net are two statements about one drawing, and neither may quietly win
+    #     (`_expression_style` asks the obligation first, so without this gate
+    #     the author's exception would be drawn as the wire it excepts). Read
+    #     off **this view's** binding, which for a module compile is the
+    #     module's own grammar.
+    conflicts = local_label_grammar_failures(
+        circuit_spec, presentation_spec, binding
+    )
+    if conflicts:
+        result.failures = conflicts
+        return result
+
     # 3. the library has to describe every part that must be placed.
     missing = _library_failures(circuit_spec, book)
     if missing:
@@ -1067,6 +1097,238 @@ def _profile_book(
 # ----------------------------------------------- stage 0: cross-document facts
 
 
+def local_label_nets(presentation_spec: PresentationSpec) -> set[str]:
+    """Every net the document names in `localLabelObligations`."""
+    out: set[str] = set()
+    for item in presentation_spec.local_label_obligations:
+        out.update(item.nets)
+    return out
+
+
+def local_label_failures(
+    circuit_spec: CircuitSpec, presentation_spec: PresentationSpec
+) -> list[GrammarFailure]:
+    """Why a stated local-label exception cannot be drawn here, if it cannot.
+
+    `localLabelObligations` is the one *stated* exception to "a local net is
+    wired" (053 sec.7): a net named there is expressed by a label at each of its
+    pins instead of by a wire. Five facts decide whether the exception has a
+    drawing at all, and each is checked here rather than left to a later stage
+    that would meet it as a contradiction of something else:
+
+    * **the net exists** — a name for nothing is not an exception
+      (`facts-missing`);
+    * **the net is a signal** — a rail or a ground is a flag (069 sec.7), and a
+      naming of one is refused rather than re-expressed (`presentation-poor`);
+    * **nothing else says "wire"** — `directWiringObligations` naming the same
+      net is one net with two statements; refused, so neither key silently wins
+      over the other;
+    * **the net has a local connection to name** — fewer than two members in the
+      circuit means the "every pin" the entry asks for is one pin, and a net the
+      drawing cannot tell apart from an open end is not what the author named;
+    * **some module holds two or more members** — otherwise the module pipeline
+      (which reads obligations per module, see `pagecompiler._module_view`)
+      would drop the entry and the page would be drawn as if the exception had
+      never been written. That is the silent no-op this refusal exists for.
+
+    A `mainPath` mark that would draw the same net as **one wire** from port to
+    port is the same contradiction at page scale and is refused with it
+    (:func:`~boardwise.core.presentationspec.main_path_wire` is the single
+    source of that decision, so the two layers cannot disagree).
+
+    Both compile entries call this — the single-module path through
+    :func:`_reference_failures`, the page path through
+    `pagecompiler._reference_failures` — so one document gets one verdict.
+    """
+    out: list[GrammarFailure] = []
+    if not presentation_spec.local_label_obligations:
+        return out
+    # The island layout path (520j/536) does not read this key: it draws each
+    # island as its own local picture and joins them by name, so an exception
+    # stated for the ordinary path would be ignored rather than honoured.
+    # Refused, not drawn — the same rule every unsupported reading follows.
+    if len(presentation_spec.effective_islands()) > 1:
+        return [GrammarFailure(
+            category=FAILURE_PRESENTATION_POOR,
+            subject="localLabelObligations",
+            detail=(
+                "the presentation declares several layout islands and also "
+                "states localLabelObligations — the island path does not read "
+                "that key, so the exception would be silently ignored"
+            ),
+            action=(
+                "drop localLabelObligations for this document, or state the page "
+                "as modules (the module pipeline reads the key)"
+            ),
+        )]
+    nets = {net.id: net for net in circuit_spec.nets}
+    wiring = {
+        net_id for item in presentation_spec.direct_wiring_obligations
+        for net_id in item.nets
+    }
+    for net_id in sorted(local_label_nets(presentation_spec)):
+        net = nets.get(net_id)
+        if net is None:
+            out.append(GrammarFailure(
+                category=FAILURE_FACTS_MISSING,
+                subject=net_id,
+                detail=(
+                    "PresentationSpec.localLabelObligations names "
+                    f"{net_id!r}, which the circuit does not declare"
+                ),
+                action=(
+                    "fix the net id — the exception names a net the drawing has, "
+                    "and a name for nothing excepts nothing"
+                ),
+            ))
+            continue
+        if net.cls != "signal":
+            out.append(GrammarFailure(
+                category=FAILURE_PRESENTATION_POOR,
+                subject=net_id,
+                detail=(
+                    f"PresentationSpec.localLabelObligations names {net_id!r}, "
+                    f"whose class is {net.cls!r} — only a **signal** net may be "
+                    "named at every pin: a rail or a ground is expressed by its "
+                    "flag, never by a label (053 sec.7, 069 sec.7)"
+                ),
+                action=(
+                    f"drop {net_id} from localLabelObligations; a power or ground "
+                    "net is stated by its flag"
+                ),
+            ))
+            continue
+        if net_id in wiring:
+            out.append(GrammarFailure(
+                category=FAILURE_PRESENTATION_POOR,
+                subject=net_id,
+                detail=(
+                    "PresentationSpec names "
+                    f"{net_id!r} in both directWiringObligations and "
+                    "localLabelObligations — one net, one statement: wired and "
+                    "named at every pin cannot both be true"
+                ),
+                action=(
+                    f"keep exactly one of the two entries for {net_id}, or remove "
+                    "the net from both"
+                ),
+            ))
+            continue
+        if len(net.members) < 2:
+            out.append(GrammarFailure(
+                category=FAILURE_PRESENTATION_POOR,
+                subject=net_id,
+                detail=(
+                    f"PresentationSpec.localLabelObligations names {net_id!r}, "
+                    f"which has {len(net.members)} member(s) — there is no local "
+                    "connection for per-pin labels to state, and a one-pin net is "
+                    "already named at its pin"
+                ),
+                action=(
+                    f"drop {net_id} from localLabelObligations, or name the net "
+                    "that actually joins two or more pins"
+                ),
+            ))
+            continue
+        owners = {member.partition(".")[0] for member in net.members}
+        holders = [
+            module for module in presentation_spec.modules
+            if owners & set(module.parts)
+        ]
+        # The `mainPath` contradiction is asked **before** the no-op question:
+        # when both apply (a net split one-and-one across the two modules of a
+        # main-path edge), the mark is the concrete statement the author made and
+        # the one they have to change — "no module holds two" would name a
+        # symptom and leave the flow mark unexplained.
+        if main_path_wire(
+            presentation_spec, net.cls, [module.id for module in holders]
+        ):
+            out.append(GrammarFailure(
+                category=FAILURE_PRESENTATION_POOR,
+                subject=net_id,
+                detail=(
+                    f"PresentationSpec names {net_id!r} in "
+                    "localLabelObligations and also marks the flow edge between "
+                    + " and ".join(sorted(module.id for module in holders))
+                    + " mainPath — that mark asks for one wire from port to "
+                    "port (056 sec.2) while the exception asks for a name at "
+                    "every pin; the same net cannot be both"
+                ),
+                action=(
+                    f"drop {net_id} from localLabelObligations, or drop the "
+                    "mainPath mark on that flow edge"
+                ),
+            ))
+            continue
+        if holders and not any(
+            sum(1 for member in net.members
+                if member.partition(".")[0] in set(module.parts)) > 1
+            for module in holders
+        ):
+            out.append(GrammarFailure(
+                category=FAILURE_PRESENTATION_POOR,
+                subject=net_id,
+                detail=(
+                    f"PresentationSpec.localLabelObligations names {net_id!r}, "
+                    "but no module holds two of its members — the module "
+                    "pipeline reads the entry only for a net a module has a "
+                    "local connection to, so this statement would be dropped and "
+                    "the page drawn as if it were never written"
+                ),
+                action=(
+                    "name a net that two or more of one module's pins share, or "
+                    "drop the entry"
+                ),
+            ))
+    return out
+
+
+def local_label_grammar_failures(
+    circuit_spec: CircuitSpec,
+    presentation_spec: PresentationSpec,
+    binding: GrammarResult,
+) -> list[GrammarFailure]:
+    """The grammar's own `direct-wire` promise against the stated exception.
+
+    Bound **after** the grammar answered, because which nets the grammar says
+    are wires is that answer's fact and not the document's: a `direct-wire`
+    obligation is the grammar's statement that a net is drawn as a wire, and a
+    `localLabelObligations` entry is the author stating the opposite for the
+    same net. Neither may quietly win — :func:`_expression_style` asks the
+    obligation first and would draw the wire the author just excepted — so the
+    conflict is refused here, naming the net and the grammar's own reason. The
+    obligations read are the ones **this view** bound (a module's view binds its
+    own grammar), which is why this check lives beside the binding and not in
+    :func:`local_label_failures`.
+    """
+    named = local_label_nets(presentation_spec)
+    if not named:
+        return []
+    promised: dict[str, str] = {}
+    for item in binding.obligations:
+        if item.kind != DIRECT_WIRE:
+            continue
+        for net_id in item.nets:
+            promised.setdefault(net_id, item.reason)
+    out: list[GrammarFailure] = []
+    for net_id in sorted(named & set(promised)):
+        out.append(GrammarFailure(
+            category=FAILURE_PRESENTATION_POOR,
+            subject=net_id,
+            detail=(
+                f"PresentationSpec.localLabelObligations names {net_id!r} and "
+                "the grammar's direct-wire obligation promises it as a wire "
+                f"({promised[net_id]}) — one net, one statement: wired and named "
+                "at every pin cannot both be true"
+            ),
+            action=(
+                f"drop {net_id} from localLabelObligations, or use a grammar that "
+                "does not require that net as a wire"
+            ),
+        ))
+    return out
+
+
 def _reference_failures(
     circuit_spec: CircuitSpec, presentation_spec: PresentationSpec
 ) -> list[GrammarFailure]:
@@ -1170,6 +1432,11 @@ def _reference_failures(
                     "it can only protect a net the circuit has"
                 ),
             ))
+    # The stated exception to "a local net is wired": the document's own facts
+    # about it (a net that exists, is a signal, is said once, has a connection
+    # and a module that holds it). The grammar's half is answered after binding,
+    # where the obligations exist (`local_label_grammar_failures`).
+    out.extend(local_label_failures(circuit_spec, presentation_spec))
     for lock in presentation_spec.user_locks:
         if lock.part_id in parts:
             continue
@@ -1564,6 +1831,54 @@ def _chain_net_ranks(binding: GrammarResult) -> dict[str, int]:
     return ranks
 
 
+def _coreless_shunt_parts(
+    circuit_spec: CircuitSpec, binding: GrammarResult
+) -> frozenset[str]:
+    """The parts this binding reads as a **coreless bank of parallel branches**.
+
+    A drawing with no core has no chain, so every bound part is a branch with no
+    owner — and the node it belongs to is not written on the page, which is what
+    the string refusal below is for. 534 states one shape where that refusal is
+    the wrong answer: the group is **all** two-terminal parts, each from a node
+    of its own to **one** ground. Then a branch has no owner because there is no
+    owner to have — the parts are parallel, the page is their own row, and no
+    electrical chain is missing.
+
+    Read **from the binding's structure**, never from a flag: no chain role at
+    all (so no `core`), a `gnd` net role, and every part role is `shunt`. Every
+    one of those parts must also be a two-terminal part of the circuit with one
+    pin on that ground, so a binding that merely calls something a shunt does
+    not get here. Anything else returns the empty set, which leaves the
+    existing refusal exactly as it was.
+    """
+    gnd = ""
+    parts: list[str] = []
+    for item in binding.bindings:
+        if item.role in CHAIN_ROLES:
+            return frozenset()
+        if item.role == "gnd":
+            gnd = item.part_id
+        elif item.role in NET_ROLES:
+            # The bank states the nodes it holds (`rail` / `out`) as net roles;
+            # they name nets, and the slot pass skips them for that reason.
+            continue
+        elif item.role == "shunt":
+            parts.append(item.part_id)
+        else:
+            return frozenset()
+    if not gnd or not parts:
+        return frozenset()
+    net = circuit_spec.net(gnd)
+    if net is None or net.cls != "gnd":
+        return frozenset()
+    for part_id in parts:
+        pins = _part_nets(circuit_spec, part_id)
+        nets = set(pins.values())
+        if len(pins) != 2 or len(nets) != 2 or gnd not in nets:
+            return frozenset()
+    return frozenset(parts)
+
+
 def _prepare(
     circuit_spec: CircuitSpec,
     presentation_spec: PresentationSpec,
@@ -1615,12 +1930,17 @@ def _prepare(
     owners, links, strings = _branch_owners(
         circuit_spec, [part_id for part_id, _, _ in candidates], chain_ids, ranks,
     )
+    # 534: a binding that is a coreless bank of parallel branches has nothing to
+    # anchor on — and needs nothing: the group is its own row. Only the parts
+    # that binding *structurally* reads that way are let through; every other
+    # unowned branch keeps the refusal below.
+    coreless = _coreless_shunt_parts(circuit_spec, binding)
     for part_id, role, is_branch in candidates:
         if not is_branch:
             continue
         owner = owners.get(part_id, "")
         if not owner:
-            if part_id in strings:
+            if part_id in strings and part_id not in coreless:
                 order_failures.append(GrammarFailure(
                     category=FAILURE_FACTS_MISSING,
                     subject=part_id,
@@ -5638,6 +5958,7 @@ def _net_modules(ctx: _Context, net_id: str) -> list[str]:
 def _expressions(ctx: _Context, placed: _Placement) -> dict[str, _Expression]:
     """Every net's expression, decided before anything is drawn."""
     obligated = _obligation_nets(ctx)
+    local_labels = local_label_nets(ctx.presentation)
     out: dict[str, _Expression] = {}
     for net in sorted(ctx.circuit.nets, key=lambda item: item.id):
         points: list[tuple[str, tuple[float, float]]] = []
@@ -5648,7 +5969,9 @@ def _expressions(ctx: _Context, placed: _Placement) -> dict[str, _Expression]:
                 points.append((member, point))
         if not points:
             continue
-        style, reason = _expression_style(ctx, net.id, net.cls, len(points), obligated)
+        style, reason = _expression_style(
+            ctx, net.id, net.cls, len(points), obligated, local_labels
+        )
         detached: tuple[str, ...] = ()
         pivot = ""
         if style == "wire" and _sibling_name_form(ctx, net.id, net.cls):
@@ -5934,7 +6257,8 @@ def _sibling_members(ctx: _Context, net: Any) -> set[str]:
 
 
 def _expression_style(
-    ctx: _Context, net_id: str, cls: str, count: int, obligated: set[str]
+    ctx: _Context, net_id: str, cls: str, count: int, obligated: set[str],
+    local_labels: set[str] = frozenset(),
 ) -> tuple[str, str]:
     """``(style, why)`` for one net — the policy of 053 sec.7, spelled out.
 
@@ -5990,6 +6314,22 @@ def _expression_style(
             "wire",
             f"a rail with {count} members is a local connection, so it is wired "
             "rather than named",
+        )
+    # The stated local exception, asked **after** the promise and after the
+    # class: a rail and a ground keep their flag/wire answer above (a power or
+    # ground net may not be listed at all — `local_label_failures` refuses it),
+    # and a grammar obligation is settled by its own gate before this runs. What
+    # is left is a signal net the author named: named at each pin, which is what
+    # `_draw_expressions` does with ``label`` — and why a reversible connector's
+    # mirrored pins stop being joined by a U-shaped wire.
+    if net_id in local_labels:
+        return (
+            "label",
+            f"presentationSpec.localLabelObligations names {net_id!r}, so it is "
+            "stated by a name at each of its pins rather than by a wire: the "
+            "author asked for the local exception (a mirrored/reversible "
+            "connector's pins, where a wire says the wrong pin is the right "
+            "one), and labelPolicy.local stays 'wire' for every net nobody named",
         )
     if len(modules) > 1 and policy.cross_module == LABEL_LABEL:
         return (
@@ -6245,6 +6585,8 @@ def _label_for(
     point: tuple[float, float],
     placed: _Placement,
     occupied: list[Box],
+    segments: Sequence[LayoutSegment] = (),
+    avoid: Sequence[Box] = (),
 ) -> LayoutLabel:
     """A label on a pin tip, its box put where it collides with nothing.
 
@@ -6257,7 +6599,10 @@ def _label_for(
     direction = _pin_direction(ctx, part_id, token, placed.poses)
     if direction is None:
         direction = ctx.lateral()
-    return _label_at(net_id, point, direction, occupied, part_id=part_id)
+    return _label_at(
+        net_id, point, direction, occupied, part_id=part_id, segments=segments,
+        avoid=avoid,
+    )
 
 
 def _label_at(
@@ -6267,6 +6612,8 @@ def _label_at(
     occupied: list[Box],
     *,
     part_id: str = "",
+    segments: Sequence[LayoutSegment] = (),
+    avoid: Sequence[Box] = (),
 ) -> LayoutLabel:
     """A label whose *anchor* is fixed and whose *box* moves around it.
 
@@ -6307,7 +6654,11 @@ def _label_at(
             )
             if fallback is None:
                 fallback = candidate
-            if all(not _overlaps(candidate, other) for other in occupied):
+            if (
+                all(not _overlaps(candidate, other) for other in occupied)
+                and all(not _overlaps(candidate, other) for other in avoid)
+                and not _box_across_foreign_run(candidate, net_id, segments)
+            ):
                 box = candidate
                 break
         if box is not None:
@@ -6320,6 +6671,61 @@ def _label_at(
     return LayoutLabel(
         net=net_id, text=net_id, bbox=box, x=point[0], y=point[1], part_id=part_id,
     )
+
+
+def _flag_ink_rows(ctx: _Context, symbols: Sequence[LayoutPowerSymbol]) -> list[Box]:
+    """The glyph **and name row** box of every flag already placed (534 fix r1).
+
+    `_place_flag` puts the glyph box in `occupied`; the row the host prints the flag's
+    net name in is not there (`_local_label_carriers` measured that and built its own
+    `flag_boxes`). A bare label's ladder pushed off a conductor lands wherever
+    `occupied` is free — the four-island page's TXD went to rung 4 and printed on
+    +5V's name row, which readability refused (`text-overlap`). Same ruler, same
+    helper (`_flag_box`, margin 0) — one statement for every label placer.
+    """
+    rows: list[Box] = []
+    for symbol in symbols:
+        profile = ctx.book.get(symbol.symbol_ref)
+        if profile is None:
+            continue
+        rows.append(_flag_box(profile, symbol.rotation, (symbol.x, symbol.y),
+                              symbol.net, margin=0.0))
+    return rows
+
+
+def _box_across_foreign_run(
+    box: Box, net_id: str, segments: Sequence[LayoutSegment]
+) -> bool:
+    """Does an already-drawn conductor of **another** net cut through this box?
+
+    534 fix r1: the bare-label ladder (`_label_at`) was the one box placer on the page
+    with no conductor in its predicate — `_local_label_trial_box` has had
+    ``_box_hits_foreign_run`` since 534 r6, and the two must not disagree about what
+    "ink" means. The audited four-island page measured the cost: RXD's and TXD's boxes
+    (503-527, 735.5-754.5) sat on the GND flag lead at x=505 for 9 units each, because
+    the lead was laid at ``segments=2`` and the boxes were chosen afterwards with
+    `occupied` only.
+
+    ``segments`` is "the runs already laid **at the moment this box is chosen**", so a
+    caller that places labels before the routing (the lane reservation pass) passes
+    nothing rather than a picture it does not have — an empty sequence is the truth
+    there, not a silent pass. A segment of the label's **own** net is skipped: this
+    net's name may ride on its own conductor, which is the whole point of a name
+    carrier (``label_wire_indices``), and refusing that would take the label off the
+    wire that names it.
+
+    The interior test is :func:`~boardwise.engines.router._segment_hits_box`, the same
+    one the trial box and the readability gate use: a wire on the outline or through a
+    corner is adjacent ink, not a cut.
+    """
+    for segment in segments:
+        if segment.net == net_id:
+            continue
+        points = segment.points
+        for start, end in zip(points, points[1:]):
+            if _segment_hits_box(start, end, box):
+                return True
+    return False
 
 
 def _directions(preferred: tuple[float, float]) -> list[tuple[float, float]]:
@@ -6374,7 +6780,9 @@ def _tap_stub(
         if not _span_free(router, junction, end, blocked - {_key(junction)}):
             continue
         segments.append(LayoutSegment(net=expression.net, points=[junction, end]))
-        label = _label_at(expression.net, end, direction, occupied)
+        label = _label_at(
+            expression.net, end, direction, occupied, segments=segments
+        )
         labels.append(label)
         solids.append(label.bbox)
         horizontal = "right" if sign > 0 else "left"
@@ -8647,6 +9055,13 @@ def _build_one_variant(
     symbols: list[LayoutPowerSymbol] = []
     segments: list[LayoutSegment] = []
     notes: list[str] = []
+    #: 534: every bare label the per-net loop put on a `localLabelObligations`
+    #: pin, remembered as ``(net, member, pin point, label)``. The carrier pass
+    #: after the flag passes moves the label **anchor and box both** onto the
+    #: short run it draws off that pin (:func:`_local_label_carriers`).
+    deferred_local_labels: list[
+        tuple[str, str, tuple[float, float], LayoutLabel]
+    ] = []
     router = _Router(
         grid=ctx.budget.grid,
         residue=placed.residue,
@@ -8678,9 +9093,18 @@ def _build_one_variant(
     # defect 岳 saw on `test/P1`. `flag_walls` is therefore part of `router.boxes`
     # from here on, and `solids` (what a *flag* may not land on) is not: a flag's
     # own seat must not turn that flag away from itself.
-    _lead_lane_reservations(
+    #: 534 fix r3: the ordinary flag seats this pass stored — the only ones the
+    #: placement re-checks. `_seat_wire_flags`'s rail seats are not in here and keep
+    #: their old replay path.
+    ordinary_flag_seats: set[tuple[str, str]] = set()
+    local_label_plan, local_label_reservation_failure = _lead_lane_reservations(
         ctx, placed, expressions, order, router, occupied, solids, bodies,
+        ordinary_flag_seats,
     )
+    if local_label_reservation_failure is not None:
+        # 534 r15: a local-label pin with no legal carrier is a named refusal, not a
+        # silent straight stub -- the drawing must not keep a 10-unit pair quietly.
+        return None, local_label_reservation_failure, []
     router.boxes = [*solids, *router.flag_walls]
     for net_id in order:
         expression = expressions[net_id]
@@ -8880,14 +9304,15 @@ def _build_one_variant(
                     failure = _flag_pins(
                         ctx, placed, net_id, profile, ref, [(member, point)],
                         router, segments, symbols, occupied, solids, blocked,
-                        bodies, stub=True,
+                        bodies, stub=True, notes=notes,
+                        ordinary_seats=ordinary_flag_seats,
                     )
                     if failure is not None:
                         return None, failure, []
                     continue
                 failure = _stub_label(
                     ctx, placed, net_id, member, point, router, segments,
-                    labels, occupied, solids, blocked,
+                    labels, occupied, solids, blocked, symbols=symbols,
                 )
                 if failure is not None:
                     return None, failure, []
@@ -8896,14 +9321,15 @@ def _build_one_variant(
                     failure = _flag_pins(
                         ctx, placed, net_id, profile, ref, [(member, point)],
                         router, segments, symbols, occupied, solids, blocked,
-                        bodies,
+                        bodies, notes=notes,
+                        ordinary_seats=ordinary_flag_seats,
                     )
                     if failure is not None:
                         return None, failure, []
                     continue
                 failure = _stub_label(
                     ctx, placed, net_id, member, point, router, segments,
-                    labels, occupied, solids, blocked,
+                    labels, occupied, solids, blocked, symbols=symbols,
                 )
                 if failure is not None:
                     return None, failure, []
@@ -8919,9 +9345,17 @@ def _build_one_variant(
                 part_id, _, token = member.partition(".")
                 label = _label_for(
                     ctx, net_id, part_id, token, point, placed, occupied,
+                    segments, _flag_ink_rows(ctx, symbols),
                 )
                 labels.append(label)
                 solids.append(label.bbox)
+                if net_id in local_label_nets(ctx.presentation):
+                    # 534: this label is the net's name and it is anchored on the
+                    # pin itself — a name with no conductor under it. It stays
+                    # here for now because every pass below reads `labels`;
+                    # `_local_label_carriers` re-places anchor **and box** once
+                    # those passes have measured the picture.
+                    deferred_local_labels.append((net_id, member, point, label))
         if expression.style == "flag":
             net = ctx.circuit.net(net_id)
             cls = net.cls if net is not None else "gnd"
@@ -8935,6 +9369,7 @@ def _build_one_variant(
                     part_id, _, token = member.partition(".")
                     label = _label_for(
                         ctx, net_id, part_id, token, point, placed, occupied,
+                        segments, _flag_ink_rows(ctx, symbols),
                     )
                     labels.append(label)
                     solids.append(label.bbox)
@@ -8942,6 +9377,7 @@ def _build_one_variant(
             failure = _flag_pins(
                 ctx, placed, net_id, profile, ref, expression.points,
                 router, segments, symbols, occupied, solids, blocked, bodies,
+                notes=notes, ordinary_seats=ordinary_flag_seats,
             )
             if failure is not None:
                 return None, failure, []
@@ -9056,7 +9492,8 @@ def _build_one_variant(
         router.blocked = blocked
         failure = _flag_pins(
             ctx, placed, net_id, profile, ref, [pin], router, segments,
-            symbols, occupied, solids, blocked, bodies,
+            symbols, occupied, solids, blocked, bodies, notes=notes,
+            ordinary_seats=ordinary_flag_seats,
         )
         if failure is not None:
             return None, failure, []
@@ -9068,6 +9505,36 @@ def _build_one_variant(
             "conductor, and the symbol says where the return leaves the group"
         )
         router.boxes = [*solids, *router.flag_walls]
+
+    # 534: `localLabelObligations` says a net is named *at each of its pins*, and
+    # a name with no conductor under it names nothing (`layoutplan.py`: "A label
+    # with no named wire on it names nothing"). Each of those pins gets one short
+    # carrier run with its label — anchor and box — at the far end. Placed after
+    # both flag passes and before the junctions are read, for the reason those
+    # passes are: the runs are obstacles for the router, so they are laid down
+    # once every net has been routed and no routed net had to route around them.
+    # Only the nets the document names are touched; every other label keeps the
+    # bare form it has always had.
+    failure = _local_label_carriers(
+        ctx, placed, router, segments, labels, symbols, occupied, solids,
+        deferred_local_labels, local_label_plan,
+    )
+    if failure is not None:
+        return None, failure, []
+
+    # 534 r22: the **last** thing before the junctions are read is the one pass a
+    # box decided in net order could not do for itself — re-seat the boxes a
+    # conductor came to lie under afterwards. Every conductor is laid by now (the
+    # per-net wires, both flag passes and the local-label carriers), so this is
+    # the first and only moment the whole picture exists. See
+    # :func:`_reseat_crossed_labels`: the trigger is a conductor through the box
+    # **of any length**, and a box with no legal seat is a named refusal, never a
+    # row left printed through a wire.
+    failure = _reseat_crossed_labels(
+        ctx, placed, segments, labels, symbols, occupied, solids, router,
+    )
+    if failure is not None:
+        return None, failure, []
 
     junctions = _junctions(segments)
     plan_notes = [
@@ -10083,6 +10550,20 @@ def _place_flag(
 
     ``router`` is handed the lead (:func:`_remember_lead`) so the next flag's
     ladder can see it — 175/B-2's book of the leads this plan has already drawn.
+
+    **534 r1: the box taken is the flag, not just its glyph.** Until this batch
+    this recorded ``flag_glyph_box`` alone while every other reader — the
+    readability gate (``pagecompiler._glyph_box`` + ``_flag_name_row``), the
+    island seat (``islandlayout._flag_seat``) and this module's own
+    :func:`_flag_box` — reserved glyph **and** the name row the host prints
+    beside it. The two disagreed exactly where it matters: a flag whose name
+    lands on a foreign conductor or another row was invisible to the placement
+    that put it there, and only the post-render gate could see it. Measured on
+    the landed `test/534` page: the VCC flag's name row `(712,707)-(728,717)`
+    sits on RTS's conductor at `y=710` while the plan kept only the glyph
+    `(715,715)-(725,725)` free. The name row comes from
+    :func:`_flag_box` with ``margin=0`` — one statement for the row, not a
+    second copy of it.
     """
     symbols.append(LayoutPowerSymbol(
         symbol_ref=ref,
@@ -10099,8 +10580,15 @@ def _place_flag(
     glyph = flag_glyph_box(
         profile, rotation=rotation, anchor=anchor,
     ) or (anchor[0], anchor[1], anchor[0], anchor[1])
+    # The flag's own place is its glyph **plus the name row the host prints**
+    # (`_flag_box`, margin 0 — the row is measured, the clearance is the caller's
+    # choice): 534 r1, the reserved box and the gate's box have to be one shape.
+    flag = _flag_box(profile, rotation, anchor, net_id, margin=0.0)
     occupied.append(glyph)
     solids.append(glyph)
+    if flag != glyph:
+        occupied.append(flag)
+        solids.append(flag)
 
 
 def _flag_crossing_failure(
@@ -10596,6 +11084,7 @@ def _lead_lane_reservations(
     occupied: Sequence[Box],
     solids: Sequence[Box],
     bodies: Sequence[Box] | None,
+    ordinary_seats: set[tuple[str, str]] | None = None,
 ) -> list[Box]:
     """145a T3: promise every **lead the plan will draw** its lane, before any wire.
 
@@ -10656,12 +11145,33 @@ def _lead_lane_reservations(
     #: not swallow a lane another flag already holds (`_flag_room`). Cleared
     #: again below, so the placement asks the original question.
     router.reserve_strict = True
-    for net_id in net_order:
+    #: 534 r15: the lanes this pass promised to `localLabelObligations` pins, as the
+    #: carriers the drawing will actually carry -- handed to
+    #: :func:`_local_label_carriers`, so the two passes cannot choose differently.
+    plan: dict[tuple[str, tuple[float, float]],
+               tuple[tuple[float, float], tuple[float, float],
+                     list[tuple[float, float]]]] = {}
+    # 534 r15: the local-label carriers are promised their lanes **first**. The
+    # document says these pins are named by a short carrier before any flag is
+    # placed, and a flag lead reserved earlier owns the very bands those rows need
+    # -- r14 measured it on `+5V` vs `D+`'s second pin, which then had no legal
+    # shape at all. A document with no `localLabelObligations` keeps the single
+    # pass in the order it always had, so its drawing does not move by one unit.
+    local_first = local_label_nets(ctx.presentation)
+    passes = [list(net_order)]
+    if local_first:
+        passes = [[net for net in net_order if net in local_first],
+                  [net for net in net_order if net not in local_first]]
+    for ordered in passes:
+      for net_id in ordered:
         expression = expressions[net_id]
         if expression.style == "label":
-            _reserve_label_stubs(
+            sub_plan, sub_failure = _reserve_label_stubs(
                 ctx, placed, net_id, expression, router, occupied, tips, taken,
             )
+            if sub_failure is not None:
+                return plan, sub_failure
+            plan.update(sub_plan)
             continue
         if expression.style != "flag":
             continue
@@ -10695,13 +11205,31 @@ def _lead_lane_reservations(
                     profile, _flag_rotation((0.0, hang), family), anchor, net_id
                 ),
             )
-            _take_lane(taken, cells, tips, own, net_id)
+            taken_ok = _take_lane(taken, cells, tips, own, net_id)
             _remember_lead(router, net_id, family, lead)
+            if taken_ok:
+                # 534 fix r3: the lane promised here is the lead the flag will be
+                # drawn on, so it is stored as the seat `_flag_pins` replays (the same
+                # map `_seat_wire_flags` fills for the rails). `_flag_pins` re-checks
+                # it against the placement-time picture before using it, and drops it
+                # by name when the picture has moved on — a promised lane is not a
+                # licence to draw through what was placed afterwards. A lane
+                # `_take_lane` refused is not stored at all: that pin keeps the
+                # ordinary ladder and its own named refusal.
+                router.flag_seats[(net_id, member)] = (
+                    anchor, _flag_rotation((0.0, hang), family), lead,
+                )
+                if ordinary_seats is not None:
+                    # 534 fix r3: this key is **ours** — an ordinary flag's seat. The
+                    # placement re-checks exactly these and leaves every seat
+                    # `_seat_wire_flags` filled (wire-style rails) on its old path.
+                    ordinary_seats.add((net_id, member))
     router.flag_walls = _seat_wire_flags(
         ctx, placed, expressions, net_order, router, solids, bodies, tips, taken,
     )
     router.reserved_exempt = ""
     router.reserve_strict = False
+    return plan, None
 
 
 
@@ -10714,20 +11242,51 @@ def _reserve_label_stubs(
     occupied: Sequence[Box],
     tips: set[tuple[float, float]],
     taken: dict[tuple[float, float], str],
-) -> None:
-    """Reserve the first rung of every stub this label net will be named by.
+) -> tuple[dict[tuple[str, tuple[float, float]],
+               tuple[tuple[float, float], tuple[float, float],
+                     list[tuple[float, float]]]], GrammarFailure | None]:
+    """Reserve the lane of every stub this label net will be named by.
 
-    One cell run per pin, from the pin out along the side the label's own box is
-    on — the same side :func:`_label_stub_lane` reads off the box the compiler
-    just chose, and the side the page layer's stub leaves on (:func:`_label_at`
-    / `drawapply._label_stub_candidates`). The length is
-    :data:`LABEL_LANE_STEPS` lattice steps, which is the page layer's own first
-    rung (:data:`drawapply.LABEL_STUB_LENGTH`, 2 steps): reserving the first rung
-    is enough, because a wire that would have taken it is what pushes the stub
-    off the label's side in the first place.
+    One run per pin, from the pin out along the side the label's own box is on — the
+    same side :func:`_label_stub_lane` reads off the box the compiler just chose, and
+    the side the page layer leaves on (:func:`_label_at` /
+    `drawapply._label_stub_candidates`).
+
+    **534 r15: one decision for both readers, and no silent fallback.** For a net the
+    document names in ``localLabelObligations`` this pass walks the *carrier's own*
+    ladder — a straight rung first, then ``out(d0) -> aside(k*grid) -> out(d1)`` with
+    ``d1 > max(d0, |aside|)`` so the longest run stays horizontal and the host prints
+    the name in the band that was chosen — and accepts a candidate only when
+
+    * every cell of its runs and of its name row's **interior** is free for this net
+      (:func:`_take_lane`: no foreign pin tip, nothing another net already holds), and
+    * its name row stays ``drawlint``'s ``L5_DUPLICATE_NET_GAP`` away from every row
+      this net's earlier pins already claimed — the gap is **shared** between the
+      pair, and which carrier steps aside is decided by what the geometry allows,
+      never by a name or a coordinate.
+
+    **534 r16: the row band owns only its interior nodes.** Two name rows that merely
+    touch (a shared boundary) are two readable statements, not one, so they must be
+    allowed to sit next to each other; a real overlap still meets on interior nodes
+    and is refused. The conductor rules are untouched: a segment's nodes, a conductor
+    vertex and a foreign pin tip stay exclusive, so no two nets can share a conductor
+    point or run. The text-collision measurement is **not** shrunk with this — the
+    audit and the readability gate still measure the real boxes.
+
+    A pin with **no accepted candidate** is a named ``layout-unsat`` carrying every
+    candidate's measured reason. The returned map is what
+    :func:`_local_label_carriers` draws: the reserved lane *is* the carrier. Every
+    other label net keeps the straight first rung it has always had, verbatim.
     """
+    from .drawlint import L5_DUPLICATE_NET_GAP
+
     router.reserved_exempt = net_id
     reach = LABEL_LANE_STEPS * router.grid
+    plan: dict[tuple[str, tuple[float, float]],
+               tuple[tuple[float, float], tuple[float, float],
+                     list[tuple[float, float]]]] = {}
+    local = net_id in local_label_nets(ctx.presentation)
+    rows: list[Box] = []
     for member, point in expression.points:
         part_id, _, token = member.partition(".")
         # `_label_at` *appends* the box it chooses to the list it is given, so it
@@ -10737,13 +11296,181 @@ def _reserve_label_stubs(
             ctx, net_id, part_id, token, point, placed, list(occupied)
         )
         direction = _label_stub_lane(label, point)
+        if direction[0] == 0.0:
+            # 534 r17: the carrier pass has always drawn the run **horizontally**
+            # (`_label_stub_lane` reads the side off the box's centre, and a box
+            # above/below the pin still has a horizontal side). The reservation must
+            # promise the same lane, or it reserves a vertical row nobody prints.
+            centre = (label.bbox[0] + label.bbox[2]) / 2.0
+            direction = (-1.0 if centre < point[0] else 1.0, 0.0)
         far = _rounded((
             point[0] + direction[0] * reach, point[1] + direction[1] * reach,
         ))
-        _take_lane(
-            taken, _lattice_nodes(router, point, far), tips,
-            {_key(point)}, net_id,
+        if not local:
+            _take_lane(
+                taken, _lattice_nodes(router, point, far), tips,
+                {_key(point)}, net_id,
+            )
+            continue
+        chosen = None
+        reasons: list[str] = []
+        for candidate_direction, path in _local_label_paths(point, direction, router.grid):
+            far = path[-1]
+            if not _label_fits(ctx, net_id, far):
+                reasons.append(f"the name at {_point_text(far)} leaves the page's margin")
+                continue
+            # 534 r18: a carrier the host would name **along a vertical run** is
+            # not a candidate at all — the row is rotated, whatever the boxes say.
+            # The direction judgement is the shape's (`_carrier_name_reason`), not
+            # its leg count: a legal stagger still comes through.
+            vertical = _carrier_name_reason(path, net_id)
+            if vertical is not None:
+                reasons.append(
+                    f"the carrier to {_point_text(far)} is refused: {vertical}"
+                )
+                continue
+            row = textmetrics.wire_name_box([list(p) for p in path], net_id)
+            if row is None:
+                reasons.append(f"the path to {_point_text(far)} prints no name row")
+                continue
+            cells: set[tuple[float, float]] = set()
+            for start, stop in zip(path, path[1:]):
+                cells |= _lattice_nodes(router, start, stop)
+            row_cells = _interior_nodes_in_box(router, row)
+            foreign = sorted(((cells | row_cells) & tips) - {_key(point)})
+            held = sorted({owner for cell, owner in taken.items()
+                           if cell in cells | row_cells and owner != net_id})
+            if foreign:
+                reasons.append(
+                    f"the lane to {_point_text(far)} would stand on the pin tip(s) "
+                    f"{foreign[:4]}"
+                )
+                continue
+            if held:
+                reasons.append(
+                    f"the lane to {_point_text(far)} is already held by {held}"
+                )
+                continue
+            gaps = [(_row_gap(row, other), other) for other in rows]
+            close = [(gap, other) for gap, other in gaps if gap < L5_DUPLICATE_NET_GAP]
+            if close:
+                reasons.append(
+                    f"the name at {_point_text(far)} would print {min(g for g, _ in close):g} "
+                    f"units from another row of net {net_id}"
+                )
+                continue
+            if not _take_lane(taken, cells | row_cells, tips, {_key(point)}, net_id):
+                reasons.append(f"the lane to {_point_text(far)} could not be reserved")
+                continue
+            chosen = (candidate_direction, far, path)
+            rows.append(row)
+            break
+        if chosen is None:
+            return plan, _local_label_failure(net_id, member, point, reasons)
+        plan[(net_id, point)] = chosen
+    return plan, None
+
+
+def _local_label_paths(
+    point: tuple[float, float],
+    direction: tuple[float, float],
+    grid: float,
+) -> list[tuple[tuple[float, float], list[tuple[float, float]]]]:
+    """The carrier shapes a local-label pin may take, cheapest first (534 r15).
+
+    A straight run off the pin along the label's own side, then the same run bent
+    one or two lattice steps aside with an outward run that **owns the longest
+    segment** — the plan's 099f idiom, and the only shape whose name row lands in
+    the adjacent band. Nothing here reads a net, a part or a coordinate.
+
+    534 r18 grows only the **straight** half (:data:`LOCAL_LABEL_RUNGS`): the bent
+    half is offered exactly as before, and :func:`_carrier_name_reason` decides
+    whether the host could name it horizontally at all. No shape is removed from
+    the family here — a carrier is refused by **direction**, never by its leg
+    count, so a legal stagger stays a candidate.
+    """
+    out: list[tuple[tuple[float, float], list[tuple[float, float]]]] = []
+    for rung in range(1, LOCAL_LABEL_RUNGS + 1):
+        out.append((direction, [
+            _rounded(point),
+            _rounded((point[0] + direction[0] * rung * grid,
+                      point[1] + direction[1] * rung * grid)),
+        ]))
+    if direction[1] != 0.0:
+        return out
+    for steps in (1, 2):
+        aside = steps * grid
+        for sign in (-1.0, 1.0):
+            for run_out in (grid, 2 * grid, 3 * grid):
+                for far_out in (2 * grid, 3 * grid, 4 * grid):
+                    if far_out <= max(run_out, aside):
+                        continue
+                    bend = _rounded((point[0] + direction[0] * run_out, point[1]))
+                    offset = _rounded((bend[0], bend[1] + sign * aside))
+                    out.append((direction, [
+                        _rounded(point), bend, offset,
+                        _rounded((offset[0] + direction[0] * far_out, offset[1])),
+                    ]))
+    return out
+
+
+def _carrier_name_reason(points, text: str) -> str | None:
+    """Why the host could not print this carrier's name **horizontally**, or ``None``.
+
+    Two directions are consulted for one carrier, and neither is a leg count
+    (534 r18):
+
+    * the run the model names — the longest one, `textmetrics.wire_name_row`. A
+      vertical longest run is a rotated row by construction.
+    * the **middle run** of an odd-length run table
+      (`textmetrics.wire_name_middle_run`). The CH343 sheet's two 5-run
+      local-label carriers printed their name on that run while the model named
+      the longest one, so a vertical middle run is a shape the host has been
+      *measured* to rotate — this is a veto, not a second prediction (the
+      selection rule above three runs is not established).
+
+    A carrier whose longest run is horizontal and whose table has no vertical
+    middle run — a straight run, an elbow, or a stagger that steps aside on a
+    horizontal middle run — answers ``None`` and stays a candidate.
+    """
+    row = textmetrics.wire_name_row([list(p) for p in points], text)
+    if row is not None and not row.horizontal:
+        return (
+            f"the run it would be named on "
+            f"{_point_text(row.run[0])}-{_point_text(row.run[1])} is vertical, "
+            "so the name prints rotated a quarter turn"
         )
+    middle = textmetrics.wire_name_middle_run([list(p) for p in points])
+    if middle is not None and abs(middle[0][1] - middle[1][1]) > 1e-6:
+        return (
+            f"the middle run {_point_text(middle[0])}-{_point_text(middle[1])} "
+            "is vertical, a run this shape is measured to be named on"
+        )
+    return None
+
+
+def _row_gap(a: Box, b: Box) -> float:
+    """drawlint's cheapest distance between two text boxes (positive parts only)."""
+    dx = max(b[0] - a[2], a[0] - b[2], 0.0)
+    dy = max(b[1] - a[3], a[1] - b[3], 0.0)
+    return math.hypot(dx, dy)
+
+
+def _interior_nodes_in_box(router: _Router, box: Box) -> set[tuple[float, float]]:
+    """The lattice nodes **strictly inside** a box (534 r16).
+
+    A name row's band is ten units tall on a five-unit lattice, so a whole-box
+    raster hands its boundary rows to whoever reserved first and two rows that
+    merely touch cannot sit beside each other. The band therefore owns only the
+    nodes inside it: touching boxes share a boundary (allowed), overlapping boxes
+    meet on an interior node (refused). Nothing here is a text-collision rule --
+    the audit and the readability gate keep measuring the real boxes.
+    """
+    return {
+        cell for cell in _nodes_in_box(router, box)
+        if (box[0] + 1e-6 < cell[0] < box[2] - 1e-6
+            and box[1] + 1e-6 < cell[1] < box[3] - 1e-6)
+    }
 
 
 def _label_stub_lane(
@@ -10805,6 +11532,8 @@ def _flag_pins(
     bodies: Sequence[Box] | None = None,
     *,
     stub: bool = False,
+    notes: list[str] | None = None,
+    ordinary_seats: Collection[tuple[str, str]] = (),
 ) -> GrammarFailure | None:
     """Put this net's flag on each of ``members``, on a lead out of its own pin.
 
@@ -10835,6 +11564,46 @@ def _flag_pins(
     family = flag_glyph_kind(profile)
     for member, point in members:
         seat = router.flag_seats.get((net_id, member))
+        ordinary = (net_id, member) in ordinary_seats
+        if seat is not None and ordinary and stub:
+            # A reserved lane belongs to the ordinary flag this pin would hang, not
+            # to 069 sec.1's reaching stub: reusing it there would draw the seat's
+            # lead on a shape the reservation never promised.
+            seat = None
+        if seat is not None and ordinary:
+            # 534 fix r3: the reservation was decided before the wires and the flag
+            # walls were on the page, so it is re-checked against **this** picture
+            # before it is replayed. Everything asked here is the placement's own
+            # question (`_flag_pin_lead`'s `fits` plus its crossing refusal), never a
+            # looser one.
+            anchor, rotation, lead = seat
+            why: list[str] = []
+            for start, end in zip(lead, lead[1:]):
+                if not _span_free(router, start, end, blocked, wire=False):
+                    why.append(f"its lead run {_point_text(start)}-{_point_text(end)} "
+                               "is no longer free")
+            crossing = _lead_crossing(router, lead)
+            if crossing is not None:
+                why.append(crossing)
+            for vertex in (anchor, *lead):
+                if not _vertex_clear(router, vertex):
+                    why.append(f"its vertex {_point_text(vertex)} is no longer clear")
+            box = _flag_box(profile, rotation, anchor, net_id)
+            for other in router.boxes:
+                if _overlaps(box, other):
+                    why.append(
+                        "its flag box "
+                        f"({box[0]:g}, {box[1]:g})-({box[2]:g}, {box[3]:g}) overlaps "
+                        f"({other[0]:g}, {other[1]:g})-({other[2]:g}, {other[3]:g})")
+                    break
+            if why:
+                if notes is not None:
+                    notes.append(
+                        f"net {net_id}: the reserved lane of {member} was dropped — "
+                        + "; ".join(why[:3])
+                        + " — so this flag is drawn on the ordinary ladder instead"
+                    )
+                seat = None
         if seat is None:
             anchor, lead, hang, crossings = _flag_pin_lead(
                 ctx, placed, net_id, profile, member, point, router, blocked,
@@ -10972,6 +11741,8 @@ def _stub_label(
     occupied: list[Box],
     solids: list[Box],
     blocked: set[tuple[float, float]],
+    *,
+    symbols: Sequence[LayoutPowerSymbol] = (),
 ) -> GrammarFailure | None:
     """069 sec.1's other half: a **label** where a rail would have had a flag.
 
@@ -10988,35 +11759,612 @@ def _stub_label(
     net's wire is refused the same way and the candidate reported as 074's
     ``layout-unsat`` when no stub survives. The stub's own ladder is climbed to its
     end first — 069 sec.1 brings the pad out *its own way*, and the rungs it has are
-    074 sec.3's distance ladder and the turn. A ladder that left on another side
-    would be 074 sec.3's 换逃逸方向, and it is not added here: no offline drawing asks
-    for it (measured: the pad's own direction answers all six stub calls the
-    twenty-four scenarios and the E1 shapes make), and a pad whose own side is
-    sealed is the loud ``layout-unsat`` rather than a stub pointing somewhere the
-    symbol does not.
+    074 sec.3's distance ladder and the turn.
+
+    **534 r20: the pad's own side is tried first, and it is not the only one.** A
+    pin that escapes *vertically* gets a vertical lead, and the host prints the
+    net's name along that lead — `readability`'s `name-row-vertical`, measured on
+    the CH343 sheet as `rotate(-90)`. So after the pad's own side the two
+    perpendicular escapes are tried, and only when the pad's own lead would name
+    the net vertically (:func:`_carrier_name_reason` — the same direction test the
+    local-label ladder uses, not a net name, a coordinate or a part). A drawing
+    whose own side already reads horizontally cannot move: its direction list is
+    one entry long, exactly as before. The perpendicular lead is
+    `_flag_anchor`'s bent shape (069 sec.10: run out, then turn), whose longest run
+    is the outward horizontal one, so the name has a horizontal run to sit on.
     """
     part_id, _, token = member.partition(".")
-    direction = _pin_direction(
+    own = _pin_direction(
         ctx, part_id, token, placed.poses,
     ) or (0.0, -1.0)
+    directions = [own]
+    if abs(own[1]) > 1e-9:
+        directions += [(1.0, 0.0), (-1.0, 0.0)]
     crossings: list[str] = []
-    anchor, lead, _hang = _flag_anchor(
-        router, point, direction, blocked,
-        leads=(SIBLING_LEAD,),
-        fits=lambda here, _hang: _label_fits(ctx, net_id, here),
-        crossings=crossings,
-    )
-    if lead is None and crossings:
+    rotated: list[str] = []
+    anchor: tuple[float, float] | None = None
+    lead: tuple[tuple[float, float], ...] | None = None
+    for direction in directions:
+        anchor, lead, _hang = _flag_anchor(
+            router, point, direction, blocked,
+            leads=(SIBLING_LEAD,),
+            fits=lambda here, _hang: _label_fits(ctx, net_id, here),
+            crossings=crossings,
+        )
+        if lead is None:
+            # The flag form may sit *on* the point; a label may not (069 sec.1: on
+            # the pin it lands in the part's own annotation). Only a crossed-out
+            # side is worth another direction — an on-the-point answer keeps the
+            # old behaviour verbatim.
+            break
+        reason = _carrier_name_reason(list(lead), net_id)
+        if reason is None:
+            break
+        rotated.append(f"{_point_text(lead[-1])}: {reason}")
+    else:
+        anchor, lead = None, None
+    # 534 r20b: the elbow. A pin that escapes vertically can have its whole band
+    # sealed — on the 069 LDO both perpendicular straight leads cross another
+    # net's own lead lying along the pin's row — so the remaining shape is the
+    # one a human draws: a short jog on the pin's own axis, then the outward
+    # horizontal run that **owns the longest segment** (069 sec.10's turn,
+    # transposed; the shipped sheet's CTS/V3 elbows read horizontally). The name
+    # row then sits on the horizontal run, which is what `_carrier_name_reason`
+    # checks — the same direction test, no net name, part or coordinate.
+    if lead is None and rotated:
+        grid = router.grid
+        for jog in (grid, 2 * grid):
+            for jog_sign in (-1.0, 1.0):
+                corner = _rounded((point[0], point[1] + jog_sign * jog))
+                if _key(corner) in blocked or not _span_free(
+                    router, point, corner, blocked
+                ):
+                    continue
+                for out_sign in (1.0, -1.0):
+                    far = _rounded((
+                        corner[0] + out_sign * SIBLING_LEAD, corner[1],
+                    ))
+                    if _key(far) in blocked or not _span_free(
+                        router, corner, far, blocked
+                    ):
+                        continue
+                    if not _label_fits(ctx, net_id, far):
+                        continue
+                    path = [point, corner, far]
+                    if _carrier_name_reason(path, net_id) is not None:
+                        continue
+                    anchor, lead = far, tuple(path)
+                    break
+                if lead is not None:
+                    break
+            if lead is not None:
+                break
+    if lead is None and (crossings or rotated):
         return _flag_crossing_failure(
-            net_id, point, crossings,
+            net_id, point, [*crossings, *rotated],
             f"{member} is named by a net label of its own (069 sec.1)",
         )
     if lead is not None:
         segments.append(LayoutSegment(net=net_id, points=list(lead)))
-    label = _label_for(ctx, net_id, part_id, token, anchor, placed, occupied)
+    label = _label_for(
+        ctx, net_id, part_id, token, anchor, placed, occupied, segments,
+        _flag_ink_rows(ctx, symbols),
+    )
     labels.append(label)
     solids.append(label.bbox)
     return None
+
+
+def _local_label_carriers(
+    ctx: _Context,
+    placed: _Placement,
+    router: _Router,
+    segments: list[LayoutSegment],
+    labels: list[LayoutLabel],
+    symbols: list[LayoutPowerSymbol],
+    occupied: list[Box],
+    solids: list[Box],
+    moves: Sequence[tuple[str, str, tuple[float, float], LayoutLabel]],
+    preplan: dict[tuple[str, tuple[float, float]],
+                  tuple[tuple[float, float], tuple[float, float],
+                        list[tuple[float, float]]]] | None = None,
+) -> GrammarFailure | None:
+    """534: the short run each pin of a `localLabelObligations` net is named on.
+
+    One horizontal run per pin: the near end is that pin (the electrical fact the
+    name is about), the far end is the net's label — anchor **and box** measured
+    for that far end, never reused from the bare label.
+
+    **Two phases, because the host prints a second box nobody asked for.** A
+    carrier's wire carries the net's name and the host prints that name at the
+    run's midpoint (`textmetrics.wire_name_box`) — a row the compiler does not
+    place but must not print through. 534 r6 measured the cost of committing a
+    box before the next carrier existed: D-'s name box at y 710.5..719.5 was
+    chosen against the picture at that moment, and the carrier drawn afterwards
+    at y 710 printed its row through it by 2 units. So **every far end is chosen
+    first**, and only then is every box placed — each against the rows of *all*
+    carriers of the pass, own and later alike.
+
+    Phase one **lays each carrier down as its far end is chosen** (r8): a later
+    move's foreign edges, blocked points and span checks therefore see every
+    carrier already chosen, and the box phase sees all of them. Phase one refuses
+    a far end that is another pin of the net, has such a pin
+    along the run (the U-line), is a foreign anchor or wire vertex
+    (`_blocked_points`), crosses a conductor, body or text (`_span_free`), or
+    leaves the page margin (`_label_fits`). Phase two walks
+    :func:`_local_label_trial_box` — a copy of `_label_at`'s ladder that only
+    measures — against `occupied`, the flag glyph+name rows (`_flag_box`, margin
+    0), every carrier row and the boxes already placed. No legal pair is the
+    loud ``layout-unsat`` (:func:`_local_label_failure`), naming every rung that
+    was measured; the alternatives are refused on purpose — a bare label puts the
+    name back on the pin this batch is about, and ``lead=None`` hides the failure.
+    """
+    # 1) Detach the bare labels first, as a set: both phases measure one picture.
+    for _net_id, _member, _point, label in moves:
+        labels[:] = [item for item in labels if item is not label]
+        occupied[:] = [item for item in occupied if item is not label.bbox]
+        solids[:] = [item for item in solids if item is not label.bbox]
+    router.boxes = [*solids, *router.flag_walls]
+
+    own_points: dict[str, set[tuple[float, float]]] = {}
+    for net_id, _member, point, _label in moves:
+        own_points.setdefault(net_id, set()).add(_key(point))
+
+    # Every flag already placed prints a name row beside its glyph, and that row
+    # is not in `occupied` (only the glyph is, `_place_flag`): a moved name must
+    # be asked about it (measured on 534's usb_c page: D+ box over +5V's row).
+    flag_boxes: list[Box] = []
+    for symbol in symbols:
+        flag_profile = ctx.book.get(symbol.symbol_ref)
+        if flag_profile is None:
+            continue
+        flag_boxes.append(_flag_box(
+            flag_profile, symbol.rotation, (symbol.x, symbol.y), symbol.net,
+            margin=0.0,
+        ))
+
+    dedicated: set[tuple[float, float]] = set()
+    nets: list[str] = []
+    members: list[str] = []
+    points: list[tuple[float, float]] = []
+    parts: list[str] = []
+    blocks: list[set[tuple[float, float]]] = []
+    fars: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    paths: list[list[tuple[float, float]]] = []
+    measured: list[list[str]] = []
+    for net_id, member, point, original in moves:
+        reserved = preplan.get((net_id, point)) if preplan else None
+        if reserved is not None:
+            # 534 r15: this carrier's lane was promised by `_lead_lane_reservations`
+            # -- the run and its name row are the same ones. The segment is drawn
+            # here, once, from that decision; nothing new is reserved.
+            direction, far, path = reserved
+            pick = (direction, far)
+            segments.append(LayoutSegment(net=net_id,
+                                          points=[tuple(p) for p in path]))
+            dedicated.add(_key(far))
+            nets.append(net_id)
+            members.append(member)
+            points.append(point)
+            parts.append(original.part_id)
+            blocks.append(set())
+            fars.append(pick)
+            paths.append([tuple(p) for p in path])
+            measured.append([])
+            continue
+        lane = _label_stub_lane(original, point)
+        if lane[0] == 0.0:
+            # The carrier is a short **horizontal** run. `_label_stub_lane` reads
+            # the side off the box's centre; a box above/below the pin still has
+            # a horizontal side.
+            centre = (original.bbox[0] + original.bbox[2]) / 2.0
+            lane = (-1.0 if centre < point[0] else 1.0, 0.0)
+        router.reserved_exempt = net_id
+        _set_foreign_edges(router, segments, net_id)
+        blocked = (
+            _blocked_points(ctx, placed, net_id, labels, symbols, segments)
+            - own_points.get(net_id, set())
+        ) | dedicated
+        own_other = own_points.get(net_id, set()) - {_key(point)}
+        reasons: list[str] = []
+        pick: tuple[tuple[float, float], tuple[float, float]] | None = None
+        for direction in (lane, (-lane[0], 0.0)):
+            if pick is not None:
+                break
+            for rung in range(1, TEXT_ESCALATION_STEPS + 1):
+                reach = rung * router.grid
+                far = _rounded((
+                    point[0] + direction[0] * reach,
+                    point[1] + direction[1] * reach,
+                ))
+                reason = None
+                if _key(far) in own_other:
+                    reason = (
+                        f"{_point_text(far)} is another pin of this net (a U-line)"
+                    )
+                elif any(
+                    _strictly_on_segment(other, point, far) for other in own_other
+                ):
+                    reason = (
+                        f"the run to {_point_text(far)} passes through another pin "
+                        "of this net (a U-line)"
+                    )
+                elif _key(far) in blocked:
+                    reason = (
+                        f"{_point_text(far)} is another net's anchor or wire vertex"
+                    )
+                elif not _span_free(router, point, far, blocked):
+                    reason = (
+                        f"the run to {_point_text(far)} crosses a conductor, a body "
+                        "or a piece of text"
+                    )
+                elif not _label_fits(ctx, net_id, far):
+                    reason = (
+                        f"the name at {_point_text(far)} leaves the page's margin"
+                    )
+                if reason is not None:
+                    reasons.append(reason)
+                    continue
+                pick = (direction, far)
+                break
+        if pick is None:
+            return _local_label_failure(net_id, member, point, reasons)
+        # r8: the carrier is laid down the moment its far end is chosen, so the
+        # next move's `_set_foreign_edges` / `_blocked_points` / `_span_free` and
+        # the box phase's `_box_hits_foreign_run` all see it. `dedicated` carries
+        # the far point for the same reason: a later far may not reuse it.
+        segments.append(LayoutSegment(net=net_id, points=[point, pick[1]]))
+        dedicated.add(_key(pick[1]))
+        nets.append(net_id)
+        members.append(member)
+        points.append(point)
+        parts.append(original.part_id)
+        blocks.append(blocked)
+        fars.append(pick)
+        paths.append([point, pick[1]])
+        measured.append(reasons)
+
+    # 2) Every far end — and so every row the host will print — is known before
+    #    the first box is measured.
+    rows: list[Box] = []
+    for index in range(len(nets)):
+        row = textmetrics.wire_name_box([list(p) for p in paths[index]], nets[index])
+        if row is not None:
+            rows.append(row)
+
+    placed: list[LayoutLabel] = []
+    for index in range(len(nets)):
+        direction, far = fars[index]
+        trial = None
+        for box_rung in range(1, TEXT_ESCALATION_STEPS + 1):
+            avoid = [*occupied, *flag_boxes, *rows, *(item.bbox for item in placed)]
+            trial = _local_label_trial_box(
+                nets[index], far, direction, box_rung, avoid, segments,
+                blocks[index], parts[index],
+            )
+            if trial is not None:
+                break
+        if trial is None:
+            measured[index].append(
+                f"no free name box for the run to {_point_text(far)}"
+            )
+            return _local_label_failure(
+                nets[index], members[index], points[index], measured[index],
+            )
+        placed.append(trial)
+
+    for index in range(len(nets)):
+        label = placed[index]
+        labels.append(label)
+        occupied.append(label.bbox)
+        solids.append(label.bbox)
+        router.boxes = [*solids, *router.flag_walls]
+    return None
+
+
+# ------------------------------------------ 534 r22: the final label re-seat
+
+
+def _foreign_runs_through(
+    box: Box, net_id: str, segments: Sequence[LayoutSegment]
+) -> list[str]:
+    """The nets whose already-drawn conductors run **through** this box, in order.
+
+    One measurement, two readers: :func:`_box_across_foreign_run` asks it as a
+    question of fact while the box is being chosen, and
+    :func:`_reseat_crossed_labels` asks it again when every conductor exists. The
+    two must not disagree about what "ink" is, so the shape test lives here once
+    and the interior test is `router._segment_hits_box`'s — a wire on the outline
+    or through a corner is adjacent ink, not a cut.
+
+    A conductor of the box's **own** net is skipped: this net's name may ride on
+    its own wire, which is what a name carrier is for, and refusing that would
+    take the label off the run that names it.
+    """
+    out: list[str] = []
+    for segment in segments:
+        if segment.net and segment.net == net_id:
+            continue
+        points = segment.points
+        for start, end in zip(points, points[1:]):
+            if _segment_hits_box(start, end, box):
+                out.append(segment.net or "unnamed")
+                break
+    return out
+
+
+def _label_pin_direction(
+    ctx: _Context, placed: _Placement, label: LayoutLabel
+) -> tuple[float, float]:
+    """The escape direction of the **pin** this label names, else its box's side.
+
+    The first placement asked the pin (`_label_for`'s `_pin_direction`); a
+    `LayoutLabel` carries its owner but not the pin token, so the token is read
+    back off the drawing: the pin whose drawn tip is the label's anchor. When no
+    pin sits on the anchor the box's own side answers — the same reading
+    :func:`_label_stub_lane` and `drawapply._label_stub_candidates` use, so the
+    ladder starts where the page layer would draw first.
+    """
+    if label.part_id:
+        profile = ctx.profile(label.part_id)
+        if profile is not None:
+            for pin in profile.pins:
+                point = _pin_point(
+                    ctx, label.part_id, pin.number, placed.poses, placed.origins
+                )
+                if point is None or _key(point) != _key((label.x, label.y)):
+                    continue
+                direction = _pin_direction(
+                    ctx, label.part_id, pin.number, placed.poses
+                )
+                if direction is not None:
+                    return direction
+    return _label_stub_lane(label, (label.x, label.y))
+
+
+def _replace_box(sequence: list[Box], old: Box, new: Box) -> None:
+    """Swap the one entry that *is* `old` for `new`, leaving the rest in order.
+
+    The picture is kept single-sourced: a box moved in `labels` and left behind in
+    `solids` (the router's own obstacle list) or `router.boxes` would be a stale
+    wall for everything that reads those afterwards.
+    """
+    for position, entry in enumerate(sequence):
+        if entry == old:
+            sequence[position] = new
+            return
+
+
+def _reseat_failure(
+    label: LayoutLabel, hits: Sequence[str], index: int
+) -> GrammarFailure:
+    """The named refusal for a box with no free seat: never ship a pierced row."""
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject=f"labels[{index}]",
+        detail=(
+            f"the label {label.net!r} at {_point_text((label.x, label.y))} has a "
+            "conductor through its box that no seat on its own ladder clears: "
+            + ", ".join(f"a {net} run" for net in sorted(set(hits)))
+            + " runs through "
+            f"[{label.bbox[0]:g}, {label.bbox[1]:g}, {label.bbox[2]:g}, "
+            f"{label.bbox[3]:g}], and the last pass (after every conductor, both "
+            "flag passes and the local-label carriers) found no box that is free "
+            "of them — a name printed through a wire reads as the other net, so "
+            "the drawing is refused rather than delivered with the collision"
+        ),
+        action=(
+            "the label's own four-direction ladder is exhausted at its anchor: "
+            "give the island room (the spacing ladder) or move the branch that "
+            "holds the conductor — widening the text tolerance is not available, "
+            "because the box was chosen before the wire existed and the wire is "
+            "the thing that arrived second"
+        ),
+    )
+
+
+def _reseat_crossed_labels(
+    ctx: _Context,
+    placed: _Placement,
+    segments: Sequence[LayoutSegment],
+    labels: list[LayoutLabel],
+    symbols: Sequence[LayoutPowerSymbol],
+    occupied: list[Box],
+    solids: list[Box],
+    router: _Router,
+) -> GrammarFailure | None:
+    """Move every label box a conductor came to lie under, once, at the end.
+
+    **The disease this answers** (534 r22, measured on the `ch343_power` island).
+    A bare label's box is chosen inside the per-net loop (:func:`_label_at`), so it
+    sees only the conductors laid *before its own net's turn*, and a flag's lead is
+    laid later in that same loop. The V3 box therefore dodged the GND run it could
+    see and landed on the VCC lead it could not; the gate refused the drawing with
+    `text-on-wire … for 14 units`. No pitch fixes that: rungs 1.0x and 1.5x moved
+    box and lead by the same amount and failed identically, because the two
+    objects hang off two branches and their collision travels with the spacing.
+
+    **The ruler is "any penetration at all", not the gate's tolerance.** The
+    readability constraint tolerates a chord shorter than
+    `textmetrics.TEXT_WIRE_PENETRATION` (the lint's own graze, measured on pages
+    that pass). This pass may not borrow that tolerance: its box was chosen
+    against a picture that did not yet contain the wire, so eight units through
+    the row is still a row printed through a conductor the compiler went on to
+    draw. A box that cannot be moved off its conductors is a named `layout-unsat`
+    — never a drawing delivered with the collision.
+
+    **What moves, and what does not.** Only the box. The anchor is the electrical
+    fact (a label joins the node it touches) and the net's name is unchanged. A
+    label with nothing through it is not touched at all — not re-decided, not
+    re-appended, not re-ordered — so a drawing this pass has nothing to say about
+    is byte-identical to the drawing before it existed. The current box stays in
+    ``occupied``: it is the seat being vacated, and a ladder allowed to re-choose
+    it would answer nothing.
+
+    The ladder is :func:`_label_at`'s own — the part's escape first, then the rest
+    of the compass, `TEXT_ESCALATION_STEPS` rungs each — and the rounds are
+    :data:`NAME_ESCAPE_ROUNDS`, the same finite bound the wire-name escape obeys:
+    one box moved aside can uncover another, and a ladder that keeps finding work
+    must stop somewhere.
+
+    **The bound is a refusal, not a licence.** `NAME_ESCAPE_ROUNDS` is finite, so
+    the state the loop can end in is exactly one of two: nothing is pierced, or
+    something still is. The second is a named ``layout-unsat`` — the same one the
+    seat test raises — because falling out of the ladder with a conductor still
+    through a box would hand the gate the very drawing this pass exists to
+    refuse. There is deliberately **no** `return None` after the loop: every exit
+    from here either states that no box is pierced or names the box that is.
+    """
+    if not labels:
+        return None
+    ink = _flag_ink_rows(ctx, symbols)
+    for _round in range(NAME_ESCAPE_ROUNDS):
+        pending = [
+            index for index, label in enumerate(labels)
+            if _foreign_runs_through(label.bbox, label.net, segments)
+        ]
+        if not pending:
+            return None
+        moved = 0
+        for index in pending:
+            label = labels[index]
+            hits = _foreign_runs_through(label.bbox, label.net, segments)
+            if not hits:
+                continue
+            seat = _label_at(
+                label.net, (label.x, label.y),
+                _label_pin_direction(ctx, placed, label),
+                list(occupied), part_id=label.part_id, segments=segments,
+                avoid=ink,
+            )
+            if _foreign_runs_through(seat.bbox, label.net, segments) or any(
+                _overlaps(seat.bbox, other)
+                for other in occupied if other != label.bbox
+            ):
+                return _reseat_failure(label, hits, index)
+            occupied.append(seat.bbox)
+            _replace_box(solids, label.bbox, seat.bbox)
+            label.bbox = seat.bbox
+            # One sourced picture: the router walls are `solids` plus the flag
+            # walls (every assignment above builds exactly that list), so rebuild
+            # it rather than trust a positional swap that silently no-ops when the
+            # wall list was rebuilt by a pass in between.
+            router.boxes = [*solids, *router.flag_walls]
+            moved += 1
+        if not moved:
+            # No rung moved anything this round: the finite ladder is spent, and
+            # the single named exit below is what says so.
+            break
+    still = [
+        index for index, label in enumerate(labels)
+        if _foreign_runs_through(label.bbox, label.net, segments)
+    ]
+    if not still:
+        return None
+    index = still[0]
+    return _reseat_failure(
+        labels[index],
+        _foreign_runs_through(labels[index].bbox, labels[index].net, segments),
+        index,
+    )
+
+
+def _local_label_failure(
+    net_id: str,
+    member: str,
+    point: tuple[float, float],
+    measured: Sequence[str],
+) -> GrammarFailure:
+    """The loud ``layout-unsat`` for a pin with no legal carrier + box."""
+    why = "; ".join(measured) if measured else "no rung was measured"
+    return GrammarFailure(
+        category=FAILURE_LAYOUT_UNSAT,
+        subject=net_id,
+        detail=(
+            f"{member} is named by the local-label exception (534), and the one "
+            "short run that has to carry its name out of the pin at "
+            f"{_point_text(point)} has no legal end. Measured: {why}"
+        ),
+        action=(
+            "move the part or the run named above so this pin has a free side for "
+            "a short carrier, or enlarge the region; the drawing is refused rather "
+            "than naming the pin with a bare label"
+        ),
+    )
+
+
+def _local_label_trial_box(
+    net_id: str,
+    point: tuple[float, float],
+    direction: tuple[float, float],
+    box_rung: int,
+    avoid: Sequence[Box],
+    segments: Sequence[LayoutSegment],
+    blocked: set[tuple[float, float]],
+    part_id: str,
+) -> LayoutLabel | None:
+    """The **trial** name box a carrier's far end would carry — 534's copy of
+    :func:`_label_at`'s ladder with this pass's own predicate.
+
+    `_label_at` is the one ruler for a label placed *beside a fixed anchor*, and
+    the offsets below are its offsets (``half_x``/``half_y`` per rung, four
+    directions). It cannot be called as it stands here for two reasons: it returns
+    the first box that clears ``occupied`` only, so it would take a box across a
+    foreign run while a neighbouring placement was free; and it writes the box it
+    picks into the list it is handed. This copy only *measures*: nothing is
+    appended anywhere, so a refused rung cannot pollute the committed picture.
+
+    A placement is legal when it (a) overlaps none of ``avoid`` — the reserved
+    text boxes, the part bodies and the flag glyph+name rows, (b) sits across no
+    run already laid (`_box_hits_foreign_run`), and (c) contains no blocked point
+    (another net's anchor, pin or wire vertex). The first legal one wins, in the
+    order :func:`_directions` walks the compass from ``direction``.
+    """
+    half_x = text_width(net_id) / 2.0 + TEXT_GAP
+    half_y = TEXT_SIZE / 2.0 + TEXT_GAP
+    for box_direction in _directions(direction):
+        if box_direction[0] != 0.0:
+            offset = (box_direction[0] * half_x * box_rung, 0.0)
+        else:
+            offset = (0.0, box_direction[1] * half_y * box_rung)
+        candidate = font_text_box(
+            net_id, x=point[0] + offset[0], y=point[1] + offset[1],
+        )
+        if any(_overlaps(candidate, other) for other in avoid):
+            continue
+        if _box_hits_foreign_run(candidate, segments):
+            continue
+        if any(
+            candidate[0] <= px <= candidate[2] and candidate[1] <= py <= candidate[3]
+            for px, py in blocked
+        ):
+            continue
+        return LayoutLabel(
+            net=net_id, text=net_id, bbox=candidate,
+            x=point[0], y=point[1], part_id=part_id,
+        )
+    return None
+
+
+def _box_hits_foreign_run(
+    box: Box, segments: Sequence[LayoutSegment]
+) -> bool:
+    """Does this text box sit across a conductor that is already drawn?
+
+    A name printed across a conductor reads as that conductor's name, which the
+    readability gate refuses (`text-on-wire`). The carrier pass re-computes the
+    box for the far end it chooses, so it is that pass which has to answer for
+    the box it keeps — the bare form never asked, because a bare label named a
+    pin and no run was drawn under it. Every segment in ``segments`` is already
+    laid (the carrier's own run is appended after this check), so a hit is a
+    conductor this name must not borrow.
+    """
+    for segment in segments:
+        points = segment.points
+        for start, end in zip(points, points[1:]):
+            if _segment_hits_box(start, end, box):
+                return True
+    return False
 
 
 def _label_fits(ctx: _Context, net_id: str, anchor: tuple[float, float]) -> bool:
@@ -11113,6 +12461,10 @@ def _plan_bbox(ctx: _Context, plan: LayoutPlan) -> Box:
     Used for the region check (a plan whose own extent does not fit the region
     is refused with the numbers, rather than reported one object at a time) and
     for the compactness layer of the ranking.
+
+    A flag contributes the box :func:`_flag_box` reserves for it — glyph **and**
+    the name row the host prints beside it, margin 0 (534 r1: the page's own
+    extent has to include text the page draws, the same as a part's rows below).
     """
     boxes: list[Box] = []
     for part in plan.parts:
@@ -11133,11 +12485,10 @@ def _plan_bbox(ctx: _Context, plan: LayoutPlan) -> Box:
         profile = ctx.book.get(symbol.symbol_ref)
         if profile is not None:
             boxes.append(
-                flag_glyph_box(
-                    profile, rotation=symbol.rotation,
-                    anchor=(symbol.x, symbol.y),
+                _flag_box(
+                    profile, symbol.rotation, (symbol.x, symbol.y), symbol.net,
+                    margin=0.0,
                 )
-                or (symbol.x, symbol.y, symbol.x, symbol.y)
             )
         else:
             boxes.append((symbol.x, symbol.y, symbol.x, symbol.y))

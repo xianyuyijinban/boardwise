@@ -243,6 +243,15 @@ def test_the_topology_refusal_is_visible_beside_the_ladder_refusal():
       引脚**一条引线都没预留**，于是 `wire-on-pin-line` 有 4 条可拒。520G 换成
       pose 之后的方向，这一轮从 `4 + 29 + 1` 变成 `26 + 3` = **29** 条，那一类
       归零（下面既有新条数、也有「一条都不许再有」的不变量两条断言）。
+    * **再改（534 r22，本测试现在的形状）**：终局重落座 `_reseat_crossed_labels` 在
+      **全页导体铺完**之后、可读性闸**之前**跑：把被外网导线穿过的 label box 沿自己的
+      16 档梯子重落座，铺不满就按「有限梯子是拒绝不是许可」具名拒绝。此页拓扑轮的
+      `CLAMP`（anchor `(60, 180)`）逐档无座——另两枚 `CLAMP` 载体、`C11`/`100nF 0603`
+      的文字盒与器件体占住其余方向，独剩的方向又被 `HVDC` 整高穿过（chord 9）——于是
+      这一轮在**重落座**处拒绝（subject `labels[9]`），`violations` 为空。**这不是闸没拒，
+      是闸没跑**：换层前后的画面摘要逐字相同（`1b3031e27f33bf54`，A/B 见
+      `test_the_reseat_layer_does_not_hide_the_readability_rows`），被测的仍是同一张图，
+      换的只是先开口的那个人。
 
     轮词表本身仍是三轮（`FAILURE_ROUNDS`，由本文件形状层的
     `test_failure_round_names_are_the_three_search_rounds` 钉着）——这里量的是
@@ -363,27 +372,34 @@ def test_the_topology_refusal_is_visible_beside_the_ladder_refusal():
     topology_variant = next(
         item for item in result.rejected if item.variant == "topology-search"
     )
-    assert not [
-        line for line in topology_variant.violations if "wire-on-pin-line" in line
-    ], (
-        "520G reserves each pin's drawn lead at every pose, so the topology round "
-        "cannot run a wire along one again; a `wire-on-pin-line` here means the "
-        f"turned poses stopped reserving — got {topology_variant.violations[:3]}"
+    # **534 r22 重钉（换层：可读性闸 → 终局重落座）**：`_reseat_crossed_labels`
+    # 在全页导体铺完之后、可读性闸之前跑，因此这一轮**没到闸**。下面三句钉的是
+    # 同一层的因果事实，不是数字：
+    #   1. 主体是**具体那枚 label**（`labels[9]`），不是 `gate`；
+    #   2. 它点名的图元与理由（`CLAMP`、`HVDC`、精确 box、梯子铺不满）；
+    #   3. `violations` 为空是**原因**——「在 reseat 处就拒」，不是「闸放行」。
+    # 26 条读数与 520G 的 `wire-on-pin-line` 不变量搬到 A/B 伴生测试里（关掉具名
+    # 出口才量得到），那里它们**非空**；把那条不变量留在这里会是真空通过。
+    assert by_round["topology"].subject == "labels[9]", (
+        "534 r22 moved this round's first refusal to the final re-seat, which "
+        "names the label it could not seat: the subject is the label, not the "
+        f"gate — got {by_round['topology'].subject}"
     )
-    assert "the independent readability checker refused 26 hard violation" in (
-        by_round["topology"].detail
+    assert (
+        "the label 'CLAMP'" in by_round["topology"].detail
+        and "no seat on its own ladder clears" in by_round["topology"].detail
+        and "a HVDC run" in by_round["topology"].detail
+        and "runs through [39.25, 163, 80.75, 172]" in by_round["topology"].detail
     ), (
-        "under 530D's ruling A the topology round reaches the readability gate with "
-        "26 hard violations (520G measured 29, 530F 21, 531 22; **532 +5** because "
-        "the checker now reads a placed part's **pin name and number** as well, and "
-        "this page's own library prints them for three of its symbols; **535 −1** "
-        "because one of those `pin-text-press` rows is gone from this drawing — the "
-        "535 landing changed the routing under it. A/B measured on this worktree "
-        "with HEAD's `drawcompiler.py`: old 27 = `text-overlap` 24 + "
-        "`pin-text-press` 1 + `text-on-wire` 2, new 26 = `text-overlap` 24 + "
-        "`text-on-wire` 2. Same layer, same leading kind, one row fewer); a "
-        "different count means a different page — got "
-        f"{by_round['topology'].detail[:200]}"
+        "the re-seat refusal owes its own subject and its own reason: the label, "
+        "the net whose conductor cut the box, the exact box, and the exhausted "
+        f"ladder — got {by_round['topology'].detail[:300]}"
+    )
+    assert not topology_variant.violations, (
+        "534 r22 refuses this round at the final re-seat, **before** the "
+        "readability gate runs; an empty violation list is the cause that row "
+        "names. Rows here would mean the gate ran first and the re-seat row is "
+        f"no longer the first refusal — got {len(topology_variant.violations)}"
     )
     assert by_round["topology"].category == dc.FAILURE_LAYOUT_UNSAT, (
         "GATE_REFUSAL_KINDS maps none of the hard kinds this gate hit, so the "
@@ -422,21 +438,102 @@ def test_the_topology_refusal_is_visible_beside_the_ladder_refusal():
     #
     # **535 重钉（29 → base 不再是可读性闸 / 27 → 26）**：`base` 轮换了层（069
     # sec.1 旗标席位阶梯，上面已逐条说明），所以第一句不再是闸的计数，而是闸的
-    # **那层**自己的主体与句号；`topology` 轮仍在可读性闸上，只是这张图的
-    # `pin-text-press` 少了一条（HEAD 的 `drawcompiler.py` A/B 实测：
-    # 旧 27 = `text-overlap` 24 + `pin-text-press` 1 + `text-on-wire` 2；
-    # 新 26 = `text-overlap` 24 + `text-on-wire` 2）。两条不变量照旧：
-    # `wire-on-pin-line` 仍为 0（下面那句），轮集合仍是 `base` + `topology`。
+    # **那层**自己的主体与句号；`topology` 轮当时仍在可读性闸上。
+    # **534 r22 重钉（topology 轮也不再以闸的计数开头 / 26 是「条数 + 构成」）**：
+    # 终局重落座先开口，于是 `topology` 的摘要行是它自己的主体与句号（正文已钉）。
+    # 26 条读数搬进 A/B 伴生测试，那里的**实测构成**是 `text-overlap` **26** +
+    # `text-on-wire` **0**——旧注释写的「`text-overlap` 24 + `text-on-wire` 2」
+    # 与本树实测不符（数字被钉住、组合从未被钉）。`wire-on-pin-line` 为 0 这条
+    # 不变量**只在闸跑过的那一态才有内容**，所以在伴生测试里断言，不在这里——
+    # 留在这里会随着 `violations` 变空而**真空通过**。
     assert "is named by a flag of its own" in summary[0]["detail"], (
         "the base round's summary row is now the ground's own flag-seat ladder "
         f"(535) — got {summary[0]['detail'][:200]}"
     )
-    assert "readability checker refused 26 hard violation" in summary[1]["detail"]
+    assert "no seat on its own ladder clears" in summary[1]["detail"], (
+        "534 r22: the topology round's summary row is the final re-seat's own "
+        f"sentence now, not the gate's count — got {summary[1]['detail'][:200]}"
+    )
     for item in summary:
         assert "wire-on-pin-line" not in item["detail"], (
             "520G reserves every pin's lead at every pose; neither round's leading "
             f"refusal may be that class again — got {item['detail'][:200]}"
         )
+
+
+def test_the_reseat_layer_does_not_hide_the_readability_rows(monkeypatch):
+    """**534 r22 的 A/B 伴生钉**：关掉具名出口，26 条读数与 520G 不变量必须还在。
+
+    534 r22 让终局重落座 ``_reseat_crossed_labels`` 成为这一轮的第一个开口人：它在这页的
+    `CLAMP`（anchor `(60, 180)`）上 16 档全无座，于是**在可读性闸之前**具名拒绝，
+    `topology-search` 的 `violations` 因此为空。上面那条测试钉的是**新的**第一个开口人；
+    这一条钉的是**被它挡在后面的那一层仍然活着**——否则「26 条读数」与「
+    `wire-on-pin-line` 为 0」两条历史不变量会随着 `violations` 变空而**真空通过**，
+    等于测试缩小了覆盖面却宣称重钉。
+
+    量法：只在这一条测试里把 `_reseat_crossed_labels` 换成恒 `None`（≈ 534 r22 之前的
+    行为：仍穿透的 box 交给闸去判），其余一切照旧——同一个 fixture、同一把真尺子、
+    同一个 `CompileBudget`。这不是产品开关：monkeypatch 在测试结束自动还原，
+    别的测试看不到它。
+
+    换层前后的画面是同一张：进入该 pass 瞬间的 (labels, segments, solids) 摘要两态
+    都是 `1b3031e27f33bf54`（.tmp_534/topology-failure-review-r1/probe3.json），
+    所以这里量到的 26 条就是「如果没有更早报拒，这一页会给读者看的读数」。
+    """
+    monkeypatch.setattr(dc, "_reseat_crossed_labels", lambda *args, **kwargs: None)
+    circuit = CircuitSpec.load(SPECS / "flyback_uc3845.circuit.json")
+    presentation = _single_module(
+        PresentationSpec.load(SPECS / "flyback_uc3845.presentation.json")
+    )
+    result = dc.compile(
+        circuit, presentation, _flyback_library_real(),
+        dc.CompileBudget(max_candidates=64),
+    )
+    assert not result.ok and not result.candidates
+
+    by_round = {item.round: item.failure for item in result.failure_rounds}
+    # 关掉重落座不改变轮集合：仍是 base + topology（换的只是谁先开口）。
+    assert set(by_round) == {"base", "topology"}, (
+        f"the rounds are the same picture — got {sorted(by_round)}"
+    )
+    assert "the independent readability checker refused 26 hard violation" in (
+        by_round["topology"].detail
+    ), (
+        "with the re-seat out of the way the topology round must reach the "
+        "readability gate again — 26 hard violations, the same page the reseat "
+        f"pass refused — got {by_round['topology'].detail[:200]}"
+    )
+    assert by_round["topology"].category == dc.FAILURE_LAYOUT_UNSAT
+
+    topology_variant = next(
+        item for item in result.rejected if item.variant == "topology-search"
+    )
+    assert len(topology_variant.violations) == 26, (
+        "the count the gate's sentence states and the rows it kept are the same "
+        "reading — 26 rows on the worktree tree (534 r22 measured; 535 was 26 too) "
+        f"— got {len(topology_variant.violations)}"
+    )
+    # **不变量（520G）：这一轮的不许再有 `wire-on-pin-line`。**
+    # 它在主测试里已经量不到（那一轮没跑到闸），所以这一句是它唯一的证人：
+    # 摘掉 520G 的 pose 方向修复，这里会立刻出现 `wire-on-pin-line` 行。
+    assert not [
+        line for line in topology_variant.violations if "wire-on-pin-line" in line
+    ], (
+        "520G reserves each pin's drawn lead at every pose, so the topology round "
+        "cannot run a wire along one again; a `wire-on-pin-line` here means the "
+        f"turned poses stopped reserving — got {topology_variant.violations[:3]}"
+    )
+    # **26 的构成也钉住**（旧注释曾写「24 + text-on-wire 2」，实测不符）：
+    # 这一页闸读出来的 26 条**全是** `text-overlap`，没有一条 `text-on-wire`。
+    # 只钉条数会把「组合变了但总数凑巧相等」读成同一张图。
+    kinds = {
+        "text-overlap": sum("text-overlap" in line for line in topology_variant.violations),
+        "text-on-wire": sum("[text-on-wire]" in line for line in topology_variant.violations),
+    }
+    assert kinds == {"text-overlap": 26, "text-on-wire": 0}, (
+        "the 26 rows are all `text-overlap` on this page; a `text-on-wire` row "
+        f"means the picture moved — got {kinds}"
+    )
 
 
 def test_a_hand_built_result_json_round_trips_are_report_ready():

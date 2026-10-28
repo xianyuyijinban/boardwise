@@ -594,6 +594,13 @@ def render_box(
     the reported anchor y is negated into canvas units, and the reported
     anchor is the text's **baseline** — the glyphs sit above it in the SVG
     viewport (smaller SVG y), which is *larger* canvas y after the flip.
+
+    ``y`` is the *effective* baseline the caller read, which is **not** always
+    the ``<text y=…>`` attribute: the host shifts a row with a ``<tspan dy=…>``
+    and that offset moves the ink (534 measured it — a rot-180 rail flag's name
+    carries ``dy="8"``, its ink 707..712 on the page while the attribute says
+    715). :func:`_svg_text_nodes` folds the offsets in, so the box below is
+    always built from the baseline the glyphs were drawn at.
     The box therefore spans ``canvas_y .. canvas_y + height`` — verified
     against C20 (test/P23): designator baseline at canvas 720, glyphs
     720..730 above the symbol's body; value baseline at 710, glyphs
@@ -609,8 +616,29 @@ def render_box(
     return (x0, canvas_y, x0 + width, canvas_y + height)
 
 
+def _tspan_dy(inner: str) -> float:
+    """The vertical offset a text node's ``<tspan>`` rows move its ink by.
+
+    SVG's ``dy`` is **relative** to the ``<text>``'s own baseline and they add
+    up over nested/multiple tspans, so the drawn baseline is
+    ``y + Σ dy`` in the render's (y-down) frame — negated back to canvas units
+    by the caller. The host uses it where one row shares a ``<text>`` with
+    another: a rot-180 rail flag's name carries ``dy="8"``, which is why the
+    attribute said 715 while the ink measured 707..712 (534 r1, measured on the
+    landed `test/534` render; dy=0 rows — every other node of that page — are
+    unchanged by this reader).
+    """
+    return sum(float(value) for value in re.findall(r"dy=\"([-\d.eE]+)\"", inner))
+
+
 def _svg_text_nodes(svg: str) -> list[tuple[float, float, str, str, str]]:
     """``(x, y, text, role, anchor)`` of the canvas text nodes in one render.
+
+    ``y`` is the **effective baseline** in the render's own frame: the
+    ``<text y=…>`` attribute plus every ``<tspan dy=…>`` inside it
+    (:func:`_tspan_dy`), so callers negate one number and get the canvas
+    baseline the glyphs sit on. A node with no ``dy`` reads exactly as it did
+    before 534.
 
     Only the four measured classes read (measured 2026-10-04 on test/P22 and
     test/P1):
@@ -675,7 +703,13 @@ def _svg_text_nodes(svg: str) -> list[tuple[float, float, str, str, str]]:
         if not (x_match and y_match):
             continue
         out.append(
-            (float(x_match.group(1)), float(y_match.group(1)), content, role, anchor)
+            (
+                float(x_match.group(1)),
+                float(y_match.group(1)) + _tspan_dy(match.group(4)),
+                content,
+                role,
+                anchor,
+            )
         )
     return out
 
@@ -740,9 +774,13 @@ def _rotate_vertical_boxes(boxes: list[TextBox], svg: str) -> None:
         x_match = re.search(r'[\"\s]x="([-\d.eE]+)"', whole)
         y_match = re.search(r'[\"\s]y="([-\d.eE]+)"', whole)
         if content and x_match and y_match:
-            vertical[(float(x_match.group(1)), float(y_match.group(1)), content)] = (
-                rot.group(1)
-            )
+            vertical[
+                (
+                    float(x_match.group(1)),
+                    float(y_match.group(1)) + _tspan_dy(match.group(4)),
+                    content,
+                )
+            ] = rot.group(1)
     for box in boxes:
         key = (box.anchor[0], -box.anchor[1], box.text)
         angle = vertical.get(key) or vertical.get(

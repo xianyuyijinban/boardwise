@@ -55,6 +55,7 @@ from boardwise.engines.readability import (
     DEFAULT_GRID,
     HARD_KINDS,
     KIND_DANGLING_WIRE_END,
+    KIND_NAME_ROW_VERTICAL,
     KIND_NC_PIN_CONNECTED,
     KIND_NETLIST_PARTITION,
     KIND_OUT_OF_PAGE,
@@ -268,8 +269,8 @@ def _kinds(result) -> list[str]:
 # ------------------------------------------------ the contract and its shape
 
 
-def test_the_hard_kinds_are_the_twelve_the_contract_names():
-    """The vocabulary itself: twelve constraints, one kind each, fixed order.
+def test_the_hard_kinds_are_the_thirteen_the_contract_names():
+    """The vocabulary itself: thirteen constraints, one kind each, fixed order.
 
     147 added `wire-on-pin-line` and `text-on-wire` — the two classes 岳 caught by
     eye on a page every gate called clean (`outputs/147/FINDINGS.md`): a wire
@@ -278,7 +279,11 @@ def test_the_hard_kinds_are_the_twelve_the_contract_names():
     `text-overlap` never looked at a conductor at all. 532 added `pin-text-press`,
     the same kind of addition one level down: `_text_boxes` carried no *pin* name
     or number at all, so four collisions between a symbol's own pin text and its
-    own rows were invisible to this checker (`evidence/532/report.md` §4).
+    own rows were invisible to this checker (`evidence/532/report.md` §4). 534 r18
+    added `name-row-vertical`, the same addition one axis down: a wire's name row
+    printed along a *vertical* run is rotated a quarter turn by the host, and no
+    box test can see it — the row is 10 wide by 9.336 tall, not taller than wide
+    (`tests/test_534_horizontal_wire_names.py`).
     """
     assert HARD_KINDS == (
         "netlist-partition-mismatch",
@@ -288,6 +293,7 @@ def test_the_hard_kinds_are_the_twelve_the_contract_names():
         "wire-on-pin-line",
         "text-overlap",
         "text-on-wire",
+        "name-row-vertical",
         "pin-text-press",
         "out-of-page",
         "user-lock-violated",
@@ -661,7 +667,15 @@ def test_an_open_interface_wire_still_needs_something_at_its_end():
             bbox=(COL, 550.0, COL + 30.0, 570.0),
         )],
     ))
-    assert labelled.hard_violations == []
+    # 534 r18: this fixture's VIN wire runs **up a column**, so it is a carrier
+    # whose name the host prints rotated — the new `name-row-vertical` gate names
+    # it, and that finding is about the fixture's own geometry, not about the open
+    # interface this test measures. Every other kind still has to be absent.
+    assert [item.objects for item in _of(labelled, KIND_NAME_ROW_VERTICAL)] == [
+        ("segments[2]",)
+    ]
+    assert [item for item in labelled.hard_violations
+            if item.kind != KIND_NAME_ROW_VERTICAL] == []
 
 
 # ------------------------------------------------------------- 3. junctions
@@ -699,7 +713,15 @@ def test_two_wires_that_cross_need_no_junction():
         ],
     )
     result = _run(case)
-    assert result.hard_violations == []
+    # 534 r18: the fixture's `A` wire is the vertical one (100 -> 600 down the
+    # column) and is labelled at both ends, so it is a carrier the host prints a
+    # name along vertically — the only finding here, and one about the fixture's
+    # own shape rather than about the crossing this test measures.
+    assert [item.objects for item in _of(result, KIND_NAME_ROW_VERTICAL)] == [
+        ("segments[2]",)
+    ]
+    assert [item for item in result.hard_violations
+            if item.kind != KIND_NAME_ROW_VERTICAL] == []
     assert result.soft_metrics["crossings"] == 1.0
     assert result.soft_reasons["crossings"] == [
         "segments[2] x segments[3] at (300, 400)"

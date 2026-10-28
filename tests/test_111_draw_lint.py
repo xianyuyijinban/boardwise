@@ -99,15 +99,26 @@ def _snapshot(*components: dict, wires: list[dict] | None = None) -> dict:
 
 
 def _text_node(x: float, y_svg: float, text: str, *, fill: str, part_attr: bool = False,
-               anchor: str = "start") -> str:
+               anchor: str = "start", dys: tuple[float, ...] = (0.0,)) -> str:
+    """One canvas text node; ``dys`` is one ``<tspan dy>`` per row the host draws.
+
+    A single row is ``(0.0,)``, exactly what every node of the 2026-10-04 captures
+    carries. The host puts its ``dy`` on the tspan, not on the ``<text>``, so a
+    row that is drawn elsewhere than ``y_svg`` looks like this and only this
+    (534: a rot-180 rail flag's name carries ``dy="8"``).
+    """
     partid = ' c_partid="part_attr"' if part_attr else ""
+    spans = "".join(
+        f'<tspan xml:space="preserve" x="{x}" dx="0" dy="{dy}">'
+        f'{text if index == 0 else ""}</tspan>'
+        for index, dy in enumerate(dys)
+    )
     return (
         f'<text style="font-family:\'Arial\';font-size:7.148342059336824px;'
         f'font-style:normal;font-weight:normal;fill:{fill};stroke:none;"'
         f'{partid} x="{x}" y="{y_svg}" text-anchor="{anchor}" '
         f'transform="rotate(0, {x}, {y_svg})" '
-        f'dominant-baseline="ideographic"><tspan xml:space="preserve" '
-        f'x="{x}" dx="0" dy="0">{text}</tspan></text>'
+        f'dominant-baseline="ideographic">{spans}</text>'
     )
 
 
@@ -233,6 +244,63 @@ def test_l1_spares_a_border_graze_at_estimate_precision():
     )
     svg = _svg(_text_node(285, -725, "RXD", fill=BLUE))
     assert _by_predicate(_lint(snapshot, svg)).get("L1-text-on-wire") is None
+
+
+# -------------------------------------------------- tspan dy (534 r1)
+
+def test_svg_text_baseline_adds_the_tspan_dy():
+    """534 r1: the drawn baseline is ``y + Σ dy``, not the ``<text y>`` alone.
+
+    Measured on the landed `test/534` render: the three rot-180 rail flags'
+    names carry ``<tspan dy="8">``, and the pixels agree with the tspan rather
+    than with the attribute (VCC: attribute 715, glyph rows measured 709..713 on
+    the render, i.e. the ink moved 8 units the other way). A node without a
+    ``dy`` reads exactly as it did before this batch.
+    """
+    # ``(dys, svg y the glyphs are drawn at, canvas baseline)``; SVG's y is
+    # y-down, so a positive dy moves the drawn row *down* the page.
+    cases = [
+        ((0.0,), -700.0, 700.0),      # no dy: every row of the 2026-10-04 captures
+        ((8.0,), -692.0, 692.0),      # 534's flagged name, rot 180
+        ((-5.0,), -705.0, 705.0),     # the other direction
+        ((3.0, 4.0), -693.0, 693.0),  # two tspans add up
+    ]
+    for dys, expected_svg_y, expected_canvas_y in cases:
+        svg = _svg(_text_node(700, -700, "VCC", fill=BLUE, dys=dys))
+        nodes = drawlint._svg_text_nodes(svg)
+        assert len(nodes) == 1
+        x, y, text, role, anchor = nodes[0]
+        assert (x, text, role, anchor) == (700.0, "VCC", "annotation", "start")
+        assert y == pytest.approx(expected_svg_y)
+        box = drawlint.render_box(x, y, text, anchor=anchor)
+        assert box[1] == pytest.approx(expected_canvas_y)  # the canvas baseline
+        assert box[3] == pytest.approx(box[1] + drawlint.CANVAS_TEXT_UNITS)
+
+
+def test_l1_spares_the_flag_name_a_tspan_moved_off_the_conductor():
+    """534: VCC's name row is 707..717 once ``dy=8`` is read; DSR's run is at 720.
+
+    The captured page (`.tmp_534/final-postcheck-r1/`, `actual.svg` sha256
+    743de223…) draws the VCC flag at (720,725) rot 180: the name node's ``y``
+    says 715 and its tspan says ``+8``, so the ink is 707..712. The old reader
+    took the attribute, put the row at 715..725, and reported DSR's conductor
+    (y=720) through it — 534's false L1. Read with the tspan, the conductor is
+    three units outside the row.
+    """
+    snapshot = _snapshot(wires=[_wire("wDSR", "DSR", 660, 720, 740, 720)])
+    moved = _svg(_text_node(
+        720, -715, "VCC", fill=BLUE, anchor="middle", part_attr=True, dys=(8.0,),
+    ))
+    assert _by_predicate(_lint(snapshot, moved)).get("L1-text-on-wire") is None
+
+    # The same node without its tspan is the reading 534 corrected — and it is
+    # what made the capture look as if VCC were printed through DSR.
+    unmoved = _svg(_text_node(
+        720, -715, "VCC", fill=BLUE, anchor="middle", part_attr=True, dys=(0.0,),
+    ))
+    hits = _by_predicate(_lint(snapshot, unmoved))["L1-text-on-wire"]
+    assert len(hits) == 1
+    assert "VCC" in hits[0].message and "DSR" in hits[0].message
 
 
 # ------------------------------------------------------------------ L2

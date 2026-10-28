@@ -1,8 +1,9 @@
-"""534 — a three-island page whose flow is written down must compile, and a
+"""534 — a four-island page whose flow is written down must compile, and a
 port label must not land on the run beside it.
 
 The defect, as the task book's evidence has it: `blocklib/specs/ch343_uart`'s
-three islands compile without a flow (four candidates, but the USB connector ends
+four islands (three flow modules plus the `ch343_power` supply group) compile
+without a flow (four candidates, but the USB connector ends
 up *rightmost*), and adding
 
     "flow": [["usb_c", "ch343"], ["ch343", "hdr"]]
@@ -73,7 +74,7 @@ def _budget():
 
 @pytest.fixture(scope="module")
 def board():
-    """The shipped three-island board, compiled once: `(presentation, result)`."""
+    """The shipped four-island board, compiled once: `(presentation, result)`."""
     circuit = CircuitSpec.load(SPECS / f"{BOARD}.circuit.json")
     presentation = PresentationSpec.load(SPECS / f"{BOARD}.presentation.json")
     book = drawapply.load_library(SPECS / f"{BOARD}.library.json")
@@ -81,26 +82,40 @@ def board():
 
 
 def _order(page: PageLayoutPlan) -> list[str]:
-    """The island order the reader sees: read the page's own arrangement.
+    """The island order the reader sees: real columns, top to bottom.
 
-    The page fills a grid in flow order, so which axis the reader walks depends on
-    the grid: islands that share one horizontal band are a **column** read top to
-    bottom, and islands that stand side by side are a **row** read left to right.
-    ``y`` grows *upward* on this sheet (the title block keep-out sits at
+    The page fills a grid in flow order and the reader walks it the way the page
+    layer's own backflow rule does: down a **column**, then the next column to the
+    right. ``y`` grows *upward* on this sheet (the title block keep-out sits at
     ``y 10..190``), so "top" is the larger ``y``.
 
-    Reading x alone was right only while 534 came out as one row: with the islands
-    in a column it reported ``hdr`` first, and the column is the flow-correct
-    answer (usb_c at y 695, ch343 at 400, hdr at 185 — connector at the top). The
-    page is not obliged to keep its old shape; it is obliged to keep its flow.
+    A column is a band of frames whose **x extents overlap** — not a single left
+    edge. The old helper read one axis alone (all-in-one-column vs all-in-one-row)
+    and, on a 2x2 page whose lower row's right-hand island starts a few units to
+    the *left* of the upper row's (534's candidate 1: ``ch343`` x 483..771 above
+    ``hdr`` x 479..671), a pure x sort interleaved the two rows and reported
+    ``ch343_power, usb_c, hdr, ch343`` for a page that reads
+    ``usb_c, ch343, ch343_power, hdr``. Grouping by x overlap gives the columns
+    the page layer itself uses (the flow runs down a column between stacked
+    frames, `readability`'s rule); the flow assertion stays exactly as strict.
     """
     frames = [(item.id, *item.frame) for item in page.modules]
-    left = max(box[1] for box in frames)
-    right = min(box[3] for box in frames)
-    if left < right:
-        # every island shares one vertical band: a column, read top to bottom
-        return [row[0] for row in sorted(frames, key=lambda f: (-f[4], f[1]))]
-    return [row[0] for row in sorted(frames, key=lambda f: (f[1], -f[4]))]
+    columns: list[list[tuple]] = []
+    for frame in sorted(frames, key=lambda f: f[1]):
+        for column in columns:
+            low = min(item[1] for item in column)
+            high = max(item[3] for item in column)
+            if frame[1] < high and frame[3] > low:
+                column.append(frame)
+                break
+        else:
+            columns.append([frame])
+    columns.sort(key=lambda column: min(item[1] for item in column))
+    return [
+        frame[0]
+        for column in columns
+        for frame in sorted(column, key=lambda f: (-f[4], f[1]))
+    ]
 
 
 def _runs(page: PageLayoutPlan) -> list[tuple]:
@@ -137,9 +152,18 @@ def test_the_declared_flow_compiles_and_the_connector_reads_first(board):
             "the page layer must be clean before it is ranked"
         )
     for page in result.pages[:2]:
-        assert _order(page) == ["usb_c", "ch343", "hdr"], (
-            f"island order {_order(page)} is not the declared flow"
-        )
+        # 534 formal migration: the page is four islands; `ch343_power` is a supply
+        # group the flow does not order (its position is the page's business), so the
+        # declared order is read off the three flow modules only — exactly and in
+        # order, never merely "appears before".
+        assert sorted(item.id for item in page.modules) == [
+            "ch343", "ch343_power", "hdr", "usb_c",
+        ], (
+            "the shipped page is four islands (three flow modules plus the "
+            f"`ch343_power` supply group), got {[item.id for item in page.modules]}")
+        walked = [item for item in _order(page) if item in ("usb_c", "ch343", "hdr")]
+        assert walked == ["usb_c", "ch343", "hdr"], (
+            f"island order {_order(page)} is not the declared flow")
 
 
 def test_the_page_labels_never_sit_on_a_run_or_a_flag_s_name_row(board):

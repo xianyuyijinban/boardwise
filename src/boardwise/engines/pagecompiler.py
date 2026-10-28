@@ -127,6 +127,7 @@ from boardwise.core.pagelayoutplan import (
 from boardwise.core.presentationspec import (
     DirectWiringObligation,
     FlowEdge,
+    LocalLabelObligation,
     PresentationModule,
     PresentationPath,
     PresentationSpec,
@@ -710,7 +711,15 @@ def _reference_failures(
       order rather than a cycle — a cycle has no reading order, which is what the
       placement needs from it;
     * that every module resolves to a grammar — the module's own or the
-      document's, `facts-missing` when neither is stated.
+      document's, `facts-missing` when neither is stated;
+    * that a stated local-label exception has a drawing on this page —
+      `localLabelObligations` is read by the module pipeline, so the page is the
+      layer that can see the whole board: a net no module holds with two or more
+      members would be dropped by every module view and the page drawn as if the
+      entry were never written. That verdict is **not** written twice: the page
+      asks the same draw-owned checker the single-module entry runs
+      (:func:`boardwise.engines.drawcompiler.local_label_failures`), so one
+      document gets one answer from both entries.
     """
     out: list[GrammarFailure] = []
     parts = set(circuit_spec.part_ids())
@@ -838,6 +847,7 @@ def _reference_failures(
                 "grammarRef if every module follows the same grammar"
             ),
         ))
+    out.extend(drawcompiler.local_label_failures(circuit_spec, presentation_spec))
     return out
 
 
@@ -1093,6 +1103,22 @@ def _module_view(
                 note=item.note,
             )
             for item in presentation_spec.direct_wiring_obligations
+            if any(net_id in net_ids for net_id in item.nets)
+        ],
+        # The stated local exception travels on exactly the same terms (and is
+        # filtered by the same member count): a net this module holds one pin of
+        # has no local connection for per-pin labels to state, and keeping the
+        # entry would make the module's own reference gate refuse a fact that is
+        # true of the page, not of this drawing.
+        local_label_obligations=[
+            LocalLabelObligation(
+                nets=[
+                    net_id for net_id in item.nets
+                    if net_id in net_ids and len(sub_circuit.net(net_id).members) > 1
+                ],
+                note=item.note,
+            )
+            for item in presentation_spec.local_label_obligations
             if any(net_id in net_ids for net_id in item.nets)
         ],
         label_policy=presentation_spec.label_policy,
@@ -1726,7 +1752,28 @@ def _add_label(
         net=net_id, text=net_id, bbox=box, x=point[0], y=point[1],
     )
     plan.labels.append(label)
+    _note_name_rows(plan, occupied)
     return label
+
+
+def _note_name_rows(plan: LayoutPlan, occupied: list[Box]) -> None:
+    """Add the name rows the plan's labels **now** summon to the avoid list (534).
+
+    A page label can make a wire a *name carrier*: `core.layoutplan.
+    label_wire_indices` calls a segment a label when a label's anchor lies on it, and
+    the host then prints the net's name at the midpoint of that wire's longest run.
+    The row is ink from the moment the label is placed, and it is not the run's box
+    (the same gap :func:`_module_boxes` closes for the rows that already existed).
+    The table `_module_boxes` built cannot hold it — the label that summons it did not
+    exist yet — so the four-island page's D- label landed on the D+ row the D+ label
+    had just created, `labels[2] 'D-' [543, 698, 557, 707]` against
+    `segments[5] 'D+' [545, 690, 555, 699.336]`.
+
+    Which wires are named is asked of the one statement that says so, never copied.
+    """
+    for _name, box, _owner, _text in readability._named_wire_rows(plan):
+        if box not in occupied:
+            occupied.append(box)
 
 
 def _add_flag(
@@ -1916,12 +1963,65 @@ def _module_boxes(plan: LayoutPlan, book: Mapping[str, SymbolProfile]) -> list[B
       name row was what the D+ label still landed on). The measurement is
       :func:`~boardwise.core.textmetrics.flag_name_box` — the same one the
       readability checker uses — and a ground flag prints no name at all.
+
+    A third name row is neither of those, and missing it is what left the
+    four-island page with no candidate at all (534): a wire that **is** the
+    drawing's label carries a net name the host prints at the midpoint of its
+    longest straight run, so the paper under that name is occupied by typography
+    the run's own box does not cover (the row sits a text gap past the conductor,
+    or astride it). `_run_boxes` models the ink, not the name. The set of named
+    wires is not a second rule to keep in step: :func:`readability._named_wire_rows`
+    states it from ``core.layoutplan.label_wire_indices`` — the one statement the
+    landing and the gate both read — and only the wires that *are* a label are
+    named, so a conductor of a labelled net stays unnamed and contributes no row.
     """
     boxes: list[Box] = []
     for part in plan.parts:
         profile = book.get(part.symbol_ref)
-        if profile is not None:
+        if profile is None:
+            continue
+        # 534: the part's avoidable paper is what it is **drawn as**, not the hull
+        # of ``body ∪ every pin tip``. A pin tip is a *point* — the pin itself is a
+        # short lead off the body edge — so the hull claims the paper beside a
+        # connector's whole pin row as forbidden, and a page label anchored on one
+        # of those pins could not be placed anywhere the ladder reaches: this is
+        # what left the four-island page's D+/D- ports with no legal spot (every
+        # candidate at rings 1..3 overlapped the hull, so the unchecked fallback
+        # was used and landed inside the D+ name row). The same doctrine the run
+        # boxes already follow: a polyline's bounding rectangle is not its ink.
+        # The rest of the ink is still here and still avoided — the texts (which
+        # carry designator/value **and**, since 532, the host's pin rows), the
+        # runs, the flag glyphs and name rows, and the named-wire rows below.
+        # A profile that states no body keeps the old extent: an unstated extent is
+        # not a measured zero, so it is not a measured *nothing to avoid* either.
+        body = _body_box(profile, part)
+        if body is None:
             boxes.append(_part_extent(profile, part))
+            continue
+        # 534 F2: the body is not the whole of a part's ink. Between the body edge
+        # and a pin tip the pin draws a **lead**, and a page label printed on that
+        # lead covers the one thing that says which pin is which: the review's
+        # R0402 (body ``[-10,-20,10,20]``, tip ``(0,50)``, lead ``y 20..50``) had
+        # a label box ``(-19.5,33,19.5,42)`` accepted here, because only the body
+        # was avoided and nothing in the occupied set crosses those pins' lead.
+        # `drawcompiler._text_walls` is the ruler the module compiler already gives
+        # its own neighbouring texts (099b): the body plus each pin as the thin
+        # segment it is drawn as, :data:`drawcompiler.PIN_TEXT_WALL` thick — never
+        # the box around them. Reading it here is one ruler, not a second one, and
+        # it is deliberately *not* the ``body ∪ pin tip`` hull: that hull would
+        # take back the corner paper 534 just returned (a label beside a lead, out
+        # past the body edge but inside the hull, is legal). Two stated fallbacks
+        # come with that ruler and stay: a profile with no body keeps
+        # `_part_extent` (above), and one whose pin states no length makes
+        # `_text_walls` return the whole part box — an unstated extent is not a
+        # measured zero.
+        boxes.extend(
+            drawcompiler._text_walls(  # noqa: SLF001 - same layer, one ruler (099b)
+                profile,
+                SymbolPose(rotation=int(part.rotation), mirror=part.mirror),
+                (part.x, part.y),
+            )
+        )
     boxes.extend(text.bbox for text in plan.texts)
     boxes.extend(label.bbox for label in plan.labels)
     boxes.extend(
@@ -1940,6 +2040,13 @@ def _module_boxes(plan: LayoutPlan, book: Mapping[str, SymbolProfile]) -> list[B
             boxes.append(row)
     for item in plan.segments:
         boxes.extend(_run_boxes(item.points))
+    # The host's own name rows, for the wires that are this drawing's labels.
+    # `readability._named_wire_rows` is called rather than re-derived: a page that
+    # decided "which wires are named" for itself could drift from the gate, and the
+    # gate is what refuses the sheet.
+    boxes.extend(
+        box for _name, box, _owner, _text in readability._named_wire_rows(plan)
+    )
     return boxes
 
 

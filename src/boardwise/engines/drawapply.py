@@ -76,8 +76,17 @@ from ..core.layoutplan import (
 )
 from ..core.model import is_ground_net
 from ..core.presentationspec import PresentationSpec
-from ..core.symbolprofile import SymbolProfile, SymbolPose, pose_box, role_siblings
+from ..core.symbolprofile import (
+    SymbolProfile, SymbolPose, flag_glyph_box, pose_box, role_siblings,
+)
 from . import addcomponent
+#: 534 — one ruler for the two gates. `SOFT_FLOOR_TEXT_GAP` is S-21's number,
+#: owned by `readability` (the gate that judges the finished page); the stub
+#: chooser says the same thing while there is still a choice to make, so a plan
+#: does not hand the page a row the page's own gate would refuse. Imported, not
+#: copied: two numbers that must stay equal must be one number. No cycle —
+#: `readability` imports `core` only, and `drawcompiler` already imports it.
+from .readability import SOFT_FLOOR_TEXT_GAP
 
 __all__ = [
     "CENSUS_CLEARANCE",
@@ -669,6 +678,42 @@ class _Built:
     label_owner: dict[str, list[tuple[str, tuple[float, float, float, float]]]] = (
         field(default_factory=dict)
     )
+    #: 534 — the **name rows this plan has already committed to**, as
+    #: ``(what it is, box)``, one entry per stub drawn. The host prints each
+    #: stub's name at the midpoint of its longest straight run, so two stubs can
+    #: put two rows on the page not one of which any part owns — the CH340 page's
+    #: `CTS` row overlapped `RXD`'s by 5 units while every object check passed
+    #: (`evidence/534/label-stub-typography.md`). A stub chosen later avoids
+    #: overlapping these rows and records rows still below the S-21 floor.
+    #:
+    #: **Every** chosen row is registered here, whatever direction it reads in,
+    #: and the entry says which direction that is. The ink is on the paper either
+    #: way: a vertical row is the very footprint a later label's horizontal
+    #: candidate has to clear, and leaving it out means that candidate is measured
+    #: against no row at all (gap ``inf``) and taken silently. Measured on the 534
+    #: review's page: a vertical row at ``(0, 5)-(10, 111.45)`` and a later
+    #: horizontal row at ``(-25, 60)-(77.08, 70)`` overlap by 10, and the chooser
+    #: read the second as free (`gap = inf`) because the first had not been
+    #: registered (:func:`_place_label_stub`).
+    label_stub_rows: list[tuple[str, tuple[float, float, float, float]]] = (
+        field(default_factory=list)
+    )
+
+    #: 534 final-name-clearance: **every** name carrier this plan will print a net's
+    #: name on, as ``(net, row)`` -- the stub rows above plus the row of a wire a
+    #: label rode instead of getting a stub of its own. The host prints one name per
+    #: carrier, so two carriers of one net closer than
+    #: ``drawlint.L5_DUPLICATE_NET_GAP`` are one statement printed twice;
+    #: :func:`_duplicate_carrier_problems` refuses the plan for that at the end of
+    #: :func:`module_plan`. Rows are deduplicated by box, so a wire carrying two
+    #: **carriers, not boxes**: the rows are keyed by carrier identity (which wire
+    #: the name is printed on), so one wire carrying two labels of its net is one
+    #: carrier, while two different wires that happen to print on the same row are
+    #: two carriers ``0`` units apart -- the worst case of the floor, never a
+    #: dedupe.
+    name_carriers: list[
+        tuple[str, str, tuple[float, float, float, float]]
+    ] = field(default_factory=list)
 
 
 
@@ -1215,10 +1260,46 @@ def module_plan(
             )
             continue
         anchor = (label.x, label.y)
-        carried = any(
-            wire.net == label.net and _on_polyline(anchor, wire.points)
-            for wire in built.wires
+        carrier_index, carrier_wire = next(
+            (
+                (index, wire)
+                for index, wire in enumerate(built.wires)
+                if wire.net == label.net and _on_polyline(anchor, wire.points)
+            ),
+            (None, None),
         )
+        from .drawlint import L5_DUPLICATE_NET_GAP
+
+        carried = carrier_wire is not None
+        carrier_row = (
+            None if carrier_wire is None else textmetrics.wire_name_box(
+                [tuple(point) for point in carrier_wire.points], str(label.net)
+            )
+        )
+        # 534 stub-l5-selection: **riding a wire is a carrier choice too**, and it is
+        # the choice that produced the two rows this page's gate refuses. A net's
+        # name is one statement, so a wire whose own name row would print closer than
+        # `L5_DUPLICATE_NET_GAP` to a carrier this plan already committed is not a
+        # carrier this pass accepts: it stops riding and the stub ladder is asked for
+        # a row that clears the floor (the ladder itself skips near rows, see
+        # `_place_label_stub`). A label that cannot ride *and* cannot be stubbed keeps
+        # the wire and says so, so the final `_duplicate_carrier_problems` names the
+        # pair rather than the drawing hiding it.
+        ride_gap, ride_nearest = (
+            (math.inf, None) if carrier_row is None
+            else _same_net_carrier_gap(built, str(label.net), carrier_row)
+        )
+        ride = carried and (
+            carrier_row is None or not label_stubs
+            or ride_gap >= L5_DUPLICATE_NET_GAP
+        )
+        if carrier_row is not None and ride:
+            # The plan states that this conductor carries the name (the host cannot
+            # place a separate label), so this wire's own name row is a carrier and
+            # has to answer the same floor as a stub's.
+            built.name_carriers.append(
+                (str(label.net), f"wire[{carrier_index}]", carrier_row)
+            )
         # 145d: a net that carries a name and **no conductor at all** is stubbed on
         # a single-module plan too, not only on the page path (057 sec.4). GATE
         # (Q1.1) and VFB_NF (R10.1) are the measured shape: one pin, one label, no
@@ -1232,10 +1313,47 @@ def module_plan(
         # `built.wires` — that list grows a stub per label, and asking it here made
         # the net's *first* label flip the answer for the rest of them.
         bare = label.net not in planned_conductor_nets
-        if (label_stubs or bare) and not carried:
+        if (label_stubs or bare) and not ride:
             stub, blockers = _place_label_stub(
                 label, built, stub_bodies, stub_pins,
+                # 534 r19 put every layout label box on this list; **r24 narrows it
+                # to every *other* one**. A label's own `bbox` is the plan's
+                # reservation of where a netlabel would go, and this host cannot
+                # place one (029) — which is exactly why this pass draws the stub
+                # whose wire row prints the net's single statement. Counting the
+                # subject's own reservation as ink demands the row dodge a box
+                # nobody draws (measured: `RI`/`RTS` kept a pre-534 rung whose row
+                # crossed a real row). Every *other* label reservation, every part's
+                # reference/value row and every flag's own name row stay hard.
+                label_boxes=_hard_ink_boxes(
+                    layout, profiles, built, subject=label,
+                ),
             )
+            if stub is None and carried and carrier_row is not None:
+                # The wire was the only carrier left. Keep it, and state the pair the
+                # final gate will refuse: a fallback is recorded, never presented as
+                # a pass (534 stub-l5-selection).
+                built.name_carriers.append(
+                    (str(label.net), f"wire[{carrier_index}]", carrier_row)
+                )
+                built.notes.append(
+                    f"net {label.net}: the label at ({label.x:g}, {label.y:g}) rides "
+                    f"wire[{carrier_index}] whose name row {_box_text(carrier_row)} "
+                    f"prints {ride_gap:g} units from another carrier of the same net "
+                    f"({ride_nearest or 'unmeasured'}), under the "
+                    f"{L5_DUPLICATE_NET_GAP:g}-unit duplicate-carrier floor; no stub "
+                    "run was free either, so the wire keeps the name and the plan's "
+                    "duplicate-carrier gate names the pair"
+                )
+                built.downgrades.append(
+                    f"net {label.net}: the compiler drew a net label at "
+                    f"({label.x:g}, {label.y:g}), and this host cannot place one "
+                    f"(`sch.place_netlabel` is measured unusable, 029) — a planned wire "
+                    f"of {label.net} runs through that point and carries the name "
+                    "(`sch.place_wire` net=…); no stub was drawn because every rung "
+                    "printed its name on another carrier of this net"
+                )
+                continue
             if stub is None:
                 # 099d: a stub that lands on another net is a short in this host's
                 # netlist (measured: the V3 wire merged into RXD and the live
@@ -1349,6 +1467,13 @@ def module_plan(
             + " — the drawing would have a net with a member that does not exist"
         )
 
+    # 534 final-name-clearance: the floor the modules could only see one at a time,
+    # stated once over the whole plan. A refusal here is the plan's own geometry,
+    # named row by row -- never a note, never a lower threshold.
+    duplicate_carriers = _duplicate_carrier_problems(built)
+    if duplicate_carriers:
+        raise DrawPlanError("; ".join(duplicate_carriers))
+
     digest = source_digest(
         layout.source.circuit_sha256,
         layout.source.presentation_sha256,
@@ -1415,7 +1540,9 @@ def _label_stub(label: Any) -> tuple[float, float]:
     return run.points[-1]
 
 
-def _label_stub_candidates(label: Any) -> list[_StubRun]:
+def _label_stub_candidates(
+    label: Any, *, near_stagger: bool = False,
+) -> list[_StubRun]:
     """The runs a label's name stub is tried as, preferred and simplest first.
 
     Three rungs, and the order is the whole point of it:
@@ -1454,7 +1581,11 @@ def _label_stub_candidates(label: Any) -> list[_StubRun]:
     shortest = max(DRAW_GRID, (min(LABEL_STUB_LENGTH, max(DRAW_GRID, reach))
                                // DRAW_GRID) * DRAW_GRID)
     lengths: list[float] = []
-    for rung in (shortest, *LABEL_STUB_LENGTHS):
+    # 534 r21: two further rungs, so a row can leave a band of 10-unit-high boxes that
+    # sits on every shorter one. This is a finite ladder keyed to the drawing's own
+    # grid, not a search: 12 and 16 lattice steps.
+    for rung in (shortest, *LABEL_STUB_LENGTHS,
+                 DRAW_GRID * 12, DRAW_GRID * 16):
         if rung not in lengths:
             lengths.append(rung)
     directions = [preferred] + [
@@ -1494,6 +1625,33 @@ def _label_stub_candidates(label: Any) -> list[_StubRun]:
                     ),
                     family=f"bent {step_side} then {_direction_text(preferred)}",
                 ))
+    # 534 r19: the **four-point** form -- a short run on the pin's own side, then the
+    # perpendicular step, then the outward run that owns the longest segment. 099f's
+    # three-point bend steps aside *at the pin*, so its row still starts on the pin's
+    # band; keeping the near run first and stepping after it is what moves the row one
+    # band over while the name still leaves by the side its box is on. Kept after every
+    # existing shape, so a drawing whose stub was free cannot move.
+    for step in LABEL_STUB_STEPS:
+        for sign in (1.0, -1.0):
+            stepped = (across[0] * sign, across[1] * sign)
+            near = (round(x + preferred[0] * DRAW_GRID, 6),
+                    round(y + preferred[1] * DRAW_GRID, 6))
+            corner = (round(near[0] + stepped[0] * step, 6),
+                      round(near[1] + stepped[1] * step, 6))
+            for length in lengths:
+                if length <= step:
+                    continue          # the outward run must own the longest segment
+                far = (round(corner[0] + preferred[0] * length, 6),
+                       round(corner[1] + preferred[1] * length, 6))
+                out.append(_StubRun(
+                    points=(anchor, near, corner, far), side=preferred,
+                    shape=(
+                        f"{_direction_text(preferred)} {DRAW_GRID:g} then "
+                        f"{_direction_text(stepped)} {step:g} then "
+                        f"{_direction_text(preferred)} {length:g}"
+                    ),
+                    family=f"stagger {_direction_text(stepped)}",
+                ))
     # Only then the rest of the compass: a stub on another side of the pin still
     # names the net, which is what the stub is for.
     for length in lengths:
@@ -1505,6 +1663,41 @@ def _label_stub_candidates(label: Any) -> list[_StubRun]:
                 shape=f"{_direction_text(direction)} {length:g}",
                 family=f"straight {_direction_text(direction)}",
             ))
+    # 534 r23: the **near-length stagger** — a long run on the pin's own side,
+    # then the perpendicular step, then the outward run that owns the longest
+    # segment. It is offered **after every shape above** and only on the page path
+    # (`near_stagger`, set by the strict caller), so a drawing the old ladder
+    # already served cannot move and the 099d/099f synthetic callers keep their
+    # ladder byte for byte. r19's stagger steps aside after one lattice step, so
+    # its corner never leaves the pin's own band and a sealed band is unescapable;
+    # the near run carries the corner past a neighbouring row's x-range while the
+    # printed row stays horizontal and outward. The rungs are the grid's own
+    # multiples and nothing here reads a net, a part or a coordinate; every
+    # candidate still walks the body/pin/foreign-wire checks and the strict text
+    # floor in `_place_label_stub`.
+    if near_stagger:
+        for near in (4 * DRAW_GRID, 6 * DRAW_GRID, 8 * DRAW_GRID):
+            for step in LABEL_STUB_STEPS:
+                for sign in (1.0, -1.0):
+                    stepped = (across[0] * sign, across[1] * sign)
+                    base = (round(x + preferred[0] * near, 6),
+                            round(y + preferred[1] * near, 6))
+                    corner = (round(base[0] + stepped[0] * step, 6),
+                              round(base[1] + stepped[1] * step, 6))
+                    for length in lengths:
+                        if length <= max(near, step):
+                            continue    # the outward run must own the longest segment
+                        far = (round(corner[0] + preferred[0] * length, 6),
+                               round(corner[1] + preferred[1] * length, 6))
+                        out.append(_StubRun(
+                            points=(anchor, base, corner, far), side=preferred,
+                            shape=(
+                                f"{_direction_text(preferred)} {near:g} then "
+                                f"{_direction_text(stepped)} {step:g} then "
+                                f"{_direction_text(preferred)} {length:g}"
+                            ),
+                            family=f"near stagger {_direction_text(stepped)}",
+                        ))
     return out
 
 
@@ -1628,11 +1821,333 @@ def _box_text(box: tuple[float, float, float, float]) -> str:
     return f"({box[0]:g}, {box[1]:g})-({box[2]:g}, {box[3]:g})"
 
 
+def _stub_name_row(
+    run: "_StubRun", text: str
+) -> tuple[float, float, float, float] | None:
+    """The row the host will print for this stub — ``textmetrics.wire_name_box``.
+
+    534: the stub's name is not the layout's `label.bbox` and not the stub's own
+    box; it is the host's: the **midpoint of the longest straight run**, the row
+    :data:`WIRE_NAME_ROW` tall and the name's measured width long, start-anchored
+    along the run. That is why a 5-unit stub can print a 15-unit name past its
+    own far end, and why the row must be measured rather than assumed.
+    """
+    return textmetrics.wire_name_box([tuple(point) for point in run.points], text)
+
+
+def _stub_row_is_horizontal(run: "_StubRun") -> bool:
+    """Is the stub's **longest** straight run horizontal? (534)
+
+    The direction that decides how a name reads is the longest run's, because
+    that is the run the host rows the name along — *not* the stub's bounding box.
+    A bbox test is what makes short names lie: `TXD`'s 5-unit stub is taller than
+    the name is wide, so "the box is taller than it is wide" would call a 5-unit
+    horizontal run vertical, and `RI`'s 15-unit bent stub (5 across, 10 down) is
+    genuinely vertical even though its net's name is only 9.6 units wide.
+
+    `wire_name_row` is `wire_name_box`'s own merge and its own choice of run
+    (collinear touching pieces joined — a run split by a pin is still one run),
+    returned with the **axis** the host anchors the row in. Reading the direction
+    off that one function instead of re-deriving it here is what keeps this
+    chooser, the compiler's carrier filter and the readability gate on one
+    statement: 534 r18 added the axis to `core.textmetrics` for exactly that
+    (a private `_straight_runs` re-merge here would have been a second copy of
+    the rule, and `tests/test_layer_rules.py` forbids reaching for the private
+    name across the layer anyway). A stub with no run at all has no row and so
+    no horizontal one: ``False``, as before.
+    """
+    row = textmetrics.wire_name_row([tuple(point) for point in run.points], "X")
+    # the text only sets the row's *width*; the axis is a property of the run, so
+    # a placeholder is enough here and keeps the name out of the decision.
+    return bool(row is not None and row.horizontal)
+
+
+def _row_gap(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+) -> float:
+    """Two rows' edge-to-edge separation on S-21's ruler (+ overlap is negative)."""
+    return max(
+        max(a[0], b[0]) - min(a[2], b[2]),
+        max(a[1], b[1]) - min(a[3], b[3]),
+    )
+
+
+def _same_net_carrier_gap(
+    built: "_Built", net: str, box: tuple[float, float, float, float]
+) -> tuple[float, str | None]:
+    """The closest **other** carrier of ``net`` to this row, and how far it is.
+
+    One net's name printed on two carriers is one statement; two carriers closer
+    than :data:`drawlint.L5_DUPLICATE_NET_GAP` read as the same name printed twice
+    (110's shape, measured on this page at 18.16 / 17.46 units **after** the
+    modules merged). The rows compared are the carries this plan has committed to
+    -- ``built.name_carriers``, one entry per carrier, so one wire carrying two
+    labels of its net is one row here, not two.
+    """
+    closest, nearest = math.inf, None
+    for carrier_net, identity, row in built.name_carriers:
+        if str(carrier_net) != str(net):
+            continue
+        gap = _row_gap(box, row)
+        if gap < closest:
+            closest, nearest = gap, f"{identity} {_box_text(row)}"
+    return closest, nearest
+
+
+def _inside_length(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    box: tuple[float, float, float, float],
+) -> float:
+    """How much of this leg runs inside `box`'s **interior** (a graze is 0).
+
+    Liang–Barsky against the box inset by a hair — the same reading
+    :func:`boardwise.engines.router._segment_hits_box` makes, kept here as a length
+    because 534 fix r1 has to *name* the depth it refuses a row for.
+    """
+    left, bottom = box[0] + 1e-6, box[1] + 1e-6
+    right, top = box[2] - 1e-6, box[3] - 1e-6
+    if right <= left or top <= bottom:
+        return 0.0
+    (ax, ay), (bx, by) = start, end
+    dx, dy = bx - ax, by - ay
+    low, high = 0.0, 1.0
+    for position, delta, lo, hi in ((ax, dx, left, right), (ay, dy, bottom, top)):
+        if abs(delta) < 1e-12:
+            if position <= lo or position >= hi:
+                return 0.0
+            continue
+        first, second = (lo - position) / delta, (hi - position) / delta
+        if first > second:
+            first, second = second, first
+        low, high = max(low, first), min(high, second)
+        if low >= high:
+            return 0.0
+    return (high - low) * math.hypot(dx, dy)
+
+
+def _row_cut(
+    box: tuple[float, float, float, float],
+    net: str,
+    wires: Sequence[Any],
+) -> tuple[str, tuple[tuple[float, float], tuple[float, float]], float] | None:
+    """The first **foreign** wire that cuts through this name row, with the depth.
+
+    534 fix r1: the row is ink the plan does not place, and until now it was measured
+    against other rows, the compiler's label boxes and its own symbol — never against a
+    conductor. On the audited four-island page `RI`'s row (630, 745)-(637.15, 755) ran
+    7.15 units through VCC's lead (625, 750)-(685, 750), and every existing check
+    passed it: gap to the rows taken was 7.85 and to the label boxes 0.5.
+    """
+    best = None
+    for wire in wires:
+        if wire.net == net:
+            continue
+        points = [tuple(point) for point in wire.points]
+        for start, end in zip(points, points[1:]):
+            depth = _inside_length(start, end, box)
+            if depth > 1e-9 and (best is None or depth > best[2]):
+                best = (wire.net, (start, end), depth)
+    return best
+
+
+def _row_clearance(
+    box: tuple[float, float, float, float],
+    taken: Sequence[tuple[str, tuple[float, float, float, float]]],
+) -> tuple[float, str | None]:
+    """The least separation from ``box`` to an already-taken row, and why it fails.
+
+    ``inf`` when no row has been taken yet (so "nothing to avoid" reads as the
+    best possible clearance rather than as a special case at each call site), and
+    a sentence only when the least separation is under :data:`SOFT_FLOOR_TEXT_GAP`
+    — a row that is *enough* clear of every other row has nothing to say.
+    """
+    best_gap, best_what, best_box = math.inf, "", None
+    for what, other in taken:
+        gap = _row_gap(box, other)
+        if gap < best_gap:
+            best_gap, best_what, best_box = gap, what, other
+    if best_box is None or best_gap >= SOFT_FLOOR_TEXT_GAP:
+        return best_gap, None
+    return best_gap, (
+        f"its name row {_box_text(box)} "
+        + ("overlaps " if best_gap < 0.0
+           else "touches " if best_gap <= 0.0
+           else f"is {best_gap:g} units from ")
+        + f"{best_what} {_box_text(best_box)} — S-21 keeps two statements at least "
+        f"{SOFT_FLOOR_TEXT_GAP:g} units apart"
+    )
+
+
+def _duplicate_carrier_problems(built: "_Built") -> list[str]:
+    """Every pair of one net's carriers printed closer than the L5 floor.
+
+    A net's name is one statement. In the final plan it is printed once per
+    **carrier** -- a stub run, or a conductor the label rode instead of getting a
+    stub -- and two of those rows closer than
+    :data:`drawlint.L5_DUPLICATE_NET_GAP` read as the same name printed twice,
+    which is the defect 110 named and 534 measured (`D-` at 15 and 5 units while
+    every module-local check passed).
+
+    **One carrier, one statement**: the rows are keyed by carrier identity (which
+    wire the name is printed on), never by box. Two different wires that happen to
+    print their name on the same row are two statements ``0`` units apart -- the
+    worst case of this rule -- while one wire carrying two labels of its net is one
+    statement counted once. The threshold is drawlint's own constant: this
+    pass states the same number the lint reports against, and never a second one.
+    """
+    from .drawlint import L5_DUPLICATE_NET_GAP
+
+    by_net: dict[str, dict[str, tuple[float, float, float, float]]] = {}
+    for net, identity, box in built.name_carriers:
+        # **By carrier, not by box.** Two different wires of one net can print
+        # their name on the very same row; that is two statements 0 units apart,
+        # the worst case of this rule, not one carrier counted twice. Only an
+        # identical carrier (the same wire, carrying two labels of its net) is
+        # one statement.
+        by_net.setdefault(str(net), {}).setdefault(
+            str(identity), tuple(float(value) for value in box)
+        )
+    problems: list[str] = []
+    for net in sorted(by_net):
+        rows = sorted(by_net[net].items())
+        for index, (first_id, first) in enumerate(rows):
+            for second_id, second in rows[index + 1:]:
+                gap = _row_gap(first, second)
+                if gap < L5_DUPLICATE_NET_GAP:
+                    problems.append(
+                        f"net {net}: carriers {first_id} and {second_id} print its "
+                        f"name {gap:g} units apart ({_row_text(first)} and "
+                        f"{_row_text(second)}), under drawlint's "
+                        f"{L5_DUPLICATE_NET_GAP:g}-unit duplicate-carrier floor -- one "
+                        "net's name is one statement, and two rows this close read as "
+                        "the same name printed twice"
+                    )
+    return problems
+
+
+def _row_text(row) -> str:
+    """A row as the plan states it: lower-left and upper-right, both rounded."""
+    return (
+        f"({row[0]:g}, {row[1]:g})-({row[2]:g}, {row[3]:g})"
+    )
+
+
+def _hard_ink_boxes(
+    layout: LayoutPlan,
+    profiles: Mapping[str, SymbolProfile],
+    built: "_Built",
+    *,
+    subject: Any = None,
+) -> list[tuple[str, tuple[float, float, float, float]]]:
+    """Every **text** box a stub may neither print nor run inside (534 r23).
+
+    r19 put the layout's own label boxes on this list; r23 adds the rest of the
+    page's typography, read off the plan the compiler already fixed: every
+    ``layout.texts`` row (a part's reference and value — the fresh CH343 plan
+    printed `DSR`'s name row ``[550,435,565.09,445]`` through `H1`'s reference row
+    ``[553,437.5,568,446.5]``, interior depth 7.5, because that row was only a
+    **soft** demotion and the pre-534 fallback reinstated the clashing rung) and
+    every rail flag's own name row (``textmetrics.flag_name_box`` at the glyph the
+    plan places).
+
+    Both halves of a candidate are measured against it — the row it prints and the
+    conductor it draws (:func:`_run_through_ink`): a run through a part's value row
+    is ink over ink even when its own row is elsewhere, and
+    :func:`_label_stub_blocked` only knew bodies, pins and wires. Touching stays
+    legal: the tests are the sign of the row gap and the length of the interior
+    chord, never a threshold.
+
+    **534 r24 — the *subject's own* box is not ink.** ``subject`` is the label this
+    pass is placing. Its ``LayoutLabel.bbox`` is the plan's *reservation* of where a
+    netlabel would go, and this host cannot place one (029: ``sch.place_netlabel``
+    is measured unusable) — which is exactly why the pass is drawing this stub: the
+    wire's own name row is the only printed statement of the net. Counting that
+    reservation as a second text demands the row avoid a box nobody draws, and it
+    was the reason the header column kept a pre-534 rung whose row crossed a real
+    row (r23: `RI`, `RTS`). The exclusion is **by object identity**, the one
+    subject this call places: every other label box, every part row and every flag
+    name row stays hard, and no net is exempted anywhere.
+    """
+    out: list[tuple[str, tuple[float, float, float, float]]] = [
+        (f"the layout label box of net {other.net}", tuple(other.bbox))
+        for other in layout.labels if other is not subject
+    ]
+    for text in layout.texts:
+        if text.bbox:
+            owner = text.part_id or "the page"
+            out.append((
+                f"the {text.kind} text {text.text!r} of {owner}", tuple(text.bbox),
+            ))
+    for flag in built.flags:
+        profile = profiles.get(flag.symbol_ref)
+        if profile is None:
+            continue
+        # A profile that states no glyph extent answers `None`; an *exception* is
+        # a broken profile and must fail loudly here -- swallowing it would take a
+        # text obstacle out of the floor without saying so.
+        glyph = flag_glyph_box(
+            profile, rotation=flag.rotation, anchor=(flag.x, flag.y),
+        )
+        if glyph is None:
+            continue
+        row = textmetrics.flag_name_box(
+            glyph, (flag.x, flag.y), flag.net, axis_up=glyph[3] > flag.y,
+        )
+        if row is not None:
+            out.append((f"the name row of flag {flag.net}", tuple(row)))
+    return out
+
+
+def _segment_box_chord(start, end, box, eps: float = 1e-6) -> float:
+    """How far the segment runs inside the box's **interior** (0 for a touch)."""
+    inner = (box[0] + eps, box[1] + eps, box[2] - eps, box[3] - eps)
+    if inner[0] >= inner[2] or inner[1] >= inner[3]:
+        return 0.0
+    (x0, y0), (x1, y1) = start, end
+    dx, dy = x1 - x0, y1 - y0
+    t0, t1 = 0.0, 1.0
+    for p, q in (
+        (-dx, x0 - inner[0]), (dx, inner[2] - x0),
+        (-dy, y0 - inner[1]), (dy, inner[3] - y0),
+    ):
+        if abs(p) < 1e-12:
+            if q <= 0.0:
+                return 0.0
+            continue
+        t = q / p
+        if p < 0.0:
+            t0 = max(t0, t)
+        else:
+            t1 = min(t1, t)
+    if t1 - t0 <= 1e-9:
+        return 0.0
+    return (t1 - t0) * math.hypot(dx, dy)
+
+
+def _run_through_ink(points, ink) -> str | None:
+    """Why this run's **conductor** may not be drawn, or ``None`` (534 r23)."""
+    for head, tail in zip(points, points[1:]):
+        for what, box in ink:
+            chord = _segment_box_chord(
+                (float(head[0]), float(head[1])), (float(tail[0]), float(tail[1])),
+                box,
+            )
+            if chord > 0.0:
+                return (
+                    f"its conductor {_point_pair(head, tail)} runs {chord:.3g} "
+                    f"units through {what} {_box_text(box)}"
+                )
+    return None
+
+
 def _place_label_stub(
     label: Any,
     built: "_Built",
     bodies: Mapping[str, tuple[float, float, float, float]],
     pins: Sequence[tuple[str, str, tuple[float, float]]],
+    label_boxes: Sequence[tuple[str, tuple[float, float, float, float]]] = (),
 ) -> tuple[tuple[tuple[float, float], ...] | None, list[str]]:
     """The first free stub run (anchor first), or ``(None, blockers)``.
 
@@ -1645,6 +2160,21 @@ def _place_label_stub(
     :func:`_name_row_clash`): a stub whose conductor is free of every foreign
     object can still print its name over its own symbol.
 
+    534 adds the other half of the same fact: the rows of **two stubs** can land on
+    each other, and nothing owns either one — the CH340 page's `CTS` row overlapped
+    `RXD`'s by 5 units with every object check passing, and `RI`/U1-TXD read down
+    the page because a bent run's longest leg was vertical. So among the clear
+    runs, a run is preferred when its measured row (``wire_name_box``: direction
+    from the longest straight run, box from the host's own anchor) is horizontal
+    and does not overlap any row already taken (:func:`_row_clearance`); a remaining
+    shortfall below :data:`SOFT_FLOOR_TEXT_GAP` is recorded, not called a pass.
+    The row of the run chosen is then registered in ``built.label_stub_rows`` —
+    **every** chosen row, with the direction it reads in — for the labels after
+    it, so the next label measures its candidates against real ink rather than
+    against nothing. A page where no rung gives that keeps the pre-534 choice and
+    **says so**, naming the row it overlaps — a fallback is recorded, never
+    presented as a pass and never silent.
+
     ``blockers`` names what stopped each rung's preferred run — one line per
     shape (the four straight directions, then the two bends towards the label) —
     so "it could not be drawn" arrives with the geometry that made it so
@@ -1654,7 +2184,7 @@ def _place_label_stub(
     blockers: list[str] = []
     seen_shape: set[str] = set()
     clear: list["_StubRun"] = []
-    for run in _label_stub_candidates(label):
+    for run in _label_stub_candidates(label, near_stagger=bool(label_boxes)):
         reason = None
         for head, tail in zip(run.points, run.points[1:]):
             reason = _label_stub_blocked(label, head, tail, built, bodies, pins)
@@ -1676,15 +2206,336 @@ def _place_label_stub(
     # keeps the run the pre-146 code chose rather than refusing the plan: the
     # CH340 page's RXD pin sits 9.5 units from U1's body and had exactly that.
     own = built.label_owner.get(label.part_id, ())
+    # 534: a clear conductor is necessary and not sufficient. Each clear run is
+    # measured as the row the host will actually print on it — its direction (from
+    # the longest straight run) and its box — against the part the stub names
+    # (146, unchanged) **and** the rows the plan has already committed to for
+    # other stubs. The order the candidate ladder built is kept inside each tier,
+    # so "the simplest run that works" still means the same thing.
+    # 534 r19: the boxes the compiler already placed are ink too. They are measured
+    # on their own (below) and a run that would print over one leaves the ladder --
+    # they are never absorbed into the tiers' soft `taken` list.
+    taken = list(built.label_stub_rows)
+    checked: list[
+        tuple[
+            _StubRun,
+            tuple[float, float, float, float] | None,
+            bool,
+            str | None,
+            float,
+            str | None,
+        ]
+    ] = []
     for run in clear:
-        if _name_row_clash(label, run, own) is None:
-            return run.points, blockers
+        box = _stub_name_row(run, str(label.net))
+        gap, row_clash = (
+            (math.inf, None) if box is None else _row_clearance(box, taken)
+        )
+        checked.append((
+            run, box, _stub_row_is_horizontal(run),
+            _name_row_clash(label, run, own), gap, row_clash,
+        ))
+
+    # 534 r19: an overlap with a **layout label box** is not a fallback this pass may
+    # take, so such a run leaves the ladder before the tiers and its reason is named.
+    kept = []
+    for item in checked:
+        run, box, _horizontal, _owner, _gap, _row = item
+        hard_gap, hard_what = (
+            (math.inf, None) if box is None else _row_clearance(box, label_boxes)
+        )
+        if hard_gap < 0.0:
+            blockers.append(
+                f"{run.shape} ({_point_pair(run.points[-1], run.points[-1])}): "
+                f"{hard_what or 'its name row prints across a layout label box'}"
+            )
+            continue
+        kept.append(item)
+    checked = kept
+
+    def take(
+        run: "_StubRun",
+        box: tuple[float, float, float, float] | None,
+    ) -> tuple[tuple[tuple[float, float], ...] | None, list[str]]:
+        """Commit the run, and the row it prints for the labels that follow.
+
+        **Every** chosen row is committed as an obstacle, and the entry names the
+        direction it reads in. The old code registered horizontal rows only, on
+        the argument that a vertical row was already this chooser's recorded
+        short; that argument is wrong about the paper. A vertical row is ink too
+        — 10 units wide and as long as its net's name — and a later label whose
+        horizontal candidate lands on it was measured against *no* row at all:
+        :func:`_row_clearance` had nothing to compare with, so its gap came out
+        ``inf`` and tier 1 accepted the overlap without a note. The 534 review's
+        page had exactly that shape: the vertical row ``(0, 5)-(10, 111.45)``,
+        then a horizontal row ``(-25, 60)-(77.08, 70)`` with
+        ``_row_gap = -10`` taken as free. Steering the later label around the
+        vertical row is right even when the vertical row is itself a short: the
+        short is a fact about *one* label's choice, not permission for the next
+        label to print over it. A page where avoiding every row leaves nothing
+        keeps the pre-534 choice and the note names the row it overlaps
+        (tier 3), so the short is stated rather than hidden.
+        """
+        if box is not None:
+            direction = (
+                "horizontal" if _stub_row_is_horizontal(run) else "vertical"
+            )
+            built.label_stub_rows.append(
+                (
+                    f"the {direction} name row of the {run.shape} stub of "
+                    f"{label.net}",
+                    box,
+                )
+            )
+            built.name_carriers.append(
+                (str(label.net), f"stub[{len(built.name_carriers)}]", box)
+            )
+        return run.points, blockers
+
+    def record_touch(run: "_StubRun", gap: float, row: str | None) -> None:
+        """Say out loud that the kept row is under S-21's floor (0 gap = touching)."""
+        if gap < SOFT_FLOOR_TEXT_GAP:
+            built.notes.append(
+                f"net {label.net}: the label at ({label.x:g}, {label.y:g}) keeps a "
+                f"horizontal run ({run.shape}) whose name row is under S-21's "
+                f"{SOFT_FLOOR_TEXT_GAP:g}-unit floor — " + (row or "")
+                + " (534: no overlap; this label's ladder and selection order did "
+                "not yield a horizontal row at least 2 units clear)"
+            )
+
+    # 534 fix r1: a conductor is ink too, and this is the only pass that can see
+    # them: `built.wires` holds every run already drawn, the page compiler's flag
+    # leads included. A name row the host prints across a foreign wire reads as that
+    # wire's name (the VCC lead through RI's row measured 7.15 units), so a run whose
+    # row is cut is not a candidate at all — it leaves the ladder before the tiers and
+    # names the wire and the depth. The gate is the strict caller's, the same condition
+    # r19's label-box rule uses (`label_boxes` non-empty = the page path): the 099d /
+    # 099f synthetic callers keep the pre-534 ladder and its fallback byte for byte.
+    if label_boxes:
+        kept = []
+        for item in checked:
+            run, box = item[0], item[1]
+            cut = None if box is None else _row_cut(box, str(label.net), built.wires)
+            if cut is not None:
+                other_net, leg, depth = cut
+                blockers.append(
+                    f"{run.shape} ({_point_pair(run.points[-1], run.points[-1])}): "
+                    f"its name row {_box_text(box)} is cut {depth:g} units through by "
+                    f"net {other_net}'s wire {_point_pair(leg[0], leg[1])}"
+                )
+                continue
+            kept.append(item)
+        checked = kept
+        if not checked:
+            # Every shape of the ladder prints its name through a conductor: the
+            # drawing is refused with the reasons, never drawn with the crossing.
+            return None, blockers
+
+        # 534 stub-l5-selection: the floor this pass can still honour, because it
+        # is the pass that picks the row. A candidate whose name row would print
+        # its own net's name closer than `L5_DUPLICATE_NET_GAP` to a carrier this
+        # plan already committed is **not a candidate** — it leaves the ladder
+        # with the other carrier and the measured gap named, exactly like the
+        # label-box and conductor rules above. The later
+        # `_duplicate_carrier_problems` gate then has nothing left to refuse: a
+        # post-hoc refusal is the last line, never the way this pass chooses.
+        # `d()` avoids the module-level import the small self-contained readers
+        # (099d/099f) do not need; the number is drawlint's own, never a second one.
+        from .drawlint import L5_DUPLICATE_NET_GAP
+
+        kept = []
+        for item in checked:
+            run, box = item[0], item[1]
+            if box is None:
+                kept.append(item)
+                continue
+            gap, nearest = _same_net_carrier_gap(built, str(label.net), box)
+            if gap < L5_DUPLICATE_NET_GAP:
+                blockers.append(
+                    f"{run.shape} ({_point_pair(run.points[-1], run.points[-1])}): "
+                    f"its name row {_box_text(box)} would print net "
+                    f"{label.net}'s name {gap:g} units from its other carrier "
+                    f"{nearest or ''}, under the {L5_DUPLICATE_NET_GAP:g}-unit "
+                    "duplicate-carrier floor"
+                )
+                continue
+            kept.append(item)
+        checked = kept
+
+        # 534 r23/r24: two floors here, and they are different ones.
+        #
+        # (a) **ink over ink.** The conductor is inside the same floor as the row: a
+        # run through a part's value row, another net's label reservation or a flag's
+        # name row prints ink over ink even when its own name row is elsewhere, and
+        # `_label_stub_blocked` only knew bodies, pins and foreign wires. Boundary
+        # contact stays legal (`_segment_box_chord` measures the interior chord).
+        #
+        # (b) **a row inside a row.** ``item[4]`` is `_row_clearance` against the rows
+        # this pass already committed. A **negative** value is an interior overlap of
+        # two printed name rows — no note makes that readable — so the rung is refused
+        # here instead of being kept as the pre-534 fallback. A gap of exactly 0 (a
+        # shared boundary) and S-21's 2-unit floor are *not* this rule: the 2-unit
+        # floor is a disclosure (`record_touch` / tier 3), never a hard gate.
+        kept = []
+        for item in checked:
+            run, box = item[0], item[1]
+            hit = _run_through_ink(run.points, label_boxes)
+            if hit is not None:
+                blockers.append(
+                    f"{run.shape} ({_point_pair(run.points[-1], run.points[-1])}): "
+                    + hit
+                )
+                continue
+            if box is not None and item[4] < 0.0:
+                blockers.append(
+                    f"{run.shape} ({_point_pair(run.points[-1], run.points[-1])}): "
+                    f"its name row {_box_text(box)} overlaps a name row already "
+                    "taken"
+                )
+                continue
+            kept.append(item)
+        checked = kept
+        if not checked:
+            # Every remaining shape prints through a conductor, across a text or
+            # label box, on a taken row, or on top of another carrier of its own
+            # net: the drawing is refused with the reasons, never drawn with the
+            # duplicate and never with a row this pass measured as a clash.
+            return None, blockers
+
+    # Tier 1 — a horizontal row, clear of its own symbol and **not overlapping**
+    # any row already taken, first in the candidate ladder's own order (099d's
+    # simplest-run-first rule, kept). The direction is the one the host will read
+    # the name in: a vertical row is `RI`'s and U1-TXD's measured defect.
+    #
+    # The tier asks "no overlap" rather than "S-21's 2 units" because the two are
+    # different pages' truths: on a header column whose pins are 10 units apart
+    # (row height is 10) two horizontal rows are either exactly touching or
+    # staggered by a 5/10-unit bent run, and the pre-534 shipping pages have the
+    # straight one (`tests/test_145a_walls.py`, `tests/test_099f_*` freeze it).
+    # A *touch* is therefore kept — with a note — while an **overlap** is not:
+    # that is the defect this tier removes (the CH340 page's `CTS` row on `RXD`'s
+    # by 5 units, `evidence/534/label-stub-typography.md`).
+    for run, box, horizontal, owner, gap, row in checked:
+        if horizontal and owner is None and gap >= -1e-6:
+            record_touch(run, gap, row)
+            return take(run, box)
+    # Tier 2 — no horizontal row even avoids an overlap: a vertical row that does
+    # is still better than a clash, and is recorded as the short it is.
+    for run, box, horizontal, owner, gap, row in checked:
+        if owner is None and gap >= -1e-6 and (horizontal or not label_boxes):
+            built.notes.append(
+                f"net {label.net}: the label at ({label.x:g}, {label.y:g}) has a "
+                f"free name row but none that reads across the page — the clear run "
+                f"({run.shape}) kept here rows its name "
+                + ("vertically (the host starts a name down a vertical run)" if not horizontal
+                   else "along a run the host anchors horizontally")
+                + "; 534 asks for a horizontal row and no rung of the ladder gives "
+                "one that is free and horizontal"
+            )
+            return take(run, box)
+    # Tier 3 — the pre-534 choice, kept as the last resort so a page that has no
+    # safe row at all still draws its stub rather than refusing (146's ruler: a
+    # clash is a worse drawing, not a short). Recorded, never a pass.
+    for run, box, horizontal, owner, gap, row in checked:
+        if owner is None:
+            if row is not None and gap < 0.0:
+                # 534: the row this fallback keeps *is* an overlap, and the
+                # sentence says which row and by how much. Silence here is what
+                # let the review's page keep a 10-unit overlap and read it as a
+                # pass (`_row_gap = -10` against a vertical row nobody had taken).
+                detail = (
+                    "its row overlaps an already-taken row, recorded as an "
+                    "overlap and not as a pass: " + row
+                )
+            elif row is not None:
+                detail = (
+                    f"its row is under S-21's {SOFT_FLOOR_TEXT_GAP:g}-unit floor: "
+                    + row
+                )
+            elif box is None:
+                detail = "its name row could not be measured (the run has no straight piece)"
+            elif not horizontal:
+                detail = "its row is clear, but it reads vertically"
+            else:
+                detail = (
+                    "its row is clear of every taken row, but it prints on its "
+                    "own symbol (146)"
+                )
+            built.notes.append(
+                f"net {label.net}: no clear run puts its name row clear of an "
+                f"overlap — the pre-534 choice ({run.shape}) is kept as a fallback "
+                "(146/534); " + detail
+            )
+            return take(run, box)
     if clear:
-        first = clear[0]
+        # 534 r21: `clear` is the **conductor** verdict. r20 measured what taking
+        # `clear[0]` here cost: five labels came back with a -4.5 row printed across
+        # their own layout label box, because the box gate above had already emptied
+        # `checked` and this branch never asked it. The same three gates are applied
+        # here, and a pin that survives none of them refuses by name below instead of
+        # printing over a box (the caller's DrawPlanError, 057 sec.4).
+        survivors = []
+        for run in clear:
+            _box = _stub_name_row(run, str(label.net))
+            if _box is None:
+                continue
+            _hard_gap, _hard_what = _row_clearance(_box, label_boxes)
+            if _hard_gap < 0.0:
+                blockers.append(
+                    f"{run.shape} ({_point_pair(run.points[-1], run.points[-1])}): "
+                    f"{_hard_what or 'its name row prints across a layout label box'}"
+                )
+                continue
+            if label_boxes:
+                # the same-net floor, asked again on this branch: it takes runs
+                # out of `clear` (the conductor verdict), so a run the selector
+                # above dropped would otherwise come back here.
+                _same, _nearest = _same_net_carrier_gap(built, str(label.net), _box)
+                from .drawlint import L5_DUPLICATE_NET_GAP as _L5
+                if _same < _L5:
+                    blockers.append(
+                        f"{run.shape} ({_point_pair(run.points[-1], run.points[-1])}): "
+                        f"its name row {_box_text(_box)} would print net "
+                        f"{label.net}'s name {_same:g} units from its other carrier "
+                        f"{_nearest or ''}, under the {_L5:g}-unit duplicate-carrier floor"
+                    )
+                    continue
+            if label_boxes and not _stub_row_is_horizontal(run):
+                blockers.append(
+                    f"{run.shape} ({_point_pair(run.points[-1], run.points[-1])}): "
+                    "its name row would read vertically, and every carrier of this "
+                    "page must read across it (534 r21)"
+                )
+                continue
+            if label_boxes:
+                # 534 fix r1: the same row-x-conductor gate the candidates met above,
+                # asked again here. This branch takes runs out of `clear` (the
+                # *conductor* verdict), not out of the gated `checked` list, so a run
+                # the gate removed above would otherwise come back whenever every
+                # gated candidate clashes with its own symbol (tier 3 skips those).
+                _cut = _row_cut(_box, str(label.net), built.wires)
+                if _cut is not None:
+                    _other_net, _leg, _depth = _cut
+                    blockers.append(
+                        f"{run.shape} ({_point_pair(run.points[-1], run.points[-1])}): "
+                        f"its name row {_box_text(_box)} is cut {_depth:g} units "
+                        f"through by net {_other_net}'s wire "
+                        f"{_point_pair(_leg[0], _leg[1])}"
+                    )
+                    continue
+            survivors.append(run)
+        if not survivors:
+            return None, blockers
+        first = survivors[0]
         far = first.points[-1]
         clash = _name_row_clash(label, first, own) or ""
         blockers.append(f"{first.shape} ({_point_pair(far, far)}): {clash}")
-        return first.points, blockers
+        built.notes.append(
+            f"net {label.net}: every clear run of this label prints its name on its "
+            f"own symbol or on another name row — the pre-534 fallback "
+            f"({first.shape}) is kept, and this page's stub is not a 534 pass"
+        )
+        return take(first, _stub_name_row(first, str(label.net)))
     return None, blockers
 
 

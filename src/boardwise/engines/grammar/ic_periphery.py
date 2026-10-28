@@ -243,6 +243,21 @@ class IcPeripheryGrammar:
             circuit, presentation, intent, scope_id, scope_parts
         )
         if not claims:
+            # 534: a group of two-terminal parts that all hang between one node
+            # and one ground is a **parallel-branch bank**, not a peripheral with
+            # a missing core: nothing here is the part the others hang off, and
+            # asking for a core would be asking the document to state a fact that
+            # does not exist. The reading is taken only when the partition says
+            # every part of the group is a two-terminal part and every one of
+            # them reaches the same ground from a node of its own; anything else
+            # falls through to the refusal this grammar has always given, or —
+            # when the shape is close but wrong (a short, two grounds, no ground
+            # end) — to the one that names what is wrong with it.
+            coreless, problem = _coreless_bank(circuit, scope_id, scope_parts)
+            if coreless is not None:
+                return coreless
+            if problem is not None:
+                return refused_result([problem])
             return refused_result([
                 _no_core_failure(circuit, scope_id, scope_parts)
             ])
@@ -1431,3 +1446,301 @@ def _describe(
         *[f"‖{part_id}" for part_id in shunts],
     ]
     return f"{rail}→{core}" + "".join(parts) + f"→{gnd}"
+
+
+# ------------------------------- 534: the coreless parallel-branch group
+
+
+def _net_class(circuit: CircuitSpec, net_id: str) -> str:
+    """The class the partition states for this net, or ``""`` when it states none."""
+    net = circuit.net(net_id)
+    return net.cls if net is not None else ""
+
+
+def _coreless_bank(
+    circuit: CircuitSpec,
+    scope_id: str,
+    scope_parts: tuple[str, ...],
+) -> tuple[GrammarResult | None, GrammarFailure | None]:
+    """``(bound group, specific refusal)`` for a drawing that has no core at all.
+
+    A **parallel-branch bank** is the one drawing this grammar can read without a
+    core, and it is read from the partition alone (534):
+
+    * the drawing is one **declared** group — ``modules[].parts`` names it — so
+      "which parts these are" is a stated fact and not the whole circuit;
+    * every part of it is a two-terminal part (:func:`two_terminal_parts`: two
+      stated pins on two **different** nets), which is what makes each one a
+      branch rather than a body other parts hang off;
+    * every part has **exactly one** pin on ground, and the group returns to
+      **one** ground — the return path is one node, so the parts are parallel;
+    * the other pin of each part is a net of class ``power`` or ``signal`` — the
+      node the branch holds (a supply rail, or an internal rail the partition
+      classes as a signal and this drawiing therefore does not re-class);
+    * the group's parts are all the parts of the drawing, so no part is left
+      unbound behind the bank.
+
+    Anything that is not this shape is answered two ways, never silently: a part
+    with more (or fewer) than two stated pins is not a branch at all and the
+    **original** no-core refusal stands (``(None, None)``); a group that *is* all
+    two-pin parts but is not a bank — a short, both ends on ground, no ground end,
+    two different grounds — gets the refusal that names the measured fault.
+
+    The roles are the grammar's existing vocabulary, and every one of them is
+    read from the partition: each part is a ``shunt`` (it hangs off the node it
+    holds, exactly as a shunt does off a core's pin), the group's return is
+    ``gnd``, its power node is ``rail`` and its signal node is ``out``. No core
+    role is bound, because there is no core: nothing here is the part the others
+    are arranged around, and stating one would be stating a fact the circuit
+    does not contain.
+    """
+    if not scope_id or not scope_parts:
+        return None, None
+    declared = {part.id for part in circuit.parts}
+    # 534: the group's parts must **be** the drawing's parts, not merely be a subset
+    # of them. The docstring's "the group's parts are all the parts of the drawing"
+    # was enforced as "every named part exists", so a circuit holding one part the
+    # module never names was accepted as a complete coreless bank and that part
+    # escaped the module scope entirely. A subset is not the whole drawing: the
+    # original no-core refusal is the honest answer, and the group's parts are then
+    # left to the channels that ask about a core.
+    if declared != set(scope_parts):
+        return None, None
+    pins = {part_id: pins_of_part(circuit, part_id) for part_id in scope_parts}
+    if any(len(here) != 2 for here in pins.values()):
+        # A multi-pin (or unconnected) part is a body, not a branch: the group
+        # may still have a core, and this is the question the core channels
+        # answer. The original refusal is the honest one.
+        return None, None
+    edges = two_terminal_parts(circuit)
+    for part_id in scope_parts:
+        if part_id not in edges:
+            return None, _short_failure(circuit, part_id)
+
+    grounds: dict[str, list[str]] = {}
+    carriers: dict[str, list[str]] = {}
+    for part_id in scope_parts:
+        first, second = edges[part_id]
+        here_ground = [
+            net for net in (first, second) if _net_class(circuit, net) == "gnd"
+        ]
+        if len(here_ground) == 2:
+            return None, _two_ground_ends_failure(circuit, part_id, first, second)
+        if not here_ground:
+            return None, _no_ground_end_failure(
+                circuit, part_id, first, second, scope_id
+            )
+        ground = here_ground[0]
+        carrier = second if first == ground else first
+        grounds.setdefault(ground, []).append(part_id)
+        carriers.setdefault(carrier, []).append(part_id)
+    if len(grounds) != 1:
+        return None, _many_grounds_failure(circuit, grounds)
+    gnd = next(iter(grounds))
+    unsupported = sorted(
+        net for net in carriers
+        if _net_class(circuit, net) not in ("power", "signal")
+    )
+    if unsupported:
+        return None, _carrier_class_failure(circuit, unsupported[0])
+
+    provenance = weakest_provenance(
+        net_provenance(circuit, gnd),
+        *(net_provenance(circuit, net) for net in sorted(carriers)),
+        *(part_provenance(circuit.part(part_id)) for part_id in sorted(scope_parts)),
+    )
+    bindings: list[RoleBinding] = [
+        RoleBinding(
+            role="gnd",
+            part_id=gnd,
+            evidence=evidence(
+                "role=gnd: the one net of class 'gnd' this group's branches "
+                "return to — every part of the group has exactly one pin on it, "
+                "so the branches are parallel and the drawing has one return path",
+                _spec_net_clause(circuit, gnd),
+                "parts returning here: "
+                + ", ".join(f"{part_id}" for part_id in sorted(grounds[gnd])),
+                f"members: {', '.join(_members(circuit, gnd))}",
+                f"provenance={net_provenance(circuit, gnd)}",
+            ),
+        )
+    ]
+    for net_id in sorted(carriers):
+        cls = _net_class(circuit, net_id)
+        role = "rail" if cls == "power" else "out"
+        bindings.append(
+            RoleBinding(
+                role=role,
+                part_id=net_id,
+                evidence=evidence(
+                    (
+                        f"role=rail: the net of class 'power' this group's "
+                        "branches hold — a supply the parts decouple, drawn as a "
+                        "flag and not as a conductor here"
+                    ) if role == "rail" else (
+                        f"role=out: the net of class 'signal' this group's "
+                        "branches hold — the partition classes this node as a "
+                        "signal (an internal rail is read as the signal it is "
+                        "stated to be: this drawing does not re-class it) and it "
+                        "leaves the group at the part that reads it"
+                    ),
+                    _spec_net_clause(circuit, net_id),
+                    "branches on this node: "
+                    + ", ".join(sorted(carriers[net_id])),
+                    f"members: {', '.join(_members(circuit, net_id))}",
+                    f"provenance={net_provenance(circuit, net_id)}",
+                ),
+            )
+        )
+    for part_id in sorted(scope_parts):
+        carrier = next(
+            net for net in edges[part_id] if net != gnd
+        )
+        bindings.append(
+            RoleBinding(
+                role="shunt",
+                part_id=part_id,
+                evidence=evidence(
+                    "role=shunt: a two-terminal part from "
+                    f"{carrier} to the group's ground {gnd} — the group is a bank "
+                    "of parallel branches, so every part hangs off its own node "
+                    "and none of them is the part the others are arranged around",
+                    part_clause(circuit, part_id),
+                    "read from the partition, not from a designator prefix, a "
+                    "value or a package name: two stated pins on two different "
+                    f"nets ({carrier}, {gnd})",
+                    f"class of the held node: {_net_class(circuit, carrier)}",
+                    _scope_note(scope_id, scope_parts),
+                    "the core reading was tried and has nothing to read: "
+                    "modules[].core states none, no contract block names one, and "
+                    f"the pin counts tie or stay at two ({_counts_text({pid: 2 for pid in scope_parts})}) — "
+                    "so this group is bound as the parallel bank it is, not around "
+                    "an invented core",
+                    f"provenance={provenance}",
+                ),
+            )
+        )
+    obligations: list[GrammarObligation] = [
+        GrammarObligation(
+            kind=UNIFORM_GND,
+            nets=(gnd,),
+            reason=(
+                "534: this group's ground is expressed one way throughout — one "
+                "symbol style or one label, never mixed. No OWNED_BRANCH is "
+                "stated: nothing here is owned by a core, and a branch obligation "
+                "would invent the electrical chain this drawing does not have"
+            ),
+        )
+    ]
+    return bound_result(bindings, (), obligations), None
+
+
+def _short_failure(circuit: CircuitSpec, part_id: str) -> GrammarFailure:
+    """A two-pin part whose two pins sit on one net: a short, not a branch."""
+    pins = pins_of_part(circuit, part_id)
+    where = ", ".join(f"{pin}→{net}" for pin, net in sorted(pins.items()))
+    return GrammarFailure(
+        category=FAILURE_CIRCUIT_INVALID,
+        subject=part_id,
+        detail=(
+            f"{part_id} is a part of this drawing and both of its stated pins "
+            f"sit on one net ({where}) — a part with both ends on one node is a "
+            "short, not a branch of a parallel group, so it cannot be bound as "
+            "one"
+        ),
+        action=(
+            f"state {part_id}'s two pins on the two nets its part really joins in "
+            "CircuitSpec.nets[].members"
+        ),
+    )
+
+
+def _two_ground_ends_failure(
+    circuit: CircuitSpec, part_id: str, first: str, second: str
+) -> GrammarFailure:
+    """Both pins of one part on ground-class nets: no branch, and no second node."""
+    return GrammarFailure(
+        category=FAILURE_CIRCUIT_INVALID,
+        subject=part_id,
+        detail=(
+            f"{part_id} has both pins on nets of class 'gnd' ({first}, {second}) "
+            "— a branch of a parallel group holds one node against the ground, "
+            "and a part between two grounds holds nothing; binding it would join "
+            "two ground domains that the partition keeps apart"
+        ),
+        action=(
+            f"state {part_id}'s other pin on the node it really holds, or leave "
+            "it out of this group"
+        ),
+    )
+
+
+def _no_ground_end_failure(
+    circuit: CircuitSpec,
+    part_id: str,
+    first: str,
+    second: str,
+    scope_id: str,
+) -> GrammarFailure:
+    """A two-terminal part with no ground end: a path between two nodes."""
+    return GrammarFailure(
+        category=FAILURE_CIRCUIT_INVALID,
+        subject=part_id,
+        detail=(
+            f"{part_id} has no pin on a net of class 'gnd' (its two nets are "
+            f"{first}, {second}) — this group has no core, so the only shape it "
+            "can be read as is a bank of branches returning to one ground, and a "
+            "part between two non-ground nodes is a series path this grammar has "
+            "no role for (it would be drawn as if it hung off a node it does not "
+            "reach)"
+        ),
+        action=(
+            f"give modules[{scope_id}] a core if this group is an IC with its "
+            "periphery, or state the part's ground end in "
+            "CircuitSpec.nets[].members if it is a decoupling branch"
+        ),
+    )
+
+
+def _many_grounds_failure(
+    circuit: CircuitSpec, grounds: Mapping[str, list[str]]
+) -> GrammarFailure:
+    """The group's branches return to more than one ground."""
+    spelled = "; ".join(
+        f"{net} ({', '.join(sorted(grounds[net]))})" for net in sorted(grounds)
+    )
+    return GrammarFailure(
+        category=FAILURE_CIRCUIT_INVALID,
+        subject=sorted(grounds)[0],
+        detail=(
+            "the parts of this group return to more than one net of class 'gnd': "
+            + spelled
+            + " — one drawing expresses one ground, and binding these together "
+            "would join two domains the partition keeps apart"
+        ),
+        action=(
+            "state the group's parts on one ground net, or split the group so "
+            "each drawing returns to a single ground"
+        ),
+    )
+
+
+def _carrier_class_failure(
+    circuit: CircuitSpec, net_id: str
+) -> GrammarFailure:
+    """The node a branch holds is neither a supply nor a stated signal."""
+    return GrammarFailure(
+        category=FAILURE_FACTS_MISSING,
+        subject=net_id,
+        detail=(
+            f"the node {net_id} that a part of this group holds is not a net of "
+            "class 'power' or 'signal' in this CircuitSpec, so there is nothing "
+            "to read it as: a coreless group is branches between one ground and "
+            "the nodes they hold, and the class of those nodes is the fact that "
+            "says what they are"
+        ),
+        action=(
+            f"declare net {net_id} in CircuitSpec.nets[] with its class "
+            "('power' or 'signal')"
+        ),
+    )
