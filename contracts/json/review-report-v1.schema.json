@@ -55,7 +55,28 @@
     "pending": {"type": "object"},
     "drc": {"type": "object"},
     "modules": {"type": "array"},
-    "findings": {"type": "array"},
+    "findings": {
+      "type": "array",
+      "items": {
+        "properties": {
+          "target": {
+            "properties": {
+              "measurement": {
+                "description": "Optional additive element identities. A missing detail means not recorded (including an old report), never no element; null remains the no-measurement boundary.",
+                "properties": {
+                  "element_a_detail": {"$ref": "#/$defs/elementIdentity"},
+                  "element_b_detail": {"$ref": "#/$defs/elementIdentity"},
+                  "shared_layer_ids": {"$ref": "#/$defs/layerIds"},
+                  "external_element_a_detail": {"$ref": "#/$defs/elementIdentity"},
+                  "external_element_b_detail": {"$ref": "#/$defs/elementIdentity"},
+                  "external_shared_layer_ids": {"$ref": "#/$defs/layerIds"}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "unreviewed_parts": {"type": "array"},
     "reviewedByShelf": {"type": "array"},
     "accepted_unknown": {"type": "array"},
@@ -125,6 +146,24 @@
       "type": "array",
       "items": {"type": "string"},
       "x-presence": "Optional additive list used when a derived section fails."
+    }
+  },
+  "$defs": {
+    "layerIds": {
+      "type": "array",
+      "items": {"type": "integer", "minimum": 1},
+      "description": "Real copper layer ids; an empty list records no classified/shared layer, never an invented layer."
+    },
+    "elementIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "component", "pin", "layers"],
+      "properties": {
+        "kind": {"enum": ["pad", "track", "via", "pour"]},
+        "component": {"type": "string"},
+        "pin": {"type": "string"},
+        "layers": {"$ref": "#/$defs/layerIds"}
+      }
     }
   }
 }

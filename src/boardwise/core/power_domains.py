@@ -53,8 +53,11 @@ KNOWN = "KNOWN"
 CONFLICT = "CONFLICT"
 UNKNOWN = "UNKNOWN"
 
-# ``+5V`` / ``12V`` / ``3.3V`` — optional plus, number, trailing V.
-_V_FORM = re.compile(r"^\+?(\d+(?:\.\d+)?)V$")
+# ``+5V`` / ``12V`` / ``3.3V`` — optional plus, number, trailing V, optionally
+# marked ``DC`` (``310VDC``). A space before the unit is a **field** spelling
+# (:func:`boardwise.core.values.parse_voltage_volts` reads ``3.3 V``), not a net
+# name, so it is not admitted here.
+_V_FORM = re.compile(r"^\+?(\d+(?:\.\d+)?)V(?:DC)?$", re.IGNORECASE)
 # ``5V0`` / ``3V3`` / ``1V8`` — the ShortJam commas-free rail style. Exactly
 # one decimal digit: ``12V34`` is not a rail anyone names. The optional plus is
 # here for the same reason it is on :data:`_V_FORM` (issue #71): ``+3V3`` is a
@@ -62,6 +65,22 @@ _V_FORM = re.compile(r"^\+?(\d+(?:\.\d+)?)V$")
 # half where the ``+`` was missing, so ``+3V3`` priced as an unknown net while
 # ``+5V`` priced as 5 V.
 _MN_FORM = re.compile(r"^\+?(\d+)V(\d)$")
+# ``3V3D`` — the mid-letter form plus the **domain letter** a board writes on
+# its digital rail (measured: a real FOC board names its 3.3 V digital net
+# ``3V3D``). The letter says which 3.3 V rail, not a different voltage, so it
+# is read and the number kept. Separate from :data:`_MN_FORM` rather than an
+# optional letter there, so the shapes stay additive: only ``D`` is a suffix
+# this prices.
+_MN_D_FORM = re.compile(r"^\+?(\d+)V(\d)[Dd]$")
+# ``DC310`` / ``DC_310`` / ``DC-310`` / ``DC310V`` — the DC-marked prefix
+# spelling a converter's own bus is named with.
+_DC_PREFIX_FORM = re.compile(r"^\+?DC[-_]?(\d+(?:\.\d+)?)V?$", re.IGNORECASE)
+# ``V_310V`` / ``V310V`` / ``V310`` — the leading-``V`` spelling (task A: a
+# user's 310 V net is literally named ``V_310V``). The bare half **demands
+# three digits** so that ``V3`` — the mid-letter notation with an empty
+# mantissa, which :func:`boardwise.core.values.parse_voltage_volts` refuses —
+# does not become a priced rail by falling through to this whitelist entry.
+_V_PREFIX_FORM = re.compile(r"^\+?V_?(?:(\d+(?:\.\d+)?)[Vv]|(\d{3,}))$")
 
 #: Families whose base part number **ends in digits that name the part, not a
 #: voltage** (issue #17 point one). The classic adjustable regulators and the
@@ -129,6 +148,17 @@ def voltage_from_net_name(name: str | None) -> tuple[float, str] | None:
     The source string is what rules quote verbatim. Anything the whitelist
     does not recognise (``VCC``, ``VBUS``, ``VEE``, ``NET7``) returns None:
     not guessed, not zero.
+
+    Task A (310 V identity) added the spellings a high-voltage and a digital
+    rail are **actually named with** — ``310VDC``, ``DC310``, ``V_310V``,
+    ``V310`` and ``3V3D`` — next to the ``+5V``/``5V0``/``3.3V`` family that was
+    already here. Each is its own entry in the whitelist above, not a fallback
+    to :func:`boardwise.core.values.parse_voltage_volts`: this function is the
+    one that decides *「is this name a rail?」*, and a reader that accepted a
+    bare number would price every ``NET7``-style name the board happens to
+    carry. A shape this list does not state stays **None** — the caller's
+    UNKNOWN, which is what the architecture and spacing rules then say out
+    loud.
     """
     if not name:
         return None
@@ -140,6 +170,21 @@ def voltage_from_net_name(name: str | None) -> tuple[float, str] | None:
     if m:
         volts = float(f"{m.group(1)}.{m.group(2)}")
         return volts, f"net name {name!r}"
+    m = _MN_D_FORM.match(name)
+    if m:
+        volts = float(f"{m.group(1)}.{m.group(2)}")
+        return volts, f"net name {name!r}"
+    m = _DC_PREFIX_FORM.match(name)
+    if m and not m.group(1).startswith("0"):
+        volts = float(m.group(1))
+        return volts, f"net name {name!r}"
+    m = _V_PREFIX_FORM.match(name)
+    if m:
+        number = m.group(1) or m.group(2)
+        # the same significance rule the parser states: ``V030``/``DC030`` are
+        # a leading zero, not a voltage
+        if not number.startswith("0"):
+            return float(number), f"net name {name!r}"
     return None
 
 

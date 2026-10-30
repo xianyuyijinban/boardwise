@@ -35,6 +35,7 @@ import pytest
 
 from boardwise import cli, resources
 from boardwise.engines.checkup import (
+    PART_SECTION_TITLE,
     UNREVIEWED_CLEARING_NOTE,
     needs_datasheet_section,
     render_report_markdown,
@@ -543,8 +544,10 @@ def test_the_worklist_of_a_three_board_project_names_the_boards(tmp_path, monkey
 def test_a_single_board_report_is_unchanged_by_the_new_field(tmp_path, monkeypatch):
     """「schema 只加」: a report that never had boards gains an empty list.
 
-    The old keys keep their values byte for byte — the guard against a widened
-    section that quietly changes what an existing reader sees.
+    200A merged the three part sections into one ledger, so the pin moved with it:
+    the mark now lives in the big section's `未知项 审查者标记` cell (designator and
+    reason in the same row), and the removed ``### 审查者标记`` heading must not
+    come back. A single-board report still prints no multi-board hint.
     """
     model = type("M", (), {"components": {}, "nets": {}})()
     assert needs_datasheet_section([], [], []) == []
@@ -560,5 +563,8 @@ def test_a_single_board_report_is_unchanged_by_the_new_field(tmp_path, monkeypat
         "shelfPath": "blocklib/parts.json",
     }
     markdown = render_report_markdown(fake)
-    assert "### 审查者标记" in markdown
+    assert PART_SECTION_TITLE in markdown
+    assert "### 审查者标记" not in markdown, "旧小节已并入器件大节（200A）"
+    assert "未知项 审查者标记：（整颗器件） —— 看不清" in markdown
+    assert "| — | U1 |" in markdown, "单板行只有位号，没有板名"
     assert "多块板上" not in markdown, "单板上位号不该出现多板提示"

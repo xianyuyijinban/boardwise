@@ -746,6 +746,20 @@ def _clearance_measurement(
         payload["external_element_b"] = external.element_b
         payload["external_component_a"] = external.component_a
         payload["external_component_b"] = external.component_b
+    # #87④: additive identities for the exact pair(s) measured above. Older
+    # ClearanceResult callers without details stay valid and mean "not recorded".
+    for prefix, result in (("", measured), ("external_", external)):
+        if result is None:
+            continue
+        detail_a = result.element_a_detail
+        detail_b = result.element_b_detail
+        if not detail_a or not detail_b:
+            continue
+        payload[f"{prefix}element_a_detail"] = detail_a
+        payload[f"{prefix}element_b_detail"] = detail_b
+        payload[f"{prefix}shared_layer_ids"] = sorted(
+            set(detail_a["layers"]) & set(detail_b["layers"])
+        )
     return payload
 
 

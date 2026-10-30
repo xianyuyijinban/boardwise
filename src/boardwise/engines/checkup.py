@@ -4140,6 +4140,51 @@ WEIGHT_WHY: dict[str, str] = {
     ),
 }
 
+#: **Reading order — a second key, not a reuse of the weight** (200A §1).
+#: `WEIGHT_RANK` answers 「哪一层更重要」 (module first, because a green DRC only
+#: says 能造); a person reads a board the other way round: the DRC/ERC ticket
+#: first (is it even buildable), then the module readings, then the parts. The two
+#: orders are therefore deliberately different, and neither may be derived from
+#: the other — a single key doing both jobs is how the importance ranking would
+#: silently become a reading order.
+READING_GATE = "gate"
+READING_MODULE = "pcb-module"
+READING_DEVICE = "device"
+
+READING_RANK: dict[str, int] = {
+    READING_GATE: 0,
+    READING_MODULE: 1,
+    READING_DEVICE: 2,
+}
+
+READING_LABELS: dict[str, str] = {
+    READING_GATE: "通用门票",
+    READING_MODULE: "PCB 模块",
+    READING_DEVICE: "器件",
+}
+
+READING_WHY: dict[str, str] = {
+    READING_GATE: "DRC/ERC 与原理图连通性是门票：先回答「能不能造、电路对不对」",
+    READING_MODULE: "门票之后按模块读（噪声/发热/EMI/寿命）：第二层",
+    READING_DEVICE: "最后逐颗器件收口：封装/极性/丝印/降额——第三层",
+}
+
+
+def reading_layer(weight: str) -> str:
+    """The **reading layer** of one weight tier (`READING_RANK`).
+
+    Separate from :func:`finding_weight` on purpose: that one ranks importance,
+    this one ranks where a reader meets the row. 器件级 stays the lightest by
+    importance and the last to read; 通用 stays the heaviest by reading order
+    and the lightest by importance.
+    """
+    if weight == WEIGHT_DEVICE:
+        return READING_DEVICE
+    if weight == WEIGHT_PCB_MODULE:
+        return READING_MODULE
+    return READING_GATE
+
+
 #: 器件级 —— 路线图第三步的四条规则（E1/E2/E3 落地）。
 _DEVICE_RULE_IDS: frozenset[str] = frozenset({
     "pcb-footprint-consistency",
@@ -4800,11 +4845,15 @@ def board_report_section(
     * **per module / rule family** inside a board — the device rules as one
       :data:`DEVICE_GROUP_NAME` group, module-level PCB findings by their module,
       everything else by rule family;
-    * **sorted by severity × module weight** — severity first (ERROR → WARN →
-      INFO), then weight (:data:`WEIGHT_RANK`: 模块级 > 器件级 > 通用) inside a
-      severity tier, so an ERROR is never buried under a pile of module-level INFO
-      measurement rows and a module-level ERROR leads its tier. The exact key is
-      written into the head (`order`) so the sort is checkable, not a vibe;
+    * **sorted by reading layer, then severity** — 200A §1: 通用门票 (DRC/ERC and
+      schematic correctness) → PCB 模块 → 器件, with severity sorting only
+      **inside** one layer (:data:`READING_RANK`). That is a *different* key from
+      :data:`WEIGHT_RANK`, which keeps its importance meaning (模块级 > 器件级 >
+      通用) and is still published in the head; the two are never derived from
+      each other;
+    * the device parts ledger (`unreviewed_parts` + `accepted_unknown` +
+      `needs_datasheet`, one row per `(board, ref)`) closes the document
+      (:func:`render_part_section`) — the same renderer `report.md` uses;
     * one human-readable line per finding (:func:`finding_oneline`) — the machine
       detail stays in `findings[]`;
     * a closing verdict (:func:`board_report_verdict`) answering 「整工程能不能投板」.
@@ -4843,9 +4892,9 @@ def board_report_section(
             groups.setdefault(key, []).append((weight, severity, index, finding))
         out: list[dict] = []
         for name, members in groups.items():
-            # The sort key is **severity first, module weight second** — the two
-            # axes named in `order`, and the reason an ERROR is never buried under
-            # a pile of module-level INFO measurement rows. `rule_id` and the
+            # Inside one group the sort stays **severity first, then importance**
+            # — a group is one reading layer, so severity is the right axis there
+            # (200A §1: severity sorts *within* a layer). `rule_id` and the
             # report's own index break the remaining ties so the order is total
             # and the same report always renders the same way.
             members.sort(
@@ -4858,12 +4907,25 @@ def board_report_section(
             )
             # The group's *label* tier is its **heaviest** finding's: a module
             # group that holds one module-level reading is labelled 模块级 even if
-            # its other rows are generic. It does not decide the order — the best
-            # (severity, weight) pair inside the group does.
+            # its other rows are generic.
             best_weight = min((WEIGHT_RANK.get(m[0], 9) for m in members), default=9)
             weight_key = next(
                 (m[0] for m in members if WEIGHT_RANK.get(m[0], 9) == best_weight),
                 WEIGHT_GENERIC,
+            )
+            # 200A §1: the group's place in the reading order is its **earliest**
+            # layer's (the ticket a group contains is met before the module rows),
+            # and the sort key is (layer, severity, name) — severity no longer
+            # lifts a device group over a module one.
+            best_layer = min(
+                (READING_RANK.get(reading_layer(m[0]), 9) for m in members), default=9
+            )
+            layer_key = next(
+                (
+                    reading_layer(m[0]) for m in members
+                    if READING_RANK.get(reading_layer(m[0]), 9) == best_layer
+                ),
+                READING_GATE,
             )
             best_severity = min(
                 (SEVERITY_RANK.get(m[1].upper(), 9) for m in members), default=9
@@ -4872,6 +4934,8 @@ def board_report_section(
                 "name": name,
                 "weight": weight_key,
                 "weightLabel": WEIGHT_LABELS.get(weight_key, weight_key),
+                "reading": layer_key,
+                "readingLabel": READING_LABELS.get(layer_key, layer_key),
                 "counts": _severity_counts([m[3] for m in members]),
                 "findings": [
                     {
@@ -4885,7 +4949,7 @@ def board_report_section(
                     }
                     for m in members
                 ],
-                "_sort": (best_severity, best_weight, name),
+                "_sort": (best_layer, best_severity, name),
             })
         out.sort(key=lambda group: group["_sort"])
         for group in out:
@@ -4908,7 +4972,19 @@ def board_report_section(
         })
 
     return {
-        "order": "严重度（ERROR → WARN → INFO）× 模块权重（同级内 PCB 模块级 > 器件级 > 通用）",
+        "order": (
+            "阅读顺序：通用门票 → PCB 模块 → 器件（严重度只在同一阅读层内排序）；"
+            "层内重要性仍按 WEIGHT_RANK（PCB 模块级 > 器件级 > 通用）"
+        ),
+        "readingOrder": [
+            {
+                "key": key,
+                "label": READING_LABELS[key],
+                "rank": READING_RANK[key],
+                "why": READING_WHY[key],
+            }
+            for key in (READING_GATE, READING_MODULE, READING_DEVICE)
+        ],
         "weights": [
             {
                 "key": key,
@@ -4919,9 +4995,11 @@ def board_report_section(
             for key in (WEIGHT_PCB_MODULE, WEIGHT_DEVICE, WEIGHT_GENERIC)
         ],
         "note": (
-            "本表给人读：ERC + DRC + 模块规则 + 器件规则合成一份，按「板 → 模块/规则族」"
-            "分组，每条一句话（位号/网/问题/依据）。机器细节（完整 message、evidence、"
-            "定位链、规则等级）留在 `report.json` 的 findings[]，本表一个字都不新增结论。"
+            "本表给人读：ERC + DRC + 模块规则 + 器件规则合成一份，按「板 → 阅读层"
+            "（通用门票 → PCB 模块 → 器件）→ 模块/规则族」分组，层内按严重度，"
+            "每条一句话（位号/网/问题/依据）；末段是按 `(板, 位号)` 合并的器件大节。"
+            "机器细节（完整 message、evidence、定位链、规则等级）留在 `report.json` 的 "
+            "findings[]，本表一个字都不新增结论。"
         ),
         "drc": _drc_baseline(report),
         "boards": board_sections,
@@ -4958,13 +5036,21 @@ def _severity_counts(findings: list[dict]) -> dict[str, int]:
 BOARD_REPORT_FILE = "board-report.md"
 
 
-def render_board_report(report: dict, section: dict | None = None) -> str:
+def render_board_report(
+    report: dict, section: dict | None = None, *, with_parts: bool = True
+) -> str:
     """The `board_report` section as the Markdown a person reads.
 
     The same renderer feeds the leading section of `report.md` (via
     :func:`render_report_markdown`) **and** the standalone `board-report.md` file
     — one function, so the embedded copy and the file cannot disagree. It renders
     only what the section already says.
+
+    ``with_parts`` (200A §3) decides whether the device parts ledger
+    (:func:`render_part_section`) closes this document. `board-report.md` keeps it
+    (that file is the whole board story); `report.md` passes ``False`` because its
+    body prints the same ledger, through the same renderer, **after** 主机 DRC and
+    模块 — one heading, one set of rows, in both products.
     """
     section = section if isinstance(section, dict) else board_report_section(report)
     lines: list[str] = []
@@ -4974,6 +5060,11 @@ def render_board_report(report: dict, section: dict | None = None) -> str:
     lines.append(f"### 整工程能不能投板：{verdict.get('line', '（无结论）')}")
     lines.append("")
     lines.append(f"- 排序依据：{section.get('order', '')}")
+    for layer in section.get("readingOrder") or []:
+        lines.append(
+            f"  - **{layer.get('label')}**（阅读 #{layer.get('rank')}）：{layer.get('why')}"
+        )
+    lines.append("- 重要性（不是阅读顺序）：")
     for weight in section.get("weights") or []:
         lines.append(f"  - **{weight.get('label')}**（rank {weight.get('rank')}）：{weight.get('why')}")
     lines.append(f"- {section.get('note', '')}")
@@ -5027,7 +5118,8 @@ def render_board_report(report: dict, section: dict | None = None) -> str:
         for group in board.get("groups") or []:
             gcounts = group.get("counts") or {}
             lines.append(
-                f"#### {group.get('name')}（{group.get('weightLabel')}）"
+                f"#### {group.get('name')}（{group.get('weightLabel')} · "
+                f"阅读层 {group.get('readingLabel') or '—'}）"
                 f"—— {gcounts.get('ERROR', 0)} ERROR / {gcounts.get('WARN', 0)} WARN / "
                 f"{gcounts.get('INFO', 0)} INFO"
             )
@@ -5054,11 +5146,510 @@ def render_board_report(report: dict, section: dict | None = None) -> str:
                 f"{_cell(entry.get('line'))}{reason}"
             )
         lines.append("")
+    if with_parts:
+        # 200A §3: the same device ledger `report.md` prints, from the same
+        # renderer, so the two products' rows cannot disagree. It closes the
+        # document — 通用门票 → 模块 → 器件 is the reading order in both.
+        lines.append(render_part_section(report).rstrip())
+        lines.append("")
     totals = section.get("totals") or {}
     lines.append(
         f"**整工程合计：{totals.get('ERROR', 0)} ERROR / {totals.get('WARN', 0)} WARN / "
         f"{totals.get('INFO', 0)} INFO**"
     )
+    lines.append("")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# 器件大节 —— one ledger for 未审器件 + 接受未审 + 未知项 (200A §2/§3)
+# --------------------------------------------------------------------------
+
+#: The device big section's heading. One section for the three sources the
+#: report has always carried (`unreviewed_parts[]`, `accepted_unknown[]`,
+#: `needs_datasheet[]`), because they answer one question — 「这颗器件还欠什么」 —
+#: and read as three lists of the same parts, most of them appearing in two or
+#: three of them. The JSON keeps all three arrays (schema unchanged); this is the
+#: human reading, merged by `(board, ref)`.
+PART_SECTION_TITLE = "器件（未审器件 / 接受未审 / 未知项合并）"
+
+#: 191A's four acceptance states, as the words a reader acts on. Same wording the
+#: standalone accepted section used before 200A merged it here.
+_ACCEPTED_STATE_LABELS: dict[str, str] = {
+    STATE_ACCEPTED: "本轮接受（已从 未审 移出）",
+    STATE_ACCEPTED_NOT_UNREVIEWED: "不在本轮未审清单",
+    STATE_ACCEPTED_STALE: "stale（图纸上已没有）",
+    STATE_ACCEPTED_STALE_ELSEWHERE: "stale-elsewhere（件在别的板上）",
+}
+
+
+def _merge_placements(row: dict, *ref_keys: str) -> list[dict]:
+    """One source row → one entry per placement it names.
+
+    The merge key is `(board, ref)`; a designator is **not** the key, because a
+    project's designator is not one part (`U2` is a 2x6 header on one board and a
+    28-pin part on another — 040b/185-中1). A row with no board identity (a plain
+    model, a reviewer mark) is one placement with ``board == ""``.
+    """
+    ref = ""
+    for key in ref_keys:
+        ref = str(row.get(key) or "").strip()
+        if ref:
+            break
+    if not ref:
+        return []
+    placements = board_rows(
+        row.get("boards"),
+        mpn=str(row.get("mpn") or ""),
+        name=str(row.get("name") or ""),
+        value=str(row.get("value") or ""),
+    )
+    if not placements:
+        placements = [{
+            "board": str(row.get("board") or ""),
+            "mpn": str(row.get("mpn") or ""),
+            "name": str(row.get("name") or ""),
+            "value": str(row.get("value") or ""),
+        }]
+    return [
+        {
+            "board": str(placement.get("board") or ""),
+            "ref": ref,
+            "mpn": str(placement.get("mpn") or "").strip()
+            or str(row.get("mpn") or "").strip(),
+            "supplier": str(row.get("supplier") or "").strip(),
+        }
+        for placement in placements
+    ]
+
+
+def merged_part_rows(report: dict) -> list[dict]:
+    """The device big section's rows: one per `(board, ref)` (200A §2).
+
+    Built from the report's **own three arrays** — never from a second walk of the
+    model — so the ledger cannot say more than the JSON. The same part may arrive
+    from all three sources (a part can be unreviewed, carry a reviewer mark and be
+    accepted); it is one row, and each source's fields stay in it.
+
+    Reading order: the model's board order first, then rows with no board
+    identity, then any board title the model does not know (a hand-built report).
+    Inside one board the order is the order the sources list them. Deterministic,
+    so `report.md` and `board-report.md` print the same sequence.
+    """
+    report = report or {}
+    slots: dict[tuple[str, str], dict] = {}
+    order: list[tuple[str, str]] = []
+
+    def _slot(board: str, ref: str) -> dict:
+        key = (board, ref)
+        if key not in slots:
+            slots[key] = {
+                "board": board,
+                "ref": ref,
+                "mpn": "",
+                "supplier": "",
+                "unreviewed": None,
+                "accepted": [],
+                "needs": [],
+                "reasons": [],
+                "missingFacts": [],
+                "factsPresent": [],
+                "channels": {},
+                "shelfMatchedBy": "",
+                "factsTrust": "",
+                "onShelf": None,
+            }
+            order.append(key)
+        return slots[key]
+
+    def _unique(target: list, values) -> None:
+        for value in values or []:
+            text = str(value)
+            if text and text not in target:
+                target.append(text)
+
+    def _identity(slot: dict, placement: dict) -> None:
+        if not slot["mpn"] and placement.get("mpn"):
+            slot["mpn"] = placement["mpn"]
+        if not slot["supplier"] and placement.get("supplier"):
+            slot["supplier"] = placement["supplier"]
+
+    for row in report.get("unreviewed_parts") or []:
+        if not isinstance(row, dict):
+            continue
+        for placement in _merge_placements(row, "designator"):
+            slot = _slot(placement["board"], placement["ref"])
+            slot["unreviewed"] = row
+            _identity(slot, placement)
+            _unique(slot["reasons"], row.get("reasons"))
+            _unique(slot["missingFacts"], row.get("missingFacts"))
+            _unique(slot["factsPresent"], row.get("factsPresent"))
+            if not slot["channels"] and isinstance(row.get("channels"), dict):
+                slot["channels"] = row["channels"]
+            if not slot["shelfMatchedBy"] and row.get("shelfMatchedBy"):
+                slot["shelfMatchedBy"] = str(row["shelfMatchedBy"])
+            if not slot["factsTrust"] and row.get("factsTrust"):
+                slot["factsTrust"] = str(row["factsTrust"])
+            if slot["onShelf"] is None and row.get("onShelf") is not None:
+                slot["onShelf"] = bool(row["onShelf"])
+
+    for row in report.get("accepted_unknown") or []:
+        if not isinstance(row, dict):
+            continue
+        for placement in _merge_placements(row, "designator", "part"):
+            slot = _slot(placement["board"], placement["ref"])
+            slot["accepted"].append(row)
+            _identity(slot, placement)
+            _unique(slot["reasons"], row.get("reasons"))
+            _unique(slot["missingFacts"], row.get("missingFacts"))
+
+    for row in report.get("needs_datasheet") or []:
+        if not isinstance(row, dict):
+            continue
+        for placement in _merge_placements(row, "part", "designator"):
+            slot = _slot(placement["board"], placement["ref"])
+            slot["needs"].append(row)
+            _identity(slot, placement)
+            _unique(slot["missingFacts"], row.get("missingFacts"))
+            if not slot["channels"] and isinstance(row.get("channels"), dict):
+                slot["channels"] = row["channels"]
+            if not slot["shelfMatchedBy"] and row.get("shelfMatchedBy"):
+                slot["shelfMatchedBy"] = str(row["shelfMatchedBy"])
+
+    board_order = [
+        str(board.get("title") or "")
+        for board in (report.get("model") or {}).get("boards") or []
+        if isinstance(board, dict)
+    ]
+    seen = {key: index for index, key in enumerate(order)}
+
+    def _rank(key: tuple[str, str]) -> tuple:
+        board = key[0]
+        if board in board_order:
+            return (0, board_order.index(board), "", seen[key])
+        if not board:
+            return (1, 0, "", seen[key])
+        return (2, 0, board, seen[key])
+
+    return [slots[key] for key in sorted(order, key=_rank)]
+
+
+def _accepted_cell(entries: list[dict]) -> str:
+    """The 接受未审 cell: state, reason, who and when — per acceptance."""
+    parts: list[str] = []
+    for entry in entries:
+        state = str(entry.get("state") or "")
+        label = _ACCEPTED_STATE_LABELS.get(state, state or "—")
+        if entry.get("why"):
+            label = f"{label}：{entry['why']}"
+        parts.append(
+            f"{label}；理由 {entry.get('reason') or '—'}；"
+            f"谁 {entry.get('who') or '—'}；何时 {entry.get('when') or '—'}"
+        )
+    return "；".join(parts) or "—"
+
+
+def _unknown_cell(row: dict) -> str:
+    """The facts / 未知项 cell: the shelf's facts, and what still depends on it."""
+    parts: list[str] = []
+    if row.get("factsPresent"):
+        parts.append("货架 fact：" + "、".join(row["factsPresent"]))
+    elif row.get("unreviewed") is not None:
+        parts.append("货架无可判 fact")
+    if row.get("factsTrust"):
+        parts.append(f"facts 证据档：{row['factsTrust']}")
+    for entry in row.get("needs") or []:
+        deps = "、".join(entry.get("dependentFindings") or []) or "—"
+        if entry.get("trigger") == TRIGGER_FACTS:
+            parts.append(
+                f"未知项 facts：{entry.get('reason') or '—'}（依赖 {deps}）"
+            )
+        else:
+            pins = "、".join(str(pin) for pin in (entry.get("pins") or [])) or "（整颗器件）"
+            parts.append(
+                f"未知项 审查者标记：{pins} —— {entry.get('reason') or '（没写理由）'}"
+                f"（依赖 {deps}）"
+            )
+    return "；".join(parts) or "—"
+
+
+def _declared_passive_exempt_lines(exempt_rows: list) -> list[str]:
+    """192B's trail: one line naming the exempted parts, in both products.
+
+    Called on the empty ledger too — 200A's rule is no table and no fake rows, not
+    silence about a part the classifier declined to question.
+    """
+    if not exempt_rows:
+        return []
+    return [
+        f"**声明为无源件、未按 IC 问手册的件（{len(exempt_rows)}）**："
+        + "、".join(f"`{row.get('designator')}`" for row in exempt_rows)
+        + f"——位号像 IC，但元数据/货架声明它是无源件（190 的豁免只给 ≤ "
+        f"{MAX_PASSIVE_PINS} 脚的件）。判型读法与脚数见 `report.json` 的 "
+        "`declaredPassiveExempt[]`（`kind` / `basis` / `pins`）；判型读错时"
+        "这条就是它的留痕，而不是它无声消失。",
+        "",
+    ]
+
+
+def render_part_section(report: dict, *, rows: list[dict] | None = None) -> str:
+    """The device big section — **one** renderer for `report.md` and `board-report.md`.
+
+    200A §2/§3: 未审器件 / 接受未审 / 未知项 merged by `(board, ref)`, one row per
+    part per board, each row keeping its unreviewed reasons, the acceptance (reason
+    / who / when / state) and the facts/unknown state. Both products call this
+    function, so the rows are byte-identical and the reading order is the same.
+
+    An empty ledger says so in one sentence and prints **no table and no second
+    heading** — an empty source must not invent rows (200A §2).
+    """
+    report = report or {}
+    merged = list(rows) if rows is not None else merged_part_rows(report)
+    unreviewed = [
+        row for row in report.get("unreviewed_parts") or [] if isinstance(row, dict)
+    ]
+    accepted = [
+        row for row in report.get("accepted_unknown") or [] if isinstance(row, dict)
+    ]
+    needs = [
+        row for row in report.get("needs_datasheet") or [] if isinstance(row, dict)
+    ]
+    facts_rows = [entry for entry in needs if entry.get("trigger") == TRIGGER_FACTS]
+    marked_rows = [entry for entry in needs if entry.get("trigger") == TRIGGER_MARKED]
+    summary = report.get("summary") or {}
+    exempt_rows = report.get("declaredPassiveExempt") or []
+
+    lines: list[str] = [f"## {PART_SECTION_TITLE}", ""]
+    if not merged:
+        lines.append(
+            "无：三份来源都空——没有未审器件、没有接受未审、没有依赖的未知项。"
+            "本节空着，报告才有资格谈「通过」（完整结论仍以 `completion.verdict` 为准）。"
+        )
+        lines.append("")
+        # 192B: the empty ledger still owes the exemption trail — no rows, no table,
+        # but a part the classifier declined to question must not vanish silently.
+        lines.extend(_declared_passive_exempt_lines(exempt_rows))
+        return "\n".join(lines)
+
+    board_count = len({row["board"] for row in merged})
+    lines.append(
+        f"- 合并口径：按 `(板, 位号)` 一行 —— 未审器件 {len(unreviewed)} 颗 · "
+        f"接受未审 {len(accepted)} 条 · 未知项 facts {len(facts_rows)} 条 / "
+        f"审查者标记 {len(marked_rows)} 项 → 本表 {len(merged)} 行 / {board_count} 块板。"
+        "**同名位号在不同板不合并**（每块板各自一行，MPN/Value 按该板的位置读）"
+    )
+    lines.append("")
+    if unreviewed:
+        lines.append(
+            "未审器件非空：本节**不得**被读成审查通过——只能说 DRC/连接性已审，"
+            f"{len(unreviewed)} 颗器件缺手册未审。三通道（工程师给 / 立创找 / 官网搜）"
+            "逐行在下面。"
+        )
+        lines.append("")
+        lines.append(unreviewed_clearing_note(str(report.get("shelfPath") or "")))
+        counts = summary.get("unreviewedByReason")
+        if not isinstance(counts, dict):
+            counts = unreviewed_counts_by_reason(unreviewed)
+        if counts:
+            lines.append("")
+            lines.append(
+                "按原因计数："
+                + " · ".join(f"{reason} {count}" for reason, count in counts.items())
+            )
+        by_class = summary.get("unreviewedByClass")
+        if not isinstance(by_class, dict):
+            by_class = unreviewed_counts_by_class(unreviewed)
+        if by_class:
+            lines.append("")
+            lines.append(
+                "按性质分栏（同一器件两类都沾的，两边都列）："
+                + " · ".join(
+                    f"{name} {by_class.get(name, 0)}" for name in CLASS_ORDER
+                )
+            )
+            for name in CLASS_ORDER:
+                members = [part for part in unreviewed if name in unreviewed_classes(part)]
+                lines.append(
+                    f"- **{name}**（{len(members)}）："
+                    + ("、".join(f"`{part.get('designator')}`" for part in members) or "无")
+                )
+            lines.append("")
+            lines.append(
+                "两类的下一步相反：「工具读不懂」不是缺资料——再喂 PDF 也没用，"
+                "要补的是读法（板上 `Value` / 解码器）；「真缺资料」才轮到去要手册。"
+            )
+            meta_counts = report.get("metadataStateCounts")
+            if isinstance(meta_counts, dict) and meta_counts:
+                lines.append("")
+                lines.append(
+                    "归档元数据（LCSC Part Name / Type，零网络）："
+                    + " · ".join(
+                        f"{name} {meta_counts[name]}" for name in META_STATE_ORDER
+                        if name in meta_counts
+                    )
+                )
+                lines.append(
+                    "「已确认」= 归档/板上 Value/MPN 至少两路一致，已不再要手册；"
+                    "「冲突」= 两路读数打架（逐路读数见 `metadataValueConflicts[]`）；"
+                    "「缺失」= 归档字段为空；「不可解析」= 有字段但没读出来——"
+                    "**这是读法缺口，不是缺资料**，两类分开计数。"
+                )
+            confirmed_meta = report.get("metadataValueConfirmed") or []
+            if confirmed_meta:
+                lines.append("")
+                lines.append(
+                    f"**归档元数据确认、未要手册的件（{len(confirmed_meta)}）**："
+                )
+                for row in confirmed_meta:
+                    lines.append(
+                        f"- `{row.get('designator')}` 值 "
+                        f"{row.get('value', 0):g}（确认依据："
+                        + " + ".join(row.get("confirmedBy") or [])
+                        + f"；归档：{row.get('archive') or '—'}）"
+                    )
+            conflicts_meta = report.get("metadataValueConflicts") or []
+            if conflicts_meta:
+                lines.append("")
+                lines.append(
+                    f"**元数据冲突（{len(conflicts_meta)}）**——逐路读数，先核对再动手："
+                )
+                for row in conflicts_meta:
+                    for param, detail in (row.get("params") or {}).items():
+                        readings = "、".join(
+                            f"{name}={value:g}" for name, value in detail["readings"].items()
+                        )
+                        lines.append(
+                            f"- `{row.get('designator')}` {param}：{readings}"
+                            f"（归档：{row.get('archive') or '—'}；"
+                            f"板上：{row.get('boardValue') or '—'}；"
+                            f"MPN：{row.get('mpn') or '—'}）"
+                        )
+    if needs:
+        lines.append("")
+        lines.append(NEEDS_DATASHEET_BLOCK)
+        if marked_rows:
+            lines.append("")
+            lines.append(MARKED_ENTRY_NOTE)
+    lines.append("")
+
+    lines.append(
+        "| 板 | 位号 | MPN | 供应商 | 状态 | 未审原因 | 接受未审 | facts / 未知项 "
+        "| 缺哪些 fact | 工程师给 | 立创找 | 官网搜 |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    for row in merged:
+        statuses: list[str] = []
+        if row["unreviewed"] is not None:
+            statuses.append("未审")
+        for entry in row["accepted"]:
+            state = str(entry.get("state") or "")
+            statuses.append("接受未审：" + _ACCEPTED_STATE_LABELS.get(state, state or "—"))
+        for entry in row["needs"]:
+            statuses.append(
+                "未知项：" + ("facts" if entry.get("trigger") == TRIGGER_FACTS
+                              else "审查者标记")
+            )
+        channels = row["channels"] or {}
+        lines.append(
+            f"| {_cell(row['board'] or '—')} | {_cell(row['ref'])} "
+            f"| {_cell(row['mpn'] or '—')} | {_cell(row['supplier'] or '—')} "
+            f"| {_cell('；'.join(statuses) or '—')} "
+            f"| {_cell('；'.join(row['reasons']) or '—')} "
+            f"| {_cell(_accepted_cell(row['accepted']))} "
+            f"| {_cell(_unknown_cell(row))} "
+            f"| {_cell('、'.join(row['missingFacts']) or '—')} "
+            f"| {_channel_cell(channels.get('engineer'))} "
+            f"| {_channel_cell(channels.get('lcsc'))} "
+            f"| {_channel_cell(channels.get('official'))} |"
+        )
+    lines.append("")
+
+    from ..core.parts import IDENTITY_NAME
+
+    by_name = [
+        str(part.get("designator"))
+        for part in unreviewed
+        if part.get("shelfMatchedBy") == IDENTITY_NAME
+    ]
+    if by_name:
+        lines.append(
+            "**货架⇢按器件名匹配（弱证据）**："
+            + "、".join(f"`{name}`" for name in by_name)
+            + "——货架上这颗料是拿**器件名**找到的（MPN 与 C 码都没对上），"
+            "身份比 MPN/C 码命中弱一档：核 facts 时把身份一并核了"
+            "（行里的 `shelfMatchedBy` 就是这个读数，`name` 即按器件名）。"
+        )
+        lines.append("")
+    for part in unreviewed:
+        channels = part.get("channels") or {}
+        official = (channels.get("official") or {}).get("suggestedQueries") or []
+        if official:
+            lines.append(
+                f"- `{part.get('designator')}` 官网通道建议查询词："
+                + "；".join(f"`{query}`" for query in official)
+            )
+    if any(
+        (part.get("channels") or {}).get("official", {}).get("suggestedQueries")
+        for part in unreviewed
+    ):
+        lines.append("")
+
+    lines.extend(_declared_passive_exempt_lines(exempt_rows))
+
+    if accepted:
+        counts = accepted_unknown_counts(accepted)
+        lines.append(
+            "接受未审：这些件**这一轮没有判**——工程师明示「这颗的未知我接受」，"
+            "理由、谁、何时在行内。"
+            f"其中 {counts.get(STATE_ACCEPTED, 0)} 颗本轮真的从「未审」里移了出来"
+            + accepted_verdict_clause(report.get("completion") or {})
+            + "但报告把数量和理由一直说在明面上，**不算「审过了」**。"
+        )
+        lines.append("")
+        stale_rows = [row for row in accepted if row.get("stale")]
+        if stale_rows:
+            lines.append(
+                f"**合同里记着、图纸里已没有的件（{len(stale_rows)}，不删只标）**："
+                + "、".join(f"`{row.get('part')}`" for row in stale_rows)
+                + "——撤销用 `boardwise parts accept-unknown <MPN|位号> --reason … "
+                "--revoke`（合同里那几条值保留，只标 `stale`）。"
+            )
+            lines.append("")
+        orphans = [
+            row for row in accepted
+            if str(row.get("state")) == STATE_ACCEPTED_NOT_UNREVIEWED
+        ]
+        if orphans:
+            lines.append(
+                f"另有 {len(orphans)} 条接受记录本轮没派上用场（那些件不在本轮未审清单里）："
+                + "、".join(f"`{row.get('part')}`" for row in orphans)
+                + "——合同里的条目继续保留，货架更新不会替工程师删掉他的判断。"
+            )
+            lines.append("")
+
+    if needs:
+        multi = [entry for entry in needs if len(entry.get("boards") or []) > 1]
+        if multi:
+            lines.append(
+                "**同一份清单按位号折叠过，下列位号出现在多块板上（板上身份各不相同，"
+                "本表已按板分行）：**"
+            )
+            lines.append("")
+            for entry in multi:
+                placements = "；".join(
+                    f"{row.get('board') or '(单板)'}"
+                    f"（MPN {row.get('mpn') or '无'}，name {row.get('name') or '无'}，"
+                    f"value {row.get('value') or '无'}）"
+                    for row in entry["boards"]
+                )
+                lines.append(f"- `{entry.get('part')}`：{placements}")
+            lines.append("")
+        lines.append(
+            "同一器件两源命中时按 marked 展示（该条 `factSeed: true`），计数只算一次；"
+            f"每个器件问同一件事：{UNKNOWN_PART_QUESTION}"
+        )
+    else:
+        lines.append(f"每个器件问同一件事：{UNKNOWN_PART_QUESTION}")
     lines.append("")
     return "\n".join(lines)
 
@@ -5194,7 +5785,9 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
     _render_guarded(
         lines,
         "整板报告（board-report）",
-        lambda: lines.append(render_board_report(report).rstrip()),
+        lambda: lines.append(
+            render_board_report(report, with_parts=False).rstrip()
+        ),
     )
     lines.append("")
 
@@ -5308,339 +5901,6 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
     else:
         for entry in summary["errors"]:
             lines.append(_summary_bullet(entry))
-    lines.append("")
-
-    # --- the datasheet gate: what could not be reviewed at all (039 批② §WI-1).
-    from ..core.parts import IDENTITY_NAME
-
-    unreviewed = report.get("unreviewed_parts") or []
-    lines.append(f"## 未审器件（{len(unreviewed)}）")
-    lines.append("")
-    if not unreviewed:
-        lines.append("无：每个器件都有货架事实或身份信息，规则能判。")
-    else:
-        lines.append(
-            "本节非空时**不得宣称审查通过**：只能说 DRC/连接性已审，"
-            f"{len(unreviewed)} 颗器件缺手册未审。三通道（工程师给 / 立创找 / 官网搜）逐条列在下面。"
-        )
-        # 186 §C (P1): the action that actually clears the gate, spelled with the
-        # CLI's own commands. Feeding a PDF is the step that *looked* like it
-        # cleared the gate and does not — a reader that has to guess is the
-        # accident this line exists for. 186-H2 added **which shelf** to that
-        # instruction: the write has to land in the file this run read.
-        lines.append("")
-        lines.append(unreviewed_clearing_note(str(report.get("shelfPath") or "")))
-        # 184: the总 number is one number for different problems. Printed from the
-        # rows below (or, for a hand-built report, from the section itself), never
-        # recomputed from the model — the ledger may not say more than the JSON.
-        counts = summary.get("unreviewedByReason")
-        if not isinstance(counts, dict):
-            counts = unreviewed_counts_by_reason(unreviewed)
-        if counts:
-            lines.append("")
-            lines.append(
-                "按原因计数："
-                + " · ".join(f"{reason} {count}" for reason, count in counts.items())
-            )
-        # 186 §C: the same rows, split by what the reader has to do next. A row
-        # in both classes is named in both lists and counted once in each — the
-        # question "how many parts" is the heading's number, not these.
-        by_class = summary.get("unreviewedByClass")
-        if not isinstance(by_class, dict):
-            by_class = unreviewed_counts_by_class(unreviewed)
-        if by_class:
-            lines.append("")
-            lines.append(
-                "按性质分栏（同一器件两类都沾的，两边都列）："
-                + " · ".join(
-                    f"{name} {by_class.get(name, 0)}" for name in CLASS_ORDER
-                )
-            )
-            for name in CLASS_ORDER:
-                members = [part for part in unreviewed if name in unreviewed_classes(part)]
-                lines.append(
-                    f"- **{name}**（{len(members)}）："
-                    + ("、".join(f"`{part.get('designator')}`" for part in members) or "无")
-                )
-            lines.append("")
-            lines.append(
-                "两类的下一步相反：「工具读不懂」不是缺资料——再喂 PDF 也没用，"
-                "要补的是读法（板上 `Value` / 解码器）；「真缺资料」才轮到去要手册。"
-            )
-            # 517: the metadata reading, **inside** the class split. The four
-            # buckets are walked over the model's passives (not the rows above:
-            # confirmed parts are not in `unreviewed_parts[]` any more — that
-            # is the point), so they come from the report's own sections.
-            meta_counts = report.get("metadataStateCounts")
-            if isinstance(meta_counts, dict) and meta_counts:
-                lines.append("")
-                lines.append(
-                    "归档元数据（LCSC Part Name / Type，零网络）："
-                    + " · ".join(
-                        f"{name} {meta_counts[name]}" for name in META_STATE_ORDER
-                        if name in meta_counts
-                    )
-                )
-                lines.append(
-                    "「已确认」= 归档/板上 Value/MPN 至少两路一致，已不再要手册；"
-                    "「冲突」= 两路读数打架（逐路读数见 `metadataValueConflicts[]`）；"
-                    "「缺失」= 归档字段为空；「不可解析」= 有字段但没读出来——"
-                    "**这是读法缺口，不是缺资料**，两类分开计数。"
-                )
-            # 517: the confirmed parts' evidence — which two sources agreed.
-            # A part that left the gate has to be findable, or the shortening
-            # is exactly the silent green light the section forbids.
-            confirmed_meta = report.get("metadataValueConfirmed") or []
-            if confirmed_meta:
-                lines.append("")
-                lines.append(
-                    f"**归档元数据确认、未要手册的件（{len(confirmed_meta)}）**："
-                )
-                for row in confirmed_meta:
-                    lines.append(
-                        f"- `{row.get('designator')}` 值 "
-                        f"{row.get('value', 0):g}（确认依据："
-                        + " + ".join(row.get("confirmedBy") or [])
-                        + f"；归档：{row.get('archive') or '—'}）"
-                    )
-            conflicts_meta = report.get("metadataValueConflicts") or []
-            if conflicts_meta:
-                lines.append("")
-                lines.append(
-                    f"**元数据冲突（{len(conflicts_meta)}）**——逐路读数，先核对再动手："
-                )
-                for row in conflicts_meta:
-                    for param, detail in (row.get("params") or {}).items():
-                        readings = "、".join(
-                            f"{name}={value:g}" for name, value in detail["readings"].items()
-                        )
-                        lines.append(
-                            f"- `{row.get('designator')}` {param}：{readings}"
-                            f"（归档：{row.get('archive') or '—'}；"
-                            f"板上：{row.get('boardValue') or '—'}；"
-                            f"MPN：{row.get('mpn') or '—'}）"
-                        )
-        lines.append("")
-        lines.append("| 位号 | MPN | 供应商 | 缺哪些 fact | 工程师给 | 立创找 | 官网搜 |")
-        lines.append("|---|---|---|---|---|---|---|")
-        for part in unreviewed:
-            channels = part.get("channels") or {}
-            lines.append(
-                f"| {_cell(part.get('designator'))} | {_cell(part.get('mpn'))} "
-                f"| {_cell(part.get('supplier'))} "
-                f"| {_cell('、'.join(part.get('missingFacts') or []) or '—')} "
-                f"| {_channel_cell(channels.get('engineer'))} "
-                f"| {_channel_cell(channels.get('lcsc'))} "
-                f"| {_channel_cell(channels.get('official'))} |"
-            )
-        lines.append("")
-        # 188B (186 中1): a row whose shelf entry was found by **device name** —
-        # 186 §B's weaker identity step — says so before the reader acts on it.
-        # Read from the rows' own `shelfMatchedBy`, never re-resolved: the
-        # engineer-channel cell above can say "按器件名匹配" about a *local PDF*,
-        # which is a different claim about a different thing.
-        by_name = [
-            str(part.get("designator"))
-            for part in unreviewed
-            if part.get("shelfMatchedBy") == IDENTITY_NAME
-        ]
-        if by_name:
-            lines.append("")
-            lines.append(
-                "**货架⇢按器件名匹配（弱证据）**："
-                + "、".join(f"`{name}`" for name in by_name)
-                + "——货架上这颗料是拿**器件名**找到的（MPN 与 C 码都没对上），"
-                "身份比 MPN/C 码命中弱一档：核 facts 时把身份一并核了"
-                "（行里的 `shelfMatchedBy` 就是这个读数，`name` 即按器件名）。"
-            )
-        lines.append("")
-        for part in unreviewed:
-            channels = part.get("channels") or {}
-            official = (channels.get("official") or {}).get("suggestedQueries") or []
-            if official:
-                lines.append(
-                    f"- `{part.get('designator')}` 官网通道建议查询词："
-                    + "；".join(f"`{query}`" for query in official)
-                )
-        lines.append("")
-        lines.append(f"每个器件问同一件事：{UNKNOWN_PART_QUESTION}")
-    # 192B ⑤: the exemption's trace, printed whether or not the section above is
-    # empty — a part this pass took *off* the gate is exactly the reading a reader
-    # has to be able to see, and it is the one row that would otherwise leave no
-    # mark at all (it neither is, nor ever was, in `unreviewed_parts`).
-    exempt_rows = report.get("declaredPassiveExempt") or []
-    if exempt_rows:
-        lines.append("")
-        lines.append(
-            f"**声明为无源件、未按 IC 问手册的件（{len(exempt_rows)}）**："
-            + "、".join(f"`{row.get('designator')}`" for row in exempt_rows)
-            + f"——位号像 IC，但元数据/货架声明它是无源件（190 的豁免只给 ≤ "
-            f"{MAX_PASSIVE_PINS} 脚的件）。判型读法与脚数见 `report.json` 的 "
-            "`declaredPassiveExempt[]`（`kind` / `basis` / `pins`）；判型读错时"
-            "这条就是它的留痕，而不是它无声消失。"
-        )
-    lines.append("")
-
-    # --- 191A: the accepted-unknown list, right after 未审器件 because it is the
-    # other half of that section's answer ("these parts left the list — and here
-    # is who said they could"). Rendered from the rows' own fields, always
-    # printed when non-empty (a report that hid it would be the silent green
-    # light this batch exists to prevent), and silent by absence when the
-    # contract accepted nothing.
-    accepted_rows = report.get("accepted_unknown") or []
-    if accepted_rows:
-        counts = accepted_unknown_counts(accepted_rows)
-        lines.append(f"## 工程师接受未审（accepted_unknown：{len(accepted_rows)}）")
-        lines.append("")
-        lines.append(
-            "这些件**这一轮没有判**：工程师明示「这颗的未知我接受」，理由写在下面。"
-            f"其中 {counts.get(STATE_ACCEPTED, 0)} 颗本轮真的从「未审器件」里移了出来"
-            + accepted_verdict_clause(report.get("completion") or {})
-            + "但报告把数量和理由一直说在明面上，**不算「审过了」**。"
-        )
-        lines.append("")
-        lines.append("| 位号/令牌 | 状态 | MPN | 理由 | 谁 | 何时 |")
-        lines.append("|---|---|---|---|---|---|")
-        state_labels = {
-            STATE_ACCEPTED: "本轮接受（已从 未审 移出）",
-            STATE_ACCEPTED_NOT_UNREVIEWED: "不在本轮未审清单",
-            STATE_ACCEPTED_STALE: "stale（图纸上已没有）",
-            # 192B ⑦: the label alone would say the same false sentence the two
-            # states shared, so this row's own `why` is appended to the cell
-            # below — the board names are the whole content of the reading.
-            STATE_ACCEPTED_STALE_ELSEWHERE: "stale-elsewhere（件在别的板上）",
-        }
-        for row in accepted_rows:
-            state_text = state_labels.get(str(row.get("state")), row.get("state"))
-            if (
-                str(row.get("state")) == STATE_ACCEPTED_STALE_ELSEWHERE
-                and row.get("why")
-            ):
-                state_text = f"{state_text}：{row['why']}"
-            lines.append(
-                f"| {_cell(row.get('part'))} "
-                f"| {_cell(state_text)} "
-                f"| {_cell(row.get('mpn') or '—')} "
-                f"| {_cell(row.get('reason') or '—')} "
-                f"| {_cell(row.get('who') or '—')} "
-                f"| {_cell(row.get('when') or '—')} |"
-            )
-        lines.append("")
-        stale_rows = [row for row in accepted_rows if row.get("stale")]
-        if stale_rows:
-            # 189B's discipline, one section over: the entry is kept and marked,
-            # never removed, and the reader is told why it no longer says anything
-            # about this board.
-            lines.append(
-                f"**合同里记着、图纸里已没有的件（{len(stale_rows)}，不删只标）**："
-                + "、".join(f"`{row.get('part')}`" for row in stale_rows)
-                + "——撤销用 `boardwise parts accept-unknown <MPN|位号> --reason … "
-                "--revoke`（合同里那几条值保留，只标 `stale`）。"
-            )
-            lines.append("")
-        orphans = [
-            row for row in accepted_rows
-            if str(row.get("state")) == STATE_ACCEPTED_NOT_UNREVIEWED
-        ]
-        if orphans:
-            lines.append(
-                f"另有 {len(orphans)} 条接受记录本轮没派上用场（那些件不在本轮未审清单里）："
-                + "、".join(f"`{row.get('part')}`" for row in orphans)
-                + "——合同里的条目继续保留，货架更新不会替工程师删掉他的判断。"
-            )
-            lines.append("")
-
-    # --- 058 ⓪: what the report still depends on. It sits right after 未审器件
-    # because it *contains* that section (the facts trigger) plus the reviewer's
-    # own marks, and because its fixed first line is a gate the reader must meet
-    # before the DRC tables below. Existing sections keep their order and wording.
-    needs = report.get("needs_datasheet") or []
-    facts_rows = [entry for entry in needs if entry.get("trigger") == TRIGGER_FACTS]
-    marked_rows = [entry for entry in needs if entry.get("trigger") == TRIGGER_MARKED]
-    lines.append(
-        f"## 本报告依赖的未知项（needs_datasheet：facts {len(facts_rows)} 条 / "
-        f"审查者标记 {len(marked_rows)} 项）"
-    )
-    lines.append("")
-    if not needs:
-        lines.append(
-            "无：没有规则判不了的器件，也没有审查者标记的未知管脚。本节为空，"
-            "报告才有资格谈「通过」——完整的结论仍以 `completion.verdict` 为准。"
-        )
-    else:
-        lines.append(NEEDS_DATASHEET_BLOCK)
-        lines.append("")
-        if facts_rows:
-            lines.append(f"### facts 触发（规则判不了的器件，{len(facts_rows)} 条）")
-            lines.append("")
-            lines.append(
-                "| 位号 | MPN | 供应商 | 缺哪些 fact | 为什么在清单上 | 依赖的 findings "
-                "| 工程师给 | 立创找 | 官网搜 |"
-            )
-            lines.append("|---|---|---|---|---|---|---|---|---|")
-            for entry in facts_rows:
-                channels = entry.get("channels") or {}
-                lines.append(
-                    f"| {_cell(entry.get('part'))} | {_cell(entry.get('mpn'))} "
-                    f"| {_cell(entry.get('supplier'))} "
-                    f"| {_cell('、'.join(entry.get('missingFacts') or []) or '—')} "
-                    f"| {_cell(entry.get('reason') or '—')} "
-                    f"| {_cell('、'.join(entry.get('dependentFindings') or []) or '—')} "
-                    f"| {_channel_cell(channels.get('engineer'))} "
-                    f"| {_channel_cell(channels.get('lcsc'))} "
-                    f"| {_channel_cell(channels.get('official'))} |"
-                )
-            lines.append("")
-        if marked_rows:
-            lines.append(f"### 审查者标记（读不懂的管脚，{len(marked_rows)} 项）")
-            lines.append("")
-            lines.append(
-                "| 位号 | 管脚 | 为什么解释不了 | 依赖的 findings "
-                "| 工程师给 | 立创找 | 官网搜 |"
-            )
-            lines.append("|---|---|---|---|---|---|---|")
-            for entry in marked_rows:
-                channels = entry.get("channels") or {}
-                pins = "、".join(str(pin) for pin in (entry.get("pins") or []))
-                lines.append(
-                    f"| {_cell(entry.get('part'))} | {_cell(pins or '（整颗器件）')} "
-                    f"| {_cell(entry.get('reason') or '（没写理由）')} "
-                    f"| {_cell('、'.join(entry.get('dependentFindings') or []) or '—')} "
-                    f"| {_channel_cell(channels.get('engineer'))} "
-                    f"| {_channel_cell(channels.get('lcsc'))} "
-                    f"| {_channel_cell(channels.get('official'))} |"
-                )
-            lines.append("")
-            lines.append(MARKED_ENTRY_NOTE)
-            lines.append("")
-        lines.append(
-            "同一器件两源命中时按 marked 展示（该条 `factSeed: true`），计数只算一次；"
-            f"每个器件问同一件事：{UNKNOWN_PART_QUESTION}"
-        )
-        # 185-中1: the fold is by designator, and a project's designator is not
-        # one part. Only the rows where that matters are spelled out — one line
-        # per designator that stands for more than one placement — because the
-        # reader deciding "how many datasheets do I still owe" has to see it, and
-        # the table above cannot say it without one row per board.
-        multi = [entry for entry in needs if len(entry.get("boards") or []) > 1]
-        if multi:
-            lines.append("")
-            lines.append("**同一份清单按位号折叠，下列位号出现在多块板上（板上身份各不相同）：**")
-            lines.append("")
-            for entry in multi:
-                placements = "；".join(
-                    f"{row.get('board') or '(单板)'}"
-                    f"（MPN {row.get('mpn') or '无'}，name {row.get('name') or '无'}，"
-                    f"value {row.get('value') or '无'}）"
-                    for row in entry["boards"]
-                )
-                lines.append(f"- `{entry.get('part')}`：{placements}")
-            lines.append("")
-            lines.append(
-                "一份手册答不了两块板上两颗不同的料——这是**清单条数按位号去重**"
-                "（`completion.needsDatasheetTotal`）而不是按板计数的原因，"
-                "报「还差几份手册」时按位号乘板数算。"
-            )
     lines.append("")
 
     lines.append("## 主机 DRC")
@@ -5781,6 +6041,17 @@ def _render_report_markdown(lines: list[str], report: dict) -> None:
         for module in modules:
             _render_module(module, "###")
 
+    # --- 200A §1/§2: the device big section, LAST in the reading order.
+    # 主机 DRC → 模块 → 器件 is the order a person triages a board in; the
+    # three old sections (未审器件 / 接受未审 / 未知项) are now one ledger,
+    # merged by (board, ref) by `render_part_section` — the same renderer
+    # `board-report.md` uses, so both products print the same rows.
+    _render_guarded(
+        lines,
+        "器件大节",
+        lambda: lines.append(render_part_section(report).rstrip()),
+    )
+    lines.append("")
     lines.append(f"## 规则 findings（{len(findings)}）")
     lines.append("")
     if not findings:

@@ -1952,7 +1952,12 @@ def test_checkup_writes_report_markdown_beside_the_json(fake_bridge, tmp_path):
     assert report["summary"]["unreviewedParts"] > 0
     assert report["summary"]["mayClaimPassed"] is False
     assert f"{report['summary']['unreviewedParts']} 颗器件缺手册未审" in markdown
-    assert "## 未审器件（" in markdown
+    # 200A: 未审器件 / 接受未审 / 未知项 are one merged ledger now — pin the
+    # section and the same unreviewed count, not the retired heading.
+    from boardwise.engines.checkup import PART_SECTION_TITLE
+
+    assert f"## {PART_SECTION_TITLE}" in markdown
+    assert f"未审器件 {report['summary']['unreviewedParts']} 颗" in markdown
     assert "## 警告分诊（" in markdown
     assert "layout_review" not in report, "the aesthetics switch is off by default"
     assert "## 布局审美" not in markdown

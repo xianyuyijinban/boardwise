@@ -183,3 +183,72 @@ Rust **45 passed / 4 ignored** + fmt/clippy；Python/Rust 5 case 的 normalized 
 4. #88：1/295 与四视图已获确认并已关单；`element_ids` 唯一性另立，不在本关单中扩改。
 5. 三条评论已按授权发布：#88 已按明确授权关闭，#87 仍为 OPEN；未 push。
    后续评论、关闭、推送或新 git 提交仍按各自授权执行。
+
+## 8. #87④ 第一垂直切片候选（2026-10-28，未完成 shared 验收）
+
+> 工作树 `E:\boardwise-review-87-4`，分支 `review/issue-87-4-element-identity`，
+> 基线 `b8705c6`。`origin/main` fetch 后仍指该基线；本地 `main` 的 9 个后续提交
+> 全部属于绘制线，未混入本候选。以下全部是**阶段证据**，不是 #87④ 完成或关单结论。
+
+### 8.1 合同与范围
+
+- 仅覆盖 `pcb-voltage-spacing`。保留 `element_a/b`、`component_a/b` 字符串、
+  finding 文案、severity、verdict、exit code 和 `boardwise.checkup/7`。
+- measurement 增量可选 `element_a_detail/b_detail={kind,component,pin,layers}` 与
+  `shared_layer_ids`；external 第二读数使用对应 `external_*` 字段。身份来自测量时
+  原始几何记录，不解析 label；via/通孔 pad 保留多层，未分类层为空数组，内部 `-1`
+  sentinel 不进入报告。缺字段表示旧报告/未记录，不表示无元素。
+- UNKNOWN、不可测、合格或豁免网对不补 measurement，也不新增 finding。
+- POURED 多岛共 record id 仍不是岛级唯一身份；本切片不改 `element_ids`、rings 或岛计算。
+
+### 8.2 已有读数
+
+- Python 聚焦：**269 passed**（几何四类身份、同层/跨层、UNKNOWN、旧报告兼容、
+  VoltageSpacing 与 focground 邻域、Python schema/generator/owner）。
+- connector：**536 passed** + typecheck；DSH：**127 passed / 1 skipped** + typecheck，
+  但 build 因写权限失败，不能记为全绿。
+- Rust：fmt/clippy 通过，**47 passed / 4 ignored**；新增身份合同 **2 passed** 实际执行。
+  实际构建的 Rust 二进制单侧 differential **5/5 ok**；这不是 Python/Rust 跨语言验收。
+- 两处有效变异（删除 detail 的 `pin` 必填、移除层号 `minimum: 1`）均令目标测试
+  **1 failed / 1 passed，exit 101**；`cp` 恢复后各为 **2 passed**，schema SHA-256
+  均恢复为 `644470549812db3d440fd72966b99801da58e845514eb163890f407e48b7ea20`。
+  另有一次 `minimum: 0` 仍拒绝 `-1`，属无效变异，未计入，已恢复。
+
+### 8.3 尚未闭环
+
+1. Python 全量没有开始收集：当前环境 PowerShell 可写工作树，但 venv Python 创建文件
+   返回 `PermissionError`；因此也没有 Python/Rust 跨语言进程对拍。审批通道禁用时
+   不擅自修改 ACL，不用替代路径绕过。DSH build 写既有 `lib` 同样 Access denied，
+   文件无只读属性。
+2. 当前 worktree `core.autocrlf=true`：官方生成器把 3 个既有绘制夹具的 source hash
+   写成 CRLF 工作树字节 hash；对应 committed blob hash 与旧 manifest 一致。正式候选
+   需在 LF 环境重跑生成器剔除这项换行噪声，不得手改 `tests/fixtures` 冒充重生成。
+3. #87⑤ 在线取档仍未复测；#87② 仍需逐字点名的 `test`/`test2` PCB 授权、宿主与
+   工程身份核对及 render + 真视觉复核。2026-10-28 再读 issue，#87 仍 OPEN，只有
+   原有 2 条评论，没有新增授权。
+
+### 8.4 main 集成复验（2026-10-29，仍未完成 shared 验收）
+
+- 经用户明确授权，候选的未提交 diff 与两个新测试已逐字节转移到 `E:\boardwise`
+  的 `main`（`a8613c5`，含基线后的 9 个绘制线提交）；原 worktree 保留。未执行
+  commit/add/checkout/restore/push。主工作区写入探针与 DSH build 均通过。
+- 在三个源夹具实际为 LF 的 main 上运行官方生成器，3 个 CRLF source-hash 噪声
+  已消除。生成器同时按 main 的绘制代码更新 `divider-compile-result.json` 的
+  compactness（每项 +720）及 manifest 输入哈希；这是 main 集成差异，不是 #87④
+  业务变化。既有 rulebody 锚已同步为 `3ea85546`。
+- Python 首轮 **7 failed / 8443 passed / 25 skipped**；修复后聚焦复验
+  **4 passed / 3 failed**，最终完整复跑 **3 failed / 8447 passed / 25 skipped**。
+  残余为：用户目录 `pytest-slots` 权限拒绝、Git for Windows `sh.exe` 创建 MSYS
+  共享对象被拒绝、`a8613c5` 绘制变更导致 lead-lane 测试间谍 8/9 参数失配。
+  本切片相关红项已清零，但全量未绿，故不记为“候选待提出人验证”。
+- connector **536 passed** + typecheck；DSH **127 passed / 1 skipped** +
+  typecheck/build；Rust fmt/clippy 通过，**47 passed / 4 ignored** 且 CLI 实际构建，
+  新增身份合同 **2 passed**。真实二进制跨语言进程测试 **8 passed**。
+- Python/Rust differential **5/5 ok=true**，两侧 normalized SHA-256 均为
+  `5230498201445920e02058bb11e99274e82be02c91952f38b9f2f919cb9d5f7c`。
+  真实 finding 示例在 `.tmp_issue87_4_slice/identity-example.json`：保留原 WARN
+  与文案，新增 track 双方 detail 和 `shared_layer_ids=[1]`；不含新字段的旧报告
+  通过当前 schema，`schema.const` 仍为 `boardwise.checkup/7`。
+- 本轮未改生产行为，既有两处有效变异及其恢复证据继续有效；当前 schema SHA-256
+  仍为 `644470549812db3d440fd72966b99801da58e845514eb163890f407e48b7ea20`。
+  #87②、#87⑤及其他规则边界不变，#87 不关闭。

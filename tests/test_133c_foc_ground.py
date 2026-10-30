@@ -256,6 +256,10 @@ def test_the_three_rules_sit_in_the_foc_block_after_133b_five():
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, the sweep's last
         "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
+        "pcb-hs-cross-split",  # 200B, the family's first judgement
+        "pcb-hs-via-ground-companion",  # 200C1, the family's via-side question
+        "pcb-hs-diffpair-skew",  # 200C2, the pair's length / layer question
+        "pcb-hs-diffpair-via-parity",  # 200C2, the pair's via-count question
     ]
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     ids = [rule.id for rule in BUILTIN_PCB_RULES]

@@ -399,6 +399,12 @@ def test_a_capacitor_neither_side_reads_is_still_refused(value):
         ("+3.3", 3.3),
         ("0.05", 0.05),
         (" 5V ", 5.0),
+        ("310VDC", 310.0),  # the DC-marked suffix a high-voltage bus is named with
+        ("DC310", 310.0),  # ... and the DC-marked prefix
+        ("V_310V", 310.0),  # the spelling a real board's 310 V net carries
+        ("V310", 310.0),
+        ("V310V", 310.0),
+        ("3V3D", 3.3),  # mid-letter + the digital rail's domain letter
     ],
 )
 def test_a_voltage_is_read_in_volts(text, volts):
@@ -416,11 +422,15 @@ def test_a_voltage_is_read_in_volts(text, volts):
         "3V3V",  # a doubled unit is not a voltage
         "5 V 1",
         "5V 1A",  # a current is not a voltage
-        "12VDC",
         "3.3.3",
         "V3",  # no mantissa: the rule the mid-letter grammar already states
         "0V5",  # not a significant figure, the same rule as 0K1
         "3V123",  # a three-digit fraction is the shunt form, not a voltage
+        "V030",  # a leading zero is not a significant figure (the prefixed forms)
+        "DC030",
+        "310V_BUS",  # a name with a suffix is not a field this reads
+        "V_310V_BUS",
+        "HV+",
         "1" * 100 + "V",  # over the length cap (issue #27)
         None,
     ],
@@ -575,7 +585,7 @@ def test_two_rails_are_still_a_violation(tmp_path, source, sink):
 @pytest.mark.parametrize(
     ("source", "sink"),
     [
-        ("5V", "5VDC"),  # neither side readable -> the string is the whole of it
+        ("5V", "VDC5"),  # a DC marker with no magnitude this grammar states
         ("5V", "5 V DC"),
         ("rail-a", "rail-b"),
         ("5V", "abc"),
@@ -590,7 +600,14 @@ def test_a_voltage_neither_parser_reads_keeps_the_old_string_verdict(
     not make it declare itself *undecidable* over a spelling it has no better
     word for — undecidable would change which finding a reader sees, and the
     behaviour before the fix was a plain violation. Unreadable is compared as
-    written, which is what it did before."""
+    written, which is what it did before.
+
+    ``5VDC`` used to be one of these rows; task A taught the parser the
+    DC-marked spellings, so ``5V``/``5VDC`` is now **one rail written twice**
+    and the gate passes it on purpose (see
+    ``tests/test_hv_supply_identity.py``). The row that stays is a ``DC`` with
+    nothing behind it, which no branch states.
+    """
     spec = _power_spec(
         tmp_path,
         {"direction": "source", "voltage": source},

@@ -16,7 +16,7 @@
 
 ---
 
-## §0 当前在做（截至 2026-10-25）
+## §0 当前在做（截至 2026-10-30）
 
 - **已完成、未提交**：`540`（0.6.0 前平台准备）——540A/B/C 已验收，并在对抗修复与
   只读真机追加验收后收口；142 模块/0 legacy、24 个 CLI 命令和 DSH 10 工具面保持兼容，
@@ -39,12 +39,10 @@
   commit `0f638deaa5d089194e8addf2d400cb7422d422bf`；其后 0.5.22 的
   `63df468`/`23f030f` 已包含它。真机结论为
   `completion=incomplete / delivery=partial`，不是板子通过，也不是 540 的提交。
-- **工作树**：只剩 `540` 与少量 2026-10-24 插件安装/版本策略文档残渣；
-  `537/538/534/536` 与 `539` 均已在 `0f638de`（并含在 0.5.22 历史中）。
-  按各任务书归属，不把整棵脏树算进 540；旧 `520k–533` 岛系列的状态见下方各行与
-  `docs/handoff.md`。
-- **0.6.0 阻塞项**：原有 `200A/200B/200C` 与绘图线过锚仍未关闭，`527D2/D3` 已完成；
-  岳 2026-10-25 新增 540 三组平台准备。发布候选必须先报证据，何时发布仍由岳决定。
+- **工作树**：当前含 `540`、`200A/B/C`、`#87④` 等未提交改动，按各自任务书归属，
+  不把整棵脏树算进单一批次；旧 `520k–533` 岛系列的状态见下方各行与 `docs/handoff.md`。
+- **0.6.0 门槛**：`200A/B/C` 工作树完成、审查线验收通过（证据 `outputs/200/acceptance.md`）；
+  整体 Python 全量仍有 MSYS 与绘制线两个域外红项。发布候选必须先报证据，何时发布仍由岳决定。
 - **0.6.0 后**：绘制算法与 Rust strangler 双主线并行；共享底座、全量测试与真机串行。
   0.6.x / 0.7.0 的验收边界由 540 同步进 roadmap、SCHEDULE 与 handoff。
 - **既有搁置不变**：`201C`、`121b`、`text_overlap` 与 `R4` 阶段二；540 不顺手复活。
@@ -322,9 +320,9 @@
 
 | 编号 | 主题 | 状态 | 证据/任务书路径 |
 |---|---|---|---|
-| 200A | v0.6.0 122 E 阶段·器件检查收口+报告整合 | 规划 | tasks/200_v060_scope.md |
-| 200B | v0.6.0 高速 A1 跨分割 | 规划 | tasks/200_v060_scope.md |
-| 200C | v0.6.0 高速 A2 换层地孔+A3 差分对内 | 规划 | tasks/200_v060_scope.md |
+| 200A | v0.6.0 122 E 阶段·器件检查收口+报告整合 | 工作树 | tasks/200a_report_integration.md；outputs/200a/report-integration-evidence.md |
+| 200B | v0.6.0 高速 A1 跨分割 | 工作树 | tasks/200b_cross_split.md；outputs/200b/evidence.md |
+| 200C | v0.6.0 高速 A2 换层地孔+A3 差分对内 | 工作树 | tasks/200c1_ground_via.md、200c2_diffpair.md；outputs/200c1/evidence.md、200c2/evidence.md |
 | 201A | 地/电源符号策略重写 | 已落 | `856fb0a`；tasks/201a_flag_strategy.md；outputs/201a/evidence.md |
 | 201B | 拓扑感知模块落位+位姿联合搜索 | 已落 | `856fb0a`+`7ce7a5d`；tasks/201b_placement.md；outputs/201b/ |
 | 201C | 布线协商三步 | **搁置**（踢出 v0.5.15） | tasks/201c_routing.md；`.tmp_201c_hold/`；outputs/201c/evidence.md §13 |

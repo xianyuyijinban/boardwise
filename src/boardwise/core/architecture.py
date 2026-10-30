@@ -177,8 +177,18 @@ SLOT_LABELS: dict[str, str] = {
 #: where `U+` = {U1.PA7, DRV1.PGND1, R4} — a current-sense chain, not a rail), and
 #: reading that name as "this net is a power rail" buried the very chain task 043
 #: was filed for.
+#:
+#: Task A (310 V identity) added the **power-stage** names a rectifier bridge and
+#: an IPM actually carry: ``P``/``+``/``-`` (bridge DC output and its return
+#: terminal), ``DRAIN``/``SW``/``PVIN`` (the buck/boost power path, where the
+#: switch node is what the high-voltage net *is*) and ``HV`` (the bus pin itself).
+#: Without them a board whose 310 V bus is only touched by power pins had **no
+#: rail at all** for that net — the rule then said nothing, which reads as a pass.
+#: The entries are exact names: ``PGND1`` still does not match ``P`` because every
+#: branch is anchored on both ends, so the return-only exclusion is untouched.
 _SUPPLY_PIN = re.compile(
-    r"^(VDD|VDDA|VDDIO|DVDD|AVDD|VCC|VBAT|VREF\+?|VIN|VM|VBUS|V\+|VS)$",
+    r"^(VDD|VDDA|VDDIO|DVDD|AVDD|VCC|VBAT|VREF\+?|VIN|VM|VBUS|V\+|VS"
+    r"|P|\+|DRAIN|SW|PVIN|HV|-)$",
     re.IGNORECASE,
 )
 

@@ -34,6 +34,7 @@ import boardwise.cli as cli
 from boardwise.core.model import DesignModel
 from boardwise.engines.checkup import (
     NEEDS_DATASHEET_BLOCK,
+    PART_SECTION_TITLE,
     TRIGGER_FACTS,
     TRIGGER_MARKED,
     marked_parts,
@@ -135,7 +136,7 @@ def test_checkup_writes_the_section_with_the_facts_seed_and_nothing_marked(
     assert "审查者标记 0" in printed
 
     markdown = (out / "report.md").read_text(encoding="utf-8")
-    assert "## 本报告依赖的未知项" in markdown
+    assert f"## {PART_SECTION_TITLE}" in markdown
     assert f"facts {len(seeded)} 条 / 审查者标记 0 项" in markdown
     assert NEEDS_DATASHEET_BLOCK in markdown, "the seed alone already forbids a pass"
     assert "### 审查者标记" not in markdown, "no reviewer has marked anything yet"
@@ -187,8 +188,13 @@ def test_a_marked_pin_is_incomplete_even_when_no_part_is_unreviewed(
 
     markdown = (out / "report.md").read_text(encoding="utf-8")
     assert NEEDS_DATASHEET_BLOCK in markdown
-    assert "### 审查者标记（读不懂的管脚，1 项）" in markdown
-    assert f"| {MARKED_PART} | FB、ICG |" in markdown
+    assert "审查者标记 1 项" in markdown
+    marked_row = [
+        line for line in markdown.splitlines()
+        if line.startswith(f"| ") and f" {MARKED_PART} " in line
+    ]
+    assert marked_row, "the marked part is one row of the device ledger"
+    assert "FB、ICG" in marked_row[0]
     assert "decap-required-caps@U1" in markdown
     assert "**verdict：`incomplete`**" in markdown
 
@@ -433,23 +439,30 @@ def test_the_completion_section_counts_marked_parts_and_gates_on_them():
 def test_the_markdown_section_forbids_a_pass_while_it_is_not_empty(tmp_path):
     """The one wording the section owns, in both states (058 §四)."""
     report = _checkup(tmp_path / "out")
-    report.pop("needs_datasheet")
-    report["needs_datasheet"] = []
-    empty = render_report_markdown(report)
-    assert "## 本报告依赖的未知项（needs_datasheet：facts 0 条 / 审查者标记 0 项）" in empty
-    assert "本节为空" in empty
+    # 200A: the gate line belongs to the merged device ledger, and the ledger is
+    # only "empty" when all three sources are — clear them all for the empty case.
+    empty_report = {
+        **report,
+        "unreviewed_parts": [],
+        "accepted_unknown": [],
+        "needs_datasheet": [],
+    }
+    empty = render_report_markdown(empty_report)
+    assert f"## {PART_SECTION_TITLE}" in empty
+    assert "三份来源都空" in empty
     assert NEEDS_DATASHEET_BLOCK not in empty
 
     opening = render_report_markdown({
-        **report,
+        **empty_report,
         "needs_datasheet": [
             {"part": "U7", "pins": ["FB"], "trigger": TRIGGER_MARKED, "reason": "脚义不明",
              "dependentFindings": ["decap-required-caps@U7"], "channels": {}, "factSeed": False},
         ],
     })
     assert NEEDS_DATASHEET_BLOCK in opening
-    assert "### facts 触发" not in opening, "no seed in this copy"
-    assert "| U7 | FB | 脚义不明 | decap-required-caps@U7 |" in opening
+    assert "facts 0 条" in opening
+    assert "U7" in opening and "脚义不明" in opening
+    assert "decap-required-caps@U7" in opening
     # The template hands the model the same slot it must not fill while unknown.
     template = report["ai_slots"]["summary_template"]
     assert "【本报告依赖的未知项】" in template

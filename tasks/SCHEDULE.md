@@ -88,3 +88,16 @@
 - 0.7.0：Rust 接管全部受支持主流程，不是逐行翻译全部 Python；connector/DSH 薄适配可留 TS。
 - 539 已 commit `0f638de`，其后随 0.5.22 的 `63df468`/`23f030f` 历史一并包含；
   540 仍未提交。0.6.0 的 200A/B/C 与人工反激视觉锚不因平台准备而关闭。
+
+## 200 审查线收口（2026-10-30）
+
+| 项 | 当前状态 | 证据 |
+|---|---|---|
+| 200A 报告整合 | **工作树完成** | `outputs/200a/report-integration-evidence.md` |
+| 200B 高速 A1 | **工作树完成** | `outputs/200b/evidence.md` |
+| 200C 高速 A2/A3 | **工作树完成** | `outputs/200c1/evidence.md`、`outputs/200c2/evidence.md` |
+
+最终集成：Python **8540 passed / 25 skipped / 2 failed**（残余为 MSYS 与绘制线，
+审查侧红项清零）；connector 536 + typecheck、DSH 127/1 + typecheck/build、Rust 47/4、
+跨语言 8 passed、differential 5/5 且 normalized SHA 一致。详见 `outputs/200/acceptance.md`。
+200A/B/C 未提交、未发布；整体全量未绿，不改变 0.6.0 的发布裁决与人工门槛。

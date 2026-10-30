@@ -35,6 +35,7 @@ import pytest
 from boardwise import cli
 from boardwise.engines.checkup import (
     DEVICE_GROUP_NAME,
+    READING_RANK,
     SEVERITY_RANK,
     WEIGHT_DEVICE,
     WEIGHT_GENERIC,
@@ -291,21 +292,27 @@ def test_board_report_merges_pcb_document_under_its_schematic_board():
     assert rendered.count("### 板：") == 2
 
 
-def test_board_report_orders_groups_by_severity_then_weight():
+def test_board_report_orders_groups_by_reading_layer_then_severity():
+    """200A: 通用门票 → PCB 模块 → 器件; severity sorts inside a layer only."""
     section = board_report_section(_synthetic_report())
     board_one = section["boards"][0]
-    # Board1 holds: a module WARN, a device ERROR, a generic ERROR. Severity leads,
-    # so the two ERROR-bearing groups come first; inside that tier the heavier
-    # weight leads, so 器件检查 (device) precedes 原理图连通性 (generic).
+    # Board1 holds: a module WARN, a device ERROR, a generic ERROR. The reading
+    # layer leads, so the gate group comes first even though a device ERROR is
+    # stronger; inside the layer severity decides (both are single-row here).
     names = [group["name"] for group in board_one["groups"]]
-    assert names[0] == DEVICE_GROUP_NAME
-    assert names[1] == "原理图连通性"
-    assert names[-1] == "FOC/功率驱动"
-    severities = [
-        min(SEVERITY_RANK.get(f["severity"].upper(), 9) for f in group["findings"])
-        for group in board_one["groups"]
+    assert names == ["原理图连通性", "FOC/功率驱动", DEVICE_GROUP_NAME], names
+    layers = [READING_RANK[group["reading"]] for group in board_one["groups"]]
+    assert layers == sorted(layers)
+    assert [group["readingLabel"] for group in board_one["groups"]] == [
+        "通用门票", "PCB 模块", "器件",
     ]
-    assert severities == sorted(severities)
+    # Within one layer severity still leads.
+    for layer in {group["reading"] for group in board_one["groups"]}:
+        severities = [
+            min(SEVERITY_RANK.get(f["severity"].upper(), 9) for f in group["findings"])
+            for group in board_one["groups"] if group["reading"] == layer
+        ]
+        assert severities == sorted(severities)
     # The device findings are one group named 器件检查.
     device = next(g for g in board_one["groups"] if g["weight"] == WEIGHT_DEVICE)
     assert device["name"] == DEVICE_GROUP_NAME
@@ -314,13 +321,19 @@ def test_board_report_orders_groups_by_severity_then_weight():
 
 def test_board_report_carries_the_order_and_weights_in_the_head():
     section = board_report_section(_synthetic_report())
+    # Importance is unchanged and still published (PCB module is rank 0 there).
     assert section["weights"][0]["key"] == WEIGHT_PCB_MODULE
     assert section["weights"][0]["rank"] == 0
     assert "重中之重" in section["weights"][0]["why"]
-    assert "权重" in section["order"]
+    # The reading order is its own key, and the head says which one sorts what.
+    assert [entry["key"] for entry in section["readingOrder"]] == [
+        "gate", "pcb-module", "device",
+    ]
+    assert section["order"].startswith("阅读顺序：通用门票 → PCB 模块 → 器件")
     rendered = render_board_report(_synthetic_report(), section)
     assert "排序依据" in rendered
     assert "PCB 模块级" in rendered
+    assert "重要性（不是阅读顺序）" in rendered
 
 
 def test_board_report_totals_and_drc_baseline_are_read_not_recomputed():

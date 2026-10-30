@@ -11,7 +11,7 @@
 
 ---
 
-## 1. 当前在哪（2026-10-25）
+## 1. 当前在哪（2026-10-30）
 
 - **最新已发**：`v0.5.22`（内测/prerelease）；历史版本与读数仍见 `tasks/SCHEDULE.md`，
   本段不回头改写旧验收。
@@ -28,8 +28,9 @@
   `evidence/540/candidate-regression.md` 为准（由后续步骤产生，未产生前不算通过）**；
   真机只读结论 `conclusion=incomplete / delivery=partial`，不是板级通过；构建见
   `docs/rust-platform.md`。发布仍由岳决定。
-- **0.6.0 未发**：原有 `200A/200B/200C` 与「岳亲眼看 SVG 一眼认出反激」仍未由 540 关闭；
-  `527D2/D3` 已完成。任务书 `tasks/528_060_gate.md`，平台准备见 `tasks/540_pre060_platform.md`。
+- **0.6.0 未发**：`200A/200B/200C` 已落工作树（未提交），审查线验收证据见
+  `outputs/200/acceptance.md`（Python 8540/25/2，残余为 MSYS 与绘制线）；`527D2/D3` 已完成。
+  发布门槛不因工作树完成或平台准备而自行关闭，任务书 `tasks/528_060_gate.md`。
 - **0.6.0 后双主线**：绘制算法与 Rust strangler 并行；shared、全量测试与真机串行。
   派单入口为 `tasks/review-line.md` / `tasks/draw-line.md` / `tasks/shared-platform.md`。
 - **发版节奏**：挖洞 swarm + 上机 + 实测三闸全过才发；同一天原则上只发一版；

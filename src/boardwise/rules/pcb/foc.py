@@ -49,8 +49,10 @@ beside the measured number so the two can be read together.
 task table says R13 may narrow to 「功率/栅极网」. Both readings (R11's gate-net
 width, R13's fold list) turn out to need the *same* narrow set, so
 :data:`POWER_NET_PREFIXES` defines it **once** and both rules read it: gate nets
-(``GH`` / ``GL`` family), the switching nodes (``MOTx``), and the
-phase-current sense nets (``IA`` / ``IB`` / ``IC`` family). This is a **name**
+(``GH`` / ``GL`` family), the switching nodes (``MOTx``), the
+phase-current sense nets (``IA`` / ``IB`` / ``IC`` family), and — joined
+2026-10-30 on 岳's report — the **supply bus** spelling ``V_<digits>V``
+(``V_310V``, :data:`POWER_BUS_NET_PATTERN`). This is a **name**
 test and is declared as the fragile step it is — 133a taught the pack that
 identity must come from a stated field wherever a stated field exists, but a
 gate net has no shelf category and no pin-role spelling that says 「this is a
@@ -147,6 +149,7 @@ __all__ = [
     "BULK_FARADS",
     "GATE_NET_PATTERN",
     "MOTOR_DRIVER_CATEGORIES",
+    "POWER_BUS_NET_PATTERN",
     "POWER_NET_PREFIXES",
     "MULTILAYER_THRESHOLD",
     "CapacitanceValue",
@@ -232,11 +235,18 @@ TI_GATE_WIDTH_REFERENCE_MIL = 20.0
 #: The **net-name** prefixes that make a net a power-path net, as a regex over
 #: the upper-cased name. This is the one shared predicate R11 and R13 read.
 #:
-#: Three families, and each is there because it was **measured** on the corpus:
+#: Three families — the switching-node/sense ones measured on the corpus, the
+#: gate family measured there **and** widened with a reported spelling:
 #:
 #: * ``GH`` / ``GL`` + optional phase letter + optional digits — the gate nets.
 #:   毕设FOC 1.0.0 / 1.1.0 carry exactly ``GHA`` ``GHB`` ``GHC`` and
-#:   ``GLA`` ``GLB`` ``GLC``. ROBOT's driver connects its six gate pins to
+#:   ``GLA`` ``GLB`` ``GLC``. **``UH`` / ``UL`` / ``VH`` / ``VL`` / ``WH`` /
+#:   ``WL`` (and the same optional phase letter / digits) joined on 2026-10-30**
+#:   — the other common spelling of one half-bridge's high/low gate per phase
+#:   (U/V/W × H/L), reported by 岳 on a real board that is **not in the
+#:   corpus**. It is the same gate family under a different phase letter, so
+#:   the sieve admits both spellings and nothing else changes: no threshold,
+#:   no measurement, no severity. ROBOT's driver connects its six gate pins to
 #:   ``TIM1_CH1`` / ``TIM1_CH2`` / ``TIM1_CH3`` (pins 27 / 25 / 23) and
 #:   ``$1N147`` — MCU timer channels and editor-generated names, which match
 #:   nothing here. That is the honest cost of a name test, and the R11 row says
@@ -257,13 +267,43 @@ TI_GATE_WIDTH_REFERENCE_MIL = 20.0
 #: it, so this is a name test — and a gate net spelled outside these prefixes
 #: simply does not appear in R11 or R13's narrowed rows. :func:`is_power_net`
 #: is exported so a reader sees the sieve rather than inferring it.
-GATE_NET_PATTERN = re.compile(r"^(?:GH|GL)[A-Z]?\d*$")
+GATE_NET_PATTERN = re.compile(r"^(?:GH|GL|UH|UL|VH|VL|WH|WL)[A-Z]?\d*$")
 
 #: The prefix families of :data:`GATE_NET_PATTERN`'s **siblings**: switching
 #: nodes and phase-current sense. Kept as one tuple so R11's and R13's narrowed
 #: set is a single object both rules read, and so widening (or narrowing) the
-#: power-net definition is a one-line change with both rules following.
-POWER_NET_PREFIXES: tuple[str, ...] = ("GH", "GL", "MOT", "IA", "IB", "IC")
+#: power-net definition is a one-line change with both rules following. The
+#: **gate** prefixes repeat :data:`GATE_NET_PATTERN`'s families here so a report
+#: that lists the sieve's word list does not silently omit half of it (the six
+#: ``U``/``V``/``W`` names joined 2026-10-30 with the pattern).
+#:
+#: ``"V_"`` (2026-10-30) is the **supply-bus** family, and it is the one entry
+#: here that is a *word-list* fact rather than a matcher: a name starting with
+#: ``V_`` is a power net only when it also spells its voltage, so the test is
+#: :data:`POWER_BUS_NET_PATTERN` (``^V_\d+(?:\\.\\d+)?V$``), not
+#: ``startswith("V_")``. The entry stays in the tuple because R11/R13/R5 rows
+#: interpolate this tuple as the sieve's word list, and a family that appears in
+#: the sieve but not in the list would make the row state a sieve it does not
+#: use — which is the drift this tuple exists to prevent.
+POWER_NET_PREFIXES: tuple[str, ...] = (
+    "GH", "GL", "UH", "UL", "VH", "VL", "WH", "WL", "MOT", "IA", "IB", "IC",
+    "V_",
+)
+
+#: A **supply-bus** name: ``V_<digits>V`` — ``V_310V`` / ``V_5V`` / ``V_3.3V``.
+#:
+#: 岳 2026-10-30 实报：``pcb-foc-return-path`` 把 ``V_310V`` 当成未识别网，
+#: 因为它既不是栅极/开关节点/相电流名，也不在 :data:`POWER_NET_PREFIXES`
+#: 的族里 —— 而这条轨正是功率级的高压母线，回流路径的第一件事就是它。
+#: The family is **narrow on purpose**: the underscore-and-unit spelling is what
+#: makes the name state its own voltage, so ``VCC`` / ``VDD`` / ``V310`` /
+#: ``V_`` / ``V_FOO`` / ``NET1`` and any other ``V_*`` string stay outside —
+#: a prefix-only test (``startswith("V")`` or even ``startswith("V_")``) would
+#: sweep every editor-generated ``V_1`` signal name into the power path, which
+#: is the same silently-wrong sieve the gate-name test is careful about.
+#: Case is folded by :func:`is_power_net`, and a decimal point is admitted
+#: because ``V_3.3V`` is the ordinary spelling of a 3.3 V rail.
+POWER_BUS_NET_PATTERN = re.compile(r"^V_\d+(?:\.\d+)?V$")
 
 #: A designator whose letter says 「transistor」. **Only ever half the test.**
 #:
@@ -283,19 +323,22 @@ def _upper(text: object) -> str:
 
 
 def is_power_net(name: str) -> bool:
-    """Does this net name place it on the FOC power path (gate / switch / sense)?
+    """Does this net name place it on the FOC power path?
 
-    The single predicate R11 and R13 share. Read as a **name** test on the
-    upper-cased net, and it is the fragile step the module docstring declares:
-    :data:`GATE_NET_PATTERN` plus the switching-node / sense families of
-    :data:`POWER_NET_PREFIXES`. A name outside all of them is not a power net
-    **as far as this rule can tell**, which the rows say rather than treating as
-    「definitely a signal net」.
+    The single predicate R11 and R13 share, and R5's net set too. Read as a
+    **name** test on the upper-cased net, and it is the fragile step the module
+    docstring declares: :data:`GATE_NET_PATTERN` plus the switching-node /
+    sense families of :data:`POWER_NET_PREFIXES`, plus the supply-bus spelling
+    :data:`POWER_BUS_NET_PATTERN` (``V_310V``). A name outside all of them is
+    not a power net **as far as this rule can tell**, which the rows say rather
+    than treating as 「definitely a signal net」.
     """
     upper = _upper(name)
     if not upper:
         return False
     if GATE_NET_PATTERN.match(upper):
+        return True
+    if POWER_BUS_NET_PATTERN.match(upper):
         return True
     if upper.startswith("MOT"):
         return True

@@ -45,6 +45,7 @@ from boardwise.core import designintent as di
 from boardwise.core.model import Component, DesignModel
 from boardwise.core.parts import PartLibrary, load_parts, save_parts
 from boardwise.engines.checkup import (
+    PART_SECTION_TITLE,
     STATE_ACCEPTED,
     STATE_ACCEPTED_NOT_UNREVIEWED,
     STATE_ACCEPTED_STALE,
@@ -380,8 +381,14 @@ def test_the_accepted_part_moves_the_verdict_off_incomplete_and_the_line_says_ho
     assert "接受未审" in after["conclusion"]["oneLiner"]
 
     markdown = (tmp_path / "out-after" / "report.md").read_text(encoding="utf-8")
-    assert "## 工程师接受未审（accepted_unknown：1）" in markdown
-    assert f"| {designator} | 本轮接受（已从 未审 移出）" in markdown
+    assert f"## {PART_SECTION_TITLE}" in markdown
+    accepted_row = [
+        line for line in markdown.splitlines()
+        if line.startswith("| ") and f" {designator} " in line
+    ]
+    assert accepted_row, "the accepted part is one row of the device ledger"
+    assert "本轮接受（已从 未审 移出）" in accepted_row[0]
+    assert "接受未审 1 条" in markdown
     assert REASON in markdown
 
 

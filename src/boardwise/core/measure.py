@@ -915,6 +915,8 @@ class _Shape:
         "radius",
         "layers",
         "label",
+        "kind",
+        "pin",
         "component",
         "bbox",
         "is_pour",
@@ -933,6 +935,8 @@ class _Shape:
         layers: set[int],
         label: str,
         *,
+        kind: str = "",
+        pin: str = "",
         is_pour: bool = False,
         component: str = "",
         rings: list[list[Point]] | None = None,
@@ -941,6 +945,9 @@ class _Shape:
         self.radius = radius
         self.layers = layers
         self.label = label
+        # Identity comes from the source geometry record, never from ``label``.
+        self.kind = kind
+        self.pin = pin
         self.is_pour = is_pour
         #: The designator of the **placed component this element is part of**,
         #: or ``""`` when it is not part of one (issue #85). Only a pad has
@@ -1226,6 +1233,7 @@ def _net_shape_records(
                     max(track.width, 0.0) / 2.0,
                     layers,
                     _describe("track", track.id, track.layer_id),
+                    kind="track",
                     is_pour=False,
                 ),
                 0.0,
@@ -1243,6 +1251,7 @@ def _net_shape_records(
                     max(via.via_diameter, 0.0) / 2.0,
                     layers,
                     _describe("via", via.id, sorted(layers)[0]),
+                    kind="via",
                     is_pour=False,
                 ),
                 0.0,
@@ -1265,6 +1274,8 @@ def _net_shape_records(
                     # this fix removed, and the message is where a reader would
                     # have been misled.
                     _describe("pad", _pad_key(pad), layers),
+                    kind="pad",
+                    pin=pad.pin_number or "",
                     is_pour=False,
                     component=pad.component or "",
                 ),
@@ -1299,6 +1310,7 @@ def _net_shape_records(
                     0.0,
                     layers or {_UNKNOWN_LAYER},
                     _describe(f"pour {pour.kind}", pour.id, pour.layer_id),
+                    kind="pour",
                     is_pour=True,
                     # Issue #88A: the copper-presence view, with the explicit
                     # fallback for a record that carries no rings (POLY / POUR /
@@ -1681,6 +1693,10 @@ class ClearanceResult:
     #: alone is a label a reader parses; this is the same claim in a field.
     component_a: str = ""
     component_b: str = ""
+    #: Optional structured identities of the same closest pair. Empty dicts are
+    #: the backwards-compatible spelling of "not recorded", never "no element".
+    element_a_detail: dict[str, object] = field(default_factory=dict)
+    element_b_detail: dict[str, object] = field(default_factory=dict)
 
     @property
     def shares_a_layer(self) -> bool:
@@ -1701,6 +1717,20 @@ class ClearanceResult:
         **not** this case and stays the routing item it is.
         """
         return bool(self.component_a) and self.component_a == self.component_b
+
+
+def _element_identity(shape: _Shape) -> dict[str, object]:
+    """The source-record identity of one measured element, without label parsing.
+
+    ``_UNKNOWN_LAYER`` is an internal non-pairing sentinel, not a PCB layer id;
+    an element whose layer is unclassified therefore reports an empty list.
+    """
+    return {
+        "kind": shape.kind,
+        "component": shape.component,
+        "pin": shape.pin,
+        "layers": sorted(layer for layer in shape.layers if layer != _UNKNOWN_LAYER),
+    }
 
 
 def net_clearance(
@@ -1762,6 +1792,8 @@ def net_clearance(
         # footprint's own pitch from a routing item without parsing the label.
         component_a=sa.component,
         component_b=sb.component,
+        element_a_detail=_element_identity(sa),
+        element_b_detail=_element_identity(sb),
     )
 
 

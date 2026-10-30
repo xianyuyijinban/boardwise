@@ -5,7 +5,7 @@
   "candidates": [
     {
       "index": 0,
-      "key": "legality=0, findings=0, crossings=0, bends=0, wire_length=110, compactness=22752",
+      "key": "legality=0, findings=0, crossings=0, bends=0, wire_length=110, compactness=23472",
       "metrics": {
         "crossings": 0.0,
         "bends": 0.0,
@@ -20,7 +20,7 @@
     },
     {
       "index": 1,
-      "key": "legality=0, findings=0, crossings=0, bends=0, wire_length=130, compactness=24192",
+      "key": "legality=0, findings=0, crossings=0, bends=0, wire_length=130, compactness=24912",
       "metrics": {
         "crossings": 0.0,
         "bends": 0.0,
@@ -35,7 +35,7 @@
     },
     {
       "index": 2,
-      "key": "legality=0, findings=0, crossings=0, bends=0, wire_length=160, compactness=26352",
+      "key": "legality=0, findings=0, crossings=0, bends=0, wire_length=160, compactness=27072",
       "metrics": {
         "crossings": 0.0,
         "bends": 0.0,

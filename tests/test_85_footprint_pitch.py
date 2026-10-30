@@ -140,6 +140,12 @@ def test_the_pitch_pair_is_reported_with_both_numbers_and_downgraded_to_info():
         "external_element_a": "pad U1.2 on layer 1",
         "external_element_b": "track hv-1 on layer 1",
         "external_component_a": "U1", "external_component_b": "",
+        "element_a_detail": {"kind": "pad", "component": "U1", "pin": "2", "layers": [1]},
+        "element_b_detail": {"kind": "pad", "component": "U1", "pin": "1", "layers": [1]},
+        "shared_layer_ids": [1],
+        "external_element_a_detail": {"kind": "pad", "component": "U1", "pin": "2", "layers": [1]},
+        "external_element_b_detail": {"kind": "track", "component": "", "pin": "", "layers": [1]},
+        "external_shared_layer_ids": [1],
     }
     # And the evidence names the second reading by the flag that took it.
     assert any(
@@ -294,6 +300,9 @@ def test_two_tracks_are_still_a_warn_on_a_board_that_has_a_footprint():
         "element_b": "track hv-1 on layer 1",
         "component_a": "", "component_b": "",
         "within_one_footprint": False,
+        "element_a_detail": {"kind": "track", "component": "", "pin": "", "layers": [1]},
+        "element_b_detail": {"kind": "track", "component": "", "pin": "", "layers": [1]},
+        "shared_layer_ids": [1],
     }
 
 

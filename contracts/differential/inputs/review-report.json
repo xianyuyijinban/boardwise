@@ -1950,7 +1950,7 @@
     },
     "sourceVersions": {
       "ruleset": "a0c5e0a0",
-      "rulebody": "7646ae9a"
+      "rulebody": "5c0926a5"
     },
     "verdict": "incomplete",
     "verdictWhy": [
@@ -1987,7 +1987,27 @@
     }
   ],
   "board_report": {
-    "order": "严重度（ERROR → WARN → INFO）× 模块权重（同级内 PCB 模块级 > 器件级 > 通用）",
+    "order": "阅读顺序：通用门票 → PCB 模块 → 器件（严重度只在同一阅读层内排序）；层内重要性仍按 WEIGHT_RANK（PCB 模块级 > 器件级 > 通用）",
+    "readingOrder": [
+      {
+        "key": "gate",
+        "label": "通用门票",
+        "rank": 0,
+        "why": "DRC/ERC 与原理图连通性是门票：先回答「能不能造、电路对不对」"
+      },
+      {
+        "key": "pcb-module",
+        "label": "PCB 模块",
+        "rank": 1,
+        "why": "门票之后按模块读（噪声/发热/EMI/寿命）：第二层"
+      },
+      {
+        "key": "device",
+        "label": "器件",
+        "rank": 2,
+        "why": "最后逐颗器件收口：封装/极性/丝印/降额——第三层"
+      }
+    ],
     "weights": [
       {
         "key": "pcb-module",
@@ -2008,7 +2028,7 @@
         "why": "第一步 DRC 与原理图侧 ERC／连通性：门票与电路正确性——最轻"
       }
     ],
-    "note": "本表给人读：ERC + DRC + 模块规则 + 器件规则合成一份，按「板 → 模块/规则族」分组，每条一句话（位号/网/问题/依据）。机器细节（完整 message、evidence、定位链、规则等级）留在 `report.json` 的 findings[]，本表一个字都不新增结论。",
+    "note": "本表给人读：ERC + DRC + 模块规则 + 器件规则合成一份，按「板 → 阅读层（通用门票 → PCB 模块 → 器件）→ 模块/规则族」分组，层内按严重度，每条一句话（位号/网/问题/依据）；末段是按 `(板, 位号)` 合并的器件大节。机器细节（完整 message、evidence、定位链、规则等级）留在 `report.json` 的 findings[]，本表一个字都不新增结论。",
     "drc": {
       "erc": {
         "checked": false,
@@ -2042,6 +2062,8 @@
             "name": "原理图连通性",
             "weight": "generic",
             "weightLabel": "通用",
+            "reading": "gate",
+            "readingLabel": "通用门票",
             "counts": {
               "ERROR": 0,
               "WARN": 1,
@@ -2065,6 +2087,8 @@
             "name": "元件参数/选型",
             "weight": "generic",
             "weightLabel": "通用",
+            "reading": "gate",
+            "readingLabel": "通用门票",
             "counts": {
               "ERROR": 0,
               "WARN": 0,

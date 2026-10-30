@@ -60,6 +60,7 @@ from ..core.partkind import (
 )
 from ..core.power_domains import domain_of, infer_net_domains
 from .base import Finding, FindingTarget, Outcome
+from .connectivity import ShuntSenseLink
 from .facts import FactsRule, category_absent_reason
 from .unproven import unproven_nets, unproven_outcome
 from .values import (
@@ -134,6 +135,32 @@ LED_DOMAIN_TOLERANCE_V = 0.05
 #: otherwise.)
 MPN_AMPLITUDE_TOLERANCE_R = 3.0
 MPN_AMPLITUDE_TOLERANCE_C = 25.0
+
+#: **Milliohm shunts are not ordinary resistors** (oracle ruling 2026-10-30).
+#: The 3x above is the 015 batch-2 boundary, and it is what let a real board's
+#: three sense shunts pass in silence: the oracle reported them carrying 0.05 Ω
+#: against an MPN that decodes to 0.1 Ω -- 2.00x, below 3x, so the row said OK
+#: while BOM and schematic disagreed by a factor of two on the part that sets
+#: the current-sense scale. The ruling is therefore a **shunt-specific 1.5x**:
+#: a ratio strictly below it stays the repeated OK (with the amplitude quoted,
+#: as before), and at or above it the row takes the paths that already exist --
+#: the anchored contradiction (VIOLATION/WARN) or, unanchored, the UNKNOWN that
+#: names the missing anchor. No new "always WARN" bypass and no skipping of the
+#: anchor gate: 1.5x only decides *which* of those rows is written, it does not
+#: change what they require. Ordinary resistors keep 015's 3x and capacitors
+#: keep 25x.
+#:
+#: "Shunt" is not a designator letter or a value window invented here: the
+#: judge is :meth:`~boardwise.rules.connectivity.ShuntSenseLink._is_shunt`, the
+#: same `classify_part` + positive-resistance ≤ 50 mΩ reading
+#: ``shunt-sense-link`` uses, so the two rules cannot drift apart. The report
+#: above is the oracle's own word and **no board is declared here**: no
+#: annotated reviewset in this repository carries a shunt whose MPN disagrees,
+#: so there is no record ``evidence-boards:`` could name. The numbers are
+#: bracketed by the synthetic cases in ``tests/test_shunt_tolerance.py``
+#: (0.05 Ω vs 0.1 Ω at 2.00x, 1.49x still waived, 1.50x outside), and this
+#: comment claims nothing beyond them.
+MPN_AMPLITUDE_TOLERANCE_SHUNT = 1.5
 
 #: 052 §2.1: a contradiction names **both** repairs and the rule chooses
 #: neither. Fixing the board value to the MPN's decoded value is one option
@@ -330,6 +357,25 @@ def _kind_of(
     return None, gated
 
 
+#: The same judge ``shunt-sense-link`` asks its question through (2026-10-30):
+#: one instance, because ``max_shunt_milliohms`` is the rule's contract and no
+#: caller here changes it. Its ``_is_shunt`` is private to that rule and stays
+#: there -- editing ``connectivity.py`` is out of this batch's scope, and a
+#: second copy of "classify_part + positive resistance ≤ 50 mΩ" is exactly the
+#: drift a second copy always causes (190's lesson). The 1.5x tolerance below
+#: therefore moves only if that rule's evidence moves, and both rules read one
+#: answer to 「is this a shunt」.
+_SHUNT_SENSE = ShuntSenseLink()
+
+
+def _is_shunt_resistor(comp: Component) -> bool:
+    """Whether :class:`~boardwise.rules.connectivity.ShuntSenseLink` calls
+    ``comp`` a milliohm shunt -- the evidence :data:`MPN_AMPLITUDE_TOLERANCE_SHUNT`
+    is spent on, and nothing broader (no designator letter, no local value
+    window)."""
+    return _SHUNT_SENSE._is_shunt(comp)
+
+
 #: Engineering prefixes for :func:`_human_value`, largest scale first. The two
 #: spans differ because the value parsers do: a resistor value may be a bare
 #: number (``470``) while a capacitor value *must* name its unit, so a
@@ -419,6 +465,16 @@ class ValueMpnMatch(FactsRule):
     :data:`MPN_AMPLITUDE_TOLERANCE_R`): a small ratio is OK **with its
     amplitude quoted in the message**, so the row says what was seen instead
     of passing in silence, and it enters no precision denominator.
+
+    **A milliohm shunt is judged at its own, tighter amplitude** (oracle
+    ruling 2026-10-30, :data:`MPN_AMPLITUDE_TOLERANCE_SHUNT`): 1.5x instead of
+    the resistors' 3x, because a shunt sets the current-sense scale and a
+    2.00x disagreement on it (0.05 Ω declared, 0.1 Ω in the MPN) is not the
+    noise the wider band was meant to absorb. The part is asked the same
+    question ``shunt-sense-link`` asks (``classify_part`` resistor with a
+    positive resistance ≤ 50 mΩ); the threshold changes which row a
+    disagreement lands in, never whether an anchored reading is required for
+    the contradicting ones.
 
     **Since 071 §1 a bigger ratio is UNKNOWN, not a violation** -- the
     bleed-stop of oracle ruling 2026-09-29. The whole verdict rests on two
@@ -638,8 +694,10 @@ class ValueMpnMatch(FactsRule):
                     None,
                 ))
             else:
+                shunt = kind == "resistor" and _is_shunt_resistor(comp)
                 tolerance = (
-                    MPN_AMPLITUDE_TOLERANCE_R if kind == "resistor"
+                    MPN_AMPLITUDE_TOLERANCE_SHUNT if shunt
+                    else MPN_AMPLITUDE_TOLERANCE_R if kind == "resistor"
                     else MPN_AMPLITUDE_TOLERANCE_C
                 )
                 # ``min <= 0`` has no ratio: 0/0 is undefined and anything/0 is
@@ -647,7 +705,24 @@ class ValueMpnMatch(FactsRule):
                 # stays a contradiction, as it always was.
                 low_side, high_side = sorted((declared, decoded))
                 ratio = high_side / low_side if low_side > 0 else None
-                if ratio is not None and ratio < tolerance:
+                # ``below`` compares the ratio rounded to nine decimals, not the
+                # raw quotient: binary division leaves dust on both sides of a
+                # boundary (0.15/0.1 is 1.4999999999999998, 2.5u/100n is
+                # 25.000000000000004), and a threshold that a rounding error can
+                # step over is not a threshold. The quoted amplitude stays the
+                # raw ratio, so a reader sees what was actually divided.
+                below = (
+                    ratio is not None and round(ratio, 9) < tolerance
+                )
+                if below:
+                    ruling = (
+                        "oracle ruling 2026-10-30, milliohm shunts only: a "
+                        "0.1 Ω MPN against a 0.05 Ω board value is 2.00x and "
+                        "is no longer a pass"
+                        if shunt else
+                        'oracle ruling 015 batch-2: "\u4e0d\u8981\u5b9a\u7684'
+                        '\u592a\u6b7b"'
+                    )
                     rows.append((
                         Outcome(
                             rule_id=self.id,
@@ -657,9 +732,7 @@ class ValueMpnMatch(FactsRule):
                                 f"{comp.designator}: board value "
                                 f"{declared:.4g} {unit} vs MPN "
                                 f"{decoded:.4g} {unit} differ {ratio:.2f}x, "
-                                f"below the {tolerance:g}x tolerance (oracle "
-                                'ruling 015 batch-2: "\u4e0d\u8981\u5b9a\u7684'
-                                '\u592a\u6b7b")'
+                                f"below the {tolerance:g}x tolerance ({ruling})"
                             ),
                             evidence=[
                                 f"{comp.designator} value {comp.value!r}",

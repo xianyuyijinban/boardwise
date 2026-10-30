@@ -403,6 +403,10 @@ def test_both_rules_are_in_the_builtin_list_in_the_declared_order():
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, the board-frame sweep's last
         "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
+        "pcb-hs-cross-split",  # 200B, the family's first judgement
+        "pcb-hs-via-ground-companion",  # 200C1, the family's via-side question
+        "pcb-hs-diffpair-skew",  # 200C2, the pair's length / layer question
+        "pcb-hs-diffpair-via-parity",  # 200C2, the pair's via-count question
     ]
 
 
@@ -846,6 +850,9 @@ def test_two_nets_closer_than_their_band_allowance_are_a_warn():
         "element_b": "track lv-1 on layer 1",
         "component_a": "", "component_b": "",
         "within_one_footprint": False,
+        "element_a_detail": {"kind": "track", "component": "", "pin": "", "layers": [1]},
+        "element_b_detail": {"kind": "track", "component": "", "pin": "", "layers": [1]},
+        "shared_layer_ids": [1],
     }
     assert "19 V" in finding.message and "4.0 mil" in finding.message
     assert "1.0 mil" in finding.message
@@ -1612,7 +1619,13 @@ def test_llc_prices_no_rail_and_declares_no_current_so_both_rules_are_silent():
     # still the last two rules before it. 182 appended its inventory rule after
     # R2-1's, so the pinned tail grew by one and the adjacency this test claims
     # （the IPC pair immediately precedes the board-frame sweep） is unchanged.
-    assert section["boards"][0]["checksRun"][-4:] == [
+    # 200B / 200C1 / 200C2 then appended the high-speed family's four rules,
+    # so the tail is the same adjacency, three ids longer.
+    assert section["boards"][0]["checksRun"][-8:] == [
         "pcb-track-ampacity", "pcb-voltage-spacing", "pcb-keepout-violation",
         "pcb-hs-diffpair-inventory",  # 182
+        "pcb-hs-cross-split",  # 200B
+        "pcb-hs-via-ground-companion",  # 200C1
+        "pcb-hs-diffpair-skew",  # 200C2
+        "pcb-hs-diffpair-via-parity",  # 200C2
     ]

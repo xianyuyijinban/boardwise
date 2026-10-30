@@ -34,6 +34,7 @@ from boardwise.core.model import Component, DesignModel, Net, Pin
 from boardwise.core.parts import PartEntry, PartLibrary, load_parts
 from boardwise.engines.checkup import (
     LAYOUT_AXES,
+    PART_SECTION_TITLE,
     TRIAGE_VERDICTS,
     layout_review_section,
     order_modules_by_warnings,
@@ -198,7 +199,8 @@ def test_the_conclusion_may_not_claim_a_pass_while_parts_are_unreviewed(
     )
     assert "通过" not in conclusion_line
     assert f"{count} 颗器件缺手册未审" in conclusion_line
-    assert f"## 未审器件（{count}）" in markdown
+    assert f"## {PART_SECTION_TITLE}" in markdown
+    assert f"未审器件 {count} 颗" in markdown
 
 
 # -------------------- 053 §2.2: completion — the complete statement

@@ -560,7 +560,19 @@ def test_the_inventory_rule_is_registered_with_its_declared_identity():
     rules = {rule.id: rule for rule in BUILTIN_PCB_RULES}
 
     assert RULE_ID in rules
-    assert [rule.id for rule in BUILTIN_PCB_RULES][-1] == RULE_ID, "appended last"
+    ids = [rule.id for rule in BUILTIN_PCB_RULES]
+    # 182 was the last row when it landed; **200B appended after it** (the first
+    # judgement of the family, reading this inventory), **200C1 appended after
+    # 200B** (the family's via-side question) and **200C2 appended its two pair
+    # rules after 200C1**, so the pin is that the inventory comes immediately
+    # *before* those four rather than last.
+    assert ids[-5:] == [
+        RULE_ID,
+        "pcb-hs-cross-split",
+        "pcb-hs-via-ground-companion",
+        "pcb-hs-diffpair-skew",
+        "pcb-hs-diffpair-via-parity",
+    ]
     rule = rules[RULE_ID]
     assert isinstance(rule, DiffPairInventory)
     assert rule.level == "L1-pcb-geometry"

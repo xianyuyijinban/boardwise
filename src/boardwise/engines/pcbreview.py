@@ -42,6 +42,7 @@ from typing import Any
 from ..core.geometry import FRAGMENT_KIND_EXTRA_RECORDS, FRAGMENT_KIND_STROKE_PIECE
 from ..core.measure import read_stackup
 from ..core.model import ProjectModel
+from ..core.netdomains import is_auto_net
 from ..rules.pcb.base import PcbReviewContext, PcbRule
 from ..rules.pcb.derating import DeratingPackage
 from ..rules.pcb.distance import (
@@ -78,7 +79,13 @@ from ..rules.pcb.mcusupply import McuSupplyGroups
 from ..rules.pcb.mcureset import McuResetBoot
 from ..rules.pcb.regulator import RegulatorCapDistance
 from ..rules.pcb.fbplacement import RegulatorFbPlacement
-from ..rules.pcb.highspeed import DiffPairInventory
+from ..rules.pcb.highspeed import (
+    CrossSplit,
+    DiffPairInventory,
+    DiffPairSkew,
+    DiffPairViaParity,
+    GroundViaCompanion,
+)
 from ..rules.base import SEVERITY_ORDER, Finding
 
 #: The rules this runner applies, in execution order. Empty in 126a (地基);
@@ -171,6 +178,34 @@ from ..rules.base import SEVERITY_ORDER, Finding
 #: each of them a reading of the pairs this one lists. It has no threshold,
 #: ``INFO`` severity throughout, and reads no other rule's output, so its
 #: position is a reading choice like every other append above.
+#:
+#: **200B appends ``pcb-hs-cross-split``** after 182's inventory: the first
+#: *judgement* of the high-speed family, and the first reader of 182's
+#: inventory output — it measures each high-speed track's copper coverage on
+#: its physical reference layer and files one ``WARN`` per track that crosses a
+#: split. It goes after the inventory because the inventory is the list it
+#: reads, and it is a ``WARN`` (a house rule, 200B, iterable) rather than an
+#: ``ERROR`` because the goods are still being tuned.
+#:
+#: **200C1 appends ``pcb-hs-via-ground-companion``** after 200B's split rule:
+#: the family's first question about **vias** rather than copper, and the first
+#: reader of 182's high-speed net set from the via side — one ``WARN`` per
+#: high-speed via whose nearest ground-class via centre is farther than the
+#: house radius (``core.highspeed.GROUND_VIA_RADIUS_MIL``). It goes last
+#: because it judges a different object: 182 lists pairs, 200B judges the
+#: copper a pair runs on, this one judges the transition between layers. It
+#: reads no other rule's output, has no ordering dependency, and is a ``WARN``
+#: (a house rule, 200C1, iterable) for the same reason 200B is.
+#:
+#: **200C2 appends two more**, both readers of one
+#: :class:`~boardwise.core.highspeed.DiffPairReading` and neither of the other's
+#: output: ``pcb-hs-diffpair-skew`` (one ``WARN`` per pair that is out of
+#: tolerance in length or whose two sides use different layer sets) and
+#: ``pcb-hs-diffpair-via-parity`` (one ``INFO`` per pair whose two sides use
+#: different via counts). They come after 200C1 because they ask about a
+#: **pair** as a unit, which is 182's object, and not about one track or one
+#: via; the skew rule's threshold is a house rule
+#: (``core.highspeed.DIFFPAIR_SKEW_MIL``), the parity row grades nothing.
 BUILTIN_PCB_RULES: list[PcbRule] = [
     DecapDistance(),
     RegulatorCapDistance(),
@@ -200,6 +235,10 @@ BUILTIN_PCB_RULES: list[PcbRule] = [
     VoltageSpacing(),
     KeepoutViolation(),
     DiffPairInventory(),  # 182, the high-speed family's inventory
+    CrossSplit(),  # 200B, the family's first judgement
+    GroundViaCompanion(),  # 200C1, the family's via-side question
+    DiffPairSkew(),  # 200C2, the pair's own length / layer question
+    DiffPairViaParity(),  # 200C2, the pair's own via-count question
 ]
 
 #: The runner identity a report carries, so a reader can tell which engine
@@ -533,6 +572,100 @@ def _cross_view_candidate_mappings(
     return mappings
 
 
+#: 自动网候选别名的 ``evidence``（C，2026-10-30）：三段出处 + 一句候选说明。
+#:
+#: 两侧仍是**归档**读数（``checkup --file`` 读的导出文档），所以 ``pcb`` /
+#: ``schematic`` 与 537C 的映射写同一对出处；``basis`` 换成
+#: ``same-pin-members``——这条别名认的是**同一脚集合**，不是同名，也不是编辑器
+#: 的内部派生算法（``$1N{序号}`` 的编号稀疏且会变，原理图归档里没有派生规则）。
+#: ``note`` 把「候选」写在证据里而不只是 ``status``，因为读者可能只抄这一段。
+CROSS_VIEW_ALIAS_EVIDENCE = {
+    "pcb": "archivePcb",
+    "schematic": "archiveSchematic",
+    "basis": "same-pin-members",
+    "note": "候选别名：同一脚集合，不是确认同一网",
+}
+
+
+def _auto_net_buckets(model: Any) -> dict[tuple[str, ...], list[str]]:
+    """``member-set -> [net names]`` for the **auto-named** nets of one view.
+
+    A net belongs here only when :func:`~boardwise.core.netdomains.is_auto_net`
+    recognises its name (``NET`` 加数字 / ``$…``): a net a person named carries
+    intent, and two different names for it are not this question. Members are
+    :func:`_net_member_refs`'s deduplicated, pin-sorted ``REF.pin`` list, so the
+    bucket key is the net's **real** member set — an empty one is dropped, since
+    two nets that both reach nothing say nothing about each other.
+
+    Several nets can land in one bucket (a net recorded twice, or two islands the
+    views joined differently); the caller reads the list length as 「这个桶不唯一」
+    and withholds the alias rather than picking one.
+    """
+    buckets: dict[tuple[str, ...], list[str]] = {}
+    for name, net in (getattr(model, "nets", None) or {}).items():
+        if not is_auto_net(name):
+            continue
+        members = tuple(_net_member_refs(net))
+        if not members:
+            continue
+        buckets.setdefault(members, []).append(str(name))
+    return buckets
+
+
+def _cross_view_auto_net_aliases(schematic: Any, pcb_model: Any) -> list[dict]:
+    """Auto-named nets that hold **exactly the same pins** in both views (C).
+
+    The user-reported shape: the design's own model calls a net ``NET34`` while
+    the PCB/editor netlist calls the very same net ``$1N436``. Both names are
+    editor-generated — neither says what the net *is* — so an alias is only read
+    when the **pin sets** are fully equal, and it is recorded as a candidate:
+
+    ``{schematicNet, pcbNet, members, status: "candidate", evidence}`` with
+    ``members`` the shared, deduplicated ``REF.pin`` list, ``status`` the word
+    that keeps this from being read as confirmation, and ``evidence`` naming the
+    basis (``same-pin-members``) and both **archive** sides.
+
+    What it deliberately does **not** do:
+
+    * no derived naming — ``$1N436`` is an internal id whose numbering is sparse
+      and moves between captures, and the archive schematic holds no rule from
+      which it could be computed; nothing here invents a ``$1N{index}``. The
+      one real ``NET34 ↔ $1N436`` pair in the user's report is their oracle, and
+      the tests reproduce it synthetically rather than claiming it as measured;
+    * no name-only match: equal names are 537C's ``same-net-name`` candidate,
+      and this function only emits pairs whose names **differ**;
+    * no subset, no superset, no 「probably the same rail」: equality is on the
+      whole set, so one shared pin out of five is not an alias;
+    * no ambiguous bucket: if **either** side has two auto nets with the same
+      member set, the whole bucket is withheld — picking one would be a guess
+      dressed as a reading;
+    * no rewrite of rules, findings or ``Net.name``: the alias is a disclosure
+      under ``crossView``, and every rule message keeps the name it read.
+    """
+    schematic_buckets = _auto_net_buckets(schematic)
+    pcb_buckets = _auto_net_buckets(pcb_model)
+    aliases: list[dict] = []
+    for members, schematic_names in schematic_buckets.items():
+        pcb_names = pcb_buckets.get(members)
+        if not pcb_names:
+            continue
+        if len(schematic_names) != 1 or len(pcb_names) != 1:
+            continue  # 重复/歧义桶：整桶不出别名
+        schematic_name = schematic_names[0]
+        pcb_name = pcb_names[0]
+        if schematic_name == pcb_name:
+            continue
+        aliases.append({
+            "schematicNet": schematic_name,
+            "pcbNet": pcb_name,
+            "members": list(members),
+            "status": "candidate",
+            "evidence": dict(CROSS_VIEW_ALIAS_EVIDENCE),
+        })
+    aliases.sort(key=lambda alias: (alias["schematicNet"], alias["pcbNet"]))
+    return aliases
+
+
 def _pcb_documents(source: Any) -> list[tuple[str, str, Any]]:
     """``(META title, META board, document)`` for every PCB document, in file order.
 
@@ -622,6 +755,18 @@ def cross_view_section(
     ``candidateMappings``, because a section that says 「没查」 may not also look
     half-checked.
 
+    **C (2026-10-30) adds a third optional key, ``autoNetAliases``.** When both
+    views hold auto-named nets (``is_auto_net``: ``NET`` 加数字 / ``$…``) with
+    **exactly the same, non-empty pin set** and **different** names, the section
+    carries one candidate per such pair, assembled by
+    :func:`_cross_view_auto_net_aliases` — that is the ``NET34 ↔ $1N436`` shape
+    the user reported. The key is additive and appears only under
+    ``checked: true`` **and** only when at least one alias exists: no empty
+    array, and the ``checked: false`` shapes are untouched. It is a
+    cross-view **candidate alias**, not the editor's internal derivation, not a
+    confirmation that the two nets are one, and it rewrites no rule message —
+    ``Net.name`` and the findings keep the names they were read with.
+
     Both sides of a mapping are **archive** readings (``checkup --file`` reviews
     the exported schematic and PCB documents; neither is live evidence), so the
     mapping is a machine-assembled candidate list for a person to check — it does
@@ -660,6 +805,7 @@ def cross_view_section(
             if lonely
             else None
         )
+        aliases = _cross_view_auto_net_aliases(schematic_board, pcb_model)
     except Exception as exc:  # noqa: BLE001 — named below, never silently dropped
         return {
             "checked": False,
@@ -674,6 +820,8 @@ def cross_view_section(
     if mappings is not None:
         section["status"] = "suspected"
         section["candidateMappings"] = mappings
+    if aliases:
+        section["autoNetAliases"] = aliases
     return section
 
 

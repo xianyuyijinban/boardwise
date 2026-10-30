@@ -45,6 +45,7 @@ from boardwise.core.values import (
     parse_resistance_ohms,
 )
 from boardwise.engines.checkup import (
+    PART_SECTION_TITLE,
     UNKNOWN_REASON_UNDECODABLE,
     unknown_parts,
     unreviewed_counts_by_reason,
@@ -549,7 +550,10 @@ def test_the_report_splits_the_unreviewed_count_by_reason(capsys, tmp_path, monk
     assert report["summary"]["unreviewedParts"] == len(rows)
     assert report["completion"]["unreviewedParts"] == len(rows)
     markdown = (tmp_path / "out" / "report.md").read_text(encoding="utf-8")
-    assert f"## 未审器件（{len(rows)}）" in markdown
+    # 200A: the three old device sections are one merged ledger; pin the
+    # section and the same part count + per-reason rows it used to carry.
+    assert f"## {PART_SECTION_TITLE}" in markdown
+    assert f"未审器件 {len(rows)} 颗" in markdown
     assert "按原因计数：" in markdown
     for reason, count in counted.items():
         assert f"{reason} {count}" in markdown

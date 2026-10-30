@@ -185,6 +185,10 @@ def test_the_builtin_pcb_rule_list_is_the_126b_distance_pair_then_the_126c_pair(
         "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, appended last
         "pcb-hs-diffpair-inventory",  # 182, the high-speed family's inventory
+        "pcb-hs-cross-split",  # 200B, the family's first judgement
+        "pcb-hs-via-ground-companion",  # 200C1, the family's via-side question
+        "pcb-hs-diffpair-skew",  # 200C2, the pair's length / layer question
+        "pcb-hs-diffpair-via-parity",  # 200C2, the pair's via-count question
     ]
     assert all(isinstance(rule, PcbRule) for rule in BUILTIN_PCB_RULES)
     # The schematic side is untouched by this file: its list is the 011-family
@@ -388,6 +392,10 @@ def test_run_pcb_review_reads_every_pcb_document_of_the_foc_fixture():
             "pcb-track-ampacity", "pcb-voltage-spacing",
             "pcb-keepout-violation",  # R2-1, the sweep's last
             "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
+            "pcb-hs-cross-split",  # 200B, the family's first judgement
+            "pcb-hs-via-ground-companion",  # 200C1, the family's via-side question
+            "pcb-hs-diffpair-skew",  # 200C2, the pair's length / layer question
+            "pcb-hs-diffpair-via-parity",  # 200C2, the pair's via-count question
         ]
         for index in board["findings"]:
             assert findings[index].board == board["title"]
@@ -541,6 +549,10 @@ def test_checkup_offline_with_a_pcb_document_carries_the_pcb_review_section(
         "pcb-derating-package",
         "pcb-component-spacing", "pcb-voltage-spacing",
         "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
+        "pcb-hs-via-ground-companion",  # 200C1, the via-side question (4 WARNs on PCB1)
+        # 200C2: the fixture's DP1 differs in layers and vias; DP2 is even.
+        "pcb-hs-diffpair-skew",  # 200C2, one WARN (DP1 layer set)
+        "pcb-hs-diffpair-via-parity",  # 200C2, one INFO (DP1 0:2)
     }
     # 126a did not touch the schema or the verdict; **126d did**, by bumping the
     # id to `/7` and adding `coverage.pcbReviewMissing`. This fixture has PCB
@@ -1408,8 +1420,122 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # `test_135_poured_result.py` 与 47 条 #88 聚焦。recursive 与
     # `contracts/differential/manifest.json` 的
     # `producerVersions.rulebody` 由 `tools.build_differential_fixtures` 重生成同步。
-    assert old_digest == "ea1d06e0"
-    assert recursive == "7646ae9a", (
+    # **#87④ pcb-voltage-spacing element identity moved `recursive` only** —
+    # 7646ae9a -> **3ea85546**。本批只给 `rules/pcb/ipc.py` 的
+    # pcb-voltage-spacing **measurement** 增加**可选**的来源几何元素身份字段，
+    # 判据与用法不变；**文案、severity、verdict 全部保留**，direct 仍为
+    # `ea1d06e0`（`ipc.py` 在本配方下不进 direct 摘要）。字段缺省时行为与旧版
+    # 逐字一致；recursive 与 `contracts/differential/manifest.json` 的
+    # `producerVersions.rulebody` 由官方生成器同步更新。
+    # **200B moved `recursive` only** — 3ea85546 -> **89382e7d**。本批落在
+    # `rules/pcb/highspeed.py` **一个文件**：新增 `CrossSplit`
+    # （`pcb-hs-cross-split`，高速线跨参考层分割，一条 track 至多一条 WARN，
+    # 断点全部列在 evidence 里），`__init__.py` 的包说明未动。规则其余部分
+    # （新测量 `core/highspeed.py` 的 `high_speed_nets` / `measure_track_coverage`、
+    # 注册那一笔所在的 `engines/pcbreview.py`）按本 recipe 的定义**不进摘要** ——
+    # 与 131c/131d/131f 记过的同一条限制一致；注册那一笔由本文件上方的逐字序列
+    # 表兜住。判决语义的钉在 `tests/test_200b_cross_split.py`（39 条：连续单 pour
+    # 不报、跨无铜缝、直接相接两 pour、rings void 三种各有 WARN、非高速/PLANE/
+    # 无 pour/零覆盖/零长度五态静默、重叠有共同 pour 不误报、精确参数区间）。
+    # 两个值都在**当前这棵工作树**上按上方同一配方直接量得（树里另有 #87④ 与
+    # 200A 的未提交改动，200A 在 `engines/checkup.py`、#87④ 在 `rules/pcb/ipc.py`，
+    # 后者已计入 3ea85546 这个旧值）；recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
+    # 由官方生成器同步更新。
+    # **200C1 moved `recursive` only** — 89382e7d -> **234011c6**。本批落在
+    # `rules/pcb/highspeed.py` **一个文件**：新增 `GroundViaCompanion`
+    # （`pcb-hs-via-ground-companion`，高速过孔伴随地孔，一个高速过孔至多一条
+    # WARN，阈值 `GROUND_VIA_RADIUS_MIL = 50.0` 为屋规、含边界静默），`__init__.py`
+    # 的包说明未动。新测量（`core/highspeed.py` 的 `ground_vias` /
+    # `measure_via_ground`）与注册那一笔所在的 `engines/pcbreview.py` 按本 recipe
+    # 的定义**不进摘要** —— 与 131c/131d/131f/200B 记过的同一条限制一致；注册那一笔
+    # 由本文件上方的逐字序列表兜住。判决语义的钉在
+    # `tests/test_200c1_ground_via.py`（23 条：40 mil 静默、50.0 边界静默、
+    # 50.1/55 mil WARN、无地孔 WARN、非高速静默、多个地孔取最近且同距按 id 定序、
+    # 零过孔数组、每高速过孔至多一条、两集合每次运行各算一次、注册身份与真实夹具
+    # 只读读数）。两个值都在**当前这棵工作树**上按上方同一配方直接量得（树里另有
+    # #87④、200A、200B 的未提交改动；200B 已计入 89382e7d 这个旧值）；recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
+    # 由官方生成器同步更新。
+    # **200C2 moved `recursive` only** — 234011c6 -> **0f778250**。本批仍落在
+    # `rules/pcb/highspeed.py` **一个文件**：新增 `DiffPairSkew`
+    # （`pcb-hs-diffpair-skew`，差分对内长度/层偏差，一对至多一条 WARN，阈值
+    # `DIFFPAIR_SKEW_MIL = 5.0` 为屋规、严格大于才报）与 `DiffPairViaParity`
+    # （`pcb-hs-diffpair-via-parity`，两侧过孔数不等时一对至多一条 INFO），
+    # `__init__.py` 的包说明未动。新测量（`core/highspeed.py` 的
+    # `DiffPairReading` / `measure_diff_pair`，长度与逐层表全部来自
+    # `core.measure.track_width_stats`）与注册那一笔所在的
+    # `engines/pcbreview.py` 按本 recipe 的定义**不进摘要** —— 与
+    # 131c/131d/131f/200B/200C1 记过的同一条限制一致；注册那一笔由本文件上方的
+    # 逐字序列表兜住。判决语义的钉在 `tests/test_200c2_diffpair.py`（18 条：
+    # 等长同层同孔静默、5.0 边界静默、5.1/6 mil WARN、不同层段 WARN、过孔 2:1
+    # INFO、三类事实可组合、缺一侧 track 整对静默、未分层 track 不伪造层差异、
+    # 声明/启发式来源保留、注册顺序与真实夹具只读读数）。两个值都在**当前这棵
+    # 工作树**上按上方同一配方直接量得（树里另有 #87④、200A、200B、200C1 的未提交
+    # 改动，均已计入旧值）；recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
+    # 由官方生成器同步更新。
+    # **200C2 docstring refresher moved `recursive` again** — 0f778250 ->
+    # **746d15f2**。只改 `DiffPairSkew` 的**类 docstring**（把「未分层 track」
+    # 从「整对不产 finding」改述为「只有层集合判断未测，>5.0 mil skew 仍报
+    # WARN」），无规则行为、判据、阈值或文案变化；`direct` 仍为 `ea1d06e0`。
+    # docstring 属于 rulebody 配方，故 recursive 移动是预期结果；行为锚
+    # `tests/test_200c2_diffpair.py` 18 条保持全绿。
+    # **shunt-tolerance 批 moved both** — recursive 746d15f2 -> **c6f97918**，
+    # direct ea1d06e0 -> **7d9d55b3**（岳 2026-10-30 裁定后的 B 小批）。本批
+    # 只落在 `rules/params.py` **一个直下文件**：新增常量
+    # `MPN_AMPLITUDE_TOLERANCE_SHUNT = 1.5`（shunt 专用，普通电阻 3x、电容 25x
+    # 不动）、`_is_shunt_resistor` 复用 `ShuntSenseLink._is_shunt`
+    # （`classify_part` + 正阻值 ≤ 50 mΩ，未改 connectivity）、tolerance 选择
+    # 分支、以及「严格低于」判定改为对 1e-9 位取整后的比值比较
+    # （0.075/0.05 = 1.4999999999999998 这类二进制尘埃不得跨过裁定的边界）。
+    # **判决语义**：0.05 Ω vs 0.1 Ω 的 2.00x 从「below 3x 的 OK」改为走既有
+    # 锚定矛盾/UNKNOWN 路径（不新增一律 WARN 旁路、不跳过锚点）；1.49x 仍
+    # waive 且引用 2026-10-30 裁定，1.50x 出容差，普通电阻 2.13x 仍 3x，
+    # 电容、零值、锚定负例不动。全库 annotated reviewsets 与
+    # `tests/fixtures/*.epro2` 只读扫过：**没有一条 shunt 的 MPN 分歧行**，
+    # 故夹具侧零翻转；行为锚是新建 `tests/test_shunt_tolerance.py` 11 条
+    # （合成，不声称复测实板）。两个值都在**当前这棵工作树**上按上方同一配方
+    # 直接量得（树里另有 #87④、200A、200B、200C1、200C2 及其他批的未提交
+    # 改动，均已计入上面的旧值）；direct 移动的原因是 `params.py` 是直下
+    # 文件，符合配方定义。recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
+    # 由官方生成器同步更新。
+    # **gate-net-names (D) moved `recursive` only** — c6f97918 -> **cdddab28**。
+    # 本批只落在 `rules/pcb/foc.py` **一个文件**：`GATE_NET_PATTERN` 增加
+    # `UH`/`UL`/`VH`/`VL`/`WH`/`WL` 六路名（岳 2026-10-30 实报的 U/V/W × H/L
+    # 栅极拼法，板上不在仓库内），`POWER_NET_PREFIXES` 同步六个前缀，避免 R11/R13
+    # 报告里插值的词表与实际筛子漂移；**测量、阈值、severity、TI 20 mil 参考与
+    # 「not applied」文案一律不动**，`GH`/`GL` 旧拼法照旧。direct 仍为
+    # `7d9d55b3`（`foc.py` 在 `rules/pcb/` 下，按本配方不进直接摘要）。
+    # 判决语义的钉在新建 `tests/test_gate_net_names.py`（33 条：六路名与可选
+    # 相字母/数字后缀正例、旧拼法兼容、形似名（`U`/`V`/`U1`/`UHAB`/`UHA1B`/
+    # `TIM1_CH1` 等）反例、词表与 pattern 逐项同步、合成六路 R11 读数与 no-net
+    # 反例、无铜网名不计入、R13 同筛；合成，不声称复测实板）。两个值都在
+    # **当前这棵工作树**上按上方同一配方直接量得（树里另有 #87④、200A、200B、
+    # 200C1、200C2 及其他批的未提交改动，均已计入上面的旧值）；recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
+    # 由官方生成器同步更新。
+    # **return-path-power-bus (E) moved `recursive` only** — cdddab28 -> **5c0926a5**。
+    # 本批只落在 `rules/pcb/foc.py` **一个文件**：新增窄 pattern
+    # `POWER_BUS_NET_PATTERN = ^V_\d+(?:\.\d+)?V$`（`V_310V` / `V_5V` / `V_3.3V`，
+    # 大小写与小数），`is_power_net` 在栅极/开关节点/相电流之外承认这一族，
+    # `POWER_NET_PREFIXES` 同步词条 `"V_"`（词表事实，匹配仍走 pattern ——
+    # `startswith("V_")` 会误收 `V_FOO`，钉在 `tests/test_return_path_power_bus.py`）。
+    # **`return_path_projection` / `return_path_cover` / PLANE 语义 / 阈值 / 其他网名 /
+    # A 的电压文法 / D 的六路栅极名一律不动**，direct 仍为 `7d9d55b3`（`foc.py` 在
+    # `rules/pcb/` 下，按本配方不进直接摘要）。实测：`tests/fixtures` 全量 PCB 网的
+    # **0 条**匹配该 pattern，故夹具侧零翻转（真实 `V_310V` 板不在仓库）。
+    # 判决语义的钉在新建 `tests/test_return_path_power_bus.py`（35 条：母线正例/
+    # 形似名反例/词表与 matcher 之别/D 六路与 `GH`/`GL` 兼容；实跑 R5 把 1.0.0 板上
+    # 原在未识别清单的 `+24V` **只改名**成 `V_310V` 即出投影行、改名成 `V_FOO` 仍留
+    # 清单，两版 `return_path_cover` 读数相同；PLANE 15/16 构造性覆盖不变；R11 对
+    # 母线也出 INFO 且 20 mil 不判定）。两个值都在**当前这棵工作树**上按上方同一
+    # 配方直接量得（树里另有 #87④、200A、200B、200C1、200C2、B 与 D 的未提交改动，
+    # 均已计入旧值）；recursive 与 `contracts/differential/manifest.json` 的
+    # `producerVersions.rulebody` 由官方生成器同步更新。
+    assert old_digest == "7d9d55b3"
+    assert recursive == "5c0926a5", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

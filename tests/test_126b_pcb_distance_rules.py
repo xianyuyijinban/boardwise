@@ -1137,6 +1137,14 @@ def test_llc_is_clean_under_both_distance_rules():
     # `tests/test_182_highspeed_scaffold.py`, and this pin keeps saying what it
     # always said: *126b's two distance rules and every rule that existed before
     # the FOC pack are silent on llc*.
+    # **200C1 subtracts one more id, and again the subtraction is a *reading*
+    # of llc.** ``pcb-hs-via-ground-companion`` fires here because llc declares
+    # ``DC+``/``DC-`` as a differential pair (182's inventory lists it), so the
+    # board's DC-bus vias are high-speed vias by the rule's input — and llc
+    # carries **no ground-class via at all**, so every one of them is a WARN
+    # saying 「no ground via to measure against」. That is the contract's own
+    # 「no GND via → WARN」 case, not a distance measurement moving; the rows are
+    # pinned in `tests/test_200c1_ground_via.py`.
     assert [
         f for f in findings
         if f.rule_id
@@ -1146,6 +1154,9 @@ def test_llc_is_clean_under_both_distance_rules():
             "pcb-silk-designator",
             "pcb-derating-package",
             "pcb-hs-diffpair-inventory",
+            "pcb-hs-via-ground-companion",
+            "pcb-hs-diffpair-skew",  # 200C2: DC 343.01 mil and DCV 20.92 mil
+            "pcb-hs-diffpair-via-parity",  # 200C2: DC 0:177 vias
         }
     ] == [], (
         f"llc is clean under both rules; got "
@@ -1223,6 +1234,10 @@ def test_llc_is_clean_under_both_distance_rules():
         "pcb-track-ampacity", "pcb-voltage-spacing",
         "pcb-keepout-violation",  # R2-1, the sweep's last
         "pcb-hs-diffpair-inventory",  # 182, the high-speed inventory
+        "pcb-hs-cross-split",  # 200B, the family's first judgement
+        "pcb-hs-via-ground-companion",  # 200C1, the family's via-side question
+        "pcb-hs-diffpair-skew",  # 200C2, the pair's length / layer question
+        "pcb-hs-diffpair-via-parity",  # 200C2, the pair's via-count question
     ]
 
 

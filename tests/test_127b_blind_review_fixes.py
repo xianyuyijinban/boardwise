@@ -764,6 +764,20 @@ def test_the_llc_fixture_stays_clean_under_the_fixed_rules():
     `test_151_footprint_consistency.py`. The question this pin asks — *every
     rule that existed before the FOC pack is silent on llc* — still holds
     verbatim with the new rule subtracted.
+
+    **200 subtracts the high-speed family's four judging rules, and each is
+    already anchored elsewhere.** ``pcb-hs-cross-split`` is 200B's first
+    judgement (``tests/test_200b_cross_split.py``); ``pcb-hs-via-ground-companion``
+    is 200C1's return-path reading (``tests/test_200c1_ground_via.py``, 177 rows on
+    llc — one per via it can name a return for); ``pcb-hs-diffpair-skew`` and
+    ``pcb-hs-diffpair-via-parity`` are 200C2's two pair readings
+    (``tests/test_200c2_diffpair.py``, reading llc's ``DC+``/``DC-`` and
+    ``DCVP``/``DCVN``). They speak about high-speed geometry and return paths on
+    a board whose own names are not ``GND``-based, i.e. the same character as the
+    subtractions above, not a distance moving. What this pin still forbids is
+    unchanged and strict: the 127b spacing and decap rules must stay silent, and
+    the 180 new high-speed rows may not be made silent by widening this set
+    (only these four ids join it).
     """
     llc = FIXTURES / "llc_board.epro2"
     model, _ = cli._load_model(llc, view="schematic")
@@ -804,6 +818,13 @@ def test_the_llc_fixture_stays_clean_under_the_fixed_rules():
         # board's own names, read by KiCad's suffix rule — as two INFO rows and
         # grades none of them. Pinned in `tests/test_182_highspeed_scaffold.py`.
         "pcb-hs-diffpair-inventory",
+        # 200's four high-speed judging rules, for the reason in the docstring:
+        # each speaks about llc's own geometry / return paths, and each is
+        # anchored in its own batch's test file (200B / 200C1 / 200C2). Adding
+        # them here must not be read as licence to silence the family — the
+        # spacing/decap pins above stay, and only these four ids join the set.
+        "pcb-hs-cross-split", "pcb-hs-via-ground-companion",
+        "pcb-hs-diffpair-skew", "pcb-hs-diffpair-via-parity",
     }
     assert [f for f in findings if f.rule_id not in foc_ids] == [], [
         (f.rule_id, f.message) for f in findings if f.rule_id not in foc_ids

@@ -1696,30 +1696,49 @@ def mpn_value_code_anchor(mpn: str) -> tuple[str | None, str]:
 # voltage — the third quantity of this family (issue #53)
 # --------------------------------------------------------------------------
 
-#: A rail voltage as one field. An optional sign, then one of two grammars:
+#: A rail voltage as one field. An optional sign, then one of four grammars:
 #:
 #: * the trade's **mid-letter** notation read in volts (``3V3`` = 3.3 V, ``1V8``
-#:   = 1.8 V). This is the R/K/M notation with the unit letter in the middle
+#:   = 1.8 V), with an optional trailing domain letter (``3V3D`` = 3.3 V). The
+#:   mid-letter form is the R/K/M notation with the unit letter in the middle
 #:   instead of a prefix, and it is not a hypothetical spelling: the repository
 #:   writes it. ``blocklib/blocks.portmeta.json`` declares the CH340's VCC rail
 #:   as ``"voltage": "3V3"``, so a parser that does not read it reads half the
-#:   repository's own rails wrong.
+#:   repository's own rails wrong. ``D`` is the letter a board puts on the
+#:   digital 3.3 V rail (``3V3D``, measured on a real FOC board's nets); it
+#:   says **which** 3.3 V rail, not a different voltage, so it is read and the
+#:   number is kept.
 #: * a number with an optional ``V`` that may stand off it by a space (``3.3``,
 #:   ``3.30V``, ``3.3 V``, ``5V``) — the editor grammar, the same shape
-#:   :func:`parse_capacitance_farads`'s ``100nF`` branch has.
+#:   :func:`parse_capacitance_farads`'s ``100nF`` branch has — optionally
+#:   followed by ``DC`` (``310VDC``, ``310 VDC``).
+#: * the **DC-marked prefix** spellings (``DC310``, ``DC_310``, ``DC-310``,
+#:   ``DC310V``). A high-voltage net is named this way in the wild — the 310 V
+#:   rail a user reported as `V_310V` on their own board, and the ``DC`` names
+#:   a converter's own bus.
+#: * the **leading-V** spelling (``V_310V``, ``V310V``, ``V310``). The unit
+#:   marker is ``V`` and the number may sit behind it, underscored or not. The
+#:   bare form **requires at least three digits** so that ``V3`` — the
+#:   mid-letter notation with an empty mantissa, which this module already
+#:   refuses — does not become a voltage by falling through to this branch.
 #:
-#: The two cannot overlap, and that is the whole point of writing them as two
-#: branches rather than one alternation: the mid-letter one *requires* a
-#: fraction after the ``V``, so ``3V`` is the suffix grammar's alone and no
-#: string is read by both. The same split :func:`parse_capacitance_farads`
-#: states for the same reason — every string one grammar reads keeps the exact
-#: value, so a new grammar is additive.
+#: The branches cannot overlap, and that is the whole point of writing them as
+#: an alternation of disjoint shapes rather than one loose pattern: the
+#: mid-letter one *requires* a fraction after the ``V``, so ``3V`` is the suffix
+#: grammar's alone, ``3V3D`` is the mid-letter branch's alone, and no string is
+#: read by both. The same split :func:`parse_capacitance_farads` states for the
+#: same reason — every string one grammar reads keeps the exact value, so a new
+#: grammar is additive.
 _VOLTAGE_RE = re.compile(
     r"(?P<sign>[+-]?)"
     r"(?:"
-    r"(?P<int>\d*)[Vv](?P<frac>\d{1,2})"
+    r"(?P<int>\d*)[Vv](?P<frac>\d{1,2})(?P<domain>[Dd])?"
     r"|"
-    r"(?P<num>\d+(?:\.\d+)?|\.\d+)\s*[Vv]?"
+    r"(?P<num>\d+(?:\.\d+)?|\.\d+)\s*[Vv]?(?:[Dd][Cc])?"
+    r"|"
+    r"[Dd][Cc][-_]?(?P<dcnum>\d+(?:\.\d+)?)\s*[Vv]?"
+    r"|"
+    r"[Vv]_?(?:(?P<vnum>\d+(?:\.\d+)?)[Vv]|(?P<vbare>\d{3,}))"
     r")"
 )
 
@@ -1748,6 +1767,12 @@ def parse_voltage_volts(value: str) -> float | None:
     follows the mid-letter grammar's own rule rather than inventing one —
     ``V3`` and ``0V5`` are the shape ``0K1`` is refused by, and
     :func:`_mid_letter_readings` is where the reasoning is written down.
+    ``V3`` stays refused after :data:`_VOLTAGE_RE` grew its leading-``V``
+    branch: that branch's **bare** half demands three digits (``V310``), so a
+    unit marker with no magnitude behind it is still not a reading. An
+    underscore is not a separator this parses anywhere else — ``V_310V`` is
+    the one spelling whose ``_`` is part of the *name*, and it is written that
+    way (a real board's 310 V net), not as a general ``A_B`` grammar.
 
     Deliberately **not** here: prefixes. A rail is stated in volts; ``5V``/``12V``
     /``3V3`` cover the vocabulary of ``blocks.portmeta.json``. ``5V5`` and
@@ -1756,6 +1781,16 @@ def parse_voltage_volts(value: str) -> float | None:
     :func:`_mid_letter_readings` cannot give it: it strips *package size codes*
     off a mantissa, so it would read the ``1206`` in a 1206 V rail as a size
     and refuse the field).
+
+    **What the four branches read, in one place** (task A, 310 V identity): a
+    contract's ``rails[].voltage`` for a high-voltage net is written the way a
+    person names that net, so ``V_310V``, ``V310``, ``DC310``, ``310VDC`` all
+    read **310.0** and the digital rail's ``3V3D`` reads **3.3**. A string is
+    read by exactly one branch (see :data:`_VOLTAGE_RE`), every pre-existing
+    reading keeps its exact value, and nothing here reads a bare number out of
+    a name that is not in one of those shapes: ``net7``, ``VCC``, ``HV+`` and
+    ``310V_BUS`` are all ``None``, which is the caller's UNKNOWN, never a
+    guess.
 
     :func:`_finite` closes it (issue #31), like every other parser here.
     """
@@ -1774,7 +1809,18 @@ def parse_voltage_volts(value: str) -> float | None:
             return None  # ``V3`` states no value; ``0V5`` is not significant
         magnitude = int(whole + fraction) / (10 ** len(fraction))
     else:
-        magnitude = float(match.group("num"))
+        number = match.group("num")
+        if number is None:
+            # a prefixed spelling is held to the mid-letter mantissa's own
+            # significance rule: ``V030``/``DC030`` state no voltage a board has
+            number = (
+                match.group("dcnum")
+                or match.group("vnum")
+                or match.group("vbare")
+            )
+            if number.startswith("0"):
+                return None
+        magnitude = float(number)
     if match.group("sign") == "-":
         magnitude = -magnitude
     return _finite(magnitude)

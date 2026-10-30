@@ -80,17 +80,24 @@ def test_prohibit_types_are_read_through_the_hosts_own_table(tokens, words, unkn
 
 
 def test_the_rule_is_registered_last_and_says_where_its_reading_comes_from():
-    """R2-1 put this rule at the end of the list. **182 appended its own after it.**
+    """R2-1 put this rule at the end of the list; 182 and 200 appended after it.
 
-    The claim this test makes is 「it was registered, and it is the last of the
-    board-frame sweep at the head of the tail」; 182's high-speed inventory
-    (``pcb-hs-diffpair-inventory``) is a new family appended *after* the sweep,
-    so the rule is no longer the literal last entry and the pin says both
-    positions rather than pretending nothing moved.
+    The claim is 「it was registered, and it is the last of the board-frame sweep
+    at the head of the high-speed tail」. 182's inventory and 200's four judging
+    rules come *after* the sweep, so the pin names the whole tail rather than
+    pretending nothing moved — keepout first, then the five high-speed rules in
+    their batch order (182 → 200B → 200C1 → 200C2 → 200C2).
     """
-    assert BUILTIN_PCB_RULES[-2].id == "pcb-keepout-violation"
-    assert isinstance(BUILTIN_PCB_RULES[-2], KeepoutViolation)
-    assert BUILTIN_PCB_RULES[-1].id == "pcb-hs-diffpair-inventory"  # 182, appended last
+    tail = BUILTIN_PCB_RULES[-6:]
+    assert [rule.id for rule in tail] == [
+        "pcb-keepout-violation",
+        "pcb-hs-diffpair-inventory",  # 182
+        "pcb-hs-cross-split",  # 200B
+        "pcb-hs-via-ground-companion",  # 200C1
+        "pcb-hs-diffpair-skew",  # 200C2
+        "pcb-hs-diffpair-via-parity",  # 200C2
+    ]
+    assert isinstance(tail[0], KeepoutViolation)
     assert RULE.level == "L1-pcb-geometry"
     assert "3.2.186" in RULE.source and "checkProhibitXXX" in RULE.source
 

@@ -10,10 +10,10 @@
   },
   "producerVersions": {
     "ruleset": "a0c5e0a0",
-    "rulebody": "7646ae9a"
+    "rulebody": "5c0926a5"
   },
   "schemas": {
-    "contracts/json/review-report-v1.schema.json": "23ecbc617795b14fec99c1169a27b800e6893974c230ebded94a3074f11529a1",
+    "contracts/json/review-report-v1.schema.json": "644470549812db3d440fd72966b99801da58e845514eb163890f407e48b7ea20",
     "contracts/json/layout-plan-v1.schema.json": "7f0d1b54779b0a8457905c6f65926dc48e7c4451cb62d67f1f99ee56e1367e4d",
     "contracts/json/draw-compile-result-v1.schema.json": "aa6466feffa9fe14d89cd17533fb543a8b68194ac64b27710878e8b994c25464",
     "contracts/json/draw-page-compile-result-v1.schema.json": "1cb90569888bae967f1a13f691fb395c29ae2b2633790c306a9c360d0153fc6a",
@@ -35,9 +35,9 @@
     "no real project container is read or copied; inputs come only from the public/synthetic sources above"
   ],
   "inputs": {
-    "contracts/differential/inputs/review-report.json": "520912898bd755726fe8b51e728186e6cc195e1223c1b342dadfab24bc8ae647",
+    "contracts/differential/inputs/review-report.json": "b6f596637ea410a0d1b822423eac3aa36a55948d8c52837ce66fe6d77c7c025c",
     "contracts/differential/inputs/divider-cand1.layout.json": "5241c07f5f0417ea8226720cfbd39f74c813c2a0513635fb1d83cf866f48a233",
-    "contracts/differential/inputs/divider-compile-result.json": "6c875501a464b751bd4ea62612b0e744fee71fc028765b375efdb7d4b4dc7606",
+    "contracts/differential/inputs/divider-compile-result.json": "2b91af1b5bdac828b08f5b471a565ad6e37c7734c71e3ea5f8344623733e71c1",
     "contracts/differential/inputs/page-compile-result.json": "e1b32d0b7b6280f411dc0741d97e4091ec0c4ef60251afbad6e2e4ec8bce42ab",
     "contracts/differential/inputs/empty-page-lint-result.json": "15cc8a152471395e2354a6de6f5fd1c29bb6e671a7d217f62be887e7082fd465"
   },
