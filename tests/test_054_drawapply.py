@@ -952,4 +952,3 @@ def test_a_stub_row_too_close_to_its_own_net_is_skipped_while_choosing():
     assert row is not None
     assert _row_gap(row, (200.0, 601.0, 240.0, 611.0)) >= 20.0, row
     assert any("duplicate-carrier floor" in text for text in blockers), blockers
-

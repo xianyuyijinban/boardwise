@@ -290,9 +290,10 @@ def test_the_compiler_reserves_the_lead_lanes_before_it_routes(monkeypatch):
     seen: dict[str, object] = {}
     real = dc._lead_lane_reservations
 
-    def spy(ctx, placed, expressions, order, router, occupied, solids, bodies):
-        real(ctx, placed, expressions, order, router, occupied, solids, bodies)
+    def spy(ctx, placed, expressions, order, router, occupied, solids, bodies, ordinary_flag_seats):
+        result = real(ctx, placed, expressions, order, router, occupied, solids, bodies, ordinary_flag_seats)
         seen["reserved"] = dict(router.reserved)
+        return result
 
     monkeypatch.setattr(dc, "_lead_lane_reservations", spy)
     circuit, presentation, book, result = _compile_locked()
