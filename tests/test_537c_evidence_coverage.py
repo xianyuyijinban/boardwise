@@ -96,6 +96,10 @@ EVIDENCE_KEYS = {"schema", "channels", "coverage", "delivery"}
 CHANNEL_KEYS = {"status", "source", "detail", "artifacts", "errors", "steps"}
 DELIVERY_KEYS = {"status", "note", "requiredDisclosures"}
 DISCLOSURE_KEYS = {"code", "channel", "status", "message"}
+#: 537C4: a **closed** channel's capability limit adds these two fields to its
+#: disclosure row. They are the machine-readable reason (`limits`) and its flag,
+#: not a seventh channel.
+CAPABILITY_KEYS = {"capabilityLimit", "limits"}
 
 _AUTO = object()
 
@@ -359,7 +363,7 @@ def test_every_checkup_report_carries_the_frozen_evidence_section(monkeypatch):
     assert isinstance(delivery["note"], str) and delivery["note"]
     assert "证据" in delivery["note"] and "不是板级" in delivery["note"]
     for row in delivery["requiredDisclosures"]:
-        assert set(row) == DISCLOSURE_KEYS
+        assert set(row) - CAPABILITY_KEYS == DISCLOSURE_KEYS
         assert row["channel"] in CHANNELS
         assert row["code"] == DISCLOSURE_CODES[row["channel"]]
         assert row["status"] == evidence["coverage"][row["channel"]]
@@ -729,6 +733,99 @@ def test_delivery_is_complete_only_when_every_channel_is_ok_or_not_applicable():
         "live-schematic-evidence",
         "schematic-visual-review",
     ]
+
+
+CAPABILITY_LIMIT = "HOST_API_SCOPE: export.render 是原理图（schematic）出图口，对 PCB 不适用"
+
+
+def _closed_with(*, pcb_image_errors: list[str]) -> dict:
+    channels = {
+        name: {
+            "status": "ok",
+            "source": SOURCES[name],
+            "detail": f"synthetic ok for {name}",
+            "artifacts": [],
+            "errors": [],
+            "steps": [],
+        }
+        for name in CHANNELS
+    }
+    channels["pcbImage"].update({
+        "status": "not-applicable",
+        "detail": "PCB 位图通道不适用：宿主没有 PCB 位图可出（未调用该 API、未生成伪图）",
+        "errors": list(pcb_image_errors),
+    })
+    return channels
+
+
+def test_a_closed_channel_with_a_capability_limit_must_disclose():
+    """537C4 (V4 blocker 1). ``pcbImage`` closes as ``not-applicable`` **because
+    the host cannot render a PCB** and records ``PCB_IMAGE_LIMIT`` in ``errors``.
+    Reading the status alone made the ledger print「必披露：无」and
+    ``delivery=complete`` for a run that never produced a PCB picture: a full
+    evidence grade nobody earned. The row stays ``not-applicable`` (that is what
+    the host is) and the delivery level is not special-cased — the disclosure
+    list decides it, exactly as for an open channel.
+    """
+    ev_module = _evidence_module()
+    channels = _closed_with(pcb_image_errors=[CAPABILITY_LIMIT])
+
+    delivery = ev_module.evidence_delivery(channels)
+
+    assert delivery["status"] == "partial", "no PCB picture is not a complete delivery"
+    assert len(delivery["requiredDisclosures"]) == 1
+    row = delivery["requiredDisclosures"][0]
+    assert row["code"] == "pcb-visual-review"
+    assert row["channel"] == "pcbImage"
+    assert row["status"] == "not-applicable", "the channel is still N/A, not failed"
+    assert row["capabilityLimit"] is True
+    assert row["limits"] == [CAPABILITY_LIMIT]
+    assert "未完成 PCB 视觉复核" in row["message"]
+    assert "不是「版面已复核」" in row["message"]
+
+    # The console names it instead of printing a bare `partial`.
+    line = ev_module.evidence_console_line({
+        "schema": "boardwise.review-evidence/1",
+        "channels": channels,
+        "coverage": {name: channels[name]["status"] for name in CHANNELS},
+        "delivery": delivery,
+    })
+    assert line == "evidence: partial (pcb-visual-review)"
+
+    # The Markdown disclosure list is no longer empty, and the channel block
+    # still carries the recorded limit as an `error`.
+    lines = ev_module.render_evidence_markdown({
+        "channels": channels,
+        "coverage": {name: channels[name]["status"] for name in CHANNELS},
+        "delivery": delivery,
+    })
+    text = "\n".join(lines)
+    assert "必披露（requiredDisclosures）：无" not in text
+    assert "`pcb-visual-review`（`pcbImage`：`not-applicable`）" in text
+    assert f"error：{CAPABILITY_LIMIT}" in text
+
+
+def test_a_not_applicable_channel_without_a_limit_stays_closed_and_clean():
+    """The control: 「确认没有可读的东西」(no PCB document at all) records no
+    limit, so it stays ``not-applicable``, ``complete`` and「必披露：无」— the
+    fix discloses a capability boundary, it does not turn every N/A into a debt.
+    """
+    ev_module = _evidence_module()
+    channels = _closed_with(pcb_image_errors=[])
+
+    delivery = ev_module.evidence_delivery(channels)
+
+    assert delivery["status"] == "complete"
+    assert delivery["requiredDisclosures"] == []
+    section = {
+        "channels": channels,
+        "coverage": {name: channels[name]["status"] for name in CHANNELS},
+        "delivery": delivery,
+    }
+    assert ev_module.evidence_console_line(section) == "evidence: complete"
+    assert "必披露（requiredDisclosures）：无" in "\n".join(
+        ev_module.render_evidence_markdown(section)
+    )
 
 
 def test_delivery_partial_does_not_touch_the_board_verdict(monkeypatch):

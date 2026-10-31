@@ -352,6 +352,127 @@ def test_an_aggregate_answer_is_still_read_from_its_count_array():
 
 
 # --------------------------------------------------------------------------
+# V4 blockers (038 follow-up): unreadable entries and pages that disagree
+# --------------------------------------------------------------------------
+
+
+def test_an_aggregate_answer_with_unreadable_entries_cannot_keep_passed_true():
+    """V4 blocker 2. An old connector (V3 shape) reports `unparsableEntries: 1`
+    beside the host's own `passed: true`: one entry it could not read may be the
+    failing one, so the section may not repeat `passed: true`. The honest reading
+    already existed in `summarise` (`countsIncomplete`, exit 1); this keeps the
+    section-level verdict from contradicting it.
+    """
+    payload = {
+        **MEASURED_SCH_PAYLOAD,
+        "entryShape": "aggregate",
+        "counts": [{"type": "warn", "count": 1}, "not an entry at all"],
+        "total": 1,
+        "byType": {"warn": 1},
+        "passed": True,
+    }
+
+    section = schematic_section([_sch_reading("p1", payload)])
+
+    page = section["pages"][0]
+    assert page["unparsableEntries"] == 1
+    assert page["passed"] is None, "a partly understood answer cannot claim a pass"
+    assert section["passed"] is None
+    # The counts keep describing what was understood, and nothing becomes zero.
+    assert section["warn"] == 1 and section["total"] == 1
+    assert section["unparsableEntries"] == 1
+
+    summary = summarise(drc={"schematic": section, "pcb": {}}, findings=[])
+    assert summary["countsIncomplete"] is True
+    assert summary["exitCode"] == 1
+    assert summary["errors"][-1]["ref"] == "drc.schematic.unparsableEntries"
+
+
+def test_a_stated_false_survives_unreadable_entries():
+    """The other direction of the same rule: `false` is evidence, not a claim of
+    cleanliness — a read failure may not launder it into「未知」either."""
+    payload = {
+        **MEASURED_SCH_PAYLOAD,
+        "entryShape": "aggregate",
+        "counts": [{"type": "warn", "count": 1}, {"type": "warn", "count": "many"}],
+        "passed": False,
+    }
+
+    section = schematic_section([_sch_reading("p1", payload)])
+
+    assert section["pages"][0]["unparsableEntries"] == 1
+    assert section["pages"][0]["passed"] is False
+    assert section["passed"] is False
+    summary = summarise(drc={"schematic": section, "pcb": {}}, findings=[])
+    assert summary["countsIncomplete"] is True
+    assert summary["warnCount"] == 1
+
+
+def test_pages_that_disagree_about_their_shape_are_mixed_not_per_item():
+    """V4 blocker 4. One page enumerates (`entryShape: per-item`), one answers
+    aggregate counts. Labelling the section `per-item` claims every page carries
+    `items` — half of them do not — and `aggregate` would deny the objects that
+    really are there. The totals stay host-wide (the pages agree on counts) and
+    the per-page shape is the evidence.
+    """
+    entries = _v4_entries(2)
+    readings = [
+        _sch_reading("p1", _v4_payload(entries)),
+        _sch_reading("p2", {
+            **MEASURED_SCH_PAYLOAD,
+            "entryShape": "aggregate",
+            "counts": [{"type": "warn", "count": 2}],
+            "total": 2,
+            "byType": {"warn": 2},
+        }),
+    ]
+
+    section = schematic_section(readings)
+
+    assert section["entryShape"] == "mixed"
+    assert [page["entryShape"] for page in section["pages"]] == ["per-item", "aggregate"]
+    assert "items" in section["pages"][0] and "items" not in section["pages"][1]
+    assert section["countsBasis"] == "host-wide"
+    assert section["warn"] == 2 and section["total"] == 2, "same reading once, not 4"
+    assert "并非每页都逐条" in section["note"]
+    assert "pages[].items" in section["note"]
+    # The old sentence claimed the whole answer was enumerated; it may not come
+    # back for a mixed run.
+    assert not any("主机逐条返回 ERC（entryShape=per-item）" in note
+                   for note in section["notes"])
+    assert any("entryShape=mixed" in note for note in section["notes"])
+
+    summary = summarise(drc={"schematic": section, "pcb": {}}, findings=[])
+    assert len(summary["warnings"]) == 1
+    assert summary["warnings"][0]["count"] == 2
+    assert "mixed" in summary["warnings"][0]["detail"]
+    assert "每条对象在" not in summary["warnings"][0]["detail"]
+    assert summary["countsIncomplete"] is False
+
+
+def test_a_single_shape_answer_is_still_labelled_by_that_shape():
+    """Control for the mixed rule: one shape across pages keeps the old labels."""
+    entries = _v4_entries(3)
+    per_item = schematic_section([
+        _sch_reading("p1", _v4_payload(entries)),
+        _sch_reading("p2", _v4_payload(entries)),
+    ])
+    aggregate_payload = {**MEASURED_SCH_PAYLOAD, "entryShape": "aggregate"}
+    aggregate = schematic_section([
+        _sch_reading("p1", aggregate_payload),
+        _sch_reading("p2", aggregate_payload),
+    ])
+
+    assert per_item["entryShape"] == "per-item"
+    assert "pages[].items" in per_item["note"]
+    assert aggregate["entryShape"] == "aggregate"
+    assert "不在返回值里" in "".join(aggregate["notes"])
+    # A V3 answer that states no shape at all stays unlabelled — the new key is
+    # not invented from a field the host did not send.
+    assert "entryShape" not in schematic_section([_sch_reading("p1")])
+
+
+# --------------------------------------------------------------------------
 # the PCB section: the tree, mapped without losing what it carries
 # --------------------------------------------------------------------------
 

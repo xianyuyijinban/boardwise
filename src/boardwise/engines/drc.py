@@ -77,6 +77,25 @@ SCHEMATIC_ITEM_NOTES: tuple[str, ...] = (
     "findings 段是 boardwise 自有规则引擎的结果，与主机 ERC 不是同一套规则，两边计数不可互推",
 )
 
+#: 038 O3b follow-up: the note for a section whose pages **disagree** about how
+#: much they enumerate. Calling such a section `per-item` claims every page has
+#: `items` (half of them do not); calling it `aggregate` denies the objects that
+#: really are there. Both are false, so the section says mixed and points a
+#: reader at the per-page shape.
+SCHEMATIC_MIXED_NOTE = (
+    "逐条见逐条页的 pages[].items（entryShape=mixed：并非每页都逐条）；"
+    "findings 段是 boardwise 规则引擎"
+)
+
+#: The mixed counterpart of `SCHEMATIC_ITEM_NOTES`: the enumeration claim is
+#: page-scoped, so it must not be stated for the whole answer.
+SCHEMATIC_MIXED_NOTES: tuple[str, ...] = (
+    "主机 ERC 各页形状不一致（entryShape=mixed）：只有逐条返回的那些页在 pages[].items "
+    "带对象，其余页只有聚合计数；逐页形状见 pages[].entryShape，本段计数取自同一答复的 "
+    "total/byType，不自造条目",
+    "findings 段是 boardwise 自有规则引擎的结果，与主机 ERC 不是同一套规则，两边计数不可互推",
+)
+
 #: How a PCB leaf's severity is decided.
 #:
 #: **Measured 2026-09-23**: the host's tree carries no severity *field*, but it
@@ -263,6 +282,17 @@ def _page_reading(reading: dict) -> dict:
             page["items"] = payload["items"]
         if n := _unparsable_entries(payload, per_item=per_item):
             page["unparsableEntries"] = n
+            # 038 O3b follow-up (V4 blocker 2). An entry the connector could not
+            # read is a real finding whose number is unknown, so a host `passed:
+            # true` only means「读懂的规则没有失败」— the unread entry may be the
+            # failing one. Taking that `true` verbatim let an aggregate answer
+            # with `unparsableEntries: 1` read as a section-level pass while the
+            # summary (correctly) counted it incomplete and exited 1: the two
+            # halves of one report disagreed. `false` stays `false` (a stated
+            # failure is evidence, not a claim of cleanliness) and `null` stays
+            # `null`; only a claimed pass becomes unknown.
+            if page.get("passed") is True:
+                page["passed"] = None
         return page
     if mode == "boolean":
         # The host ignored `includeVerboseError: true` and said only "passed" or
@@ -307,13 +337,31 @@ def schematic_section(readings: list[dict]) -> dict:
     per-item evidence is `pages[].items`, never "the detail is not in the
     answer" — and a page whose `passed` is unknown (`null`, i.e. the connector
     parsed part of its answer) keeps the section's `passed` unknown instead of
-    being pressed into `false`.
+    being pressed into `false`. A run whose pages answer in different shapes is
+    labelled `mixed` — claiming `per-item` there would say every page carries
+    `items`, and `aggregate` would deny the pages that do.
     """
     pages = [_page_reading(reading) for reading in readings]
     checked = [page for page in pages if page.get("checked")]
-    per_item = any(page.get("entryShape") == "per-item" for page in checked)
-    note = SCHEMATIC_ITEMS_NOTE if per_item else SCHEMATIC_NOTE
-    notes = list(SCHEMATIC_ITEM_NOTES if per_item else SCHEMATIC_NOTES)
+    shapes_present = {
+        page.get("entryShape") for page in checked if page.get("entryShape")
+    }
+    # 038 O3b follow-up (V4 blocker 4). A run whose pages answer in *different*
+    # shapes is neither: `per-item` would claim every page carries `items`, and
+    # `aggregate` would deny the objects that really are in `pages[].items`.
+    mixed = {"per-item", "aggregate"} <= shapes_present
+    per_item = "per-item" in shapes_present and not mixed
+    if mixed:
+        note = SCHEMATIC_MIXED_NOTE
+    elif per_item:
+        note = SCHEMATIC_ITEMS_NOTE
+    else:
+        note = SCHEMATIC_NOTE
+    notes: list[str] = list(
+        SCHEMATIC_MIXED_NOTES if mixed
+        else SCHEMATIC_ITEM_NOTES if per_item
+        else SCHEMATIC_NOTES
+    )
     if not checked:
         reason = "no schematic page answered the ERC"
         if pages:
@@ -339,7 +387,11 @@ def schematic_section(readings: list[dict]) -> dict:
     }
     shapes = [page.get("entryShape") for page in checked if page.get("entryShape")]
     if shapes:
-        section["entryShape"] = "per-item" if "per-item" in shapes else "aggregate"
+        kinds = set(shapes)
+        if {"per-item", "aggregate"} <= kinds:
+            section["entryShape"] = "mixed"
+        else:
+            section["entryShape"] = "per-item" if "per-item" in kinds else "aggregate"
     if len(checked) != len(pages):
         section["pagesUnreadable"] = len(pages) - len(checked)
 
@@ -402,11 +454,12 @@ def schematic_section(readings: list[dict]) -> dict:
         "passed": passed,
     })
     if basis == "host-wide" and len(counted) > 1:
-        measured = (
-            "实测：V4 test 工程两页均回 519 条逐条对象"
-            if per_item
-            else "实测：test 工程 4 页均回 warn 1"
-        )
+        if mixed:
+            measured = "各页条目形状不一致（entryShape=mixed），逐页形状见 pages"
+        elif per_item:
+            measured = "实测：V4 test 工程两页均回 519 条逐条对象"
+        else:
+            measured = "实测：test 工程 4 页均回 warn 1"
         section["notes"] = [
             *section["notes"],
             f"{len(counted)} 页读数完全相同，故按主机口径报一次，不按页累加（{measured}）",
@@ -1129,12 +1182,21 @@ def summarise(*, drc: dict, findings: list[dict]) -> dict:
                 "detail": "主机未给计数（boolean 答复且未通过），逐条与总数都不可枚举",
             })
     elif schematic.get("checked"):
-        per_item = schematic.get("entryShape") == "per-item"
-        detail = (
-            "主机 ERC 逐条枚举（entryShape=per-item）：每条对象在 drc.schematic.pages[].items"
-            if per_item
-            else "主机 ERC 聚合计数；逐条不在返回值里（见 findings 段的说明）"
-        )
+        shape = schematic.get("entryShape")
+        per_item = shape == "per-item"
+        if shape == "mixed":
+            # 038 O3b follow-up: with pages disagreeing, neither sentence above is
+            # true — some pages carry objects, some do not.
+            detail = (
+                "主机 ERC 各页形状不一致（entryShape=mixed）：逐条对象只在逐条页的 "
+                "drc.schematic.pages[].items，其余页只有聚合计数"
+            )
+        elif per_item:
+            detail = (
+                "主机 ERC 逐条枚举（entryShape=per-item）：每条对象在 drc.schematic.pages[].items"
+            )
+        else:
+            detail = "主机 ERC 聚合计数；逐条不在返回值里（见 findings 段的说明）"
         for kind, severity in COUNT_SEVERITY.items():
             if kind not in schematic:
                 continue

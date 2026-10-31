@@ -316,11 +316,57 @@ test('sch.drc_check counts a mixed answer once per entry, without splitting aggr
   assert.equal(data.total, 11, '7 + 1 + 1 + 2 — an aggregate is never split');
   assert.deepEqual(data.byType, { warn: 8, error: 1, fatalError: 2 });
   assert.equal(data.entryShape, 'per-item', 'any per-item entry means the answer enumerated');
-  assert.equal(data.items.length, 2, 'only the entries that carried no count');
+  assert.equal(data.items.length, 2, 'the two entries that carry per-item fields');
   assert.deepEqual(data.items[0], { type: 'warn', rule: 'Netlist Error', primitives: ['p'] });
   assert.deepEqual(data.items[1], { type: 'error', rule: 'Pin not connected', net: 'GND', primitives: ['q'] });
   assert.equal(data.passed, false);
   assert.equal(data.unparsed, undefined);
+});
+
+test('sch.drc_check identifies a per-item entry by its fields, not by a missing count', async () => {
+  // V4 blocker 3: a host that states a count **and** the per-item fields used to
+  // be read as an aggregate, which dropped its `items` evidence and claimed the
+  // answer had only been summarised. The fields decide; a sane stated count is
+  // still the number of findings that object stands for.
+  const entries = [
+    { type: 'warn', rule: 'Netlist Error', primitives: ['p0'], count: 1 },
+    { type: 'error', rule: 'Pin not connected', net: 'GND', count: '2' },
+    { type: 'warn', count: 7 },
+  ];
+  const { eda } = fakeEda({ sch_Drc: { check: async () => entries } });
+  const data = await buildHandlers(eda)['sch.drc_check']({});
+
+  assert.equal(data.mode, 'counts');
+  assert.equal(data.entryShape, 'per-item', 'the answer carries per-item objects');
+  assert.equal(data.total, 10, '1 + 2 + 7 — no entry is dropped or double counted');
+  assert.deepEqual(data.byType, { warn: 8, error: 2 });
+  assert.equal(data.items.length, 2, 'both per-item objects are kept, count or not');
+  assert.deepEqual(data.items[0], entries[0], 'the entry is kept verbatim');
+  assert.deepEqual(data.items[1], entries[1]);
+  assert.deepEqual(data.counts, entries, 'the host array is still carried whole');
+  assert.equal(data.unparsed, undefined);
+  assert.equal(data.passed, false);
+});
+
+test('sch.drc_check still treats a bare {type, count} entry as a V3 aggregate', async () => {
+  // V3 compatibility for the field-based rule: an entry with a count and none of
+  // the per-item fields stays an aggregate and is never split into findings.
+  const { eda } = fakeEda({
+    sch_Drc: {
+      check: async () => [
+        { type: 'fatalError', count: 0 },
+        { type: 'error', count: 2 },
+        { type: 'warn', count: 3 },
+      ],
+    },
+  });
+  const data = await buildHandlers(eda)['sch.drc_check']({});
+
+  assert.equal(data.entryShape, 'aggregate');
+  assert.equal(data.total, 5);
+  assert.deepEqual(data.byType, { fatalError: 0, error: 2, warn: 3 });
+  assert.equal(data.items, undefined, 'an aggregate has no per-item evidence to keep');
+  assert.equal(data.passed, false);
 });
 
 test('sch.drc_check reports an unknown entry as unparsed and refuses a verdict', async () => {

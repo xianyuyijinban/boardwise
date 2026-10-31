@@ -7700,12 +7700,36 @@ function describeDocument(page: Record<string, unknown>): string {
 /** The severities the editor's ERC uses; a V4 per-item entry states one as `type`. */
 const DRC_SEVERITIES = ['fatalError', 'error', 'warn'] as const;
 
+/** The fields a per-item ERC finding carries and an aggregate count never does. */
+const DRC_PER_ITEM_FIELDS = ['rule', 'primitives', 'net'] as const;
+
 /** The severity a schematic DRC entry states, or `null` when it states none. */
 function drcEntrySeverity(entry: unknown): string | null {
   const type = plainGet(entry, 'type');
   return typeof type === 'string' && (DRC_SEVERITIES as readonly string[]).includes(type)
     ? type
     : null;
+}
+
+/**
+ * Whether an ERC entry is a **per-item finding** rather than an aggregate count.
+ *
+ * Decided by the fields the entry really carries, not by `count` alone: V3
+ * answers `{type, count}` per kind (025 §0) while V4.1.93 answers one object per
+ * finding with `rule` / `primitives` / net fields (038 O3a). A host that states
+ * **both** — a per-item object whose `count` is redundant — was read as an
+ * aggregate before this, which dropped its `items` detail *and* claimed the host
+ * had only summarised. A legal severity is still required, so an entry whose
+ * `type` this build cannot read stays `unparsed` rather than becoming a guess.
+ */
+function drcEntryIsPerItem(entry: unknown): boolean {
+  if (!drcEntrySeverity(entry)) return false;
+  for (const key of DRC_PER_ITEM_FIELDS) {
+    const value = plainGet(entry, key);
+    if (typeof value === 'string' && value) return true;
+    if (Array.isArray(value) && value.length > 0) return true;
+  }
+  return false;
 }
 
 /**
@@ -7721,11 +7745,15 @@ function drcEntrySeverity(entry: unknown): string | null {
  * pages of the test project. Both are read the same way, and the array is still
  * returned **verbatim** under `counts`:
  *
- * - an entry with a numeric `count` is an aggregate and contributes that count
- *   (it is never split into several findings);
- * - an entry with a legal severity (`fatalError`/`error`/`warn`) and no numeric
- *   `count` is a per-item finding and contributes **1**, with its `rule` /
- *   `primitives` / net fields kept untouched in `items`;
+ * - a **per-item** entry — a legal severity (`fatalError`/`error`/`warn`) **plus**
+ *   the fields only a finding carries (`rule` / `primitives` / `net`) — is one
+ *   finding: it contributes its own `count` when the host stated a sane one, else
+ *   **1**, and its `rule` / `primitives` / net fields are kept untouched in
+ *   `items`. The identifying fields, not the presence of `count`, decide this: a
+ *   V4 object that also states a count is still a finding, and reading it as an
+ *   aggregate dropped its evidence and claimed the host had only summarised;
+ * - an entry with a numeric `count` and none of those fields is a V3 aggregate
+ *   and contributes that count (it is never split into several findings);
  * - anything else (a string, an object with no legal `type`, a missing type) is
  *   counted in `unparsed` rather than folded in as zero.
  *
@@ -7796,16 +7824,19 @@ export const schDrcCheck: ActionHandler = async (params, eda) => {
       // `null`/absent is "did not say", not 0 — and it is what a V4 per-item
       // entry looks like; a numeric string is still read as the count it is.
       const count = stated === undefined || stated === null ? null : Number(stated);
-      if (count !== null && Number.isFinite(count)) {
+      if (drcEntryIsPerItem(entry)) {
+        // V4.1.93 (measured 2026-10-31): one object per finding. A redundant
+        // numeric `count` on such an object is still a stated number of
+        // findings, so it is used when it is sane — under-reporting is the one
+        // direction that must not happen.
+        const weight = count !== null && Number.isFinite(count) && count >= 1 ? count : 1;
+        perItem += 1;
+        byType[label] = (byType[label] ?? 0) + weight;
+        total += weight;
+        items.push(entry);
+      } else if (count !== null && Number.isFinite(count)) {
         byType[label] = (byType[label] ?? 0) + count;
         total += count;
-      } else if (drcEntrySeverity(entry)) {
-        // V4.1.93 (measured 2026-10-31): one object per finding — `count` is
-        // simply absent, so each entry is exactly one finding.
-        perItem += 1;
-        byType[label] = (byType[label] ?? 0) + 1;
-        total += 1;
-        items.push(entry);
       } else {
         unparsed += 1;
         byType[label] = byType[label] ?? 0;

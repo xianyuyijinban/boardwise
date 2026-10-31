@@ -384,8 +384,27 @@ def test_success_writes_the_capture_and_all_three_products(bridge, capsys, tmp_p
     assert evidence["channels"]["pcbImage"]["artifacts"] == []
     assert evidence["channels"]["pcbImage"]["errors"] == [PCB_IMAGE_LIMIT]
     assert not list(out.glob("live-pcb-*.png")), "no PCB image is invented"
-    assert evidence["delivery"]["status"] == "complete"
+    # 537C4: `not-applicable` here is a **capability limit**, not「确认没有版面」.
+    # A closed channel with a recorded limit now discloses, so this run may not
+    # read as `complete` with「必披露：无」while no PCB picture exists.
+    assert evidence["delivery"]["status"] == "partial"
+    assert evidence["delivery"]["requiredDisclosures"] == [{
+        "code": "pcb-visual-review",
+        "channel": "pcbImage",
+        "status": "not-applicable",
+        "capabilityLimit": True,
+        "limits": [PCB_IMAGE_LIMIT],
+        "message": (
+            "未完成 PCB 视觉复核：宿主没有 PCB 出图能力（export.render 只服务原理图页），"
+            "本次没有 PCB 渲染图，PCB 版面没有经过视觉确认；not-applicable 只表示"
+            "「没有可出的图」，不是「版面已复核」。"
+        ),
+    }]
     assert evidence["coverage"]["livePcb"] == "ok"
+    # The disclosure reaches the product a reader actually opens.
+    report_md = (out / "report.md").read_text(encoding="utf-8")
+    assert "`pcb-visual-review`（`pcbImage`：`not-applicable`）" in report_md
+    assert "必披露（requiredDisclosures）：无" not in report_md
 
     # The pre-existing PNG keeps its bytes; every artifact the report names is real.
     assert (out / "live-sch-PWR-p1.png").read_bytes() == b"sentinel-png-not-a-real-render"
@@ -421,6 +440,8 @@ def test_success_writes_the_capture_and_all_three_products(bridge, capsys, tmp_p
     assert "verifiedAgainstReport: True" in console
     assert "restored" in console
     assert evidence_console_line(evidence) in console
+    # 537C4: the console names the capability limit, not a bare `partial`.
+    assert "evidence: partial (pcb-visual-review)" in console
     assert "板子通过" not in console
     assert "可以投板" not in console
     assert "不是板级通过" in console

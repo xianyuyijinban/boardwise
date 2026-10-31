@@ -605,12 +605,42 @@ def _disclosure_message(channel: str, status: str, detail: str) -> str:
         (CHANNEL_PCB_IMAGE, STATUS_MISSING): (
             "未完成 PCB 视觉复核：本次没有 PCB 渲染图，PCB 版面没有经过视觉确认。"
         ),
+        # 537C4: `not-applicable` here is a **capability limit**, not「确认没有可看
+        # 的版面」— the PCB exists and the host has no endpoint that renders it. Without
+        # this row the ledger said「必披露：无」and `complete` beside no PCB picture.
+        (CHANNEL_PCB_IMAGE, STATUS_NOT_APPLICABLE): (
+            "未完成 PCB 视觉复核：宿主没有 PCB 出图能力（export.render 只服务原理图页），"
+            "本次没有 PCB 渲染图，PCB 版面没有经过视觉确认；not-applicable 只表示"
+            "「没有可出的图」，不是「版面已复核」。"
+        ),
         (CHANNEL_DATASHEETS, STATUS_UNAVAILABLE): (
             "手册证据未齐/待核：仍有器件缺已核验的手册事实（含工程师接受未审、"
             "审查者标记与空模型），相关规格结论只能待核，不能写成已与手册核对。"
         ),
     }
     return fixed.get((channel, status)) or f"{channel} 的证据状态是 {status}：{detail}"
+
+
+def _capability_limits(row: dict, status: str) -> list[str]:
+    """The recorded limits that stop a ``not-applicable`` row from being a clean one.
+
+    537C4. A closed channel is「ok, or confirmed there is nothing to read」— but the
+    live collector closes ``pcbImage`` as ``not-applicable`` because the **host**
+    cannot render a PCB (``export.render`` is schematic-only) and records
+    ``PCB_IMAGE_LIMIT`` in ``errors``. That is not "nothing to read": a PCB exists
+    and its layout was never looked at. Reading only the status made the ledger
+    print「必披露：无」and ``delivery=complete`` beside zero PCB pictures, so a
+    capability limit now discloses.
+
+    Only ``not-applicable`` qualifies. ``ok`` with error text is a contradiction
+    this module does not reinterpret, and the open statuses are disclosed anyway.
+    """
+    if status != STATUS_NOT_APPLICABLE:
+        return []
+    errors = row.get("errors")
+    if not isinstance(errors, list):
+        return []
+    return [str(error) for error in errors if str(error).strip()]
 
 
 def _error_reason(error: object) -> str:
@@ -707,6 +737,15 @@ def evidence_delivery(
     disclosure and the focus-restore disclosure, in that order. This is a
     reading about evidence coverage and never a board-level pass/fail.
 
+    **A closed channel can still owe a disclosure** (537C4): ``not-applicable``
+    with a recorded capability limit (``errors``) is「宿主给不出这类证据」, not
+    「确认没有可读的东西」. Closing on the status alone printed「必披露：无」and a
+    ``complete`` delivery for a run that never saw a PCB picture. The row is
+    emitted with ``capabilityLimit: true`` and the recorded ``limits``; the
+    delivery level is **not** special-cased — it follows from the disclosure list
+    as it always has (so it reads ``partial`` here, which is what the missing
+    visual review actually is).
+
     ``live_capture=None`` is exactly the 537C3a behaviour: six channels only.
     """
     channels = channels or {}
@@ -714,9 +753,22 @@ def evidence_delivery(
     disclosures: list[dict] = []
     for name in CHANNEL_ORDER:
         status = coverage[name]
-        if status in CLOSED_STATUSES:
-            continue
         row = channels.get(name) or {}
+        limits = _capability_limits(row, status)
+        if status in CLOSED_STATUSES and not limits:
+            continue
+        if limits:
+            disclosures.append({
+                "code": DISCLOSURE_CODES[name],
+                "channel": name,
+                "status": status,
+                "capabilityLimit": True,
+                "limits": limits,
+                "message": _disclosure_message(
+                    name, status, str(row.get("detail") or "")
+                ),
+            })
+            continue
         disclosures.append({
             "code": DISCLOSURE_CODES[name],
             "channel": name,
@@ -1065,7 +1117,10 @@ def evidence_console_line(evidence: object) -> str:
     `report.json`. Only channels that are neither ``ok`` nor ``not-applicable``
     are listed — those are the ones a reader has to act on. 537C3b2 adds the
     capture's non-channel disclosure codes to that list, so six closed channels
-    plus an unverified identity is not a bare, context-free ``partial``.
+    plus an unverified identity is not a bare, context-free ``partial``. 537C4
+    adds a **closed** channel's capability-limit code for the same reason: a
+    ``not-applicable`` ``pcbImage`` that never produced a picture is not
+    ``complete``, and the console must name what is missing.
     """
     if not isinstance(evidence, dict) or not evidence:
         return ""
@@ -1081,11 +1136,17 @@ def evidence_console_line(evidence: object) -> str:
     ]
     # 537C3b2: a capture's identity/focus disclosures are not channels, so they
     # are printed by their fixed code. Without this, six closed channels plus a
-    # disclosure would print a bare `partial` with no context.
+    # disclosure would print a bare `partial` with no context. 537C4: a closed
+    # channel with a capability limit is named by its code too — it is not in
+    # `open_rows` (its status is `not-applicable`), and printing a bare `partial`
+    # for a run with no PCB picture is exactly the silence this ledger forbids.
+    open_names = {name for name in CHANNEL_ORDER if coverage[name] not in CLOSED_STATUSES}
     extra_codes = [
         str(row.get("code"))
         for row in (delivery.get("requiredDisclosures") or [])
-        if isinstance(row, dict) and not row.get("channel") and row.get("code")
+        if isinstance(row, dict)
+        and row.get("code")
+        and (row.get("channel") is None or row.get("channel") not in open_names)
     ]
     status = delivery.get("status")
     if status not in (DELIVERY_COMPLETE, DELIVERY_PARTIAL):
