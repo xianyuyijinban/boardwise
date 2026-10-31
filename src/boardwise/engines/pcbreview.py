@@ -1310,7 +1310,12 @@ def _review_units(source_path: str | Path) -> list[tuple[str, str, Any, Any]]:
 
     The two readers are deferred so an ``.epro2`` with three PCB documents
     still parses one board at a time, exactly as before R3. An ``.epro2`` gives
-    one unit per PCB document (titled by its ``META``, 钉 4). A KiCad project
+    one unit per PCB document (titled by its ``META``, 钉 4). A folder project
+    (038F5) gives exactly the one board 038F4's
+    :func:`~boardwise.parsers.eprj3.load_eprj3_pcb_source` accepts, titled the
+    way that adapter titled it; its refusals (no board file, several board
+    files) propagate, so this function never turns a refusal into an empty
+    list. A KiCad project
     (R3) gives **one** unit — a ``.kicad_pcb`` is one board — titled by the
     board file's stem, with no schematic-board link (``board_uuid`` empty: KiCad
     has no such container). An empty list is 「no board in this file」.
@@ -1334,9 +1339,21 @@ def _review_units(source_path: str | Path) -> list[tuple[str, str, Any, Any]]:
         )]
 
     from ..parsers.epro2_model import build_design_model
+    from ..parsers.eprj3 import load_eprj3_pcb_source, looks_like_eprj3
     from ..parsers.epru import extract_board, load_epro2_source
 
-    source = load_epro2_source(source_path)
+    # 038F5: the only container difference this runner knows about. A folder
+    # project's board is ``pcb/<board>.epcb2``, and 038F4's adapter hands it over
+    # as the same :class:`~boardwise.parsers.epru.Epro2Source` the ``.epro2``
+    # reader returns — so every line below (`_pcb_documents`, footprints /
+    # artwork, `extract_board`, `build_design_model`) is one shared path and
+    # there is no second V4 review driver. The adapter's own refusals (no board
+    # file, several board files, a file with no PCB document) are its
+    # `Eprj3Error`s, raised here before any document is selected.
+    if looks_like_eprj3(source_path):
+        source = load_eprj3_pcb_source(source_path)
+    else:
+        source = load_epro2_source(source_path)
     documents = _pcb_documents(source)
     if not documents:
         return []
@@ -1374,7 +1391,9 @@ def run_pcb_review(
     (a canvas that re-parsed the archive would be a third parse per run and could
     in principle disagree with the board the findings came from).
 
-    ``source_path`` is any readable ``.epro2`` backup, and **166** is why that
+    ``source_path`` is any readable container this runner knows: an ``.epro2``
+    backup, a KiCad project, or (038F5) an eprj3 folder project whose single
+    board is ``pcb/<board>.epcb2``. **166** is why the ``.epro2`` half of that
     sentence is worth spelling out: the online `checkup` calls this function too,
     handing it the archive its `project-file` tier downloaded from
     ``sys.get_project_file`` (written to a temporary file for the duration of the

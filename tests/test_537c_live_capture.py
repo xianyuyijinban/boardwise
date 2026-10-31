@@ -17,10 +17,10 @@ contract pinned by these tests:
    ``document.current``'s real ``active.uuid`` (connector 873–944) before one
    byte is read from it.
 3. Steps are isolated: ``sch.readback`` / ``sch.netlist`` / ``export.render``
-   each fail alone; a PCB render timeout neither erases readback/geometry nor
-   stops the next board; geometry is skipped when its readback dependency is
+   each fail alone; geometry is skipped when its readback dependency is
    missing, but an empty board's ``components == []`` is a *success* and still
-   calls geometry.
+   calls geometry. ``export.render`` is schematic-only: a PCB is read and
+   measured but **never rendered** (``pcbImage`` is ``not-applicable``).
 4. Evidence validity is stricter than a transport exit code: readback
    ``problems`` / ``unreadable`` and geometry ``meta.unreadable`` / ``reasons``
    are ``failed`` steps; a render must be ``dict`` + ``format == image/png`` +
@@ -28,7 +28,8 @@ contract pinned by these tests:
    bytes, sha256 recorded).
 5. Coverage is disclosed: an explicit subset that succeeded is ``missing``, not
    ``ok``; no PCB document is ``not-applicable``; no schematic page is
-   ``failed``.
+   ``failed``; ``pcbImage`` is ``not-applicable`` even when a PCB exists, because
+   the host render API has no PCB output (the reason travels in ``errors``).
 6. The original focus is restored in ``finally`` (verified again through
    ``document.current``), a failed restore is disclosed with ``focusRestore.ok =
    false``, and a missing ``active.uuid`` refuses before navigation rather than
@@ -50,6 +51,8 @@ import json
 from pathlib import Path
 
 import pytest
+
+from boardwise.engines.liveevidence import PCB_IMAGE_LIMIT
 
 SCHEMA = "boardwise.live-evidence/1"
 PROJECT = "proj-synthetic"
@@ -114,11 +117,16 @@ def make_listing(
     *,
     pages=PAGES,
     pcbs=PCBS,
+    containers=(),
     active="p2",
     project_uuid=PROJECT,
     focused=True,
 ) -> dict:
+    # V4 order: the schematic container precedes its pages (an O1 regression
+    # only shows when the container is the first document).
     documents = [
+        {"uuid": uuid, "name": name, "type": "schematic"} for uuid, name in containers
+    ] + [
         {"uuid": uuid, "name": name, "type": "page"} for uuid, name in pages
     ] + [
         {"uuid": uuid, "name": name, "type": "pcb"} for uuid, name in pcbs
@@ -374,8 +382,7 @@ def test_all_success_records_the_order_writes_hashed_images_and_a_json_capture(t
     assert p2_actions[-2:] == ["doc.open", "document.current"], "restore steps"
     assert actions_for(capture, "b1") == [
         "doc.open", "document.current", "pcb.readback", "pcb.geometry",
-        "export.render",
-    ]
+    ], "PCB must not be rendered: export.render is schematic-only"
 
     # The netlist is one call for the whole run, and the rest of the parameters
     # are the ones the real actions take.
@@ -387,25 +394,24 @@ def test_all_success_records_the_order_writes_hashed_images_and_a_json_capture(t
         "pcb-prim-1", "pcb-prim-2",
     ]
     render_calls = calls_named(client, "export.render")
-    assert len(render_calls) == 3
+    assert len(render_calls) == 2, "only schematic pages are rendered"
     for call in render_calls:
         assert call["params"]["format"] == "png"
         assert call["params"]["scope"] == "page"
         assert call["params"]["timeoutMs"] == 10000
-        assert call["params"]["pageUuid"] in {"p1", "p2", "b1"}
+        assert call["params"]["pageUuid"] in {"p1", "p2"}, "no PCB render call"
     file_names = [call["params"]["fileName"] for call in render_calls]
-    assert len(set(file_names)) == 3, "render file names must be unique"
-    assert any(name.startswith("live-sch-") for name in file_names)
-    assert any(name.startswith("live-pcb-") for name in file_names)
+    assert len(set(file_names)) == 2, "render file names must be unique"
+    assert all(name.startswith("live-sch-") for name in file_names)
 
     assert_steps_well_formed(capture)
 
-    # Artifacts: two schematic PNGs, one PCB PNG, one netlist text — all on
-    # disk, relative, and hash-verified.
+    # Artifacts: two schematic PNGs and one netlist text — all on disk, relative,
+    # and hash-verified. No PCB image exists, and none is fabricated.
     artifacts = capture["artifacts"]
     pngs = [row for row in artifacts if str(row["file"]).endswith(".png")]
     netlists = [row for row in artifacts if row.get("kind") == "netlist"]
-    assert len(pngs) == 3
+    assert len(pngs) == 2
     assert len(netlists) == 1
     for row in artifacts:
         assert not Path(row["file"]).is_absolute()
@@ -414,7 +420,7 @@ def test_all_success_records_the_order_writes_hashed_images_and_a_json_capture(t
         blob = target.read_bytes()
         assert len(blob) == row["bytes"]
         assert hashlib.sha256(blob).hexdigest() == row["sha256"]
-        assert row["documentUuid"] in {"p1", "p2", "b1"}
+        assert row["documentUuid"] in {"p1", "p2"}
     assert (out_dir / netlists[0]["file"]).read_text(encoding="utf-8") == (
         "NETLIST SYNTHETIC\n"
     )
@@ -422,11 +428,17 @@ def test_all_success_records_the_order_writes_hashed_images_and_a_json_capture(t
     for name in LIVE_CHANNELS:
         row = capture["channels"][name]
         assert set(row) == CHANNEL_KEYS, name
-        assert row["status"] == "ok", name
         assert row["source"] == SOURCES[name], name
         assert isinstance(row["detail"], str) and row["detail"], name
-        assert row["errors"] == [], name
         assert isinstance(row["steps"], list), name
+        if name == "pcbImage":
+            assert row["status"] == "not-applicable", name
+            assert row["errors"] == [PCB_IMAGE_LIMIT], name
+            assert row["steps"] == [], name
+            assert row["artifacts"] == [], name
+        else:
+            assert row["status"] == "ok", name
+            assert row["errors"] == [], name
 
     # Each channel carries only the steps of its own reading.
     live_steps = {step["action"] for step in capture["channels"]["liveSchematic"]["steps"]}
@@ -464,7 +476,8 @@ def test_empty_components_on_an_empty_board_still_calls_geometry(tmp_path):
     assert geometry["status"] == "ok"
     assert calls_named(client, "pcb.geometry")[0]["params"]["bboxIds"] == []
     assert capture["channels"]["livePcb"]["status"] == "ok"
-    assert capture["channels"]["pcbImage"]["status"] == "ok"
+    assert capture["channels"]["pcbImage"]["status"] == "not-applicable"
+    assert not calls_named(client, "export.render"), "a PCB is never rendered"
 
 
 # ---------------------------------------------------------------------------
@@ -542,7 +555,11 @@ def test_current_reporting_another_document_stops_all_reads_and_discloses_restor
     assert capture["focusRestore"]["error"]["code"] == "FOCUS_MISMATCH"
     assert capture["ok"] is False
     for name in LIVE_CHANNELS:
-        assert capture["channels"][name]["status"] == "failed", name
+        if name == "pcbImage":
+            # Host capability, independent of this run's focus: still N/A.
+            assert capture["channels"][name]["status"] == "not-applicable", name
+        else:
+            assert capture["channels"][name]["status"] == "failed", name
 
 
 def test_document_current_problems_mean_focus_is_not_verified(tmp_path):
@@ -595,33 +612,35 @@ def test_when_no_selected_document_needs_navigation_focus_is_not_applicable(tmp_
 # ---------------------------------------------------------------------------
 
 
-def test_pcb_render_timeout_keeps_readback_and_geometry_and_continues(tmp_path):
+def test_pcb_is_never_rendered_and_pcb_image_carries_the_host_limit(tmp_path):
+    """`export.render` is schematic-only: the PCB is read and measured, never
+    rendered. The old 10 s leash hid a 60 s non-return; calling it again (or
+    raising the timeout) is not a fix, so no call is made at all."""
     listing = make_listing(pages=(), pcbs=(("b1", "B1"), ("b2", "B2")))
-
-    def render(client, params):
-        if params.get("pageUuid") == "b1":
-            raise FakeBridgeError("TIMEOUT", "export.render hung on b1")
-        return {"format": "image/png", "data": PNG_B64}
-
-    client = FakeClient(listing, overrides={"export.render": render})
+    client = FakeClient(listing)
 
     capture, out_dir = collect(client, tmp_path)
 
-    b1 = {step["action"]: step for step in steps_for(capture, "b1")}
-    assert b1["pcb.readback"]["status"] == "ok"
-    assert b1["pcb.geometry"]["status"] == "ok"
-    assert b1["export.render"]["status"] == "failed"
-    assert b1["export.render"]["error"]["code"] == "TIMEOUT"
+    assert not calls_named(client, "export.render"), "no PCB render call"
+    assert actions_for(capture, "b1") == [
+        "doc.open", "document.current", "pcb.readback", "pcb.geometry",
+    ]
+    assert step_named(capture, "b1", "pcb.readback")["status"] == "ok"
+    assert step_named(capture, "b1", "pcb.geometry")["status"] == "ok"
     assert actions_for(capture, "b2") == [
         "doc.open", "document.current", "pcb.readback", "pcb.geometry",
-        "export.render",
     ]
-    assert step_named(capture, "b2", "export.render")["status"] == "ok"
     assert capture["channels"]["livePcb"]["status"] == "ok"
-    assert capture["channels"]["pcbImage"]["status"] == "failed"
-    assert [row["documentUuid"] for row in capture["channels"]["pcbImage"]["artifacts"]] == [
-        "b2",
-    ]
+    pcb_image = capture["channels"]["pcbImage"]
+    assert pcb_image["status"] == "not-applicable"
+    assert pcb_image["steps"] == []
+    assert pcb_image["artifacts"] == []
+    assert pcb_image["errors"] == [PCB_IMAGE_LIMIT]
+    assert "export.render" in pcb_image["detail"] and "不适用" in pcb_image["detail"]
+    assert not list(out_dir.glob("live-pcb-*")), "no PCB image, real or fake"
+    # No schematic page exists, so the capture is still not ok; pcbImage is not
+    # what makes it false.
+    assert capture["channels"]["schematicImage"]["status"] == "failed"
     assert capture["ok"] is False
 
 
@@ -650,10 +669,11 @@ def test_geometry_is_skipped_when_its_readback_dependency_is_missing(
     assert geometry["error"]["code"] == "DEPENDENCY_MISSING"
     assert geometry["exitCode"] is None
     assert not calls_named(client, "pcb.geometry"), "no fake empty-ids geometry call"
-    # The render is still attempted independently, and its success is kept.
-    assert step_named(capture, "b1", "export.render")["status"] == "ok"
+    # No PCB image is attempted either: the channel is a host limit, not a
+    # dependency on this readback.
+    assert not calls_named(client, "export.render")
     assert capture["channels"]["livePcb"]["status"] == "failed"
-    assert capture["channels"]["pcbImage"]["status"] == "ok"
+    assert capture["channels"]["pcbImage"]["status"] == "not-applicable"
     assert capture["ok"] is False
 
 
@@ -671,7 +691,7 @@ def test_a_failed_write_still_runs_the_render_and_keeps_its_image(tmp_path):
     assert step_named(capture, "p1", "export.render")["status"] == "ok"
     assert capture["channels"]["liveSchematic"]["status"] == "failed"
     assert capture["channels"]["schematicImage"]["status"] == "ok"
-    assert len(list(out_dir.glob("*.png"))) == 3
+    assert len(list(out_dir.glob("*.png"))) == 2, "one per schematic page, no PCB"
 
 
 # ---------------------------------------------------------------------------
@@ -747,7 +767,7 @@ def test_geometry_meta_unreadable_is_failed_even_with_bboxes(tmp_path):
     assert step["status"] == "failed"
     assert step["error"]["code"] == "GEOMETRY_UNREADABLE"
     assert capture["channels"]["livePcb"]["status"] == "failed"
-    assert capture["channels"]["pcbImage"]["status"] == "ok"
+    assert capture["channels"]["pcbImage"]["status"] == "not-applicable"
 
 
 @pytest.mark.parametrize(
@@ -783,8 +803,8 @@ def test_geometry_without_a_complete_meta_cannot_be_ok(tmp_path, geometry, code)
     assert step["status"] == "failed"
     assert step["error"]["code"] == code
     assert capture["channels"]["livePcb"]["status"] == "failed"
-    # The picture is still independent evidence and survives the geometry fail.
-    assert capture["channels"]["pcbImage"]["status"] == "ok"
+    # No PCB image exists to survive or fail with it: that channel is a host limit.
+    assert capture["channels"]["pcbImage"]["status"] == "not-applicable"
     assert capture["ok"] is False
 
 
@@ -953,9 +973,9 @@ def test_an_explicit_subset_that_succeeds_is_missing_not_ok(tmp_path):
     assert capture["channels"]["liveSchematic"]["status"] == "missing"
     assert capture["channels"]["schematicImage"]["status"] == "missing"
     assert capture["channels"]["livePcb"]["status"] == "ok"
-    assert capture["channels"]["pcbImage"]["status"] == "ok"
+    assert capture["channels"]["pcbImage"]["status"] == "not-applicable"
     assert capture["ok"] is False
-    assert len(list(out_dir.glob("*.png"))) == 2  # p1 + b1
+    assert len(list(out_dir.glob("*.png"))) == 1  # p1 only; a PCB is never rendered
 
 
 def test_no_pcb_document_is_not_applicable_not_missing(tmp_path):
@@ -984,6 +1004,115 @@ def test_no_schematic_page_is_failed_not_missing(tmp_path):
     assert capture["channels"]["schematicImage"]["status"] == "failed"
     assert not calls_named(client, "sch.readback")
     assert not calls_named(client, "sch.netlist")
+
+
+# ---------------------------------------------------------------------------
+# 5b. O1: the V4 schematic container is metadata, never a collection target
+# ---------------------------------------------------------------------------
+
+
+def test_a_schematic_container_is_metadata_and_never_a_collection_target(tmp_path):
+    """`type: "schematic"` is the container: no tab, so no action may touch it.
+
+    The container is listed first (V4's real order). Pages must still be
+    collected exactly as before: same per-page action order, one netlist, both
+    schematic channels ``ok`` from their real readings, focus restored.
+    """
+    client = FakeClient(make_listing(containers=(("sc1", "schematic root"),)))
+
+    capture, _ = collect(client, tmp_path)
+
+    assert set(capture) == ROOT_KEYS
+    assert set(capture["channels"]) == set(LIVE_CHANNELS)
+    assert capture["ok"] is True
+
+    # The container is never opened, read back or rendered.
+    assert "sc1" not in {
+        call["params"].get("uuid") for call in calls_named(client, "doc.open")
+    }
+    assert steps_for(capture, "sc1") == []
+    assert all(
+        call["params"].get("pageUuid") != "sc1"
+        for call in calls_named(client, "export.render")
+    )
+
+    schematic = capture["selection"]["schematic"]
+    assert schematic["available"] == ["p1", "p2"]
+    assert schematic["requested"] == ["p1", "p2"]
+    assert schematic["selected"] == ["p1", "p2"]
+    assert schematic["unknown"] == []
+    assert schematic["coversAll"] is True
+    assert schematic["explicit"] is False
+    containers = schematic["containers"]
+    assert [row["uuid"] for row in containers] == ["sc1"]
+    assert containers[0]["name"] == "schematic root"
+    assert containers[0]["status"] == "not-applicable"
+    assert "容器" in containers[0]["reason"]
+    assert capture["selection"]["ok"] is True
+
+    assert actions_for(capture, "p1") == [
+        "doc.open", "document.current", "sch.readback", "sch.netlist",
+        "export.render",
+    ]
+    assert len(calls_named(client, "sch.netlist")) == 1
+    assert capture["channels"]["liveSchematic"]["status"] == "ok"
+    assert capture["channels"]["schematicImage"]["status"] == "ok"
+    assert capture["focusRestore"]["ok"] is True
+    assert client.active == "p2"
+
+
+def test_a_container_without_pages_still_fails_both_schematic_channels(tmp_path):
+    """A container alone is not a page: knowing it exists proves no reading."""
+    client = FakeClient(
+        make_listing(pages=(), pcbs=(), containers=(("sc1", "schematic root"),))
+    )
+
+    capture, out_dir = collect(client, tmp_path)
+
+    assert [call["action"] for call in client.calls] == ["doc.list"]
+    assert capture["channels"]["liveSchematic"]["status"] == "failed"
+    assert capture["channels"]["schematicImage"]["status"] == "failed"
+    assert capture["channels"]["livePcb"]["status"] == "not-applicable"
+    assert capture["channels"]["pcbImage"]["status"] == "not-applicable"
+    assert capture["selection"]["schematic"]["available"] == []
+    assert [
+        row["uuid"] for row in capture["selection"]["schematic"]["containers"]
+    ] == ["sc1"]
+    assert capture["focusRestore"]["attempted"] is False
+    assert capture["ok"] is False
+    assert not list(out_dir.glob("*"))
+
+
+def test_an_explicit_container_id_is_not_an_addressable_page(tmp_path):
+    """Naming the container is refused on its own code, before any navigation.
+
+    The id really is in `doc.list`, so ``UNKNOWN_DOCUMENT_UUID`` would be a false
+    statement; the honest answer is that a container has no page to address.
+    """
+    client = FakeClient(make_listing(containers=(("sc1", "schematic root"),)))
+
+    capture, out_dir = collect(client, tmp_path, page_uuids=["sc1"])
+
+    assert [call["action"] for call in client.calls] == ["doc.list"]
+    selection = capture["selection"]
+    assert selection["ok"] is False
+    assert selection["error"]["code"] == "NOT_AN_ADDRESSABLE_PAGE"
+    assert selection["error"]["containers"] == ["sc1"]
+    assert selection["error"]["unknown"] == {"schematic": [], "pcb": []}
+    assert "容器" in selection["error"]["message"]
+    schematic = selection["schematic"]
+    assert schematic["requested"] == []
+    assert schematic["selected"] == []
+    assert schematic["unknown"] == []
+    assert schematic["available"] == ["p1", "p2"]
+    assert schematic["coversAll"] is False
+    assert schematic["explicit"] is True
+    assert [row["uuid"] for row in schematic["containers"]] == ["sc1"]
+    for name in LIVE_CHANNELS:
+        assert capture["channels"][name]["status"] == "missing", name
+    assert capture["focusRestore"]["attempted"] is False
+    assert capture["ok"] is False
+    assert not list(out_dir.glob("*"))
 
 
 # ---------------------------------------------------------------------------

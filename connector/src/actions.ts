@@ -7697,19 +7697,42 @@ function describeDocument(page: Record<string, unknown>): string {
     : 'no document (the host reported none as focused)';
 }
 
+/** The severities the editor's ERC uses; a V4 per-item entry states one as `type`. */
+const DRC_SEVERITIES = ['fatalError', 'error', 'warn'] as const;
+
+/** The severity a schematic DRC entry states, or `null` when it states none. */
+function drcEntrySeverity(entry: unknown): string | null {
+  const type = plainGet(entry, 'type');
+  return typeof type === 'string' && (DRC_SEVERITIES as readonly string[]).includes(type)
+    ? type
+    : null;
+}
+
 /**
  * `sch.drc_check` — the schematic DRC counts, read without touching the editor UI.
  *
  * What the type package promises and what the host does are different here, and
  * both are reported: the declaration overloads `includeVerboseError: true` to
- * resolve an array and `false` to resolve a boolean, but the machine measurement
- * behind 025 §0 found the array holds **aggregate counts only**
- * (`[{type: 'fatalError'|'error'|'warn', count}]`) while the per-item detail goes
- * to the bottom panel, which has no read interface for an extension. So the array
- * is returned **verbatim** under `counts` — no reshaping that would make an
- * aggregate look like a list of findings — and `total` / `byType` are summed from
- * the entries' own fields, with any entry that carries no numeric `count` counted
- * separately in `unparsed` rather than folded in as zero.
+ * resolve an array and `false` to resolve a boolean, and the array's shape
+ * **changed between editor generations**. The 025 §0 measurement (V3) found
+ * **aggregate counts only** (`[{type: 'fatalError'|'error'|'warn', count}]`);
+ * the V4.1.93 measurement behind 038 O3a found **one object per finding**
+ * (`{type: 'warn', rule, primitives}` with no `count`), 519 of them for two
+ * pages of the test project. Both are read the same way, and the array is still
+ * returned **verbatim** under `counts`:
+ *
+ * - an entry with a numeric `count` is an aggregate and contributes that count
+ *   (it is never split into several findings);
+ * - an entry with a legal severity (`fatalError`/`error`/`warn`) and no numeric
+ *   `count` is a per-item finding and contributes **1**, with its `rule` /
+ *   `primitives` / net fields kept untouched in `items`;
+ * - anything else (a string, an object with no legal `type`, a missing type) is
+ *   counted in `unparsed` rather than folded in as zero.
+ *
+ * `entryShape` says which of the two shapes this answer was (`aggregate` /
+ * `per-item`), so a reader can tell "the host enumerated its findings" from
+ * "the host only summarised them". `passed` is `null` — unknown — as soon as
+ * any entry was unparsed: a partially understood answer cannot claim a verdict.
  *
  * A boolean answer despite `includeVerboseError: true` is reported as mode
  * `boolean`, not as an empty result: this build said only "passed".
@@ -7764,13 +7787,25 @@ export const schDrcCheck: ActionHandler = async (params, eda) => {
     const byType: Record<string, number> = {};
     let total = 0;
     let unparsed = 0;
+    let perItem = 0;
+    const items: unknown[] = [];
     for (const entry of result) {
       const type = plainGet(entry, 'type');
-      const count = Number(plainGet(entry, 'count'));
       const label = typeof type === 'string' && type ? type : '(entry without a type field)';
-      if (Number.isFinite(count)) {
+      const stated = plainGet(entry, 'count');
+      // `null`/absent is "did not say", not 0 — and it is what a V4 per-item
+      // entry looks like; a numeric string is still read as the count it is.
+      const count = stated === undefined || stated === null ? null : Number(stated);
+      if (count !== null && Number.isFinite(count)) {
         byType[label] = (byType[label] ?? 0) + count;
         total += count;
+      } else if (drcEntrySeverity(entry)) {
+        // V4.1.93 (measured 2026-10-31): one object per finding — `count` is
+        // simply absent, so each entry is exactly one finding.
+        perItem += 1;
+        byType[label] = (byType[label] ?? 0) + 1;
+        total += 1;
+        items.push(entry);
       } else {
         unparsed += 1;
         byType[label] = byType[label] ?? 0;
@@ -7779,12 +7814,15 @@ export const schDrcCheck: ActionHandler = async (params, eda) => {
     return {
       ...base,
       mode: 'counts',
+      entryShape: perItem ? 'per-item' : 'aggregate',
       counts: result,
       entries: result.length,
       total,
       byType,
-      passed: total === 0,
+      // A partially understood answer cannot carry a verdict either way.
+      passed: unparsed ? null : total === 0,
       ...(unparsed ? { unparsed } : {}),
+      ...(items.length ? { items } : {}),
     };
   }
   if (typeof result === 'boolean') {

@@ -10,11 +10,15 @@ record) instead of only against a live editor.
 
 Three rules this layer exists to keep:
 
-1. **Never invent per-item detail.** `sch_Drc.check` returns
-   `[{type: 'fatalError'|'error'|'warn', count}]` (measured 2026-09-22, 025 §0),
-   and the array is carried through as counts. Nothing here turns a count into a
-   plausible-looking finding; the per-item list in the report is the *offline
-   rule engine's*, and the schematic section says so.
+1. **Never invent per-item detail.** `sch_Drc.check` answers in one of two
+   measured shapes: V3 (2026-09-22, 025 §0) returned
+   `[{type: 'fatalError'|'error'|'warn', count}]` only; V4 (2026-10-31, 038 O3a)
+   returns **one object per finding** (`{type, rule, primitives}`, no `count`).
+   The connector normalises both (`entryShape` / `total` / `byType` / `items`),
+   and this module reads those numbers while keeping the host's per-item objects
+   verbatim as evidence. Nothing here turns a count into a plausible-looking
+   finding of its own; the per-item list in the *findings* section is still the
+   *offline rule engine's*, and the schematic section says so.
 2. **"Not checked" is not "clean".** A host refusal, a `checked: false` answer or
    an absent PCB document produces `{checked: false, reason}` — never a section
    with zero counts, which a reader cannot tell from a board that passed.
@@ -54,6 +58,22 @@ SCHEMATIC_NOTE = "逐条见 findings 段（规则引擎）"
 #: instead of letting the two numbers imply a coverage claim neither makes.
 SCHEMATIC_NOTES: tuple[str, ...] = (
     "主机只回聚合计数（025 §0 实测），逐条细节不在返回值里（在编辑器底部面板，扩展无读接口）",
+    "findings 段是 boardwise 自有规则引擎的结果，与主机 ERC 不是同一套规则，两边计数不可互推",
+)
+
+#: The note a **per-item** answer carries instead of `SCHEMATIC_NOTE` (038 O3b).
+#: V4.1.93 (measured 2026-10-31) enumerates its findings in the array itself, so
+#: repeating "逐条见 findings 段" would point the reader away from the evidence
+#: they actually have: the host's own objects under `pages[].items`.
+SCHEMATIC_ITEMS_NOTE = "逐条见 pages[].items（主机 ERC 逐条）；findings 段是 boardwise 规则引擎"
+
+#: The per-item counterpart of `SCHEMATIC_NOTES`. The first caveat above is a
+#: statement about the *V3* answer shape and is false for V4 — carrying it into a
+#: per-item report would tell a reader the host has no per-item detail while 519
+#: of them sit in `pages[].items`.
+SCHEMATIC_ITEM_NOTES: tuple[str, ...] = (
+    "主机逐条返回 ERC（entryShape=per-item）：每条对象（type/rule/primitives 等）原样在 "
+    "pages[].items；本段计数取自同一答复的 total/byType，不自造条目",
     "findings 段是 boardwise 自有规则引擎的结果，与主机 ERC 不是同一套规则，两边计数不可互推",
 )
 
@@ -111,18 +131,20 @@ def _text(value: Any) -> str:
 
 
 # --------------------------------------------------------------------------
-# the schematic side: counts only, and it must stay that way
+# the schematic side: counts, plus the host's own per-item objects verbatim
 # --------------------------------------------------------------------------
 
 
 def _counts_of(payload: dict) -> dict[str, int]:
     """`{kind: count}` from the host's count array, adding repeated kinds.
 
-    Adding rather than overwriting because the array's contract is "one entry per
-    kind" but nothing enforces it; a duplicated kind that silently overwrote its
-    twin would under-report. A non-numeric `count` is reported by the caller as
-    an unparsable entry — it never becomes a zero here, which is what would make
-    a broken entry look like a clean one.
+    This is the **V3 aggregate** path only (`entryShape` absent/`aggregate`): its
+    array is `[{type, count}]` (025 §0). Adding rather than overwriting because
+    the array's contract is "one entry per kind" but nothing enforces it; a
+    duplicated kind that silently overwrote its twin would under-report. A
+    non-numeric `count` is reported by the caller as an unparsable entry — it
+    never becomes a zero here, which is what would make a broken entry look like
+    a clean one.
     """
     counts: dict[str, int] = {}
     for entry in _as_list(payload.get("counts")):
@@ -136,8 +158,51 @@ def _counts_of(payload: dict) -> dict[str, int]:
     return counts
 
 
-def _unparsable_entries(payload: dict) -> int:
-    """Count-array entries whose `count` is not a number."""
+def _per_item_counts(payload: dict) -> dict[str, int]:
+    """`{kind: count}` for a **V4 per-item** answer, from the connector's `byType`.
+
+    V4.1.93's `sch_Drc.check` returns one object per finding with **no `count`**
+    (measured 2026-10-31, 038 O3a), so counting entries by their `count` field
+    reads 519 legal objects as 519 broken ones and leaves `total` at 0. The
+    connector has already decided each of them is one finding and summed them
+    into `byType`/`total`; this reads that decision instead of re-deriving it
+    from a field the answer does not carry. `items` is only a fallback for a
+    payload whose `byType` did not arrive — the raw per-item evidence is still
+    there, so the count must not fall back to zero.
+    """
+    by_type = _as_dict(payload.get("byType"))
+    counts: dict[str, int] = {}
+    if by_type:
+        for kind, value in by_type.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                continue
+            label = str(kind)
+            counts[label] = counts.get(label, 0) + int(value)
+        return counts
+    for entry in _as_list(payload.get("items")):
+        kind = _text(_as_dict(entry).get("type"))
+        if kind:
+            counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+def _unparsable_entries(payload: dict, *, per_item: bool = False) -> int:
+    """Entries the connector could not read, in *this answer's* own shape.
+
+    Per-item: only the connector's own `unparsed` count — the entries that were
+    neither an aggregate nor a recognised per-item object. Re-counting the raw
+    array's missing `count` fields here is exactly the V4 bug this batch fixes:
+    a legal per-item object has no `count` and is still one finding.
+
+    Aggregate: count-array entries whose `count` is not a number, re-read from
+    the raw array so a V3 answer is classified by what it says rather than by a
+    field a newer connector may have added.
+    """
+    if per_item:
+        value = payload.get("unparsed")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0
+        return max(int(value), 0)
     bad = 0
     for entry in _as_list(payload.get("counts")):
         if not isinstance(entry, dict):
@@ -170,17 +235,35 @@ def _page_reading(reading: dict) -> dict:
         }
     mode = _text(payload.get("mode")) or "counts"
     if mode == "counts":
-        counts = _counts_of(payload)
-        return {
+        shape = _text(payload.get("entryShape"))
+        per_item = shape == "per-item"
+        counts = _per_item_counts(payload) if per_item else _counts_of(payload)
+        total = sum(counts.values())
+        stated_total = payload.get("total")
+        if (per_item and isinstance(stated_total, (int, float))
+                and not isinstance(stated_total, bool)):
+            # The connector's own total covers every recognised entry; the sum
+            # of `byType` should equal it, and taking the stated number keeps a
+            # per-item answer from reading as 0 when nothing was summed.
+            total = int(stated_total)
+        page: dict[str, Any] = {
             "pageUuid": page_uuid,
             "checked": True,
             "mode": mode,
             "counts": counts,
-            "total": sum(counts.values()),
+            "total": total,
             "passed": payload.get("passed"),
             "elapsedMs": payload.get("elapsedMs"),
-            **({"unparsableEntries": n} if (n := _unparsable_entries(payload)) else {}),
         }
+        if shape:
+            page["entryShape"] = shape
+        if per_item and isinstance(payload.get("items"), list):
+            # The host's own objects, verbatim — the per-item evidence a V4
+            # answer gives and a V3 answer never did.
+            page["items"] = payload["items"]
+        if n := _unparsable_entries(payload, per_item=per_item):
+            page["unparsableEntries"] = n
+        return page
     if mode == "boolean":
         # The host ignored `includeVerboseError: true` and said only "passed" or
         # not. That is a verdict without a count, and it is carried as exactly
@@ -216,9 +299,21 @@ def schematic_section(readings: list[dict]) -> dict:
     are summed and labelled `sum-of-pages`, because then per-page scoping is the
     only explanation left. Either way `pages` keeps the individual readings, so
     the reader can check the rule against the evidence.
+
+    **V4 changed the answer, not this rule** (038 O3b). A per-item answer is 519
+    host objects per page (measured 2026-10-31, two pages): the same rule reports
+    them once as `warn 519`, not 1038, because the host is enumerating the same
+    project-wide set on every page. The section says so in its own words — the
+    per-item evidence is `pages[].items`, never "the detail is not in the
+    answer" — and a page whose `passed` is unknown (`null`, i.e. the connector
+    parsed part of its answer) keeps the section's `passed` unknown instead of
+    being pressed into `false`.
     """
     pages = [_page_reading(reading) for reading in readings]
     checked = [page for page in pages if page.get("checked")]
+    per_item = any(page.get("entryShape") == "per-item" for page in checked)
+    note = SCHEMATIC_ITEMS_NOTE if per_item else SCHEMATIC_NOTE
+    notes = list(SCHEMATIC_ITEM_NOTES if per_item else SCHEMATIC_NOTES)
     if not checked:
         reason = "no schematic page answered the ERC"
         if pages:
@@ -228,8 +323,8 @@ def schematic_section(readings: list[dict]) -> dict:
             "source": SCHEMATIC_SOURCE,
             "reason": reason,
             "pages": pages,
-            "note": SCHEMATIC_NOTE,
-            "notes": list(SCHEMATIC_NOTES),
+            "note": note,
+            "notes": list(notes),
         }
 
     counted = [page for page in checked if page.get("mode") == "counts"]
@@ -239,9 +334,12 @@ def schematic_section(readings: list[dict]) -> dict:
         "pageCount": len(pages),
         "pagesChecked": len(checked),
         "pages": pages,
-        "note": SCHEMATIC_NOTE,
-        "notes": list(SCHEMATIC_NOTES),
+        "note": note,
+        "notes": notes,
     }
+    shapes = [page.get("entryShape") for page in checked if page.get("entryShape")]
+    if shapes:
+        section["entryShape"] = "per-item" if "per-item" in shapes else "aggregate"
     if len(checked) != len(pages):
         section["pagesUnreadable"] = len(pages) - len(checked)
 
@@ -263,7 +361,12 @@ def schematic_section(readings: list[dict]) -> dict:
         return section
 
     first = counted[0].get("counts", {})
-    agree = all(page.get("counts", {}) == first for page in counted)
+    first_unparsable = counted[0].get("unparsableEntries", 0)
+    agree = all(
+        page.get("counts", {}) == first
+        and page.get("unparsableEntries", 0) == first_unparsable
+        for page in counted
+    )
     if agree:
         basis = "host-wide"
         totals = dict(first)
@@ -282,17 +385,44 @@ def schematic_section(readings: list[dict]) -> dict:
         # an explicit zero the host never gave.
         if kind in totals:
             section[kind] = totals[kind]
+    # `passed` is only usable when every checked page stated one. A `null` is
+    # the connector saying "part of this answer was unreadable" — pressing that
+    # into `false` would turn "unknown" into "failed" (and vice versa the other
+    # way round for `true`), so the section keeps the unknown.
+    passeds = [page.get("passed") for page in counted]
+    if len(counted) == len(checked) and all(value is not None for value in passeds):
+        passed = all(bool(value) for value in passeds)
+    else:
+        passed = None
     section.update({
         "totals": totals,
         "total": sum(totals.values()),
         "countsBasis": basis,
         "pageCountsAgree": agree,
-        "passed": all(page.get("passed") for page in counted) if len(counted) == len(checked) else None,
+        "passed": passed,
     })
     if basis == "host-wide" and len(counted) > 1:
+        measured = (
+            "实测：V4 test 工程两页均回 519 条逐条对象"
+            if per_item
+            else "实测：test 工程 4 页均回 warn 1"
+        )
         section["notes"] = [
             *section["notes"],
-            f"{len(counted)} 页读数完全相同，故按主机口径报一次，不按页累加（实测：test 工程 4 页均回 warn 1）",
+            f"{len(counted)} 页读数完全相同，故按主机口径报一次，不按页累加（{measured}）",
+        ]
+    unparsable = first_unparsable if agree else sum(
+        page.get("unparsableEntries", 0) for page in counted
+    )
+    if unparsable:
+        # Entries the connector could not read are neither counted nor zero.
+        # The totals above describe only what was understood, so the answer is
+        # incomplete and `summarise` turns this into a `count: null` error.
+        section["unparsableEntries"] = unparsable
+        section["notes"] = [
+            *section["notes"],
+            f"主机有 {unparsable} 条条目读不懂（unparsed）：它们没算进上面的合计，也不等于 0 —— "
+            "合计只描述读懂的条目",
         ]
     return section
 
@@ -999,6 +1129,12 @@ def summarise(*, drc: dict, findings: list[dict]) -> dict:
                 "detail": "主机未给计数（boolean 答复且未通过），逐条与总数都不可枚举",
             })
     elif schematic.get("checked"):
+        per_item = schematic.get("entryShape") == "per-item"
+        detail = (
+            "主机 ERC 逐条枚举（entryShape=per-item）：每条对象在 drc.schematic.pages[].items"
+            if per_item
+            else "主机 ERC 聚合计数；逐条不在返回值里（见 findings 段的说明）"
+        )
         for kind, severity in COUNT_SEVERITY.items():
             if kind not in schematic:
                 continue
@@ -1010,7 +1146,23 @@ def summarise(*, drc: dict, findings: list[dict]) -> dict:
                 "kind": kind,
                 "count": schematic[kind],
                 "ref": "drc.schematic",
-                "detail": "主机 ERC 聚合计数；逐条不在返回值里（见 findings 段的说明）",
+                "detail": detail,
+            })
+        unknown_entries = schematic.get("unparsableEntries")
+        if isinstance(unknown_entries, int) and not isinstance(unknown_entries, bool) and unknown_entries > 0:
+            # Entries the connector could not read are real findings whose
+            # number is unknown: leaving the summary at the parsed total would
+            # claim a `total: 0` answer is a clean board.
+            counts_incomplete = True
+            errors.append({
+                "section": "drc.schematic",
+                "source": SCHEMATIC_SOURCE,
+                "severity": "ERROR",
+                "count": None,
+                "countsKnown": False,
+                "ref": "drc.schematic.unparsableEntries",
+                "detail": f"主机 ERC 有 {unknown_entries} 条条目读不懂（unparsed）："
+                          "既没算进合计，也不等于 0，合计只描述读懂的条目",
             })
 
     pcb = _as_dict(_as_dict(drc).get("pcb"))

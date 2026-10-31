@@ -613,15 +613,33 @@ def test_the_sop_never_turns_a_readback_or_a_png_into_a_visual_pass():
     )
 
 
-def test_the_sop_records_the_issue_60s_as_unreproduced_and_refuses_a_blind_retry():
-    """护 #87② 的第三句话：issue 的 60 s 是历史报告，本批没复现。
+def test_the_sop_records_the_v4_pcb_60s_timeout_and_stops_calling_render():
+    """护 #87② 的第三句话：PCB 上的 60 s 是 **V4.1.93 实测**，此后不再调用该 API。
 
+    O2（2026-10-31）在已 `doc.open` + `document.current` 确证的 PCB1 上单发一次
+    `timeoutMs:60000`，整 60.01 s 不返回；同会话原理图页秒回 ⇒ schematic-only。
+    所以 SOP 必须写实测读数、`not-applicable`、以及"停止对 PCB 调用"，
+    **不许**回退成「本批没有复现」这类过期口径。
     SOP 说的两个数字（`timeoutMs` 夹取 1–60 s、缺省 30 s）必须仍对得上
-    connector 源码，否则文案里的「上限」就成了二手转述；而「必然超时」
-    与「60 s 盲重试」都不许被写成建议。
+    connector 源码，否则文案里的「上限」就成了二手转述。
     """
     section = _sop_pcb_visual_section()
-    assert "历史报告" in section and "本批没有复现" in section
+    assert "60.01" in section, (
+        "the SOP must carry the measured wall clock of the V4 PCB render timeout"
+    )
+    assert "not-applicable" in section, (
+        "the SOP must fix pcbImage at not-applicable — the call no longer happens"
+    )
+    assert "停止对 PCB 调用" in section, (
+        "the SOP must say the render action is no longer invoked on PCB pages"
+    )
+    assert "只服务原理图" in section, (
+        "the SOP must name the API as schematic-only, not as a budget problem"
+    )
+    assert "本批没有复现" not in section and "历史报告" not in section, (
+        "the stale 'unreproduced this batch / historical report' wording is back; "
+        "O2 reproduced it on V4.1.93"
+    )
     assert "不给 60 s 盲重试" in section
     assert "上限" in section and "TIMEOUT" in section
     source = _ACTIONS_TS.read_text(encoding="utf-8")
@@ -674,8 +692,41 @@ def test_pit_23_carries_the_pcb_boundary_without_growing_a_new_pit_number():
     assert "PCB 目视复核没有独立的已验图像通道" in row, (
         "pit 23 must quote the SOP anchor verbatim or the pointer rots"
     )
-    assert "本批未复现" in row
     assert "`export.render`" in row and "`pcb.readback`" in row and "`pcbImage`" in row
+    for token in ("V4.1.93", "60.01", "not-applicable", "停止对 PCB 调用", "schematic-only"):
+        assert token in row, (
+            f"pit 23 must carry the V4 O2 measured boundary token {token!r}; "
+            "the '未复现' era wording is gone"
+        )
+    assert "本批未复现" not in row and "没有逐项条目" not in row
+
+
+def test_pit_27_records_both_the_v3_aggregate_and_the_v4_per_item_shape():
+    """护 O3：主机 ERC 在 V4.1.93 返回逐条，坑表不能再说"所有版本都没有逐项"。
+
+    V3（039 实测）只有 `counts/byType/total`；V4.1.93（2026-10-31 O3）每页 519 个
+    `{type,rule,primitives}`、没有 `count`。connector 的归一化键 `entryShape` /
+    `per-item` / `items` 必须仍在源码里，否则坑表描述的接口已经不存在；
+    SOP 的两处 ERC 说明也必须按版本分家。
+    """
+    pits = (REPO / "docs" / "pits.md").read_text(encoding="utf-8")
+    rows = [line for line in pits.splitlines() if line.startswith("| 27 |")]
+    assert len(rows) == 1, "docs/pits.md lost its host-ERC row (pit 27)"
+    row = rows[0]
+    assert "没有逐项条目" not in row, (
+        "pit 27 still claims host ERC has no per-item entries; V4.1.93 returns them"
+    )
+    for token in ("V3", "V4.1.93", "519", "entryShape", "per-item", "items",
+                  "host-wide", "pages[].items"):
+        assert token in row, f"pit 27 must state the current ERC contract token {token!r}"
+    source = _ACTIONS_TS.read_text(encoding="utf-8")
+    assert "entryShape" in source and "'per-item'" in source, (
+        "the connector no longer emits entryShape='per-item'; pit 27 is stale"
+    )
+    assert "items" in source
+    sop = (REPO / "docs" / "review-sop.md").read_text(encoding="utf-8")
+    assert "V3 只有 host-wide 合计、没有逐条文本" in sop
+    assert "V4.1.93 起返回值里" in sop and "直接带逐条对象" in sop
 
 
 # ========================================== dsh 迁移：SOP 的两个入口必须同源

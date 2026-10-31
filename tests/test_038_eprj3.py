@@ -273,10 +273,13 @@ def test_the_v3_fixture_still_keys_pins_by_zindex():
 # --------------------------------------------------------------------------
 
 
-def test_the_pcb_view_of_a_folder_project_is_refused_by_name():
+def test_the_pcb_view_of_a_folder_project_without_a_board_is_refused_by_name():
+    """038F5: the pcb view is now answered through 038F4's adapter, so a folder
+    project with no ``pcb/*.epcb2`` is refused by **that** adapter's own words —
+    still a refusal, never an empty model (SKILL pit 14)."""
     with pytest.raises(ValueError) as caught:
         cli._load_model(FIXTURE, view="pcb")
-    assert "B 档" in str(caught.value) and "038 未开" in str(caught.value)
+    assert ".epcb2" in str(caught.value) and "pcb/" in str(caught.value)
     model, board = cli._load_model(FIXTURE, view="schematic")
     assert len(model.components) == 2 and board is None
 

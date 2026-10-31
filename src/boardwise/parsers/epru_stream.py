@@ -14,9 +14,13 @@ Format facts this module owns (reverse-engineered, see ``docs/epru-format.md``;
   is matched by extension, never by name.
 - ``.epru`` is a line record format: ``{envelope-json}||{body-json}|``
   terminated by ``\n``. Two real-world deviations are tolerated: the final line
-  may lack the terminator, and a record may carry an **empty body**
-  (``{envelope}|||``) — counted as ``empty_body_records`` and skipped, since
-  there is no payload to read.
+  may lack the terminator (``{envelope}||{body-json}``), and a record may carry
+  an **empty body** (``{envelope}|||``) — counted as ``empty_body_records`` and
+  skipped, since there is no payload to read. The two compose: a real V4 export
+  ends its document streams with ``{envelope}||``, an empty body whose terminator
+  is missing (038F1). That line is **not** ``{envelope}|`` — there the field
+  separator itself is gone, which is what a genuinely truncated record looks
+  like.
 - The stream is a concatenation of **documents**, each introduced by a
   ``DOCHEAD`` record carrying a ``docType``. On the fixture: 252 documents —
   83 SYMBOL, 81 FOOTPRINT, 81 DEVICE, 1 SCH, 1 SCH_PAGE, **1 PCB**, ...
@@ -156,7 +160,23 @@ def iter_epru_records(text: str, stats: ParseStats | None = None) -> Iterator[Ep
             stats.total_records += 1
 
         # A record ends with "|"; the final line of a file may not have one.
-        core = line[:-1] if line.endswith("|") else line
+        # Four shapes reach this point, and they must not be conflated (038F1):
+        #   ``{env}||{body}|`` terminated, body present
+        #   ``{env}||``        empty body, missing terminator (the V4 EOF shape)
+        #   ``{env}|||``       empty body, terminated
+        #   ``{env}``          no separator at all — truncated, stays malformed
+        # Stripping the last "|" unconditionally is what turned the second shape
+        # into ``{env}|``: the separator's second "|" was eaten, so the record
+        # "had no separator" and every V4 document stream reported one damaged
+        # line at EOF.
+        if line.endswith(FIELD_SEP + "|"):
+            core = line[:-1]
+        elif line.endswith(FIELD_SEP):
+            core = line
+        elif line.endswith("|"):
+            core = line[:-1]
+        else:
+            core = line
         if FIELD_SEP not in core:
             if stats is not None:
                 stats.malformed_records += 1

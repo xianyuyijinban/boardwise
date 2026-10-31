@@ -52,6 +52,7 @@ from boardwise.engines.evidence import (
     evidence_console_line,
     evidence_section,
 )
+from boardwise.engines.liveevidence import PCB_IMAGE_LIMIT
 
 PROJECT = "proj-synthetic"
 PAGES = (("p1", "PWR"), ("p2", "CTRL"))
@@ -88,10 +89,14 @@ def make_listing(
     *,
     pages=PAGES,
     pcbs=PCBS,
+    containers=(),
     active="p2",
     project_uuid=PROJECT,
 ) -> dict:
+    # V4 lists the schematic container before its pages.
     documents = [
+        {"uuid": uuid, "name": name, "type": "schematic"} for uuid, name in containers
+    ] + [
         {"uuid": uuid, "name": name, "type": "page"} for uuid, name in pages
     ] + [{"uuid": uuid, "name": name, "type": "pcb"} for uuid, name in pcbs]
     projects = []
@@ -370,11 +375,15 @@ def test_success_writes_the_capture_and_all_three_products(bridge, capsys, tmp_p
     }, "the capture file carries exactly the four live rows the merge reads"
 
     # Four live channels replaced from the capture, archive/datasheets verbatim.
+    # pcbImage is not-applicable: export.render has no PCB output on this host.
     evidence = written["evidence"]
     assert evidence["schema"] == EVIDENCE_SCHEMA
     assert [evidence["channels"][name]["status"] for name in CHANNEL_ORDER] == [
-        "ok", "ok", "ok", "ok", "ok", "ok",
+        "ok", "ok", "ok", "ok", "not-applicable", "ok",
     ]
+    assert evidence["channels"]["pcbImage"]["artifacts"] == []
+    assert evidence["channels"]["pcbImage"]["errors"] == [PCB_IMAGE_LIMIT]
+    assert not list(out.glob("live-pcb-*.png")), "no PCB image is invented"
     assert evidence["delivery"]["status"] == "complete"
     assert evidence["coverage"]["livePcb"] == "ok"
 
@@ -766,6 +775,39 @@ def test_an_unknown_document_uuid_refuses_before_navigation(bridge, capsys, tmp_
     assert client.actions() == ["doc.list"], "未知文档 id 在任何导航前拒绝"
     capture = json.loads((out / CAPTURE_FILE).read_text(encoding="utf-8"))
     assert capture["selection"]["error"]["code"] == "UNKNOWN_DOCUMENT_UUID"
+    assert capture["ok"] is False
+    assert read_report(out)["evidence"]["coverage"]["schematicImage"] == "missing"
+
+
+def test_a_container_first_listing_collects_pages_and_exits_zero(bridge, capsys, tmp_path):
+    """V4's real listing: container first, then pages and the PCB."""
+    client = bridge(make_listing(containers=(("sc1", "schematic root"),)))
+    out = seed_out_dir(tmp_path / "out")
+
+    assert run_cli("--out", str(out), "--project", "test2", "--instance", "win-1") == 0, (
+        capsys.readouterr()
+    )
+
+    opened = [call["params"].get("uuid") for call in calls_named(client, "doc.open")]
+    assert "sc1" not in opened, "容器没有 tab，不得 doc.open"
+    capture = json.loads((out / CAPTURE_FILE).read_text(encoding="utf-8"))
+    assert capture["ok"] is True
+    assert capture["selection"]["schematic"]["containers"][0]["status"] == "not-applicable"
+    evidence = read_report(out)["evidence"]
+    assert evidence["channels"]["liveSchematic"]["status"] == "ok"
+    assert evidence["channels"]["schematicImage"]["status"] == "ok"
+
+
+def test_an_explicit_container_page_is_refused_before_navigation(bridge, capsys, tmp_path):
+    """The container id exists, so this is not an unknown id: it is unaddressable."""
+    client = bridge(make_listing(containers=(("sc1", "schematic root"),)))
+    out = seed_out_dir(tmp_path / "out")
+
+    assert run_cli("--out", str(out), "--page", "sc1") == 1, capsys.readouterr()
+
+    assert client.actions() == ["doc.list"]
+    capture = json.loads((out / CAPTURE_FILE).read_text(encoding="utf-8"))
+    assert capture["selection"]["error"]["code"] == "NOT_AN_ADDRESSABLE_PAGE"
     assert capture["ok"] is False
     assert read_report(out)["evidence"]["coverage"]["schematicImage"] == "missing"
 

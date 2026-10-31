@@ -471,21 +471,30 @@ ACTIONS: tuple[Action, ...] = (
         name="sch.drc_check",
         summary=(
             "READ-ONLY: the schematic DRC, via sch_Drc.check(strict, "
-            "userInterface, includeVerboseError). (025 §0, measured) the host's "
-            "verbose answer holds **aggregate counts only** — the per-item detail "
-            "goes to the bottom panel, which has no read interface for an "
-            "extension. The array is therefore returned **verbatim** under "
-            "`counts`, with `total`/`byType` summed from the entries' own fields "
-            "and any entry without a numeric `count` counted in `unparsed` "
-            "instead of folding in as zero. A boolean answer is reported as mode "
-            "`boolean`, never as an empty result. Throws on a page that is not a "
-            "schematic page, and the throw is reported with the focused document "
-            "named."
+            "userInterface, includeVerboseError). The answer's shape changed "
+            "between editor generations, and both are read (038 O3a/O3b): the "
+            "025 §0 measurement (V3) found **aggregate counts only** — "
+            "`[{type: 'fatalError'|'error'|'warn', count}]`, the per-item detail "
+            "going to the bottom panel, which has no read interface; the V4.1.93 "
+            "measurement (2026-10-31, two pages of the test project) found **one "
+            "object per finding** — `{type, rule, primitives}` with no `count`, "
+            "519 of them. The connector normalises both: `entryShape` says which "
+            "shape answered, `total`/`byType` sum the recognised entries, and "
+            "`items` keeps the per-item objects verbatim. The host array is still "
+            "returned **verbatim** under `counts`; an entry with a numeric "
+            "`count` contributes that count and is never split, a legal-severity "
+            "entry without one contributes 1, and anything else is counted in "
+            "`unparsed` instead of folding in as zero. `passed` is `null` "
+            "(unknown) as soon as any entry was unparsed. A boolean answer is "
+            "reported as mode `boolean`, never as an empty result. Throws on a "
+            "page that is not a schematic page, and the throw is reported with "
+            "the focused document named."
         ),
         params=("strict", "userInterface", "includeVerboseError"),
         returns=(
-            "{source, checked, mode: 'counts'|'boolean'|'unexpected', counts, "
-            "entries?, total?, byType?, unparsed?, passed, elapsedMs, args, page, "
+            "{source, checked, mode: 'counts'|'boolean'|'unexpected', "
+            "entryShape?: 'aggregate'|'per-item', counts, entries?, total?, "
+            "byType?, unparsed?, items?, passed, elapsedMs, args, page, "
             "uiRequested, notes?, raw?, unrenderable?, note?}"
         ),
         params_schema=(
@@ -599,9 +608,12 @@ ACTIONS: tuple[Action, ...] = (
         name="sys.log_read",
         summary=(
             "READ-ONLY: the host's own log panel, as text, via "
-            "`sys_Log.sort(types?)`. It exists because `sch_Drc.check`'s verbose "
-            "answer holds **aggregate counts only** (025 §0, measured: no detail), "
-            "while 岳's log panel showed 22 warn lines of full text on 2026-10-04. "
+            "`sys_Log.sort(types?)`. It exists because the **V3** `sch_Drc.check` "
+            "verbose answer held **aggregate counts only** (025 §0, measured: no "
+            "detail), while 岳's log panel showed 22 warn lines of full text on "
+            "2026-10-04. (V4 enumerates its findings in the array itself — see "
+            "`sch.drc_check`'s `items` — so the panel is no longer the only "
+            "per-item source there.) "
             "**Measured live 2026-10-04 (111b, test/P1, 22 warns): an API-driven "
             "`sch.drc_check` writes NOTHING to sys_Log — neither with "
             "userInterface:false nor :true — so this action does NOT recover the "

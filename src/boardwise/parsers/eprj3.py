@@ -37,25 +37,67 @@ example project happens to contain none, so this reader accepts it in the
 placements are covered by the tests, and the day a real V4 export shows a third
 one, the fixture is what will say so.
 
-Tier A is **read-only SCH_PAGE**: PCB documents are deliberately not read here, and
-asking for the pcb view is an honest error rather than an empty model (a model with
-0 components and 0 nets reads as "a clean board" — SKILL pit 14).
+Tier A is **read-only SCH_PAGE**. The **source** half of the pcb view is 038F4's:
+:func:`load_eprj3_pcb_source` reads ``pcb/**/*.epcb2`` and hands it to the very same
+``split_documents`` / :class:`~boardwise.parsers.epru.Epro2Source` the ``.epro2``
+container uses, so both builders work unchanged. 038F5 wired it into the CLI:
+``_load_model(view="pcb")`` returns that adapter's source through
+``build_design_model`` / ``build_board_geometry``, and
+:func:`boardwise.engines.pcbreview._review_units` selects it for a folder project
+before running the one shared PCB review path. A project with no board file, with
+several, or whose board file holds no PCB document is refused by the adapter by
+name — never answered with an empty model (a model with 0 components and 0 nets
+reads as "a clean board" — SKILL pit 14).
+
+A PCB document carries **no** ``yAxisDirection`` the way a page does: PCB
+coordinates are the cloud frame already, and the board's libraries (``SYMBOL`` /
+``FOOTPRINT`` copied into the same file) are library payload that must never be
+flipped either. So the PCB read passes the whole file through **untransformed** —
+the schematic branch is the only place the y-flip runs.
+
+**The editor version** (038F2) is the other thing a folder project does not hand
+over the way an `.epro2` does: there is no `project2.json`, so an index without
+`editorVersion` left `ParseStats.editor_version` empty and every consumer that
+grades "which editor wrote this" saw unknown. Each content document's `DOCHEAD`
+carries `editVersion`, and that is the project's editor version — but only for
+the documents that *are* the design (`SCH` / `SCH_PAGE` / `PCB` / `PANEL`).
+`SYMBOL` / `DEVICE` / `FOOTPRINT` documents are library payload copied into the
+project, so their `editVersion` is whatever editor last saved *that part*; taking
+it would be reporting a library's age as the project's. Only a single non-empty
+content version becomes `editorVersion`; a conflict is disclosed under
+`editorVersionConflict` rather than silently resolved, and no version stays
+unknown. An index that does name `editorVersion` keeps its say.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime import cycle
+    from .epru import Epro2Source
 
 #: The index file's extension. A folder project is `<folder>/<name>.eprj3`.
 EPRJ3_SUFFIX = ".eprj3"
 #: Schematic page documents.
 ESCH2_SUFFIX = ".esch2"
+#: PCB documents: one file per board, ``pcb/<board>.epcb2``.
+EPCB2_SUFFIX = ".epcb2"
 
 #: Document types whose coordinates are written y-up in an eprj3 file. Everything
 #: else in the same stream passes through byte-for-byte.
 SCHEMATIC_DOC_TYPES = frozenset({"SCH", "SCH_PAGE", "SIM_SCH", "SIMULATION", "SYMBOL"})
+
+#: Documents whose ``DOCHEAD.editVersion`` is the **project's** editor version.
+#: Library documents (``SYMBOL`` / ``DEVICE`` / ``FOOTPRINT``) also sit in the
+#: stream with an ``editVersion``, but theirs is the version of whichever editor
+#: last saved that part — it says nothing about this project.
+CONTENT_DOC_TYPES = frozenset({"SCH", "SCH_PAGE", "PCB", "PANEL"})
+
+#: Files that declare a content ``DOCHEAD`` but are not part of the tier-A stream
+#: (the root schematic config, the PCB, the panel). Read for the version only.
+CONTENT_DOC_GLOBS = ("sch/**/*.ecfg", f"pcb/**/*{EPCB2_SUFFIX}", "panel/**/*.epan2")
 
 #: Which body field of which primitive carries y (the spec's table, verbatim).
 FLIPPED_FIELDS: dict[str, tuple[str, ...]] = {
@@ -82,12 +124,6 @@ POINTS_ARRAY_TYPES = frozenset({"POLY"})
 CONTROLS_ARRAY_TYPES = frozenset({"BEZIER"})
 #: Types whose ``busEntry`` array is a list of ``{pointY}``.
 BUS_TYPES = frozenset({"BUS"})
-
-#: The honest refusal for the tier this batch does not open.
-PCB_TIER_ERROR = (
-    "PCB 读取在 B 档（038 未开）：本批只接 eprj3 的**只读原理图**（SCH_PAGE）；"
-    "空 PCB 模型会被误读成\"0 器件 0 网\"（SKILL 坑 14），所以这里报错而不是给一个空模型"
-)
 
 
 class Eprj3Error(ValueError):
@@ -152,6 +188,24 @@ def page_files(path: str | Path) -> list[Path]:
         root = root.parent
     found: dict[str, Path] = {}
     for candidate in sorted(root.glob(f"sch/**/*{ESCH2_SUFFIX}")):
+        if candidate.is_file():
+            found.setdefault(str(candidate).lower(), candidate)
+    return [found[key] for key in sorted(found)]
+
+
+def pcb_files(path: str | Path) -> list[Path]:
+    """Every PCB file under ``pcb/``, deterministically ordered (038F4).
+
+    ``pcb/**/*.epcb2`` — the spec's layout is ``pcb/<board>.epcb2``, one file per
+    board. Same discipline as :func:`page_files`: a folder and its ``.eprj3``
+    index name the same project and give the same list, the order is by path, and
+    duplicates are collapsed case-insensitively the way Windows paths compare.
+    """
+    root = Path(path)
+    if root.is_file():
+        root = root.parent
+    found: dict[str, Path] = {}
+    for candidate in sorted(root.glob(f"pcb/**/*{EPCB2_SUFFIX}")):
         if candidate.is_file():
             found.setdefault(str(candidate).lower(), candidate)
     return [found[key] for key in sorted(found)]
@@ -232,8 +286,16 @@ def _flip_body(record_type: str, body: dict[str, Any]) -> None:
                 entry["pointY"] = _flip(entry["pointY"])
 
 
-def _doc_type_of(line: str) -> str | None:
-    core = line[:-1] if line.endswith("|") else line
+def _doc_head(line: str) -> tuple[str, str] | None:
+    """``(docType, editVersion)`` of a ``DOCHEAD`` line, or ``None``.
+
+    Both fields are returned as strings (``""`` when the head does not carry
+    one), because the head is the only place a document names itself. A line
+    that is not a decodable ``DOCHEAD`` is ``None`` — the caller's job, not this
+    one's, to decide whether that matters.
+    """
+    core = line.rstrip("\r\n")
+    core = core[:-1] if core.endswith("|") else core
     envelope_text, _, body_text = core.partition("||")
     try:
         envelope = json.loads(envelope_text)
@@ -245,7 +307,78 @@ def _doc_type_of(line: str) -> str | None:
         head = json.loads(body_text) if body_text.strip() else {}
     except ValueError:
         return None
-    return str((head or {}).get("docType") or "") if isinstance(head, dict) else None
+    if not isinstance(head, dict):
+        return None
+    return (str(head.get("docType") or ""), str(head.get("editVersion") or "").strip())
+
+
+def _doc_type_of(line: str) -> str | None:
+    head = _doc_head(line)
+    return head[0] if head is not None else None
+
+
+def _stream_versions(text: str) -> list[str]:
+    """Content-document versions in one record stream, in the order they appear."""
+    found: list[str] = []
+    for line in text.split("\n"):
+        head = _doc_head(line)
+        if head is None or head[0] not in CONTENT_DOC_TYPES or not head[1]:
+            continue
+        if head[1] not in found:
+            found.append(head[1])
+    return found
+
+
+def _file_versions(root: Path) -> list[str]:
+    """Content-document versions from the documents the stream does **not** carry.
+
+    Line-by-line rather than whole-file: a PCB file is the largest document in a
+    project and only its ``DOCHEAD`` matters here. An unreadable file is skipped
+    — this is metadata, and a version we cannot read is "unknown", not a reason
+    to refuse a schematic read that would have worked.
+    """
+    found: list[str] = []
+    for pattern in CONTENT_DOC_GLOBS:
+        for candidate in sorted(root.glob(pattern)):
+            if not candidate.is_file():
+                continue
+            try:
+                with candidate.open(encoding="utf-8-sig", errors="replace") as handle:
+                    for line in handle:
+                        if '"DOCHEAD"' not in line:
+                            continue
+                        head = _doc_head(line)
+                        if head is None or head[0] not in CONTENT_DOC_TYPES or not head[1]:
+                            continue
+                        if head[1] not in found:
+                            found.append(head[1])
+            except OSError:
+                continue
+    return found
+
+
+def _apply_editor_version(meta: dict[str, Any], versions: list[str]) -> None:
+    """Fill ``meta['editorVersion']`` from content documents — or say it is unclear.
+
+    The index wins when it names a version (that is the precedence the `.epro2`
+    path always had). With nothing in the index: one content version is the
+    project's version; several are a conflict, and picking one would be inventing
+    a fact, so they are disclosed as ``editorVersionConflict`` and the version
+    stays unknown; none leaves it unknown with no extra field.
+    """
+    declared = meta.get("editorVersion")
+    if str(declared or "").strip():
+        return
+    unique: list[str] = []
+    for version in versions:
+        if version and version not in unique:
+            unique.append(version)
+    if not unique:
+        return
+    if len(unique) == 1:
+        meta["editorVersion"] = unique[0]
+        return
+    meta["editorVersionConflict"] = unique
 
 
 def transform_text(text: str) -> str:
@@ -280,6 +413,11 @@ def load_eprj3_text(path: str | Path) -> tuple[str, dict[str, Any]]:
     gluing them with newlines yields exactly the multi-document stream the offline
     pipeline already reads. Files are read in path order, so the stream is
     reproducible; an unreadable page is reported with its path rather than skipped.
+
+    The metadata is the index plus the fields the pipeline reads; ``editorVersion``
+    comes from the index when it has one, otherwise from the content documents'
+    ``DOCHEAD.editVersion`` (see :func:`_apply_editor_version`) — the one fact
+    that otherwise only exists inside the stream and never reached ``ParseStats``.
     """
     root = Path(path)
     if root.is_file():
@@ -311,7 +449,117 @@ def load_eprj3_text(path: str | Path) -> tuple[str, dict[str, Any]]:
     meta["format"] = "eprj3"
     meta["pages"] = [page.stem for page in pages]
     meta["sourcePath"] = str(root)
+    _apply_editor_version(meta, _stream_versions(text) + _file_versions(root))
     return text, meta
+
+
+def _pcb_title(index: dict[str, Any], document: Any, pcb_path: Path) -> str:
+    """The board document's own title, in the index's words when it has them.
+
+    ``profile.pcbs`` is the project's uuid→title map and the PCB document's own
+    ``DOCHEAD.uuid`` is the key into it, so a board is named the way the project
+    names it. Otherwise the document's ``META.title`` says the same thing from the
+    board's side, and the file stem is the last resort — never an empty name.
+    """
+    uuid = str(getattr(document, "uuid", "") or "").strip()
+    if uuid:
+        profile = index.get("profile")
+        pcbs = profile.get("pcbs") if isinstance(profile, dict) else None
+        entry = pcbs.get(uuid) if isinstance(pcbs, dict) else None
+        if isinstance(entry, dict):
+            title = str(entry.get("title") or "").strip()
+            if title:
+                return title
+    for record in getattr(document, "records", ()) or ():
+        if record.type != "META":
+            continue
+        title = str((record.body or {}).get("title") or "").strip()
+        if title:
+            return title
+        break
+    return pcb_path.stem
+
+
+def load_eprj3_pcb_source(path: str | Path) -> "Epro2Source":
+    """The folder project's **PCB** document as an :class:`Epro2Source` (038F4).
+
+    The container difference stops here: a folder project keeps its board in
+    ``pcb/<board>.epcb2``, which is a complete record stream of its own (its own
+    ``DOCHEAD``, its libraries, and the PCB document), so feeding it to the very
+    :func:`~boardwise.parsers.epru_stream.split_documents` the ``.epro2`` reader
+    uses yields documents both builders already consume —
+    :func:`~boardwise.parsers.epru.build_board_geometry` and
+    :func:`~boardwise.parsers.epro2_model.build_design_model`. No PCB parser is
+    copied and no geometry rule changes.
+
+    **No y-flip.** A page file is written y-up; a PCB file is not — its board
+    coordinates are the frame the geometry walk already assumes, and the
+    ``SYMBOL`` / ``FOOTPRINT`` documents the file carries are library payload that
+    the schematic transform would flip. The file is therefore read verbatim.
+
+    ``project_meta`` is the index (its identity fields included), with ``title``
+    set from the board's own name and ``editorVersion`` from 038F2's rule — the
+    index when it names one, else the content documents' ``editVersion``.
+
+    Only **one** board is read: without a mapping that says which board a caller
+    means, several ``.epcb2`` files (or several PCB documents in one file) are
+    refused by name rather than silently reduced to the first one.
+    """
+    from ..core.geometry import ParseStats
+    from .epru import Epro2Source
+    from .epru_stream import split_documents
+
+    root = Path(path)
+    if root.is_file():
+        root = root.parent
+    index = read_index(path)
+    boards = pcb_files(root)
+    if not boards:
+        raise Eprj3Error(
+            f"{root}: no PCB file ({EPCB2_SUFFIX}) under pcb/ — this folder project has "
+            "no board document, and an empty board model would read as \"0 器件 0 网\" "
+            "(SKILL 坑 14)"
+        )
+    if len(boards) > 1:
+        raise Eprj3Error(
+            f"{root}: {len(boards)} PCB files under pcb/ ("
+            + ", ".join(board.name for board in boards)
+            + "); this slice reads one board and the project index names no mapping "
+            "that would say which one a caller means — refusing rather than picking "
+            "the first"
+        )
+    pcb_path = boards[0]
+    try:
+        text = pcb_path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        text = pcb_path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        raise Eprj3Error(f"{pcb_path}: cannot be read ({exc})") from exc
+
+    meta = dict(index)
+    meta.setdefault("name", root.name)
+    meta["format"] = "eprj3"
+    meta["sourcePath"] = str(root)
+    meta["pcbPath"] = str(pcb_path)
+    _apply_editor_version(meta, _stream_versions(text) + _file_versions(root))
+
+    stats = ParseStats(source=str(root), editor_version=meta.get("editorVersion"))
+    documents = split_documents(text, stats)
+    pcb_documents = [document for document in documents if document.doc_type == "PCB"]
+    if not pcb_documents:
+        raise Eprj3Error(
+            f"{pcb_path}: no PCB document (DOCHEAD docType \"PCB\") inside the file — "
+            "a board file without a board is not an empty board"
+        )
+    if len(pcb_documents) > 1:
+        raise Eprj3Error(
+            f"{pcb_path}: {len(pcb_documents)} PCB documents in one file — refusing to "
+            "pick one without a mapping that says which"
+        )
+    meta["title"] = _pcb_title(index, pcb_documents[0], pcb_path)
+    return Epro2Source(
+        source=str(root), stats=stats, documents=documents, project_meta=meta,
+    )
 
 
 def describe(path: str | Path) -> dict[str, Any]:

@@ -18,6 +18,11 @@ JSON-serialisable capture:
   were rejected before navigation, and whether the selection covered **all**
   documents of that type. An explicit subset that succeeded is ``missing`` in the
   channel, never ``ok``: it is coverage, not evidence quality.
+  ``doc.list`` reports the V4 schematic as a ``type: "schematic"`` **container**
+  with no tab, while ``type: "page"`` is the openable, collectable page. The
+  container is never opened, rendered or read back: it is kept as metadata under
+  ``selection.schematic.containers`` (``status: not-applicable``), and naming one
+  explicitly is refused before navigation with ``NOT_AN_ADDRESSABLE_PAGE``.
 * ``steps`` — one row per action:
   ``{documentUuid, action, status, stdout, stderr, exitCode, error}`` with
   ``status`` in ``ok / failed / skipped``, ``exitCode`` 0 / 1 / null, stdout a
@@ -30,6 +35,11 @@ JSON-serialisable capture:
   (``liveSchematic / livePcb / schematicImage / pcbImage``), in the same row
   shape as 537C3a's ledger (``status / source / detail / artifacts / errors /
   steps``). Archive and datasheet channels are deliberately not fabricated.
+  ``pcbImage`` is ``not-applicable`` by host capability, not by failure:
+  ``export.render`` is a schematic-only API (an activated PCB returned nothing
+  even with a 60 s leash, on V4 and V3), so no PCB is rendered at all. PCB live
+  evidence is ``livePcb`` (readback + geometry); archived PCB review and the
+  offline geometry SVG are separate channels and are never written as live PNG.
 * ``artifacts`` — every file written, relative to ``out_dir``, with byte count
   and sha256; images only after ``format == image/png`` + non-empty valid base64
   (a zip container or a broken payload is never written).
@@ -95,10 +105,35 @@ LIVE_CHANNEL_ORDER: tuple[str, ...] = (
 #: contract (a step row must not grow a full page render into the capture).
 STEP_STDOUT_LIMIT = 2000
 
-#: One page render's leash. A correct render answers in ~100–200 ms; 10 s also
-#: keeps a hung host (pit 23) from freezing the editor's progress toast for
-#: longer than a human should wait.
+#: One page render's leash. A correct schematic render answers in ~100–200 ms;
+#: 10 s also keeps a hung host (pit 23) from freezing the editor's progress toast
+#: for longer than a human should wait. Only schematic pages are rendered:
+#: ``export.render`` does not return for a PCB (see ``PCB_IMAGE_LIMIT``), so no
+#: PCB call is made and this leash never applies to one.
 RENDER_TIMEOUT_MS = 10_000
+
+#: Why ``pcbImage`` is ``not-applicable``. Measured 2026-10-31 on the V4 host:
+#: PCB1 was ``doc.open`` + ``document.current`` active, then
+#: ``export.render(format=png, scope=page, timeoutMs=60000)`` timed out whole 60 s
+#: while a schematic page answered in ~100 ms in the same session; V3 behaves the
+#: same. That is a host capability boundary, not a short leash: the API is the
+#: schematic export endpoint and has no PCB drawing to return. Retrying with a
+#: larger timeout only freezes the editor longer, so the channel stops calling it
+#: and says why instead of manufacturing a failed step or a placeholder image.
+PCB_IMAGE_LIMIT = (
+    "HOST_API_SCOPE: export.render 是原理图（schematic）出图口，对 PCB 不适用——"
+    "PCB1 已 doc.open + document.current 激活后仍整 60s 不返回（V4 实测；V3 同样），"
+    "同会话原理图页秒回。这是宿主能力边界而不是超时，已停止对 PCB 调用该 API；"
+    "本通道不生成伪图，PCB 实时证据走 livePcb（readback + geometry），"
+    "归档 PCB 审查与离线几何 SVG 是别的通道，不是 live PNG。"
+)
+
+#: ``pcbImage``'s detail. Same fact, one sentence for the report row.
+PCB_IMAGE_DETAIL = (
+    "PCB 位图通道不适用：export.render 只服务原理图页，对已激活的 PCB 调用"
+    "（page scope，60s）仍不返回，宿主没有 PCB 位图可出（不是超时、不是失败）；"
+    "未调用该 API、未生成伪图。PCB 实时证据是 livePcb 的 readback + geometry。"
+)
 
 #: The only render payload this module accepts as an image.
 RENDER_FORMAT = "image/png"
@@ -125,9 +160,9 @@ _CHANNEL_ACTIONS: dict[str, frozenset[str]] = {
     CHANNEL_SCHEMATIC_IMAGE: frozenset(
         {"doc.open", "document.current", "export.render"}
     ),
-    CHANNEL_PCB_IMAGE: frozenset(
-        {"doc.open", "document.current", "export.render"}
-    ),
+    # No action: PCB images are never attempted (``PCB_IMAGE_LIMIT``), so the
+    # channel has no steps to attribute.
+    CHANNEL_PCB_IMAGE: frozenset(),
 }
 
 #: Per-document actions a channel needs to be `ok`.
@@ -137,7 +172,9 @@ _REQUIRED_ACTIONS: dict[str, tuple[str, ...]] = {
         "doc.open", "document.current", "pcb.readback", "pcb.geometry"
     ),
     CHANNEL_SCHEMATIC_IMAGE: ("doc.open", "document.current", "export.render"),
-    CHANNEL_PCB_IMAGE: ("doc.open", "document.current", "export.render"),
+    # Nothing is required: the channel is closed as not-applicable, never failed
+    # for an API it must not call.
+    CHANNEL_PCB_IMAGE: (),
 }
 
 
@@ -297,13 +334,8 @@ def _listing_error(listing: Any) -> dict | None:
     return None
 
 
-def _documents(listing: Any) -> list[dict]:
-    """The listing's documents, normalised to ``schematic`` / ``pcb``.
-
-    Only these two kinds are collectable. Unknown kinds are left out rather than
-    guessed at; a uuid of the wrong kind is consequently an unknown id for the
-    kind the caller asked about (and is rejected before navigation).
-    """
+def _listing_documents(listing: Any) -> list[dict]:
+    """The listing's raw document rows that carry a usable uuid."""
     if not isinstance(listing, dict):
         return []
     raw_documents = listing.get("documents")
@@ -316,21 +348,64 @@ def _documents(listing: Any) -> list[dict]:
         uuid = str(row.get("uuid") or "")
         if not uuid:
             continue
-        raw_type = str(row.get("type") or "")
-        if raw_type == "pcb":
-            kind = "pcb"
-        elif raw_type in ("page", "schematic"):
-            kind = "schematic"
-        else:
-            continue
         rows.append(
             {
                 "uuid": uuid,
                 "name": str(row.get("name") or row.get("title") or uuid),
-                "type": kind,
+                "rawType": str(row.get("type") or ""),
             }
         )
     return rows
+
+
+def _documents(listing: Any) -> list[dict]:
+    """The listing's **collectable** documents, normalised to ``pcb`` / ``schematic``.
+
+    Only ``type: "pcb"`` and ``type: "page"`` are collectable. In V4 the
+    ``type: "schematic"`` row is the schematic *container*: it has no tab, so it
+    cannot be opened, read back or rendered — keeping it here was what made the
+    collector ``doc.open`` a container and fail both schematic channels. It is
+    returned as metadata by :func:`_containers` instead. Unknown kinds are left
+    out rather than guessed at; a uuid of the wrong kind is consequently an
+    unknown id for the kind the caller asked about (and is rejected before
+    navigation).
+    """
+    rows: list[dict] = []
+    for raw in _listing_documents(listing):
+        raw_type = raw["rawType"]
+        if raw_type == "pcb":
+            kind = "pcb"
+        elif raw_type == "page":
+            kind = "schematic"
+        else:
+            continue
+        rows.append(
+            {"uuid": raw["uuid"], "name": raw["name"], "type": kind}
+        )
+    return rows
+
+
+def _containers(listing: Any) -> list[dict]:
+    """The listing's schematic containers: identity only, never a target.
+
+    A container answers no page-level action (no tab), so it is not a channel and
+    holds no evidence. It is kept so the capture still names what ``doc.list``
+    showed, with ``not-applicable`` and the reason stated in the same vocabulary
+    as the rest of the evidence ledger.
+    """
+    return [
+        {
+            "uuid": raw["uuid"],
+            "name": raw["name"],
+            "status": "not-applicable",
+            "reason": (
+                "doc.list 的 type=schematic 是原理图容器（没有 tab）："
+                "不是可寻址页面，不 doc.open/readback/render"
+            ),
+        }
+        for raw in _listing_documents(listing)
+        if raw["rawType"] == "schematic"
+    ]
 
 
 def _requested_ids(requested: Iterable[str] | None) -> list[str] | None:
@@ -613,8 +688,9 @@ class _Capture:
         self.steps.append(step)
         return step
 
-    def png_check(self, document: dict, channel: str) -> Callable[[Any], dict | None]:
-        """Validate one render payload and write the PNG only if it is one."""
+    def png_check(self, document: dict) -> Callable[[Any], dict | None]:
+        """Validate one schematic render payload and write the PNG only if it is
+        one. Only schematic pages are rendered (``PCB_IMAGE_LIMIT``)."""
 
         def check(payload: Any) -> dict | None:
             if not isinstance(payload, dict):
@@ -643,12 +719,14 @@ class _Capture:
                     "RENDER_NOT_IMAGE",
                     "render 的 data 不是 PNG（缺 8 字节 PNG 签名，不落盘）",
                 )
-            prefix = "live-sch" if channel == CHANNEL_SCHEMATIC_IMAGE else "live-pcb"
-            stem = f"{prefix}-{_safe_stem(document['name'])}-{_short_uuid(document['uuid'])}"
+            stem = (
+                f"live-sch-{_safe_stem(document['name'])}-"
+                f"{_short_uuid(document['uuid'])}"
+            )
             relative = _write_unique(self.out_dir, stem, ".png", blob)
             self.artifacts.append(
                 {
-                    "channel": channel,
+                    "channel": CHANNEL_SCHEMATIC_IMAGE,
                     "documentUuid": document["uuid"],
                     "kind": "image",
                     "page": document["name"],
@@ -711,16 +789,15 @@ async def _open_and_verify(capture: _Capture, document: dict) -> bool:
     return current_step["status"] == STATUS_OK
 
 
-async def _render_page(
-    capture: _Capture, document: dict, channel: str
-) -> dict:
+async def _render_page(capture: _Capture, document: dict) -> dict:
+    """Render one schematic page. Never called for a PCB (``PCB_IMAGE_LIMIT``)."""
     params = {
         "format": "png",
         "scope": "page",
         "pageUuid": document["uuid"],
         "fileName": (
-            ("live-sch-" if channel == CHANNEL_SCHEMATIC_IMAGE else "live-pcb-")
-            + f"{_safe_stem(document['name'])}-{_short_uuid(document['uuid'])}.png"
+            f"live-sch-{_safe_stem(document['name'])}-"
+            f"{_short_uuid(document['uuid'])}.png"
         ),
         "timeoutMs": RENDER_TIMEOUT_MS,
     }
@@ -728,7 +805,7 @@ async def _render_page(
         document["uuid"],
         "export.render",
         params,
-        check=capture.png_check(document, channel),
+        check=capture.png_check(document),
     )
     return step
 
@@ -764,17 +841,21 @@ async def _collect_schematic(
                 {"type": NETLIST_TYPE},
                 check=capture.netlist_check(document),
             )
-        await _render_page(capture, document, CHANNEL_SCHEMATIC_IMAGE)
+        await _render_page(capture, document)
 
 
 async def _collect_pcb(capture: _Capture, documents: list[dict]) -> None:
-    """One PCB at a time. Render runs even when readback/geometry failed."""
+    """One PCB at a time: readback, then geometry.
+
+    No picture is taken. ``export.render`` is schematic-only and never returns
+    for a PCB (``PCB_IMAGE_LIMIT``), so calling it here would only burn a timeout
+    and leave a failed step for a capability the host does not have.
+    """
     for document in documents:
         if not await _open_and_verify(capture, document):
             uuid = document["uuid"]
             capture.skip(uuid, "pcb.readback", "SKIPPED", "焦点未核实，不在错误页面回读")
             capture.skip(uuid, "pcb.geometry", "SKIPPED", "焦点未核实，不测几何")
-            capture.skip(uuid, "export.render", "SKIPPED", "焦点未核实，不在错误页面出图")
             continue
 
         readback_data, readback_step = await capture.call(
@@ -799,8 +880,6 @@ async def _collect_pcb(capture: _Capture, documents: list[dict]) -> None:
                 "DEPENDENCY_MISSING",
                 "pcb.readback 没有给出可用组件读数，bboxIds 依赖缺失，几何未测量",
             )
-        # Independent of both: the picture may still be the evidence that lands.
-        await _render_page(capture, document, CHANNEL_PCB_IMAGE)
 
 
 async def _restore_focus(
@@ -932,6 +1011,8 @@ def _build_channels(
     * an unusable ``doc.list`` → **missing**: the document set is unknown;
     * no PCB document → ``not-applicable``; no schematic page → ``failed``;
     * a refused run (identity/selection/focus) → ``missing``: nothing was read;
+    * ``pcbImage`` → ``not-applicable`` by host capability: ``export.render`` is
+      schematic-only and is never called for a PCB, so there is no step to judge;
     * any attempted required step failed → ``failed`` (successes stay listed);
     * an explicit subset that has not failed → ``missing`` (coverage, not quality);
     * every required step ok (and a non-empty netlist) → ``ok``;
@@ -982,6 +1063,12 @@ def _build_channels(
         elif abort is not None:
             status = STATUS_MISSING
             detail = f"未导航采集：{abort.get('message') or abort.get('code')}"
+        elif channel == CHANNEL_PCB_IMAGE:
+            # The host has no PCB render endpoint. This is a capability boundary,
+            # not a failure of this run and not a missing step: saying ok would
+            # invent a picture, saying failed would invite a pointless retry.
+            status = STATUS_NOT_APPLICABLE
+            detail = PCB_IMAGE_DETAIL
         elif failures:
             status = STATUS_FAILED
             detail = (
@@ -1023,6 +1110,14 @@ def _build_channels(
         ]
         if status == STATUS_FAILED and not errors:
             errors = list(failures) or [detail]
+        if (
+            channel == CHANNEL_PCB_IMAGE
+            and status == STATUS_NOT_APPLICABLE
+            and all_documents
+        ):
+            # The reason must travel with the row, not only in prose. With no PCB
+            # at all the earlier "no PCB" detail is the whole reason.
+            errors = [PCB_IMAGE_LIMIT]
 
         channels[channel] = _channel_row(
             status,
@@ -1106,13 +1201,23 @@ async def collect_live_evidence(
             actual=project_uuid,
         )
 
-    schematic_selection = _selection_row(
-        by_kind["schematic"], _requested_ids(page_uuids)
-    )
+    containers = _containers(listing)
+    container_ids = {row["uuid"] for row in containers}
+    requested_pages = _requested_ids(page_uuids)
+    # A container id is a real row in `doc.list`, but it is not an addressable
+    # page: it is refused on its own code, never folded into the pages' selection
+    # (where it would read as an unknown uuid).
+    not_addressable: list[str] = []
+    if requested_pages is not None:
+        not_addressable = [uuid for uuid in requested_pages if uuid in container_ids]
+        requested_pages = [uuid for uuid in requested_pages if uuid not in container_ids]
+    schematic_selection = _selection_row(by_kind["schematic"], requested_pages)
     pcb_selection = _selection_row(by_kind["pcb"], _requested_ids(pcb_uuids))
+    schematic_public = _public_selection(schematic_selection)
+    schematic_public["containers"] = [dict(row) for row in containers]
     selection: dict = {
         "ok": True,
-        "schematic": _public_selection(schematic_selection),
+        "schematic": schematic_public,
         "pcb": _public_selection(pcb_selection),
         "error": None,
     }
@@ -1120,19 +1225,31 @@ async def collect_live_evidence(
         "schematic": schematic_selection["unknown"],
         "pcb": pcb_selection["unknown"],
     }
-    if unknown["schematic"] or unknown["pcb"]:
+    if not_addressable or unknown["schematic"] or unknown["pcb"]:
         selection["ok"] = False
-        parts = []
-        if unknown["schematic"]:
-            parts.append("原理图页 " + ", ".join(unknown["schematic"]))
-        if unknown["pcb"]:
-            parts.append("PCB " + ", ".join(unknown["pcb"]))
-        selection["error"] = _error(
-            "UNKNOWN_DOCUMENT_UUID",
-            "显式选择含 doc.list 里不存在的文档 id（" + "；".join(parts) + "）："
-            "在任何导航前拒绝",
-            unknown=unknown,
-        )
+        if not_addressable:
+            selection["error"] = _error(
+                "NOT_AN_ADDRESSABLE_PAGE",
+                "显式选择含 doc.list 里的原理图容器 id（"
+                + ", ".join(not_addressable)
+                + "）：type=schematic 的容器没有 tab，不是可打开页，"
+                "容器不能 doc.open/readback/render；请改用 type=page 的页 id"
+                "（在任何导航前拒绝）",
+                containers=list(not_addressable),
+                unknown=unknown,
+            )
+        else:
+            parts = []
+            if unknown["schematic"]:
+                parts.append("原理图页 " + ", ".join(unknown["schematic"]))
+            if unknown["pcb"]:
+                parts.append("PCB " + ", ".join(unknown["pcb"]))
+            selection["error"] = _error(
+                "UNKNOWN_DOCUMENT_UUID",
+                "显式选择含 doc.list 里不存在的文档 id（" + "；".join(parts) + "）："
+                "在任何导航前拒绝",
+                unknown=unknown,
+            )
 
     selected_document_count = len(schematic_selection["_documents"]) + len(
         pcb_selection["_documents"]

@@ -485,14 +485,18 @@ def _load_model(
 ) -> tuple[object, object | None]:
     """Return ``(DesignModel, BoardGeometry | None)`` for a supported input.
 
-    ``view`` picks which model a ``.epro2`` backup yields: ``schematic`` (the
-    parsed schematic, which is what the 011-family rules are written against —
-    and what ``review`` asks for by default since 047, because the schematic is
-    the design's truth) or ``pcb`` (the PCB document's own netlist view, asked
-    for by name when the board itself is the subject). ``BoardGeometry`` is only
-    available for the pcb view of a ``.epro2``; both views come from one parse of
-    the file. Raises :class:`EncryptedProjectError` for an unreadable backup and
-    ``ValueError`` for an unsupported extension.
+    ``view`` picks which model a ``.epro2`` backup or an eprj3 folder project
+    yields: ``schematic`` (the parsed schematic, which is what the 011-family
+    rules are written against — and what ``review`` asks for by default since
+    047, because the schematic is the design's truth) or ``pcb`` (the PCB
+    document's own netlist view, asked for by name when the board itself is the
+    subject). ``BoardGeometry`` is available for the pcb view of a ``.epro2`` and,
+    since 038F5, of a folder project (``pcb/<board>.epcb2`` through 038F4's
+    adapter); both views of one ``.epro2`` come from one parse of the file, and
+    the folder path likewise reads the board file once.
+    Raises :class:`EncryptedProjectError` for an unreadable backup and
+    ``ValueError`` for an unsupported extension, an unreadable folder project,
+    or a folder project with no single board.
 
     ``parse_stats`` (task 020 §WI-1) is an optional caller-owned
     :class:`boardwise.core.geometry.ParseStats` the schematic parse fills in.
@@ -503,18 +507,26 @@ def _load_model(
     reader must not treat a zero as a measurement.
     """
     suffix = path.suffix.lower()
-    from .parsers.eprj3 import Eprj3Error, PCB_TIER_ERROR, looks_like_eprj3
+    from .parsers.eprj3 import looks_like_eprj3
 
     if looks_like_eprj3(path):
-        # 038 tier A: a folder project is readable **schematic** only, and the
-        # pcb view is refused by name rather than answered with an empty model
-        # (a model with 0 components and 0 nets reads as "a clean board" —
-        # SKILL pit 14).
-        if view == "pcb":
-            raise ValueError(PCB_TIER_ERROR)
-        from .parsers.schematic import build_project_model
+        # 038F5: a folder project's **pcb** view goes through 038F4's adapter.
+        # `pcb/<board>.epcb2` is a complete record stream of its own, so the same
+        # two builders the `.epro2` branch below uses consume it unchanged — the
+        # container difference stops in the adapter. A project with no board
+        # file, with more than one, or with a board file holding no PCB document
+        # is still refused by `load_eprj3_pcb_source` rather than answered with
+        # an empty model (a model with 0 components and 0 nets reads as "a clean
+        # board" — SKILL pit 14); that refusal is an `Eprj3Error`, a
+        # `ValueError`, so every caller already turns it into exit 2.
+        if view != "pcb":
+            from .parsers.schematic import build_project_model
 
-        return build_project_model(path, parse_stats=parse_stats), None
+            return build_project_model(path, parse_stats=parse_stats), None
+        from .parsers.eprj3 import load_eprj3_pcb_source
+
+        source = load_eprj3_pcb_source(path)
+        return build_design_model(source), build_board_geometry(source)
     if suffix == ".enet":
         return parse_enet(path), None
     if suffix in (".kicad_pro", ".kicad_sch", ".kicad_pcb"):
@@ -3002,7 +3014,7 @@ def _coverage_reasons(coverage: dict) -> list[str]:
         )
     if coverage.get("pcbReviewMissing"):
         reasons.append(
-            "工程含 PCB 文档但本次没有 pcb_review 一节：PCB 版面几何未审（离线 epro2 "
+            "工程含 PCB 文档但本次没有 pcb_review 一节：PCB 版面几何未审（离线/归档 "
             "路径的 PCB 审查未完成，见 source.notes）—— 整块 PCB 的结论缺失"
         )
     return reasons
@@ -4813,14 +4825,17 @@ def _run_pcb_runner(
 
     Two things happen here, in this order:
 
-    * the ``had_documents`` probe — a *second* parse of the same archive, because
+    * the ``had_documents`` probe — a *second* look at the file, because
       「does this backup have PCB documents at all?」 is a fact about the file and
       the runner answers a different question (「review what it has」). It is
       asked rather than inferred from ``section is None``, because that single
-      value cannot tell the two absences apart (126d). A parse failure here is
-      **not** a gate failure by itself — the runner's own parse is the one that
-      decides whether the review happened, and if the archive is so broken that
-      it cannot be listed, the model-empty gate already speaks for it;
+      value cannot tell the two absences apart (126d). For an ``.epro2`` it is a
+      second parse of the archive; for a folder project (038F5) it is 038F4's
+      ``pcb_files`` listing; for KiCad it is whether the ``.kicad_pcb`` exists.
+      A probe failure here is **not** a gate failure by itself — the runner's own
+      parse is the one that decides whether the review happened, and if the
+      file is so broken that it cannot be listed, the model-empty gate already
+      speaks for it;
     * the runner itself, whose one exception is caught: a broken rule set or a
       board the rules choke on may not take the report down, so the section is
       simply absent and ``notes`` says why (126a's discipline).
@@ -4829,9 +4844,16 @@ def _run_pcb_runner(
 
     pcb_had_documents = False
     try:
+        from .parsers.eprj3 import looks_like_eprj3, pcb_files
         from .parsers.kicad import is_kicad_path, kicad_project_files
 
-        if is_kicad_path(path):
+        if looks_like_eprj3(path):
+            # 038F5: a folder project states its board as a **file**
+            # (`pcb/**/*.epcb2`), listed by 038F4's adapter — the same
+            # `pcb_files` the caller's canvas note reads, so one project gives
+            # one answer everywhere.
+            pcb_had_documents = bool(pcb_files(path))
+        elif is_kicad_path(path):
             # R3: a KiCad project has a board exactly when its .kicad_pcb exists.
             pcb_had_documents = kicad_project_files(path)[1] is not None
         else:
@@ -6452,6 +6474,13 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # the *emptiness* online is itself a fact: no project archive was downloaded,
     # so there is nothing to review the board with.
     online_artifacts: dict = {}
+    # 038F3: a folder project's PCB documents, listed once by 038F4's adapter
+    # (`pcb_files`) and read by three consumers below — the canvas note, the
+    # 038F5 runner gate, and `_run_pcb_runner`'s `pcb_had_documents`. Not the
+    # index's `pcb_count` (the real V4 sample's index is not the authority for
+    # what is on disk) and not a second glob written here. Empty on every
+    # non-folder path, so all three readers see one fact.
+    folder_pcb_files: list = []
 
     if args.file:
         path = Path(args.file)
@@ -6464,6 +6493,14 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
             print(f"boardwise checkup: {path}: {exc}", file=sys.stderr)
             return 2
         tier = "file"
+        from .parsers.eprj3 import looks_like_eprj3, pcb_files
+
+        if looks_like_eprj3(path):
+            # 038F3: a folder project states its boards as files under `pcb/`,
+            # and 038F4's adapter is the one reader of that layout. Asked here so
+            # the canvas note below (printed before the PCB block runs) and
+            # `pcb_had_documents` later both answer from the same list.
+            folder_pcb_files = pcb_files(path)
         source = {
             "project": None, "pageUuid": None, "pageType": None,
             "hostVersion": "", "connectorVersion": "", "file": str(path),
@@ -6495,6 +6532,11 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
         canvas_note = (
             "离线路径（--file）没有 PCB 文档（或 PCB 审查未出结果），没有可渲染的版面"
             "几何；要编辑器截图需在线工程"
+            if not folder_pcb_files
+            else (
+                f"工程有 PCB（pcb/ 下 {len(folder_pcb_files)} 个 .epcb2），但本次 PCB "
+                "审查未出结果（原因见 source.notes）：没有可渲染的版面几何"
+            )
         )
         # #87 ①: the first line names the engine, on both paths — the report's
         # top-level `toolVersion` is this same `_local_version()`, so a console
@@ -6878,7 +6920,13 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
     # `run_pcb_review`'s own two-value contract and its callers stay as they are.
     pcb_boards: list = []
     if tier == "file" and (
-        str(path).lower().endswith(".epro2") or Path(path).suffix.lower() in (".kicad_pro", ".kicad_sch", ".kicad_pcb")
+        str(path).lower().endswith(".epro2")
+        or Path(path).suffix.lower() in (".kicad_pro", ".kicad_sch", ".kicad_pcb")
+        # 038F5: a folder project reaches the runner through the very same call.
+        # `_review_units` picks the container source (eprj3 adapter vs `.epro2`
+        # entry) and everything after that — documents, footprints, artwork,
+        # `extract_board`, `build_design_model` — is one shared path.
+        or folder_pcb_files
     ):
         pcb_findings, pcb_review, pcb_had_documents = _run_pcb_runner(
             path, model=model, intent=contract, modules=modules, notes=notes,
@@ -6963,6 +7011,16 @@ def _cmd_checkup(args: argparse.Namespace) -> int:
                 "逐页归档只有一页原理图记录，网表档根本没有版面）：PCB 版面审查未跑"
             ),
         )
+    if tier == "file" and folder_pcb_files and pcb_review is None:
+        # 038F3, restated by 038F5: a folder project's boards are **files**
+        # (`pcb/**/*.epcb2`, listed by 038F4's `pcb_files`) and the PCB runner
+        # above now reads them through 038F4's adapter — so reaching this branch
+        # means the board exists and the review **really** produced no section
+        # (a parse or rule failure, named in `source.notes`). Either way the
+        # fact is 「not reviewed」, never 「no PCB」: the flag feeds the same 126d
+        # coverage gate and the same evidence ledger an `.epro2` with PCB
+        # documents already feeds, so no second gate and no second vocabulary.
+        pcb_had_documents = True
     if pcb_not_run is not None:
         notes.append(
             f"{pcb_not_run['reason']}（在线模式；{PCB_ONLINE_HINT}）；"

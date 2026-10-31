@@ -240,6 +240,8 @@ test('sch.drc_check returns the count array verbatim with the UI off by default'
   assert.deepEqual(data.byType, { fatalError: 0, error: 2, warn: 3 });
   assert.equal(data.passed, false);
   assert.equal(data.uiRequested, false);
+  assert.equal(data.entryShape, 'aggregate', 'V3 says one aggregate entry per kind');
+  assert.equal(data.items, undefined, 'an aggregate has no per-item evidence to keep');
   assert.equal(typeof data.elapsedMs, 'number');
 });
 
@@ -248,7 +250,7 @@ test('sch.drc_check honours explicit arguments and refuses to fold an unparsable
     sch_Drc: {
       check: async (...args) => {
         calls.schDrc.push(args);
-        return [{ type: 'warn', count: 1 }, { type: 'error' }];
+        return [{ type: 'warn', count: 1 }, 'not an entry at all'];
       },
     },
   });
@@ -259,9 +261,9 @@ test('sch.drc_check honours explicit arguments and refuses to fold an unparsable
   });
 
   assert.deepEqual(calls.schDrc, [[false, true, false]]);
-  assert.equal(data.total, 1, 'an entry with no numeric count adds nothing');
+  assert.equal(data.total, 1, 'a string entry adds nothing');
   assert.equal(data.unparsed, 1);
-  assert.equal(data.passed, false, 'one warning is not zero findings');
+  assert.equal(data.passed, null, 'a partly understood answer cannot claim either verdict');
 });
 
 test('sch.drc_check reports a boolean answer as a boolean, not as an empty result', async () => {
@@ -272,6 +274,88 @@ test('sch.drc_check reports a boolean answer as a boolean, not as an empty resul
   assert.equal(data.counts, null);
   assert.equal(data.passed, true);
   assert.match(data.note, /does not hand back per-kind counts/);
+});
+
+test('sch.drc_check reads V4 per-item entries as one finding each (measured 4.1.93)', async () => {
+  // The exact shape the V4.1.93 host answered with 519 times: `{type, rule,
+  // primitives}`, no `count`. Before this, every one of them was unparsed and
+  // the answer claimed passed=true beside 519 warnings.
+  const V4_ENTRIES = Array.from({ length: 519 }, (_, i) => ({
+    type: 'warn',
+    rule: 'Netlist Error',
+    primitives: [`prim-${i}`],
+  }));
+  const { eda } = fakeEda({ sch_Drc: { check: async () => V4_ENTRIES } });
+  const data = await buildHandlers(eda)['sch.drc_check']({});
+
+  assert.equal(data.mode, 'counts');
+  assert.equal(data.entryShape, 'per-item');
+  assert.equal(data.entries, 519);
+  assert.equal(data.total, 519);
+  assert.deepEqual(data.byType, { warn: 519 });
+  assert.equal(data.passed, false, '519 warnings is not a pass');
+  assert.equal(data.unparsed, undefined, 'a recognised V4 entry is not unparsed');
+  assert.equal(data.items.length, 519);
+  assert.deepEqual(data.items[0], V4_ENTRIES[0], 'the per-item entry is kept verbatim');
+  assert.equal(data.counts.length, 519, 'the raw host array is still carried whole');
+});
+
+test('sch.drc_check counts a mixed answer once per entry, without splitting aggregates', async () => {
+  const { eda } = fakeEda({
+    sch_Drc: {
+      check: async () => [
+        { type: 'warn', count: 7 },
+        { type: 'warn', rule: 'Netlist Error', primitives: ['p'] },
+        { type: 'error', rule: 'Pin not connected', net: 'GND', primitives: ['q'] },
+        { type: 'fatalError', count: '2' },
+      ],
+    },
+  });
+  const data = await buildHandlers(eda)['sch.drc_check']({});
+
+  assert.equal(data.total, 11, '7 + 1 + 1 + 2 — an aggregate is never split');
+  assert.deepEqual(data.byType, { warn: 8, error: 1, fatalError: 2 });
+  assert.equal(data.entryShape, 'per-item', 'any per-item entry means the answer enumerated');
+  assert.equal(data.items.length, 2, 'only the entries that carried no count');
+  assert.deepEqual(data.items[0], { type: 'warn', rule: 'Netlist Error', primitives: ['p'] });
+  assert.deepEqual(data.items[1], { type: 'error', rule: 'Pin not connected', net: 'GND', primitives: ['q'] });
+  assert.equal(data.passed, false);
+  assert.equal(data.unparsed, undefined);
+});
+
+test('sch.drc_check reports an unknown entry as unparsed and refuses a verdict', async () => {
+  const { eda } = fakeEda({
+    sch_Drc: {
+      check: async () => [
+        { type: 'warn', count: 1 },
+        { type: 'mystery', rule: 'who knows' },
+        {},
+        'not an entry at all',
+      ],
+    },
+  });
+  const data = await buildHandlers(eda)['sch.drc_check']({});
+
+  assert.equal(data.total, 1, 'nothing unknown becomes zero, and nothing becomes one either');
+  assert.equal(data.unparsed, 3);
+  assert.equal(data.passed, null, 'unparsed entries make the verdict unknown, not true');
+  assert.equal(data.byType.warn, 1);
+  assert.equal(data.byType.mystery, 0, 'an unknown kind is visible at zero, not dropped');
+  assert.equal(data.byType['(entry without a type field)'], 0);
+  assert.equal(data.entryShape, 'aggregate', 'no recognised per-item entry was found');
+  assert.equal(data.items, undefined);
+});
+
+test('sch.drc_check reports an empty answer as zero findings and a pass', async () => {
+  const { eda } = fakeEda({ sch_Drc: { check: async () => [] } });
+  const data = await buildHandlers(eda)['sch.drc_check']({});
+
+  assert.equal(data.entries, 0);
+  assert.equal(data.total, 0);
+  assert.deepEqual(data.byType, {});
+  assert.equal(data.passed, true, 'an empty array is the host saying "no findings"');
+  assert.equal(data.unparsed, undefined);
+  assert.equal(data.items, undefined);
 });
 
 test('sch.drc_check names the focused document when the host throws', async () => {

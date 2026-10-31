@@ -292,8 +292,10 @@ warn 逐条进 `warning_triage[]`，**把每条的 `verdict` 填成 有益/有�
 填法：`boardwise triage --out <checkup目录> --key <key> --verdict … --reason …`
 （report.md「警告分诊」表里有 `key` 列；填了立即重算 completion 与报告里记录的退出码
 （075——命令自己的退出码是 `0`），重跑 checkup 经侧车并入不丢）。
-主机 ERC **没有逐条文本**（只有 host-wide 合计，039 真机 probe 实证，§6 坑 27），
-对着计数与画布图判，要看文本得去编辑器底部面板；PCB DRC 叶子和自有规则 WARN 是带文本的。
+主机 ERC 的逐条形状看宿主版本（§6 坑 27）：**V3 只有 host-wide 合计、没有逐条文本**
+（039 真机 probe 实证），对着计数与画布图判，要看文本得去编辑器底部面板；**V4.1.93 起返回值里
+直接带逐条对象**（`type/rule/primitives`，落成 `drc.schematic.pages[].items`），按条目分诊即可。
+PCB DRC 叶子和自有规则 WARN 是带文本的。
 含警告的模块已排在 `modules` 前头（`source.modulesOrderedBy = "warnings-first"`，
 每个模块带 `warningFindings`），分模块**先审含警告的**。
 
@@ -368,7 +370,8 @@ verdict 至少是 `complete-with-open-items`；别的缺口还在时它仍是 `i
    **不许解析 `runBoardwise` 截断后的 stdout**——半截 JSON「解析成功」比失败更危险
    （缺的节读成空、空的读成通过）。它只是投影：`verdict` 就取 `report.conclusion`，
    不重新判板，也不拿 `summary.conclusion` 升格成结论。
-2. **分诊**：无逐条文本的槽位（主机 ERC 只有 host-wide 合计，§6 坑 27）只能标
+2. **分诊**：无逐条文本的槽位（V3 主机 ERC 只有 host-wide 合计，§6 坑 27；V4.1.93 起带
+   逐条 `items`，按条目分诊、不必退化）只能标
    `needs-manual`，它**仍然算 pending**；**不许**用 有益/有害/无害 三词把无细节项关掉
    （537B）。批量 `boardwise triage-batch --out <目录> --input <batch.json>`、单条
    `boardwise triage`，判决都要带理由；`needs-manual` 在
@@ -617,14 +620,19 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   （C3 值/料号可读、C1 空值仍空）——改字段或改代码而不改文档，测试当场红。
 - **PCB 目视复核没有独立的已验图像通道**（pits #23 的 PCB 边界）：`export.render` 是**一个**
   动作，原理图页与 PCB 页共用同一份实现（`sch_ManufactureData.getExportDocumentFile`），
-  `scope=page` 时先激活目标页再导出、激活不成立就拒（不导出），返回
-  `{format, encoding, bytes, data, scope, activatedPageUuid}`——**没有 PCB 专用的第二个出图动作**。
-  issue #87 里那条「PCB `export.render` 跑满 60 s」是**历史报告，本批没有复现**；
-  `timeoutMs` 的 1–60 s 夹取与 30 s 缺省是**上限设计**（防一个不 settle 的 promise 占住动作槽），
-  不是「PCB 必然超时」的证据 ⇒ **不给 60 s 盲重试**，也不把一次 `TIMEOUT` 写成板子的性质：
-  先按 pit #23 查焦点/激活，再看那次调用到底返回了什么（参数与返回形态见
-  `docs/bridge.md` 动作表的 `export.render` 行）。
-  PCB 的「看过板子」要两条腿，缺一条就不是看过：
+  `scope=page` 时先激活目标页再导出、激活不成立就拒（不导出）——**没有 PCB 专用的第二个出图动作**。
+  **V4 O2 实测（2026-10-31，宿主 4.1.93）**：PCB1 已 `doc.open` + `document.current` 逐字确证激活，
+  `export.render(format=png, scope=page, timeoutMs=60000)` 仍**整 60.01 s 不返回**，同会话原理图页
+  ~100 ms 返回（V3 同样；首次 10 s 那次是**同一失效**）。⇒ 不是预算太短、也不是焦点没激活：
+  **该 API 只服务原理图，对 PCB 页不适用**，是宿主能力边界。**处置：已停止对 PCB 调用
+  `export.render`**（不给 60 s 盲重试）。`timeoutMs` 的 1–60 s 夹取与 30 s 缺省是**上限设计**（防一个不 settle 的 promise
+  占住动作槽），不是修法 ⇒ 也不把一次 `TIMEOUT` 写成板子的性质。
+  因此 `review-evidence` **不对 PCB 调用该 API**：`pcbImage` 固定为 **`not-applicable`**，
+  `detail` 与 `errors` 写明「schematic-only API 不适用于 PCB，已停止调用」——**不生成伪图、
+  不写 `ok`、也不写成 `failed`**（调用根本不发生，没有失败步骤可记）。原理图 `schematicImage`
+  仍由 `export.render` 采集，**原理图成功不能替代 PCB 成功，反之亦然**。旧记录里那类
+  `pcbImage` 的 `ok` 只证明**采集到一张合规 PNG**（magic 字节对、base64 非空）——**不证明有人看过**；
+  本机现在没有这个通道。PCB 的「看过板子」要两条腿，缺一条就不是看过：
   ① **只读几何**（必做）：参数名核对过的固定命令是
   `boardwise bridge call --action pcb.readback --params '{"includePrimitives": true}'`
   （`pcb.readback` 回 `{kind, components[], componentCount, primitives[]}`：位号/封装/坐标/层，
@@ -632,19 +640,23 @@ checkup 每次都会在 `--out` 里写**一对文件**，规则从 053 §2.2 起
   `boardwise bridge call --action pcb.geometry --params '{"bboxIds": ["<primitiveId>"]}'`
   （`pcb.geometry` 给实测包围盒，读不出的 id 点名在 `meta.unreadable`）。它们全是**数字**，用来做离线/自绘
   **几何复核**（间距、越界、丝印压焊盘）。
-  ② **图**（才叫「目视」）：`export.render` 出一张图之后**真的看一遍**再下结论。
-  `evidence.channels` 里 `pcbImage` 的 `ok` 只证明**采集到一张合规 PNG**（magic 字节对、
-  base64 非空）——**不证明有人看过**。本批没有走到渲染 + 视觉自审，所以报告里这一项只能写
-  `pcbImage: missing` / `visual: missing`，或写成**人工待办**并注明「PCB 图未取到」。
+  ② **图**（才叫「目视」）：本机没有 PCB 位图通道，所以一份 live 版图**拿不到**。别把
+  `pcb.readback` / `pcb.geometry` / 归档 PCB 审查 / 离线几何 SVG 写成 live 位图或
+  `pcbImage: ok`——它们是**不同通道**。报告里这一项写 `not-applicable`（附上面的理由）；
+  旧写法 `pcbImage: missing` / `visual: missing` 仍可用来表示「本次没有图」，也可写成
+  **人工待办**并注明「PCB 图未取到」；若用编辑器外部截图人工看过，注明那是人工/外部证据，
+  仍不填进 `pcbImage`。
   **`pcb.readback` 回 `ok:true` / `componentCount:N` 只说「这几件被读到了」**：把它写成
   visual-pass、PCB 版面通过或板级通过都是**伪造证据**。另：`canvas.highlight` 回
   `highlighted: 0` 是**一个标记都没画成**（`unresolved` 里点名没解析到的 uuid），不是高亮成功；
   marker 画在交互叠层上，导出的**截图**按合同预期与不加 marker 时逐字节相同
   （`docs/bridge.md` 实测表）——所以别把「高亮过」当看过板子。
-- **eprj3 文件夹工程（V4，038 A 档只读）**：`boardwise review <工程目录> --json ...`
+- **eprj3 文件夹工程（V4，原理图 + 单 PCB，038F5 起）**：`boardwise review <工程目录> --json ...`
   —— 目录内含 `<同名>.eprj3` 索引即识别（`sch/**/*.esch2` 逐页粘成一条记录流，原理图模型满血；
-  文件夹只有 schematic 这一档，047 起缺省正是它，不必再显式写）。`--view pcb` 对 eprj3
-  **诚实报错**"B 档未开"，不给空模型；
+  缺省 view 正是 schematic，不必再显式写）。`--view pcb` 读取 `pcb/*.epcb2`，容器适配后复用
+  同一套 PCB model/geometry 与规则；`checkup --file` 同样产出 `pcb_review` 和几何 SVG。
+  当前垂直切片只接**一张 PCB**：没有 `.epcb2`、多张文件或单文件多张 PCB 都明确报错，
+  不悄悄选第一张；多张的选板映射仍待后续。
   `--latest` 认 eprj3 目录（按索引 mtime 参选）；工程 uuid 从索引 `owner_uuid` 取
   （补了"只有 .epro2 才带工程 uuid"的老缺口）。**一律只读**：写路径走 bridge API，不落盘。
 - **器件事实库（039 parts 工具链，纯离线）**：`boardwise parts missing --file <工程>` 列出每颗

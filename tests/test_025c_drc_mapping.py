@@ -207,6 +207,151 @@ def test_a_boolean_answer_is_a_verdict_without_counts():
 
 
 # --------------------------------------------------------------------------
+# 038 O3b: V4 per-item answers, measured 2026-10-31 (519 objects, no `count`)
+# --------------------------------------------------------------------------
+
+
+def _v4_entries(count: int = 519, *, severity: str = "warn") -> list[dict]:
+    """The exact V4.1.93 per-item shape: `{type, rule, primitives}`, no count."""
+    return [
+        {"type": severity, "rule": "Netlist Error", "primitives": [f"primitive-{i}"]}
+        for i in range(count)
+    ]
+
+
+_UNSET = object()
+
+
+def _v4_payload(
+    entries: list, *, unparsed: int = 0, passed=_UNSET,
+    extra_by_type: dict | None = None,
+) -> dict:
+    """What the connector returns for those entries (038 O3a's normalisation)."""
+    by_type: dict[str, int] = dict(extra_by_type or {})
+    for entry in entries:
+        kind = entry.get("type")
+        by_type[kind] = by_type.get(kind, 0) + 1
+    payload = {
+        "source": "sch_Drc.check",
+        "checked": True,
+        "elapsedMs": 7,
+        "args": {"strict": True, "userInterface": False, "includeVerboseError": True},
+        "page": {"uuid": "v4", "type": "page"},
+        "uiRequested": False,
+        "mode": "counts",
+        "entryShape": "per-item",
+        "counts": entries,
+        "entries": len(entries),
+        "total": len(entries),
+        "byType": by_type,
+        # The measured V4 answer: 519 `warn` objects and `passed: false`; the
+        # connector answers `null` instead as soon as an entry was unparsed.
+        "passed": (not entries) if passed is _UNSET else passed,
+        "items": entries,
+    }
+    if unparsed:
+        payload["unparsed"] = unparsed
+    return payload
+
+
+def test_two_identical_v4_pages_report_519_once_and_keep_the_items():
+    """Measured 2026-10-31: both pages answer 519 per-item objects. Counting every
+    object's missing `count` as unparsable (the old reader) said `total: 0` beside
+    519 warnings; summing the pages would say 1038. Neither may come back."""
+    entries = _v4_entries()
+    readings = [_sch_reading(uuid, _v4_payload(entries)) for uuid in ("p1", "p2")]
+
+    section = schematic_section(readings)
+
+    assert section["checked"] is True
+    assert section["entryShape"] == "per-item"
+    assert section["warn"] == 519 and section["total"] == 519
+    assert section["countsBasis"] == "host-wide"
+    assert section["pageCountsAgree"] is True
+    assert section["passed"] is False
+    assert "unparsableEntries" not in section, "a legal V4 object is not a broken entry"
+    assert all(page["total"] == 519 for page in section["pages"])
+
+    # The per-item evidence is the host's own objects, carried verbatim.
+    page = section["pages"][0]
+    assert page["entryShape"] == "per-item"
+    assert len(page["items"]) == 519
+    assert page["items"][0] == entries[0], "the object is not reshaped"
+    assert page["counts"] == {"warn": 519}, "the report's counts are the connector's byType"
+
+    # ... and the section says where it is, instead of the V3 sentence.
+    assert "pages[].items" in section["note"]
+    assert any("pages[].items" in note for note in section["notes"])
+    assert not any("不在返回值里" in note for note in section["notes"])
+
+    summary = summarise(drc={"schematic": section, "pcb": {}}, findings=[])
+    assert summary["warnCount"] == 519 and summary["errorCount"] == 0
+    assert len(summary["warnings"]) == 1, "one host-wide answer, not one per page"
+    assert summary["warnings"][0]["count"] == 519
+    assert "pages[].items" in summary["warnings"][0]["detail"]
+    assert summary["countsIncomplete"] is False
+
+
+def test_v4_pages_that_disagree_are_summed():
+    readings = [
+        _sch_reading("p1", _v4_payload(_v4_entries())),
+        _sch_reading("p2", _v4_payload(
+            _v4_entries(2) + _v4_entries(1, severity="error"),
+        )),
+    ]
+
+    section = schematic_section(readings)
+
+    assert section["countsBasis"] == "sum-of-pages"
+    assert section["warn"] == 521 and section["error"] == 1
+    assert section["total"] == 522
+
+
+def test_a_v4_answer_with_unparsed_entries_keeps_passed_unknown_and_blocks_a_zero_total():
+    """The connector says `passed: null` when part of its answer was unreadable,
+    and `unparsed` names how many. That unknown must reach the summary as a
+    `count: null` error: `total: 0` is not a clean board."""
+    entries = _v4_entries()
+    payload = _v4_payload(entries, unparsed=3, passed=None,
+                          extra_by_type={"mystery": 0})
+    readings = [_sch_reading("p1", payload), _sch_reading("p2", payload)]
+
+    section = schematic_section(readings)
+
+    assert section["passed"] is None, "unknown must not be pressed into false"
+    assert section["unparsableEntries"] == 3, "host-wide answer counted once, not 6"
+    assert section["warn"] == 519
+    assert any("读不懂" in note for note in section["notes"])
+
+    summary = summarise(drc={"schematic": section, "pcb": {}}, findings=[])
+    assert summary["countsIncomplete"] is True
+    assert summary["exitCode"] == 1
+    unknown = summary["errors"][-1]
+    assert unknown["ref"] == "drc.schematic.unparsableEntries"
+    assert unknown["count"] is None and unknown["countsKnown"] is False
+    assert summary["warnings"][0]["count"] == 519
+
+
+def test_an_aggregate_answer_is_still_read_from_its_count_array():
+    """V3 compatibility: `entryShape: 'aggregate'` keeps the old path — the raw
+    `{type, count}` array decides, not a normalisation that may not exist."""
+    payload = {
+        **MEASURED_SCH_PAYLOAD,
+        "entryShape": "aggregate",
+        "counts": [{"type": "error", "count": 2}],
+        "total": 9,
+        "byType": {"warn": 9},
+    }
+
+    section = schematic_section([_sch_reading("p1", payload)])
+
+    assert section["entryShape"] == "aggregate"
+    assert section["error"] == 2 and section["total"] == 2
+    assert "warn" not in section, "byType is not consulted on the aggregate path"
+    assert section["pages"][0]["total"] == 2
+
+
+# --------------------------------------------------------------------------
 # the PCB section: the tree, mapped without losing what it carries
 # --------------------------------------------------------------------------
 
