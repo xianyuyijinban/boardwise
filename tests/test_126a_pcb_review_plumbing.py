@@ -1534,8 +1534,48 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 配方直接量得（树里另有 #87④、200A、200B、200C1、200C2、B 与 D 的未提交改动，
     # 均已计入旧值）；recursive 与 `contracts/differential/manifest.json` 的
     # `producerVersions.rulebody` 由官方生成器同步更新。
+    # **89A (issue #89) moved `recursive` only** — 5c0926a5 -> **429537aa**。
+    # 本批只落在 `rules/pcb/regulator.py` **一个文件**：`RegulatorCapDistance._one_pool`
+    # 的去耦距离从 `core.measure.component_distance` 改为**同网焊盘平面投影**
+    # （新增 `same_net_loop_distance` / `SameNetLoopDistance`，复用
+    # `core.measure.pad_edge_distance`，与 164c 起 `DecapDistance` 的口径一致），
+    # 空池三种成因（无候选 / 本 PCB 文档未放置 / 在板但该网无焊盘对）分行说明，
+    # 不再把 `None` 写成「none is placed」。direct 仍为 `7d9d55b3`
+    # （`regulator.py` 在 `rules/pcb/` 下，按本配方不进直接摘要）；
+    # `core/measure.py`、`rules/pcb/distance.py`、`fbplacement.py` 一律未动，
+    # 所以 `component_distance` 的同网/跨层拒绝与 `DecapDistance` 的读数不受影响。
+    # 判决语义的钉在新建 `tests/test_89a_regulator_same_net_distance.py`（10 条：
+    # issue 最小几何 U1 顶层/C7 底层 120.0 mil、同层同网、多同网焊盘取最近与焊盘
+    # 身份、最近候选、空池三路径互不冒充、`DecapDistance` 同上下文同读数 360.0、
+    # `component_distance` 旧行为不变）；本文件上述 131b/131c 的实板表按新读数
+    # 重钉（C89 99.5→221.5、C3 41.8→29.1、C98 660.9→736.5、U6+5V 存储最近
+    # C101→C11 95.8、ROBOT C10 35.0→27.1 / C7 62.8→101.7 / VOUT-HF C15→C8 363.1）。
+    # 两个值都在**当前这棵工作树**上按上方同一配方直接量得；recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
+    # 由官方生成器同步更新。
+    # **89B (issue #89) moved `recursive` only** — 429537aa -> **bed81e5b**。
+    # 本批只落在 `rules/pcb/fbplacement.py` **一个文件**：`pcb-regulator-fb-placement`
+    # 的两条电容距离从 `core.measure.component_distance` 改为 89A 的
+    # `same_net_loop_distance` —— 输出电容从 `divider.upper` 按 `output_net` 量，
+    # FB 节点电容从 `divider.ic` 按 `tap_net` 量（同网、平面投影、层无关）；
+    # IC→分压电阻腿仍用 `component_distance`（既有口径，既非去耦环路），
+    # severity / verdict / exit code / `target.measurement`（锚 upper leg）一律
+    # 不动。空读数改为四态（measured / 无候选 / 本文档未放置 / 在板但目标网
+    # 无焊盘对），后三者不再合并成「no capacitor … is placed」。direct 仍为
+    # `7d9d55b3`（`fbplacement.py` 在 `rules/pcb/` 下，按本配方不进直接摘要）；
+    # `regulator.py`、`core/measure.py`、`rules/pcb/distance.py`、其他规则与既有
+    # fixtures 一律未动。判决语义的钉在新建
+    # `tests/test_89b_fb_same_net_distance.py`（6 条：输出电容同网跨层 160.0
+    # （pads 1/1，异网 10.0 更近焊盘不冒名）、FB 节点电容按 FB 脚量 360.0
+    # （pads 2/1，BST 20.0 不入最小值）、池内最近与 storage 优先不变且腿读数与
+    # measurement 不变、输出与 FB 两侧三条空路径互不冒充、实板 1.0.0 行按实际
+    # 读数重钉：U11→R14 37.2 / U11→R21 47.4 不变，C92 638.8→650.9（pads 5/1
+    # 于 tap 网），C101 745.2→684.1（pads 2/1））；本文件 131c 的实板锚同步重钉。
+    # 两个值都在**当前这棵工作树**上按上方同一配方直接量得；recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
+    # 由官方生成器同步更新。
     assert old_digest == "7d9d55b3"
-    assert recursive == "5c0926a5", (
+    assert recursive == "bed81e5b", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

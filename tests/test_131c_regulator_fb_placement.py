@@ -29,7 +29,8 @@ from two divider groups to one, and it is pinned on the group it rejects
 the ``+5V`` rail rather than at the output node — must be reported. Both are
 pinned below, and so is the *number* that makes the second one legible: ``R14``
 shares ``+5V`` with the output capacitors, so the net comparison alone cannot
-see the problem, and the nearest output capacitor is **745.2 mil** away.
+see the problem, and the nearest output capacitor is **684.1 mil** away (#89B
+re-pinned this from 745.2 mil: the gap is now measured on ``+5V`` itself).
 
 Every fixture here is read-only. Nothing runs an editor or a daemon.
 """
@@ -312,9 +313,14 @@ def test_the_real_checkup_reports_the_output_caps_on_their_own_nets(checkup_100)
     Before 131c, in a real ``checkup`` on this fixture, the schematic view's
     ``NET11`` / ``NET3`` were the nets the rule searched, and both of them
     produced a 「no energy storage capacitor on this net」 row — while ``C3`` and
-    ``C64`` sat on the board's real output nets 41.8 and 91.4 mil from the pins.
+    ``C64`` sat on the board's real output nets 29.1 and 91.4 mil from the pins.
     The 冤案 131b was written to remove was still live in the shipped path; only
     the test harness (which passed the PCB model by hand) saw the fix.
+
+    89A moved two of these numbers (``C3`` 41.8 → **29.1**, ``C64`` unchanged):
+    the gap is now the **same-net pad-to-pad loop** projection, the reading
+    ``DecapDistance`` takes since 164c, not ``component_distance``'s
+    cross-net placement gap.
     """
     rows = _cap_rows(checkup_100)
     assert rows, "the regulator rule fires in a real checkup"
@@ -332,7 +338,7 @@ def test_the_real_checkup_reports_the_output_caps_on_their_own_nets(checkup_100)
     measured = [r for r in u5 if r["target"]["counterpart_ref"]]
     assert measured and measured[0]["target"]["counterpart_ref"] == "C3"
     assert measured[0]["target"]["measurement"] == {
-        "kind": "distance", "value": 41.8, "unit": "mil",
+        "kind": "distance", "value": 29.1, "unit": "mil",
     }
     # U6's VOUT likewise, with the storage capacitor it had been missing.
     u6 = [r for r in rows if r["target"]["component_ref"] == "U6"
@@ -356,13 +362,22 @@ def test_the_whole_real_checkup_table_is_pinned(checkup_100):
     164b's ruling and the row it belongs to moved with it:
 
     * 旧 ``("U5", "+5V", "C93", 521.2)`` — the HF pool's nearest on ``+5V``;
-    * 新 ``("U5", "+5V", "C98", 660.9)`` — the next nearest HF candidate, because
+    * 新 ``("U5", "+5V", "C98", 736.5)`` — the next nearest HF candidate, because
     * ``C93`` is now in the **storage** pool: the schematic declares ``22µF`` and
       the PCB document copies ``100nF`` over it (岳裁 ``tasks/158``: the PCB
       document's ``Value`` field is a systematic placeholder, so 电气语义以原理图
-      为准). The row's evidence states both declarations. ``C93`` stays 521.2 mil
-      from the pin — it is simply no longer the nearest *HF* part, and it does not
-      displace ``C5`` (95.9) as U5's nearest storage part.
+      为准). The row's evidence states both declarations. ``C93`` is simply no
+      longer the nearest *HF* part, and it does not displace ``C5`` (95.9) as
+      U5's nearest storage part.
+
+    **89A moved the numbers again, and the reading is why.** The gap is now the
+    same-net pad-to-pad loop (:func:`~boardwise.rules.pcb.regulator.
+    same_net_loop_distance`, 164c's reading) instead of ``component_distance``'s
+    cross-net placement gap, so a value can rise (``C98`` 660.9 → 736.5,
+    ``C89`` 99.5 → 221.5) as well as fall (``C3`` 41.8 → 29.1). One row's
+    **nearest** moved too: U6's ``+5V`` storage nearest is now ``C11`` at 95.8
+    mil, because on the loop reading ``C101``'s pad pair is farther than
+    ``C11``'s — the placement gap had ordered them the other way round.
     """
     assert {
         (r["target"]["component_ref"], r["target"]["net_refs"][0] if r["target"]["net_refs"] else "",
@@ -371,14 +386,14 @@ def test_the_whole_real_checkup_table_is_pinned(checkup_100):
         for r in _cap_rows(checkup_100)
     } == {
         ("U11", "+24V", "", None),
-        ("U11", "+24V", "C89", 99.5),
+        ("U11", "+24V", "C89", 221.5),
         ("U11", "", "", None),
-        ("U5", "+5V", "C98", 660.9),
+        ("U5", "+5V", "C98", 736.5),
         ("U5", "+5V", "C5", 95.9),
-        ("U5", "$1N66612", "C3", 41.8),
+        ("U5", "$1N66612", "C3", 29.1),
         ("U5", "$1N66612", "", None),
-        ("U6", "+5V", "C98", 107.5),
-        ("U6", "+5V", "C101", 118.7),
+        ("U6", "+5V", "C98", 108.0),
+        ("U6", "+5V", "C11", 95.8),
         ("U6", "$1N66627", "C13", 244.8),
         ("U6", "$1N66627", "C64", 91.4),
     }
@@ -424,7 +439,7 @@ def test_the_wrong_rows_are_reproducible_and_they_are_different(checkup_100):
         "the schematic view is what the old path handed the rule"
     )
     assert ("U6", "NET3", "", None) in wrong
-    assert ("U5", "$1N66612", "C3", 41.8) not in wrong, (
+    assert ("U5", "$1N66612", "C3", 29.1) not in wrong, (
         "with NET11 the rule cannot find C3 at all"
     )
     # ... and they are not the fixed table.
@@ -476,15 +491,20 @@ def test_the_anchor_distances_are_pinned():
     """**Anchor 2.** The three distances, with their pad pairs.
 
     ``U11 -> R14`` **37.2 mil** (pads 6/1), ``U11 -> R21`` **47.4 mil** (pads
-    5/1), ``U11 -> C92`` (the FB-node capacitor) **638.8 mil** (pads 8/1). The
-    legs are tight to the pin; the node capacitor is not, and reporting all
-    three is the difference between 「the divider is here」 and 「the node is
-    filtered here」.
+    5/1) — both still :func:`boardwise.core.measure.component_distance`, the
+    IC-to-leg 口径 — and ``U11 -> C92`` (the FB-node capacitor) **650.9 mil**
+    (pads 5/1) on the tap net, which since #89B is
+    :func:`boardwise.rules.pcb.regulator.same_net_loop_distance`. The legs are
+    tight to the pin; the node capacitor is not, and reporting all three is the
+    difference between 「the divider is here」 and 「the node is filtered here」.
     """
     row = _fb_rows()[0]
     assert "upper leg R14 at 37.2 mil (pads 6 / 1)" in row.message
     assert "lower leg R21 at 47.4 mil (pads 5 / 1)" in row.message
-    assert "FB-node capacitor C92 at 638.8 mil from U11 (pads 8 / 1)" in row.message
+    assert (
+        "FB-node capacitor C92 at 650.9 mil from U11 on the tap net '$1N66466' "
+        "(pads 5 / 1)"
+    ) in row.message
     assert row.target.measurement == {
         "kind": "distance", "value": 37.2, "unit": "mil",
     }
@@ -496,9 +516,9 @@ def test_the_anchor_sense_point_is_reported_with_both_nets_quoted():
     ``R14``'s non-tap end is on ``+5V``. The rule reports the net comparison
     (same net as the output capacitors → :data:`SENSE_CAP_END`) **and** the
     distance that makes it interesting: the nearest energy-storage capacitor on
-    the output node is ``C101`` at **745.2 mil** from ``R14``. Both sides of the
-    comparison are in the row so a reader can reject the premise, not just the
-    tool's conclusion.
+    the output node is ``C101`` at **684.1 mil** from ``R14`` (#89B: on ``+5V``
+    itself, ``R14`` pad 2 to ``C101`` pad 1). Both sides of the comparison are in
+    the row so a reader can reject the premise, not just the tool's conclusion.
     """
     row = _fb_rows()[0]
     assert SENSE_CAP_END in row.message
@@ -507,7 +527,7 @@ def test_the_anchor_sense_point_is_reported_with_both_nets_quoted():
         "comparison says the output-capacitor end"
     )
     assert "'+5V'" in row.message
-    assert "C101 at 745.2 mil from the upper leg R14" in row.message
+    assert "C101 at 684.1 mil from the upper leg R14" in row.message
     assert "energy storage" in row.message, "the pool label names which capacitor"
     evidence = " ".join(row.evidence)
     # How the output node was established is stated, not assumed: U11 has no
@@ -608,7 +628,7 @@ def test_1_1_0_finds_its_buck_on_pcb1_only():
     assert rows[0].target.component_ref == "U7"
     assert "R20/R23" in rows[0].message
     assert "upper leg R20 at 646.4 mil" in rows[0].message
-    assert "FB-node capacitor C22 at 38.8 mil" in rows[0].message
+    assert "FB-node capacitor C22 at 28.3 mil" in rows[0].message
 
 
 def test_robot_names_no_feedback_divider():

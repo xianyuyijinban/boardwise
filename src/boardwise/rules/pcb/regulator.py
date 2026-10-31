@@ -94,8 +94,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..base import Finding, FindingTarget
-from ...core.geometry import BoardGeometry
-from ...core.measure import component_distance
+from ...core.geometry import BoardGeometry, PadGeometry
+from ...core.measure import pad_edge_distance
 from ...core.partkind import (
     CATEGORY_ABSENT,
     CATEGORY_GATED,
@@ -121,7 +121,10 @@ __all__ = [
     "SIDE_INPUT",
     "SIDE_OUTPUT",
     "RegulatorCapDistance",
+    "RegulatorReading",
+    "SameNetLoopDistance",
     "regulator_role",
+    "same_net_loop_distance",
 ]
 
 
@@ -202,6 +205,73 @@ class RegulatorReading:
     nets_by_side: dict[str, list[str]] = None
     #: ``[pin name]`` for the pins that declared no role. Evidence, never a side.
     unclassified_pin_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class SameNetLoopDistance:
+    """The decoupling loop's gap on **one net**, and the pad pair that produced it.
+
+    Issue #89: the same object :class:`~boardwise.core.measure.ComponentDistance`
+    measures — a number in mils and the two pads — but read on the **net being
+    decoupled** rather than across every pad pair of two components. The
+    distinction is the whole defect: ``component_distance`` refuses same-net and
+    cross-layer pad pairs by design (127b), and a decoupling capacitor's supply
+    pad and its regulator's supply pad are *same-net* by construction, so that
+    function answered ``None`` for exactly the pairs this rule asks about — and
+    the caller then wrote ``None`` as 「none is placed」 while
+    :meth:`~boardwise.core.geometry.BoardGeometry.component` had already proved
+    the part is on the board.
+
+    ``edge_distance`` is :func:`boardwise.core.measure.pad_edge_distance` — the
+    **planar** edge-to-edge minimum, deliberately layer-blind — because the loop
+    a capacitor decouples *is* a plan-view area: on 毕设FOC 1.0.0's U5/C3 pair the
+    regulator is on the top face and the capacitor on the bottom, and the loop
+    that matters is the projection through the vias. This is the reading
+    :class:`~boardwise.rules.pcb.distance.DecapDistance` takes since 164c, which
+    is why the same context yields the same number from both rules.
+    """
+
+    edge_distance: float = 0.0
+    #: The **regulator's** pad on the net (``pin_number``, or its ``id``).
+    pad_a: str = ""
+    #: The **candidate capacitor's** pad on the net.
+    pad_b: str = ""
+
+
+def same_net_loop_distance(
+    board: BoardGeometry, des_a: str, des_b: str, net: str
+) -> SameNetLoopDistance | None:
+    """The planar gap between two parts' pads **on ``net``** (issue #89).
+
+    ``des_a`` is the regulator and ``des_b`` the candidate capacitor, both
+    already known to be placed on this PCB document. Only pads whose
+    ``pad.net == net`` take part — a capacitor's ground pad is not a leg of the
+    supply loop — and the pair is measured with
+    :func:`boardwise.core.measure.pad_edge_distance`, the layer-blind planar
+    primitive. Same-net and cross-layer pairs are therefore **measured**, not
+    refused: the loop projection is the object under study.
+
+    ``None`` when either part has no pad on ``net`` on this document. That is
+    「unmeasurable」, not 0.0 — the same discipline the shared geometry keeps,
+    and the reason the caller's message distinguishes it from an unplaced part.
+    Deterministic: pads are read in :meth:`BoardGeometry.pads_for_component`
+    order and the first pair wins a tie, so the reported pad pair is stable.
+    """
+    pads_a = [pad for pad in board.pads_for_component(des_a) if pad.net == net]
+    pads_b = [pad for pad in board.pads_for_component(des_b) if pad.net == net]
+    if not pads_a or not pads_b:
+        return None
+    best: SameNetLoopDistance | None = None
+    for pad_a in pads_a:
+        for pad_b in pads_b:
+            gap = pad_edge_distance(pad_a, pad_b)
+            if best is None or gap < best.edge_distance:
+                best = SameNetLoopDistance(
+                    edge_distance=gap,
+                    pad_a=str(pad_a.pin_number or pad_a.id),
+                    pad_b=str(pad_b.pin_number or pad_b.id),
+                )
+    return best
 
 
 def _declared(candidate: object, model: object, schematic: object | None = None) -> DrawValue:
@@ -424,6 +494,18 @@ class RegulatorCapDistance(PcbRule):
     what a decoupling candidate is. Splitting them into pools is
     :func:`regulator_role`'s job, and 裁定 ③ owns the boundary.
 
+    **Which gap: the loop on the net, not the placement (issue #89).** The
+    number is :func:`same_net_loop_distance` — the regulator's pad on ``net`` to
+    the capacitor's pad on ``net``, edge to edge, planar and layer-blind. It is
+    the reading :class:`~boardwise.rules.pcb.distance.DecapDistance` takes since
+    164c, so one context yields one number from both rules. Until this fix the
+    rule asked :func:`~boardwise.core.measure.component_distance`, which by
+    design refuses same-net *and* cross-layer pad pairs; a decoupling pair is
+    same-net by construction, so every real candidate came back ``None`` and the
+    row said 「candidates exist but none is placed」 about a part
+    :meth:`~boardwise.core.geometry.BoardGeometry.component` had just proved is
+    on the board.
+
     **Measured, not judged.** See the module docstring: no threshold, every row
     ``INFO``. A board with no regulator in :data:`REGULATOR_CATEGORIES` produces
     nothing at all — and so does a context with no ``pcb_model`` (the schematic
@@ -542,6 +624,55 @@ class RegulatorCapDistance(PcbRule):
             target=FindingTarget(component_ref=reading.designator),
         )
 
+    def _empty_reason(
+        self, unplaced: list[str], padless: list[str], net: str
+    ) -> str:
+        """The parenthetical that says **why** a pool row has no measurement.
+
+        Issue #89: the three reasons are different claims and must not wear each
+        other's clothes. 「no capacitor on the net at all」 is about the design;
+        「none is placed on this PCB document」 is about the board's scope; and
+        「on the board but no same-net pad pair on this net」 is about this
+        document's geometry — which is what the rule used to misreport as
+        「none is placed」 whenever ``component_distance`` refused the pair.
+        """
+        if not unplaced and not padless:
+            return " (no capacitor on the net at all)"
+        if padless and not unplaced:
+            return (
+                f" (the candidates are on this PCB document, but no same-net "
+                f"pad pair on {net!r} is measurable — unmeasurable, not 0 mil "
+                f"and not unplaced)"
+            )
+        if unplaced and not padless:
+            return (
+                " (candidates exist but none is placed on this PCB document)"
+            )
+        return (
+            " (some candidates are not placed on this PCB document, and the "
+            f"rest are on it but have no measurable same-net pad pair on "
+            f"{net!r})"
+        )
+
+    def _empty_evidence(
+        self, unplaced: list[str], padless: list[str], net: str
+    ) -> str:
+        """The evidence line that names which candidates fell in which bucket."""
+        parts: list[str] = []
+        if unplaced:
+            parts.append(
+                "not placed on this PCB document: "
+                + ", ".join(sorted(unplaced))
+            )
+        if padless:
+            parts.append(
+                f"on this PCB document with no pad on {net!r}: "
+                + ", ".join(sorted(padless))
+            )
+        if not parts:
+            return f"no candidate capacitor bridges {net!r} to a ground net"
+        return "; ".join(parts)
+
     def _one_pool(
         self,
         reading: RegulatorReading,
@@ -552,7 +683,14 @@ class RegulatorCapDistance(PcbRule):
         library,
         schematic: object | None = None,
     ) -> list[Finding]:
-        """The one row for ``(side, net, pool)`` of one regulator."""
+        """The one row for ``(side, net, pool)`` of one regulator.
+
+        The measurement is :func:`same_net_loop_distance` (issue #89), and the
+        empty-pool row tells three cases apart instead of collapsing them:
+        no capacitor on the net at all, candidates this PCB document does not
+        place, and candidates it does place but with no pad on ``net``. The
+        third is 「unmeasurable」 — it must never read as 0 mil or as unplaced.
+        """
         label = _SIDE_LABELS[side]
         pool_label = _POOL_LABELS[pool]
         candidates = list(cap_candidates_on(reading.board_model, net, library))
@@ -572,15 +710,24 @@ class RegulatorCapDistance(PcbRule):
                 candidates, key=lambda c: c.designator
             )],
         ]
-        measured: list[tuple[str, object]] = []
+        measured: list[tuple[str, SameNetLoopDistance]] = []
+        unplaced: list[str] = []
+        padless: list[str] = []
         for candidate in members:
             if board.component(candidate.designator) is None:
-                continue  # named by the netlist, not carried by this PCB document
-            distance = component_distance(
-                board, reading.designator, candidate.designator
+                # Named by the netlist, not carried by this PCB document — the
+                # old path, kept: this is the 「not on the board」 case, not the
+                # 「on the board but not measurable on this net」 one below.
+                unplaced.append(candidate.designator)
+                continue
+            distance = same_net_loop_distance(
+                board, reading.designator, candidate.designator, net
             )
             if distance is None:
-                continue  # padless on this board: unmeasurable, not zero
+                # On this board, but no pad of either part carries ``net``:
+                # unmeasurable, **not** zero and **not** unplaced (issue #89).
+                padless.append(candidate.designator)
+                continue
             measured.append((candidate.designator, distance))
         if not measured:
             return [
@@ -592,14 +739,12 @@ class RegulatorCapDistance(PcbRule):
                         f"{reading.designator} has no {pool_label} capacitor "
                         f"measurable against its {label} net {net!r} — the "
                         f"{label} {pool_label} pool is empty on this net"
-                        + (
-                            " (candidates exist but none is placed on this "
-                            "PCB document)"
-                            if members
-                            else " (no capacitor on the net at all)"
-                        )
+                        + self._empty_reason(unplaced, padless, net)
                     ),
-                    evidence=evidence,
+                    evidence=evidence
+                    + [
+                        self._empty_evidence(unplaced, padless, net),
+                    ],
                     target=FindingTarget(
                         component_ref=reading.designator, net_refs=[net]
                     ),

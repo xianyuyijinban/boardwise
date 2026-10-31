@@ -30,7 +30,8 @@ verdicts:
   1.0.0 they disagree in exactly the way this stick exists to surface: ``R14``
   and the output capacitors share the net ``+5V``, so the net comparison says
   「the output-capacitor end」 — while the nearest storage capacitor on that node
-  is ``C101``, **745.2 mil** away. The rail is shared; the node is not local.
+  is ``C101``, **684.1 mil** away (#89B: measured on ``+5V`` itself, from
+  ``R14``'s pad 2 to ``C101``'s pad 1). The rail is shared; the node is not local.
   Whether that is wrong is 岳's call; what this rule does is put both numbers
   in one row so the premise can be rejected as well as the conclusion.
 
@@ -144,6 +145,7 @@ from .regulator import (
     _POOL_LABELS,
     _regulator_readings,
     regulator_role,
+    same_net_loop_distance,
 )
 
 __all__ = [
@@ -170,13 +172,58 @@ __all__ = [
 #: rather than leaving a reader to assume the branch is exercised. On 毕设FOC
 #: 1.0.0 the comparison comes out :data:`SENSE_CAP_END` — ``R14``'s far end is
 #: ``+5V`` and the LM5164's output node resolves to ``+5V`` too (via ``L4``) —
-#: yet the nearest storage capacitor on that node is ``C101``, **745.2 mil**
-#: from the upper leg. Same net, different locality, which is why the row
-#: carries the distance as well as the comparison. The branch stays because it
-#: is the other half of a two-valued answer, and a two-valued answer with only
-#: one value exercised is not an answer.
+#: yet the nearest storage capacitor on that node is ``C101``, **684.1 mil**
+#: from the upper leg (#89B's same-net reading). Same net, different locality,
+#: which is why the row carries the distance as well as the comparison. The
+#: branch stays because it is the other half of a two-valued answer, and a
+#: two-valued answer with only one value exercised is not an answer.
 SENSE_CAP_END = "on the output-capacitor end"
 SENSE_CAP_RAIL = "on the rail"
+
+#: The four states a capacitor-distance reading can be in (#89B). They are
+#: separate values because they are separate statements, and the old code
+#: collapsed three of them into one sentence:
+#:
+#: ``CAP_MEASURED`` — a capacitor on the target net **is** placed on this PCB
+#: document and has a pad on that net, so there is a number.
+#:
+#: ``CAP_NO_CANDIDATE`` — nothing on this net reads as a capacitor at all.
+#:
+#: ``CAP_NOT_PLACED`` — capacitors on the net exist in the netlist, but this
+#: PCB document places none of them (it is not the board they are on).
+#:
+#: ``CAP_NO_SAME_NET_PAD`` — the part **is** on this board, but no pad of it
+#: carries the target net, so the loop has no measurable leg. Unmeasurable,
+#: which is neither ``0 mil`` nor 「not placed」.
+CAP_MEASURED = "measured"
+CAP_NO_CANDIDATE = "no candidate"
+CAP_NOT_PLACED = "not placed"
+CAP_NO_SAME_NET_PAD = "no same-net pad pair"
+
+
+@dataclass(frozen=True)
+class CapLoopReading:
+    """One capacitor-distance reading, and the state that produced it (#89B).
+
+    ``distance`` is :func:`~boardwise.rules.pcb.regulator.same_net_loop_distance`
+    — pads on the **target net** only, measured with the planar, layer-blind
+    primitive — so a same-net cross-layer pair is a number rather than the
+    ``None`` :func:`~boardwise.core.measure.component_distance` returns for
+    exactly those pairs by design.
+
+    ``candidates`` / ``placed`` / ``unmeasurable`` are the designators behind the
+    state, in board order and de-duplicated: a reader who is told 「unmeasurable」
+    needs to see *which* part was on the board and failed, because that is a
+    different investigation from 「no capacitor is drawn」.
+    """
+
+    state: str = CAP_NO_CANDIDATE
+    designator: str = ""
+    distance: object = None
+    pool: str = ""
+    candidates: tuple[str, ...] = ()
+    placed: tuple[str, ...] = ()
+    unmeasurable: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -813,8 +860,8 @@ class RegulatorFbPlacement(PcbRule):
 
     def _nearest_output_cap(
         self, model: object, divider: FbDivider, board: BoardGeometry, library
-    ) -> tuple[str, object, str] | None:
-        """``(designator, distance, pool)`` of the nearest output-node capacitor.
+    ) -> CapLoopReading:
+        """The nearest output-node capacitor, measured **on the output net**.
 
         **The number the sense-point question is really about, and the reason
         the net comparison alone is not enough.** On 毕设FOC 1.0.0 the upper leg
@@ -828,6 +875,23 @@ class RegulatorFbPlacement(PcbRule):
         Measured **from the upper leg**, not from the IC: the question is where
         the *sensing* part sits, and the sensing part is the resistor.
 
+        **Measured on the output net, not across every pad pair (#89B).** The
+        reading is :func:`~boardwise.rules.pcb.regulator.same_net_loop_distance`
+        — #89A's primitive — with ``net = output_net``. The old reading was
+        :func:`~boardwise.core.measure.component_distance`, which refuses
+        same-net pad pairs (127b) and cross-layer ones (127a): a capacitor on
+        the output node shares that net with the leg **by construction**, and
+        the pair is frequently on the opposite face, so every real candidate
+        came back ``None`` — and ``None`` was then written as 「no capacitor …
+        is placed」 about a part the board does carry. The pad pair that produces
+        the number is the leg's output-net pad against the capacitor's, so a
+        nearer pad on a *different* net cannot stand in for it.
+
+        The three empty outcomes are **kept apart** (:class:`CapLoopReading`):
+        nothing on the net reads as a capacitor, candidates that this document
+        does not place, and candidates it places with no pad on the net. The
+        third is unmeasurable — not ``0 mil``, and not 「not placed」.
+
         **Both pools are reported**, and the *storage* pool is the one the
         sense-point question is about, because that is the part the LM5164's
         datasheet means by its output capacitor. 裁定 ③ (131b) owns the split —
@@ -840,24 +904,108 @@ class RegulatorFbPlacement(PcbRule):
         one is preferred when both exist.
         """
         best: dict[str, tuple[str, object, str]] = {}
+        candidates: list[str] = []
+        placed: list[str] = []
+        unmeasurable: list[str] = []
         for output_net in divider.output_nets:
             for candidate in cap_candidates_on(model, output_net, library):
+                if candidate.designator not in candidates:
+                    candidates.append(candidate.designator)
                 if board.component(candidate.designator) is None:
                     continue
-                distance = component_distance(
-                    board, divider.upper, candidate.designator
+                if candidate.designator not in placed:
+                    placed.append(candidate.designator)
+                distance = same_net_loop_distance(
+                    board, divider.upper, candidate.designator, output_net
                 )
                 if distance is None:
+                    if candidate.designator not in unmeasurable:
+                        unmeasurable.append(candidate.designator)
                     continue
                 pool = regulator_role(candidate, model) or POOL_HF
                 held = best.get(pool)
                 if held is None or distance.edge_distance < held[1].edge_distance:
                     best[pool] = (candidate.designator, distance, pool)
-        if POOL_STORAGE in best:
-            return best[POOL_STORAGE]
-        if POOL_HF in best:
-            return best[POOL_HF]
-        return None
+        chosen = best.get(POOL_STORAGE) or best.get(POOL_HF)
+        if chosen is not None:
+            return CapLoopReading(
+                state=CAP_MEASURED,
+                designator=chosen[0],
+                distance=chosen[1],
+                pool=chosen[2],
+                candidates=tuple(candidates),
+                placed=tuple(placed),
+                unmeasurable=tuple(unmeasurable),
+            )
+        state = (
+            CAP_NO_CANDIDATE
+            if not candidates
+            else CAP_NOT_PLACED
+            if not placed
+            else CAP_NO_SAME_NET_PAD
+        )
+        return CapLoopReading(
+            state=state,
+            candidates=tuple(candidates),
+            placed=tuple(placed),
+            unmeasurable=tuple(unmeasurable),
+        )
+
+    def _nearest_sense_cap(
+        self, divider: FbDivider, board: BoardGeometry, sense_caps: list[CapCandidate]
+    ) -> CapLoopReading:
+        """The nearest FB-node capacitor, measured **on the tap net** (#89B).
+
+        ``sense_caps`` is every capacitor with a terminal on
+        ``divider.tap_net`` (:func:`_capacitors_on` — the broader predicate, see
+        that function for why the ground-bridged one is wrong here). The distance
+        is :func:`~boardwise.rules.pcb.regulator.same_net_loop_distance` with
+        ``net = divider.tap_net``: the IC's **FB pad** against the capacitor's
+        **tap pad**. Only that net takes part, so a capacitor whose ground (or
+        bootstrap) pad happens to sit nearer the IC cannot stand in for the node
+        it filters — and a same-net cross-layer pair, which
+        ``component_distance`` refuses, is measured rather than dropped.
+
+        Same three empty outcomes as :meth:`_nearest_output_cap`, told apart.
+        """
+        best: tuple[str, object] | None = None
+        placed: list[str] = []
+        unmeasurable: list[str] = []
+        for candidate in sense_caps:
+            if board.component(candidate.designator) is None:
+                continue
+            placed.append(candidate.designator)
+            distance = same_net_loop_distance(
+                board, divider.ic, candidate.designator, divider.tap_net
+            )
+            if distance is None:
+                unmeasurable.append(candidate.designator)
+                continue
+            if best is None or distance.edge_distance < best[1].edge_distance:
+                best = (candidate.designator, distance)
+        candidates = tuple(sorted(candidate.designator for candidate in sense_caps))
+        if best is not None:
+            return CapLoopReading(
+                state=CAP_MEASURED,
+                designator=best[0],
+                distance=best[1],
+                candidates=candidates,
+                placed=tuple(placed),
+                unmeasurable=tuple(unmeasurable),
+            )
+        state = (
+            CAP_NO_CANDIDATE
+            if not candidates
+            else CAP_NOT_PLACED
+            if not placed
+            else CAP_NO_SAME_NET_PAD
+        )
+        return CapLoopReading(
+            state=state,
+            candidates=candidates,
+            placed=tuple(placed),
+            unmeasurable=tuple(unmeasurable),
+        )
 
     def _no_divider(self, reading, fb: tuple[str, str, str]) -> Finding:
         """The row for a regulator that names an ``FB`` pin but no divider."""
@@ -911,13 +1059,7 @@ class RegulatorFbPlacement(PcbRule):
         # here instead, and which one bridges to ground is stated in the
         # evidence rather than assumed.
         sense_caps = _capacitors_on(model, divider.tap_net, library)
-        sense = None
-        for candidate in sense_caps:
-            if board.component(candidate.designator) is None:
-                continue
-            distance = component_distance(board, divider.ic, candidate.designator)
-            if distance is not None and (sense is None or distance.edge_distance < sense[1].edge_distance):
-                sense = (candidate.designator, distance)
+        sense = self._nearest_sense_cap(divider, board, sense_caps)
 
         cap_nets = self._output_cap_nets(model, divider, library)
         placement = (
@@ -927,23 +1069,37 @@ class RegulatorFbPlacement(PcbRule):
         # On 毕设FOC 1.0.0 the two disagree in the way the task book cares about,
         # so both go in the row.
         out_cap = self._nearest_output_cap(model, divider, board, library)
-        if out_cap is not None:
+        if out_cap.state == CAP_MEASURED:
             out_cap_text = (
-                f"the nearest {_POOL_LABELS[out_cap[2]]} capacitor on that output "
-                f"node is {out_cap[0]} at "
-                f"{_mil(out_cap[1].edge_distance):.1f} mil from the upper leg "
-                f"{divider.upper} (pads {out_cap[1].pad_a} / {out_cap[1].pad_b})"
+                f"the nearest {_POOL_LABELS[out_cap.pool]} capacitor on that "
+                f"output node is {out_cap.designator} at "
+                f"{_mil(out_cap.distance.edge_distance):.1f} mil from the upper "
+                f"leg {divider.upper} (pads {out_cap.distance.pad_a} / "
+                f"{out_cap.distance.pad_b})"
             )
-        elif divider.output_nets:
-            out_cap_text = (
-                f"no capacitor on {' / '.join(divider.output_nets)} is placed on "
-                f"this PCB document, so the sensing point has no measured "
-                f"distance"
-            )
-        else:
+        elif not divider.output_nets:
             out_cap_text = (
                 "no output node was established, so the sensing point has no "
                 "measured distance"
+            )
+        elif out_cap.state == CAP_NO_CANDIDATE:
+            out_cap_text = (
+                f"no capacitor is drawn on "
+                f"{' / '.join(divider.output_nets)} at all, so the sensing point "
+                f"has no measured distance"
+            )
+        elif out_cap.state == CAP_NOT_PLACED:
+            out_cap_text = (
+                f"the capacitors on {' / '.join(divider.output_nets)} "
+                f"({', '.join(out_cap.candidates)}) are not placed on this PCB "
+                f"document, so the sensing point has no measured distance"
+            )
+        else:
+            out_cap_text = (
+                f"{', '.join(out_cap.unmeasurable)} is placed on this PCB "
+                f"document but has no pad on "
+                f"{' / '.join(divider.output_nets)}, so the sensing point's gap is "
+                f"unmeasurable — not 0 mil"
             )
 
         leg_text = "; ".join(
@@ -951,17 +1107,26 @@ class RegulatorFbPlacement(PcbRule):
             f"(pads {distance.pad_a} / {distance.pad_b})"
             for role, (designator, distance) in measured
         ) or "neither leg is placed on this PCB document"
-        if sense is not None:
+        if sense.state == CAP_MEASURED:
             sense_text = (
-                f"FB-node capacitor {sense[0]} at "
-                f"{_mil(sense[1].edge_distance):.1f} mil from {divider.ic} "
-                f"(pads {sense[1].pad_a} / {sense[1].pad_b})"
+                f"FB-node capacitor {sense.designator} at "
+                f"{_mil(sense.distance.edge_distance):.1f} mil from {divider.ic} "
+                f"on the tap net {divider.tap_net!r} (pads "
+                f"{sense.distance.pad_a} / {sense.distance.pad_b})"
+            )
+        elif sense.state == CAP_NO_CANDIDATE:
+            sense_text = f"no capacitor is drawn on the FB node {divider.tap_net!r}"
+        elif sense.state == CAP_NOT_PLACED:
+            sense_text = (
+                f"the capacitors on the FB node {divider.tap_net!r} "
+                f"({', '.join(sense.candidates)}) are not placed on this PCB "
+                f"document"
             )
         else:
             sense_text = (
-                f"no capacitor on the FB node {divider.tap_net!r} "
-                f"({', '.join(sorted(c.designator for c in sense_caps)) or 'none'}"
-                f"{' placed on this document' if sense_caps else ' on the net'})"
+                f"{', '.join(sense.unmeasurable)} is placed on this PCB document "
+                f"but has no pad on the FB node {divider.tap_net!r}, so its gap is "
+                f"unmeasurable — not 0 mil"
             )
         # The answer is a *comparison*, so the row quotes both sides of it and,
         # when the output node could not be established, says that instead of
@@ -1009,11 +1174,14 @@ class RegulatorFbPlacement(PcbRule):
                         for _role, (designator, distance) in measured
                     ],
                     (
-                        f"FB-node capacitor: {sense[0]} @ {divider.tap_net} = "
-                        f"{_mil(sense[1].edge_distance):.1f} mil edge-to-edge "
-                        f"from {divider.ic}"
-                        if sense is not None
-                        else f"FB-node capacitor: {sense_text}"
+                        f"FB-node capacitor: {sense.designator} @ "
+                        f"{divider.tap_net} = "
+                        f"{_mil(sense.distance.edge_distance):.1f} mil "
+                        f"edge-to-edge on that net (pads "
+                        f"{sense.distance.pad_a} / {sense.distance.pad_b}) "
+                        f"from {divider.ic} — state: {sense.state}"
+                        if sense.state == CAP_MEASURED
+                        else f"FB-node capacitor: {sense_text} — state: {sense.state}"
                     ),
                     f"this regulator's output pin net(s): "
                     f"{', '.join(divider.output_nets) or '(none)'}",
@@ -1021,6 +1189,12 @@ class RegulatorFbPlacement(PcbRule):
                     f"non-ground nets of the capacitors on that output node: "
                     f"{', '.join(sorted(cap_nets)) or '(none)'}",
                     f"output-node distance: {out_cap_text}",
+                    f"output-node distance reading: state {out_cap.state}; "
+                    f"candidates on that node "
+                    f"{', '.join(out_cap.candidates) or '(none)'}; placed on this "
+                    f"document {', '.join(out_cap.placed) or '(none)'}; placed but "
+                    f"with no pad on the node "
+                    f"{', '.join(out_cap.unmeasurable) or '(none)'}",
                     f"sense-point reading: upper leg {divider.upper}'s non-tap "
                     f"net {divider.rail_net!r} vs those — {placement}",
                 ],

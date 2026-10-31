@@ -20,7 +20,7 @@ Evidence sources, in the order the task book names them:
   assertion.
 * **毕设FOC 1.0.0** (`ProPrj_毕设FOC驱动板_v1.0.0_2026-10-07.epro2`, read-only)
   — the three regulators, every side and every pool, as a pinned table, with
-  the two acceptance anchors called out: **U11's C89** (4.7 µF, 99.5 mil) must
+  the two acceptance anchors called out: **U11's C89** (4.7 µF, 221.5 mil) must
   be the VIN storage nearest, and **U5's output pool** must hold only the parts
   on its own VOUT net — never the ``+5V`` input-side capacitors that share the
   input rail with U6.
@@ -42,9 +42,10 @@ fault:
 
 The nets are the same wires, so the rule measured the *right* parts and
 attributed them to the *wrong* net. That is how U5's VOUT storage pool read
-「empty」 in a real ``checkup`` while ``C3``/``C4`` sat on that very net 41.8 mil
-from the pin, and how U6's VOUT storage nearest read *nothing* while ``C64``
-was 91.4 mil away. The rule reads ``ctx.pcb_model`` for **which net and which
+「empty」 in a real ``checkup`` while ``C3``/``C4`` sat on that very net 29.1 mil
+from the pin (41.8 under the pre-89A cross-net reading), and how U6's VOUT
+storage nearest read *nothing* while ``C64`` was 91.4 mil away. The rule reads
+``ctx.pcb_model`` for **which net and which
 capacitor** (131c), and the real ``checkup`` is pinned both ways in
 ``test_131c_regulator_fb_placement.py``.
 
@@ -577,19 +578,23 @@ def test_the_three_regulators_of_bishe_foc_1_0_0_are_the_ones_examined():
 
 
 def test_the_acceptance_anchor_u11_c89_is_the_vin_storage_nearest():
-    """**Anchor 1.** C89 (4.7 µF) is U11's VIN storage nearest, at 99.5 mil.
+    """**Anchor 1.** C89 (4.7 µF) is U11's VIN storage nearest, at 221.5 mil.
 
     This is the 冤案 the task book names. 126b measures the **HF** pool only and
     reports 「no high-frequency decoupling capacitor on ``+24V``」, because on
     that net C89 is a 4.7 µF part and 126b's split calls it neither pool. 裁定 ③
     calls it storage, so it is in a pool here, it is measured, and the row names
     it.
+
+    89A: the number is the **same-net pad-to-pad loop** on ``+24V``, so it rose
+    from ``component_distance``'s 99.5 mil — which was the closest cross-net
+    placement gap, not the loop this capacitor stands on.
     """
     rows = _foc_100_rows()
     finding = rows[("U11", "VIN", "STORAGE")]
     assert finding.target.counterpart_ref == "C89"
     assert finding.target.measurement == {
-        "kind": "distance", "value": 99.5, "unit": "mil",
+        "kind": "distance", "value": 221.5, "unit": "mil",
     }
     assert finding.target.net_refs == ["+24V"]
     # The HF pool on the same net really is empty — that row is about the pool,
@@ -615,7 +620,7 @@ def test_the_acceptance_anchor_u5_output_pool_holds_only_its_own_net():
     hf = rows[("U5", "VOUT", "HF")]
     assert hf.target.net_refs == ["$1N66612"]
     assert hf.target.counterpart_ref == "C3"
-    assert hf.target.measurement["value"] == 41.8
+    assert hf.target.measurement["value"] == 29.1
     candidates_line = next(
         line for line in hf.evidence if line.startswith("candidates bridging")
     )
@@ -635,7 +640,10 @@ def test_the_acceptance_anchor_u5_output_pool_holds_only_its_own_net():
     # copy's answer, not the schematic's).
     assert rows[("U5", "VIN", "STORAGE")].target.counterpart_ref == "C5"
     assert rows[("U5", "VIN", "HF")].target.counterpart_ref == "C98"
-    assert rows[("U6", "VIN", "STORAGE")].target.counterpart_ref == "C101"
+    # 89A: U6's ``+5V`` storage nearest is ``C11`` now — on the same-net loop
+    # reading its pad pair is nearer than ``C101``'s, where the cross-net
+    # placement gap ordered them the other way round (see the table test).
+    assert rows[("U6", "VIN", "STORAGE")].target.counterpart_ref == "C11"
     assert rows[("U6", "VOUT", "STORAGE")].target.counterpart_ref == "C64"
 
 
@@ -672,18 +680,27 @@ def test_the_buck_has_no_vout_side_and_says_so():
 def test_the_whole_1_0_0_table_is_pinned():
     """Every (regulator, side, pool) row on 毕设FOC 1.0.0, with its numbers.
 
-    ``U5``'s VIN high-frequency nearest is ``C98`` at 660.9 mil, and 170 is why
+    ``U5``'s VIN high-frequency nearest is ``C98`` at 736.5 mil, and 170 is why
     this pin moved. The old value (``C93`` @ 521.2 mil) came from the PCB
     document's **placeholder copies** of the two parts — ``C93`` and ``C98`` are
     both ``100nF`` there, so both sat in the HF pool and the nearer one
     (``C93``) won. The production shape has ``schematic_board_of`` resolve the
     schematic page, where ``C93`` is **``22uF``**: 裁定 ③ puts it in the storage
     pool, it leaves the HF pool, and ``C98`` — whose schematic page states no
-    value and so falls back to the PCB copy's ``100nF`` — is the HF nearest at
-    660.9 mil. The evidence line is the ruling's own sentence
-    (``两视图不一致，判定用**原理图**值：原理图 '22uF' / PCB 文档 '100nF'``). Every
-    other row is unchanged, so this is one pinned value and not a table rewritten
-    to fit.
+    value and so falls back to the PCB copy's ``100nF`` — is the HF nearest. The
+    evidence line is the ruling's own sentence
+    (``两视图不一致，判定用**原理图**值：原理图 '22uF' / PCB 文档 '100nF'``).
+
+    **89A rewrote the numbers, not the partition.** Every row keeps its side, its
+    pool and (bar one) its nearest part; what moved is the gap, which is now the
+    same-net pad-to-pad loop projection (issue #89) instead of
+    ``component_distance``'s cross-net placement gap: ``C89`` 99.5 → 221.5,
+    ``C98`` 660.9 → 736.5, ``C3`` 41.8 → 29.1, ``C98`` on U6 107.5 → 108.0. One
+    **nearest** moved with it — U6's ``+5V`` storage is ``C11`` at 95.8 mil, not
+    ``C101`` at 118.7, because ``C101``'s loop pad pair is farther than
+    ``C11``'s. The three unchanged values (``C5`` 95.9, ``C13`` 244.8,
+    ``C64`` 91.4) are what keep this a measured rewrite rather than a table
+    fitted to the code.
     """
     rows = _foc_100_rows()
     assert {
@@ -691,14 +708,14 @@ def test_the_whole_1_0_0_table_is_pinned():
         for key, f in rows.items()
     } == {
         ("U11", "VIN", "HF"): ("", None),
-        ("U11", "VIN", "STORAGE"): ("C89", 99.5),
+        ("U11", "VIN", "STORAGE"): ("C89", 221.5),
         ("U11", "VOUT", "?"): ("", None),
-        ("U5", "VIN", "HF"): ("C98", 660.9),
+        ("U5", "VIN", "HF"): ("C98", 736.5),
         ("U5", "VIN", "STORAGE"): ("C5", 95.9),
-        ("U5", "VOUT", "HF"): ("C3", 41.8),
+        ("U5", "VOUT", "HF"): ("C3", 29.1),
         ("U5", "VOUT", "STORAGE"): ("", None),
-        ("U6", "VIN", "HF"): ("C98", 107.5),
-        ("U6", "VIN", "STORAGE"): ("C101", 118.7),
+        ("U6", "VIN", "HF"): ("C98", 108.0),
+        ("U6", "VIN", "STORAGE"): ("C11", 95.8),
         ("U6", "VOUT", "HF"): ("C13", 244.8),
         ("U6", "VOUT", "STORAGE"): ("C64", 91.4),
     }
@@ -728,7 +745,7 @@ def test_the_robot_ldo_reports_both_pools_on_both_sides():
     The AMS1117 is the case where two ``Output`` pins share one net, so the
     output side has one net and both pools are measured against it. The VIN row
     is the interesting one: ``+12V`` carries U8's own ``C10`` (10 µF), which is
-    storage by 裁定 ③ and is that pool's nearest member at 35.0 mil.
+    storage by 裁定 ③ and is that pool's nearest member.
 
     **170 moved ``U8/VIN/HF`` from ``C6`` @ 187.5 mil to an empty pool.** The two
     readings are the two shapes of the model, and the production one wins:
@@ -739,6 +756,12 @@ def test_the_robot_ldo_reports_both_pools_on_both_sides():
     (``两视图不一致，判定用**原理图**值：原理图 '10UF' / PCB 文档 '100nF'``), and the
     old pin was the placeholder copy's answer — the same failure mode as the
     ``U5``/``C93`` row on 毕设FOC 1.0.0.
+
+    **89A changed every gap and one nearest part.** The reading is the same-net
+    pad-to-pad loop projection (issue #89): ``C10`` 35.0 → 27.1,
+    ``C7`` 62.8 → 101.7, and the VOUT HF nearest is now ``C8`` at 363.1 mil
+    rather than ``C15`` at 420.7 — ``C8``'s pad on ``VCC`` is the closer leg of
+    that loop.
     """
     findings, _section = run_pcb_review(
         ROBOT, model=build_project_model(ROBOT), rules=[RegulatorCapDistance()]
@@ -753,9 +776,9 @@ def test_the_robot_ldo_reports_both_pools_on_both_sides():
         for key, f in rows.items()
     } == {
         ("U8", "VIN", "HF"): ("", None),
-        ("U8", "VIN", "STORAGE"): ("C10", 35.0),
-        ("U8", "VOUT", "HF"): ("C15", 420.7),
-        ("U8", "VOUT", "STORAGE"): ("C7", 62.8),
+        ("U8", "VIN", "STORAGE"): ("C10", 27.1),
+        ("U8", "VOUT", "HF"): ("C8", 363.1),
+        ("U8", "VOUT", "STORAGE"): ("C7", 101.7),
     }
     assert "high-frequency bypass pool is empty" in rows[("U8", "VIN", "HF")].message
     assert {f.target.component_ref for f in findings} == {"U8"}
