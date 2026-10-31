@@ -1574,8 +1574,31 @@ def test_the_rulebody_digest_covers_the_pcb_subpackage():
     # 两个值都在**当前这棵工作树**上按上方同一配方直接量得；recursive 与
     # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
     # 由官方生成器同步更新。
+    # **89 (review) moved `recursive` only** — bed81e5b -> **8aea9fed**.
+    # 本批只落在 `rules/pcb/regulator.py` 与 `rules/pcb/fbplacement.py` 两个文件，
+    # 且只改**文案与状态**，不改任何读数口径的拒绝条件：①「本池为空」与「网上无
+    # 候选」分开说（有 candidates 但 members 为空时不再印「no capacitor on the net
+    # at all」/「no candidate capacitor bridges」，改印该网上哪些件在**另一个池**）；
+    # ②fbplacement 的两条电容读数区分**锚点侧**与**候选侧**，新增第五态
+    # `CAP_NO_ANCHOR_PAD`（upper/IC 在该网无焊盘）与被测件无焊盘分开陈述，不再把锚点
+    # 的缺失写成电容的名字；③`SENSE_CAP_RAIL`（`rail_net not in output_nets`）下
+    # upper 按定义没有该网焊盘，同网环路结构上不存在，改用它真实的**跨网**最近焊盘对
+    # 读数（新 `BASIS_CROSS_NET`，层无关、明确标注口径），不再只说 unmeasurable；
+    # ④多 `output_nets` 时已测到的件不再同时出现在「本网无焊盘」清单里（按 measured
+    # 名单过滤）；⑤docstring 里「两规则 pool 语义一致」的过度断言改为**如实说明差异**
+    # （fbplacement 的 `regulator_role(...) or POOL_HF` 与 regulator.py 的
+    # `== pool` 对**值不可读**的件不同，行为不改）。direct 仍为 `7d9d55b3`；
+    # `core/measure.py`、`rules/pcb/distance.py`、CLI、schema、connector、DSH、Rust
+    # 与绘制线一律未动；`contracts/differential` 由官方
+    # `tools.build_differential_fixtures` 重生成（实测 inputs 只动 rulebody 一行，
+    # 合成源的读数零翻转）。判决语义的钉在 `tests/test_89a…`（新增「本池空但有候选」）
+    # 与 `tests/test_89b…`（新增 3 条：rail 侧跨网 160.0 读数、IC 无 tap 焊盘归锚点、
+    # 多 output_nets 已测件不进无焊盘清单）。
+    # 两个值都在**当前这棵工作树**上按上方同一配方直接量得；recursive 与
+    # `contracts/differential/manifest.json` 的 `producerVersions.rulebody`
+    # 由官方生成器同步更新。
     assert old_digest == "7d9d55b3"
-    assert recursive == "bed81e5b", (
+    assert recursive == "8aea9fed", (
         "the measured value of the widened recipe over this tree; if a rule body "
         "changed since, update this together with the note in test_017"
     )

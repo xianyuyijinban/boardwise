@@ -297,10 +297,24 @@ def test_issue_89_minimal_geometry_is_measured_on_the_net():
     assert "not placed" not in hf.message
     assert "no same-net pad pair" not in hf.message
 
-    # The empty pool row on the same net is about the pool, not about placement.
+    # The empty pool row on the same net is about the **pool**, not about the
+    # net and not about placement: ``C7`` is on ``+12V`` and is measurable, it is
+    # simply in the other pool. Until #89's review this row said 「no capacitor
+    # on the net at all」 directly under an evidence list naming ``C7`` — two
+    # statements that cannot both be true, pinned green by this very test.
     storage = rows[("U1", "VIN", "STORAGE")]
     assert storage.target.counterpart_ref == ""
-    assert "(no capacitor on the net at all)" in storage.message
+    assert "no capacitor on the net at all" not in storage.message
+    assert "the net is not empty: C7 on '+12V' is outside this pool" in storage.message
+    assert "not placed" not in storage.message
+    assert not any(
+        "no candidate capacitor bridges" in line for line in storage.evidence
+    )
+    assert any(
+        "candidates bridging '+12V' to a ground net are outside this pool: C7"
+        in line
+        for line in storage.evidence
+    )
 
 
 def test_the_ground_pad_is_not_a_leg_of_the_supply_loop():
@@ -552,10 +566,57 @@ def test_both_empty_reasons_are_reported_together_rather_than_one_standing_in():
     assert "on this PCB document with no pad on '+12V': C7" in evidence
 
 
+def test_an_empty_pool_on_a_populated_net_says_pool_not_net():
+    """Path D (#89 review): the net has a candidate, **this** pool has none.
+
+    ``+12V`` carries a 10 µF storage capacitor, so the storage pool has a
+    reading — and the high-frequency pool has none because the net's only
+    candidate is in the other pool, not because the net is empty. Until the
+    review the empty-pool row of *every* pool printed 「no capacitor on the net
+    at all」 and its evidence printed 「no candidate capacitor bridges …」
+    directly under a candidate list that named that capacitor.
+    """
+    model = _model([
+        _regulator(),
+        _comp("C6", value="10uF", pins=[Pin("1", "1", SUPPLY), Pin("2", "2", GND)]),
+    ])
+    board = _board(
+        [("U1", 0.0, 40.0, TOP), ("C6", 200.0, 0.0, BOTTOM)],
+        [
+            _pad("U1", "1", x=0.0, y=0.0, net=SUPPLY),
+            _pad("U1", "2", x=0.0, y=40.0, net=OUT_NET),
+            _pad("U1", "3", x=0.0, y=80.0, net=GND),
+            _pad("C6", "1", x=200.0, y=0.0, net=SUPPLY, layer=BOTTOM),
+            _pad("C6", "2", x=200.0, y=40.0, net=GND, layer=BOTTOM),
+        ],
+    )
+
+    storage = _rows(model, board)[("U1", "VIN", "STORAGE")]
+    assert storage.target.counterpart_ref == "C6"
+    assert storage.target.measurement == {
+        "kind": "distance", "value": 160.0, "unit": "mil",
+    }
+
+    hf = _rows(model, board)[("U1", "VIN", "HF")]
+    assert hf.target.counterpart_ref == ""
+    assert hf.target.measurement is None
+    assert "the VIN high-frequency bypass pool is empty on this net" in hf.message
+    assert "no capacitor on the net at all" not in hf.message
+    assert "not placed" not in hf.message
+    assert "the net is not empty: C6 on '+12V' is outside this pool" in hf.message
+    assert not any(
+        "no candidate capacitor bridges" in line for line in hf.evidence
+    )
+    assert any(
+        "candidates bridging '+12V' to a ground net are outside this pool: C6"
+        in line
+        for line in hf.evidence
+    )
+
+
 # ---------------------------------------------------------------------------
 # 4. one context, two rules, one number
 # ---------------------------------------------------------------------------
-
 
 def test_the_regulator_rule_and_decap_distance_report_the_same_loop_gap():
     """The consistency 164c established, now on the regulator side too.

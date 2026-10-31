@@ -53,10 +53,15 @@ from boardwise.core.parts import PartEntry, PartLibrary
 from boardwise.engines.pcbreview import run_pcb_review
 from boardwise.rules.pcb.base import PcbReviewContext
 from boardwise.rules.pcb.fbplacement import (
+    BASIS_CROSS_NET,
+    BASIS_SAME_NET,
     CAP_MEASURED,
+    CAP_NO_ANCHOR_PAD,
     CAP_NO_CANDIDATE,
     CAP_NO_SAME_NET_PAD,
     CAP_NOT_PLACED,
+    SENSE_CAP_RAIL,
+    FbDivider,
     RegulatorFbPlacement,
 )
 from boardwise.rules.pcb.regulator import same_net_loop_distance
@@ -487,6 +492,303 @@ def test_the_three_empty_fb_node_cap_paths_are_three_sentences():
         "so its gap is unmeasurable — not 0 mil"
     ) in row.message
     assert f"state: {CAP_NO_SAME_NET_PAD}" in " ".join(row.evidence)
+
+
+# ---------------------------------------------------------------------------
+# 5b. #89 review: the anchor side, the rail-side shape, several output nets
+# ---------------------------------------------------------------------------
+
+
+RAIL_12 = "+12V"
+OUT2 = "OUT2"
+
+
+def _rail_side_model() -> DesignModel:
+    """``R1`` spans ``+12V``/``TAP`` — the ``SENSE_CAP_RAIL`` shape.
+
+    The regulator's output pin is on ``+5V`` while the upper leg's non-tap end is
+    on ``+12V``, so ``divider.rail_net`` is **not** one of this regulator's
+    output nets. The upper leg therefore has no pad on ``+5V`` *by construction*
+    and #89B's same-net loop cannot exist. The pre-review code asked for it
+    anyway, got ``None`` for every candidate, and printed that as the
+    capacitor's fault — a structural non-reading written as a defect.
+    """
+    return _model([
+        _comp(
+            "U1",
+            mpn="SYNTHREG",
+            lcsc="C0",
+            pins=[
+                Pin("1", "VOUT", OUT),
+                Pin("2", "FB", TAP),
+                Pin("3", "GND", GND),
+            ],
+        ),
+        _resistor("R1", RAIL_12, TAP),
+        _resistor("R2", TAP, GND),
+        _cap("C1", "10uF", OUT, GND),
+        _cap("C2", "100nF", OUT, GND),
+    ])
+
+
+def _rail_side_board() -> BoardGeometry:
+    """``R1``'s pads are on ``+12V``/``TAP``; the capacitors are on ``+5V``.
+
+    Every pad is 40x40. The nearest **cross-net** pair is ``R1.1`` (``+12V``,
+    x 80..120) against ``C1.2`` (``GND``, x 280..320) — ``280 - 120 = 160.0 mil``
+    — which is the reading the row must quote, on
+    :data:`BASIS_CROSS_NET`, instead of 「unmeasurable」.
+    """
+    return _board(
+        [
+            ("U1", 0.0, 60.0, TOP),
+            ("R1", 100.0, 0.0, TOP),
+            ("R2", 100.0, 80.0, TOP),
+            ("C1", 400.0, 0.0, BOTTOM),
+            ("C2", 340.0, 160.0, BOTTOM),
+        ],
+        [
+            _pad("U1", "1", x=0.0, y=0.0, net=OUT),
+            _pad("U1", "2", x=0.0, y=60.0, net=TAP),
+            _pad("U1", "3", x=0.0, y=120.0, net=GND),
+            _pad("R1", "1", x=100.0, y=0.0, net=RAIL_12),
+            _pad("R1", "2", x=100.0, y=40.0, net=TAP),
+            _pad("R2", "1", x=100.0, y=80.0, net=TAP),
+            _pad("R2", "2", x=100.0, y=120.0, net=GND),
+            _pad("C1", "1", x=400.0, y=0.0, net=OUT, layer=BOTTOM),
+            _pad("C1", "2", x=300.0, y=0.0, net=GND, layer=BOTTOM),
+            _pad("C2", "1", x=340.0, y=160.0, net=OUT, layer=BOTTOM),
+            _pad("C2", "2", x=340.0, y=240.0, net=GND, layer=BOTTOM),
+        ],
+    )
+
+
+def test_the_rail_side_shape_reads_a_cross_net_gap_instead_of_blaming_the_cap():
+    """``SENSE_CAP_RAIL`` keeps a useful number, on a stated reading basis.
+
+    The upper leg has no ``+5V`` pad, so the same-net loop is not a reading that
+    *failed* — it is a reading that does not exist for this topology. The row
+    quotes the nearest cross-net pad pair and says that is what it is (#89
+    review), instead of 「C1, C2 … has no pad on +5V」 about two capacitors that
+    are exactly where the drawing puts them.
+    """
+    model, board = _rail_side_model(), _rail_side_board()
+    assert same_net_loop_distance(board, "R1", "C1", OUT) is None
+
+    row = _row(model, board)
+    assert SENSE_CAP_RAIL in row.message
+    assert (
+        "the nearest energy storage capacitor on that output node is C1 at "
+        "160.0 mil from the upper leg R1 (pads 1 / 2)"
+    ) in row.message
+    assert "cross-net" in row.message
+    assert "has no pad on +5V" in row.message  # the **anchor**, and the row says so
+    assert "is placed on this PCB document but has no pad on" not in row.message
+    assert "unmeasurable" not in row.message
+
+    evidence = " ".join(row.evidence)
+    assert f"reading basis {BASIS_CROSS_NET}" in evidence
+    assert f"state {CAP_MEASURED}" in evidence
+    assert "anchor R1 has no pad on +5V" in evidence
+    assert "placed but with no pad on the node (none)" in evidence
+
+
+def test_the_ic_without_a_tap_pad_is_the_anchor_side_not_the_fb_cap():
+    """The FB-node reading's anchor is the **IC**, and the row says so.
+
+    ``U1`` is placed but no pad of it carries ``TAP``, so the FB-node gap has no
+    leg to measure. The old wording named ``C3`` — 「is placed on this PCB
+    document but has no pad on the FB node 'TAP'」 — about a capacitor whose
+    ``TAP`` pad is right there. #89 review: a separate state
+    (:data:`CAP_NO_ANCHOR_PAD`), and the sentence names the IC.
+    """
+    board = _divider_board()
+    board = BoardGeometry(
+        source=board.source,
+        name=board.name,
+        components=list(board.components),
+        pads=[pad for pad in board.pads if not (pad.component == "U1" and pad.net == TAP)],
+    )
+
+    row = _row(_divider_model(), board)
+    assert "U1 has no pad on the FB node 'TAP' on this PCB document" in row.message
+    assert "not the capacitors' doing" in row.message
+    assert "C3 is placed on this PCB document but has no pad on the FB node" not in (
+        row.message
+    )
+    evidence = " ".join(row.evidence)
+    assert f"state: {CAP_NO_ANCHOR_PAD}" in evidence
+    assert f"state: {CAP_NO_SAME_NET_PAD}" not in evidence
+
+
+def test_a_measured_capacitor_is_not_also_listed_as_missing_another_output_nets_pad():
+    """Two output nets: a part measured on one is not 「missing」 the other's pad.
+
+    ``U1`` names two output pins (``VOUT`` on ``+5V``, ``OUT_1`` on ``OUT2``),
+    and ``C1`` — a case-grounded 10 µF capacitor — has a pad on each of them. The
+    measurement on ``+5V`` succeeds (``160.0 mil``, pads ``1 / 1``); the second
+    output net has no pad of the **anchor** and, in the pre-review code, added
+    ``C1`` to the 「placed but with no pad on the node」 list — the same
+    designator printed as measured and as missing in one evidence block (#89
+    review). The anchor side is what the second net lacks, and the evidence says
+    that instead.
+    """
+    model = _model([
+        _comp(
+            "U1",
+            mpn="SYNTHREG",
+            lcsc="C0",
+            pins=[
+                Pin("1", "VOUT", OUT),
+                Pin("4", "OUT_1", OUT2),
+                Pin("2", "FB", TAP),
+                Pin("3", "GND", GND),
+            ],
+        ),
+        _resistor("R1", OUT, TAP),
+        _resistor("R2", TAP, GND),
+        _comp(
+            "C1",
+            value="10uF",
+            pins=[
+                Pin("1", "1", OUT),
+                Pin("2", "2", OUT2),
+                Pin("3", "3", GND),
+            ],
+        ),
+    ])
+    board = _board(
+        [
+            ("U1", 0.0, 160.0, TOP),
+            ("R1", 100.0, 0.0, TOP),
+            ("R2", 100.0, 80.0, TOP),
+            ("C1", 300.0, 0.0, BOTTOM),
+        ],
+        [
+            _pad("U1", "1", x=0.0, y=60.0, net=OUT),
+            _pad("U1", "4", x=0.0, y=100.0, net=OUT2),
+            _pad("U1", "2", x=0.0, y=140.0, net=TAP),
+            _pad("U1", "3", x=0.0, y=180.0, net=GND),
+            _pad("R1", "1", x=100.0, y=0.0, net=OUT),
+            _pad("R1", "2", x=100.0, y=40.0, net=TAP),
+            _pad("R2", "1", x=100.0, y=80.0, net=TAP),
+            _pad("R2", "2", x=100.0, y=120.0, net=GND),
+            _pad("C1", "1", x=300.0, y=0.0, net=OUT, layer=BOTTOM),
+            _pad("C1", "2", x=300.0, y=40.0, net=OUT2, layer=BOTTOM),
+            _pad("C1", "3", x=300.0, y=80.0, net=GND, layer=BOTTOM),
+        ],
+    )
+
+    row = _row(model, board)
+    assert (
+        "the nearest energy storage capacitor on that output node is C1 at "
+        "160.0 mil from the upper leg R1 (pads 1 / 1)"
+    ) in row.message
+    evidence = " ".join(row.evidence)
+    assert f"state {CAP_MEASURED}" in evidence
+    assert f"reading basis {BASIS_SAME_NET}" in evidence
+    # The second output net has no anchor pad, and that is the stated reason —
+    # not a capacitor that is missing a pad it demonstrably has.
+    assert "anchor R1 has no pad on OUT2" in evidence
+    assert "placed but with no pad on the node (none)" in evidence
+    assert "is placed on this PCB document but has no pad on" not in row.message
+
+
+def test_a_part_measured_on_one_output_net_is_not_also_listed_as_missing_another():
+    """#89 review: the measured list wins over the missing-pad list.
+
+    The reading this pins is the one the divider walk produces when a regulator
+    names two output nets **and the anchor leg has a pad on both** while the
+    capacitor has one on the first only: the second net's gap is ``None`` (the
+    capacitor really has no pad there) *and* the same designator was just
+    measured on the first. Printing both facts is a contradiction, so the
+    measured name stays out of the 「placed but with no pad on the node」 list.
+    The leg is given three pads here because that is what the shape requires;
+    the divider is built directly so the test is about the reading rather than
+    about the divider walk, which has its own tests above.
+    """
+    model = _model([
+        _comp(
+            "U1",
+            mpn="SYNTHREG",
+            lcsc="C0",
+            pins=[
+                Pin("1", "VOUT", OUT),
+                Pin("4", "OUT_1", OUT2),
+                Pin("2", "FB", TAP),
+                Pin("3", "GND", GND),
+            ],
+        ),
+        _resistor("R2", TAP, GND),
+        _comp(
+            "R1",
+            value="100k",
+            pins=[
+                Pin("1", "1", OUT),
+                Pin("2", "2", TAP),
+                Pin("3", "3", OUT2),
+            ],
+        ),
+        _comp(
+            "C1",
+            value="10uF",
+            pins=[
+                Pin("1", "1", OUT),
+                Pin("2", "2", GND),
+                Pin("3", "3", OUT2),
+            ],
+        ),
+    ])
+    board = _board(
+        [
+            ("U1", 0.0, 160.0, TOP),
+            ("R1", 100.0, 0.0, TOP),
+            ("R2", 100.0, 80.0, TOP),
+            ("C1", 300.0, 0.0, BOTTOM),
+        ],
+        [
+            _pad("U1", "1", x=0.0, y=60.0, net=OUT),
+            _pad("U1", "4", x=0.0, y=100.0, net=OUT2),
+            _pad("U1", "2", x=0.0, y=140.0, net=TAP),
+            _pad("U1", "3", x=0.0, y=180.0, net=GND),
+            _pad("R1", "1", x=100.0, y=0.0, net=OUT),
+            _pad("R1", "2", x=100.0, y=40.0, net=TAP),
+            _pad("R1", "3", x=100.0, y=80.0, net=OUT2),
+            _pad("R2", "1", x=100.0, y=120.0, net=TAP),
+            _pad("R2", "2", x=100.0, y=160.0, net=GND),
+            _pad("C1", "1", x=300.0, y=0.0, net=OUT, layer=BOTTOM),
+            _pad("C1", "2", x=300.0, y=80.0, net=GND, layer=BOTTOM),
+        ],
+    )
+    divider = FbDivider(
+        ic="U1",
+        category="ic.buck",
+        fb_pin_number="2",
+        fb_pin_name="FB",
+        tap_net=TAP,
+        upper="R1",
+        lower="R2",
+        rail_net=OUT,
+        ground_net=GND,
+        rail_volts=5.0,
+        output_nets=(OUT, OUT2),
+        output_basis="test: two pins whose names resolve to the OUT role",
+    )
+
+    reading = RegulatorFbPlacement()._nearest_output_cap(
+        model, divider, board, _shelf()
+    )
+    assert reading.state == CAP_MEASURED
+    assert reading.designator == "C1"
+    assert reading.pool == "storage"
+    assert reading.basis == BASIS_SAME_NET
+    assert reading.candidates == ("C1",)
+    assert reading.distance.edge_distance == pytest.approx(160.0)
+    assert reading.unmeasurable == ()
+    # The anchor has a pad on **both** output nets here, so the failure on
+    # ``OUT2`` is the capacitor's own missing pad — recorded, then removed
+    # because the same part is the measured winner.
+    assert reading.anchor_without == ()
 
 
 # ---------------------------------------------------------------------------

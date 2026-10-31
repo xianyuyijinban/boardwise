@@ -625,18 +625,35 @@ class RegulatorCapDistance(PcbRule):
         )
 
     def _empty_reason(
-        self, unplaced: list[str], padless: list[str], net: str
+        self,
+        unplaced: list[str],
+        padless: list[str],
+        net: str,
+        excluded: list[str] | None = None,
     ) -> str:
         """The parenthetical that says **why** a pool row has no measurement.
 
-        Issue #89: the three reasons are different claims and must not wear each
+        Issue #89: the reasons are different claims and must not wear each
         other's clothes. 「no capacitor on the net at all」 is about the design;
-        「none is placed on this PCB document」 is about the board's scope; and
+        「none is placed on this PCB document」 is about the board's scope;
         「on the board but no same-net pad pair on this net」 is about this
         document's geometry — which is what the rule used to misreport as
         「none is placed」 whenever ``component_distance`` refused the pair.
+
+        ``excluded`` is the **pool** side (#89 review): when the net carries
+        candidates but every one of them belongs to the other pool (or states no
+        readable capacitance), the net is not empty and this pool is. The old
+        wording said 「no capacitor on the net at all」 directly under an evidence
+        list naming that capacitor — two statements that cannot both be true.
         """
         if not unplaced and not padless:
+            if excluded:
+                return (
+                    f" (the net is not empty: "
+                    f"{', '.join(sorted(excluded))} on {net!r} is outside this "
+                    f"pool — either the other pool or no readable "
+                    f"capacitance — so this pool is empty, not the net)"
+                )
             return " (no capacitor on the net at all)"
         if padless and not unplaced:
             return (
@@ -655,7 +672,11 @@ class RegulatorCapDistance(PcbRule):
         )
 
     def _empty_evidence(
-        self, unplaced: list[str], padless: list[str], net: str
+        self,
+        unplaced: list[str],
+        padless: list[str],
+        net: str,
+        excluded: list[str] | None = None,
     ) -> str:
         """The evidence line that names which candidates fell in which bucket."""
         parts: list[str] = []
@@ -670,6 +691,11 @@ class RegulatorCapDistance(PcbRule):
                 + ", ".join(sorted(padless))
             )
         if not parts:
+            if excluded:
+                return (
+                    f"candidates bridging {net!r} to a ground net are outside "
+                    f"this pool: " + ", ".join(sorted(excluded))
+                )
             return f"no candidate capacitor bridges {net!r} to a ground net"
         return "; ".join(parts)
 
@@ -686,10 +712,12 @@ class RegulatorCapDistance(PcbRule):
         """The one row for ``(side, net, pool)`` of one regulator.
 
         The measurement is :func:`same_net_loop_distance` (issue #89), and the
-        empty-pool row tells three cases apart instead of collapsing them:
-        no capacitor on the net at all, candidates this PCB document does not
-        place, and candidates it does place but with no pad on ``net``. The
-        third is 「unmeasurable」 — it must never read as 0 mil or as unplaced.
+        empty-pool row tells the cases apart instead of collapsing them:
+        no capacitor on the net at all, a net whose every candidate is in the
+        other pool (the pool is empty, not the net — #89 review), candidates
+        this PCB document does not place, and candidates it does place but with
+        no pad on ``net``. The last is 「unmeasurable」 — it must never read as
+        0 mil or as unplaced.
         """
         label = _SIDE_LABELS[side]
         pool_label = _POOL_LABELS[pool]
@@ -700,6 +728,7 @@ class RegulatorCapDistance(PcbRule):
             if regulator_role(c, reading.board_model, schematic) == pool
         ]
         excluded = [c for c in candidates if c not in members]
+        excluded_names_list = sorted(c.designator for c in excluded)
         evidence = [
             *self._identity(reading),
             f"{label} net is {net!r} (read from the pin's name, not from a "
@@ -739,11 +768,15 @@ class RegulatorCapDistance(PcbRule):
                         f"{reading.designator} has no {pool_label} capacitor "
                         f"measurable against its {label} net {net!r} — the "
                         f"{label} {pool_label} pool is empty on this net"
-                        + self._empty_reason(unplaced, padless, net)
+                        + self._empty_reason(
+                            unplaced, padless, net, excluded_names_list
+                        )
                     ),
                     evidence=evidence
                     + [
-                        self._empty_evidence(unplaced, padless, net),
+                        self._empty_evidence(
+                            unplaced, padless, net, excluded_names_list
+                        ),
                     ],
                     target=FindingTarget(
                         component_ref=reading.designator, net_refs=[net]

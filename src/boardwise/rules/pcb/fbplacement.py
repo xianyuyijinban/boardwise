@@ -129,7 +129,7 @@ from dataclasses import dataclass
 
 from ..base import Finding, FindingTarget
 from ...core.geometry import BoardGeometry
-from ...core.measure import component_distance
+from ...core.measure import component_distance, pad_edge_distance
 from ...core.model import is_ground_net
 from ...core.pinrole import pin_role
 from ...core.power_domains import domain_of, infer_net_domains
@@ -143,6 +143,7 @@ from .regulator import (
     POOL_STORAGE,
     REGULATOR_CATEGORIES,
     _POOL_LABELS,
+    SameNetLoopDistance,
     _regulator_readings,
     regulator_role,
     same_net_loop_distance,
@@ -180,7 +181,8 @@ __all__ = [
 SENSE_CAP_END = "on the output-capacitor end"
 SENSE_CAP_RAIL = "on the rail"
 
-#: The four states a capacitor-distance reading can be in (#89B). They are
+#: The states a capacitor-distance reading can be in (#89B, plus #89 review's
+#: anchor-side one). They are
 #: separate values because they are separate statements, and the old code
 #: collapsed three of them into one sentence:
 #:
@@ -199,6 +201,24 @@ CAP_MEASURED = "measured"
 CAP_NO_CANDIDATE = "no candidate"
 CAP_NOT_PLACED = "not placed"
 CAP_NO_SAME_NET_PAD = "no same-net pad pair"
+#: ``CAP_NO_ANCHOR_PAD`` — the **anchor** side is the reason there is no
+#: same-net reading: the upper leg (or the IC, for the FB-node capacitor) has no
+#: pad on the target net on this PCB document. It is a separate state from
+#: ``CAP_NO_SAME_NET_PAD`` because the two are different findings — the first is
+#: about the part the distance is measured *from*, the second about the part it
+#: is measured *to* — and the old wording wrote the anchor's failure as the
+#: capacitor's (#89 review).
+CAP_NO_ANCHOR_PAD = "anchor has no pad on the net"
+
+#: Which reading produced a ``CAP_MEASURED`` number. ``BASIS_SAME_NET`` is
+#: #89B's loop — both parts' pads on the one target net. ``BASIS_CROSS_NET`` is
+#: the nearest pad pair across **different** nets, which is the only reading that
+#: exists when the anchor has no pad on the target net at all: in the
+#: :data:`SENSE_CAP_RAIL` shape the upper leg's non-tap end is deliberately not
+#: this regulator's output, so the same-net loop cannot exist and saying
+#: 「unmeasurable」 would throw away a real placement distance (#89 review).
+BASIS_SAME_NET = "same net"
+BASIS_CROSS_NET = "cross net"
 
 
 @dataclass(frozen=True)
@@ -215,6 +235,11 @@ class CapLoopReading:
     state, in board order and de-duplicated: a reader who is told 「unmeasurable」
     needs to see *which* part was on the board and failed, because that is a
     different investigation from 「no capacitor is drawn」.
+
+    ``basis`` says which reading produced a number (:data:`BASIS_SAME_NET` or
+    :data:`BASIS_CROSS_NET`), and ``anchor_without`` names the target net(s) the
+    **anchor** — the part the distance is measured from — has no pad on, so the
+    two sides of a failed reading can be told apart (#89 review).
     """
 
     state: str = CAP_NO_CANDIDATE
@@ -224,6 +249,8 @@ class CapLoopReading:
     candidates: tuple[str, ...] = ()
     placed: tuple[str, ...] = ()
     unmeasurable: tuple[str, ...] = ()
+    basis: str = ""
+    anchor_without: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -588,6 +615,45 @@ def _fb_ic_on_tap(
     return None
 
 
+def _cross_net_gap(
+    board: BoardGeometry, des_a: str, des_b: str
+) -> SameNetLoopDistance | None:
+    """The nearest pad pair between two parts **across nets**, or ``None``.
+
+    The reading for the :data:`SENSE_CAP_RAIL` shape (#89 review). There the
+    upper leg's non-tap end sits on a net that is *not* the regulator's output,
+    so the leg has no pad on the output net by construction and #89B's same-net
+    loop cannot exist — the old code asked for it anyway, got ``None`` for every
+    candidate, and wrote that as the capacitor's fault. This reads
+    :func:`~boardwise.core.measure.pad_edge_distance` over every pad pair whose
+    two pads are on **different** nets: layer-blind and planar like the same-net
+    loop, but a placement gap rather than a supply-loop projection, so the row
+    that quotes it says which of the two it is (:data:`BASIS_CROSS_NET`).
+
+    Same-net pairs are excluded because they are the *other* reading: quoting
+    one under the cross-net basis would let a shared ground pad stand in for the
+    output node. ``None`` (no comparable pair, or either part absent) stays
+    unmeasurable — never ``0 mil``.
+    """
+    pads_a = board.pads_for_component(des_a)
+    pads_b = board.pads_for_component(des_b)
+    if not pads_a or not pads_b:
+        return None
+    best: SameNetLoopDistance | None = None
+    for pad_a in pads_a:
+        for pad_b in pads_b:
+            if pad_a.net and pad_a.net == pad_b.net:
+                continue
+            gap = pad_edge_distance(pad_a, pad_b)
+            if best is None or gap < best.edge_distance:
+                best = SameNetLoopDistance(
+                    edge_distance=gap,
+                    pad_a=str(pad_a.pin_number or pad_a.id),
+                    pad_b=str(pad_b.pin_number or pad_b.id),
+                )
+    return best
+
+
 def _output_nets_of(reading: object, board_model: object) -> tuple[tuple[str, ...], str]:
     """This regulator's **output** net(s), and the clause that says how.
 
@@ -887,27 +953,63 @@ class RegulatorFbPlacement(PcbRule):
         the number is the leg's output-net pad against the capacitor's, so a
         nearer pad on a *different* net cannot stand in for it.
 
-        The three empty outcomes are **kept apart** (:class:`CapLoopReading`):
+        The empty outcomes are **kept apart** (:class:`CapLoopReading`):
         nothing on the net reads as a capacitor, candidates that this document
-        does not place, and candidates it places with no pad on the net. The
-        third is unmeasurable — not ``0 mil``, and not 「not placed」.
+        does not place, candidates it places with no pad on the net (the
+        **candidate** side), and — #89 review — the upper leg having no pad on
+        the net at all (the **anchor** side, :data:`CAP_NO_ANCHOR_PAD`). The
+        third and fourth are unmeasurable — not ``0 mil``, and not 「not
+        placed」 — and they are different findings, so they are different states
+        rather than one sentence naming the capacitor in both.
+
+        **The SENSE_CAP_RAIL shape still gets a number.** When
+        ``divider.rail_net`` is not one of this regulator's output nets the
+        upper leg has no pad on the output net *by construction*, so #89B's
+        same-net loop cannot exist at all. Asking for it anyway and reporting
+        「unmeasurable」 would throw the reading away and blame the capacitors;
+        the number comes from :func:`_cross_net_gap` instead and the row says
+        it is a cross-net placement gap (:data:`BASIS_CROSS_NET`), not the
+        supply loop.
 
         **Both pools are reported**, and the *storage* pool is the one the
         sense-point question is about, because that is the part the LM5164's
         datasheet means by its output capacitor. 裁定 ③ (131b) owns the split —
         ``>= 1 µF`` is storage, below it is high-frequency bypass — and the pool
         is read through :func:`~boardwise.rules.pcb.regulator.regulator_role`,
-        the same function ``pcb-regulator-cap-distance`` uses, so 「storage」 and
-        「high-frequency bypass」 mean one thing across the two rules. A nearest
+        the same function ``pcb-regulator-cap-distance`` uses. A nearest
         100 nF bypass is a real measurement and a misleading answer to 「where is
         the output capacitor」, so it is reported with its pool and the storage
         one is preferred when both exist.
+
+        **Where the two rules' pool readings differ, stated rather than papered
+        over** (#89 review): this caller reads ``regulator_role(...) or
+        POOL_HF`` and does not pass a schematic page, while
+        ``pcb-regulator-cap-distance`` reads ``regulator_role(..., schematic)``
+        and admits a candidate only when its role ``== pool`` — so a part whose
+        capacitance nobody wrote down is counted as *high-frequency bypass*
+        here and as *neither pool* there. The two rules therefore agree on the
+        boundary (裁定 ③'s ``1 µF`` floor) and on every part whose value is
+        declared, but they do **not** agree on the UNKNOWN part. This docstring
+        used to claim they meant one thing; changing either reading is a
+        behaviour change outside #89's review scope, so the difference is
+        documented instead of silently resolved.
         """
-        best: dict[str, tuple[str, object, str]] = {}
+        best: dict[str, tuple[str, object, str, str]] = {}
         candidates: list[str] = []
         placed: list[str] = []
         unmeasurable: list[str] = []
+        anchor_without: list[str] = []
         for output_net in divider.output_nets:
+            anchor_has_pad = any(
+                pad.net == output_net
+                for pad in board.pads_for_component(divider.upper)
+            )
+            if not anchor_has_pad and output_net not in anchor_without:
+                # The **anchor** side of a failed reading (#89 review): the part
+                # the distance is measured *from* has no pad on this net, which
+                # is by construction in the ``SENSE_CAP_RAIL`` shape and never
+                # the capacitor's doing.
+                anchor_without.append(output_net)
             for candidate in cap_candidates_on(model, output_net, library):
                 if candidate.designator not in candidates:
                     candidates.append(candidate.designator)
@@ -915,9 +1017,16 @@ class RegulatorFbPlacement(PcbRule):
                     continue
                 if candidate.designator not in placed:
                     placed.append(candidate.designator)
-                distance = same_net_loop_distance(
-                    board, divider.upper, candidate.designator, output_net
-                )
+                if anchor_has_pad:
+                    distance = same_net_loop_distance(
+                        board, divider.upper, candidate.designator, output_net
+                    )
+                    reading_basis = BASIS_SAME_NET
+                else:
+                    distance = _cross_net_gap(
+                        board, divider.upper, candidate.designator
+                    )
+                    reading_basis = BASIS_CROSS_NET
                 if distance is None:
                     if candidate.designator not in unmeasurable:
                         unmeasurable.append(candidate.designator)
@@ -925,7 +1034,17 @@ class RegulatorFbPlacement(PcbRule):
                 pool = regulator_role(candidate, model) or POOL_HF
                 held = best.get(pool)
                 if held is None or distance.edge_distance < held[1].edge_distance:
-                    best[pool] = (candidate.designator, distance, pool)
+                    best[pool] = (
+                        candidate.designator, distance, pool, reading_basis
+                    )
+        measured_names = {entry[0] for entry in best.values()}
+        # A part measured on one output net is not 「placed but with no pad on
+        # the node」 because a *different* output net of the same regulator does
+        # not carry it (#89 review): the name already stands in the measured
+        # list, and both sentences cannot be true.
+        unmeasurable = [
+            name for name in unmeasurable if name not in measured_names
+        ]
         chosen = best.get(POOL_STORAGE) or best.get(POOL_HF)
         if chosen is not None:
             return CapLoopReading(
@@ -933,22 +1052,28 @@ class RegulatorFbPlacement(PcbRule):
                 designator=chosen[0],
                 distance=chosen[1],
                 pool=chosen[2],
+                basis=chosen[3],
                 candidates=tuple(candidates),
                 placed=tuple(placed),
                 unmeasurable=tuple(unmeasurable),
+                anchor_without=tuple(anchor_without),
             )
         state = (
             CAP_NO_CANDIDATE
             if not candidates
             else CAP_NOT_PLACED
             if not placed
+            else CAP_NO_ANCHOR_PAD
+            if anchor_without and not unmeasurable
             else CAP_NO_SAME_NET_PAD
         )
         return CapLoopReading(
             state=state,
+            basis=BASIS_CROSS_NET if anchor_without else BASIS_SAME_NET,
             candidates=tuple(candidates),
             placed=tuple(placed),
             unmeasurable=tuple(unmeasurable),
+            anchor_without=tuple(anchor_without),
         )
 
     def _nearest_sense_cap(
@@ -966,15 +1091,26 @@ class RegulatorFbPlacement(PcbRule):
         it filters — and a same-net cross-layer pair, which
         ``component_distance`` refuses, is measured rather than dropped.
 
-        Same three empty outcomes as :meth:`_nearest_output_cap`, told apart.
+        Same empty outcomes as :meth:`_nearest_output_cap`, told apart — including
+        the anchor side (#89 review): when the **IC** has no pad on the tap net on
+        this PCB document, the reading fails on the part it is measured *from*,
+        and :data:`CAP_NO_ANCHOR_PAD` says so instead of writing the capacitor's
+        name next to 「has no pad on the FB node」.
         """
         best: tuple[str, object] | None = None
         placed: list[str] = []
         unmeasurable: list[str] = []
+        anchor_has_pad = any(
+            pad.net == divider.tap_net
+            for pad in board.pads_for_component(divider.ic)
+        )
+        anchor_without = () if anchor_has_pad else (divider.tap_net,)
         for candidate in sense_caps:
             if board.component(candidate.designator) is None:
                 continue
             placed.append(candidate.designator)
+            if not anchor_has_pad:
+                continue
             distance = same_net_loop_distance(
                 board, divider.ic, candidate.designator, divider.tap_net
             )
@@ -989,22 +1125,28 @@ class RegulatorFbPlacement(PcbRule):
                 state=CAP_MEASURED,
                 designator=best[0],
                 distance=best[1],
+                basis=BASIS_SAME_NET,
                 candidates=candidates,
                 placed=tuple(placed),
                 unmeasurable=tuple(unmeasurable),
+                anchor_without=anchor_without,
             )
         state = (
             CAP_NO_CANDIDATE
             if not candidates
             else CAP_NOT_PLACED
             if not placed
+            else CAP_NO_ANCHOR_PAD
+            if anchor_without and not unmeasurable
             else CAP_NO_SAME_NET_PAD
         )
         return CapLoopReading(
             state=state,
+            basis=BASIS_SAME_NET,
             candidates=candidates,
             placed=tuple(placed),
             unmeasurable=tuple(unmeasurable),
+            anchor_without=anchor_without,
         )
 
     def _no_divider(self, reading, fb: tuple[str, str, str]) -> Finding:
@@ -1077,6 +1219,18 @@ class RegulatorFbPlacement(PcbRule):
                 f"leg {divider.upper} (pads {out_cap.distance.pad_a} / "
                 f"{out_cap.distance.pad_b})"
             )
+            if out_cap.basis == BASIS_CROSS_NET:
+                # #89 review: the SENSE_CAP_RAIL shape, where the upper leg has
+                # no pad on the output net at all. The number is a real placement
+                # gap, and the sentence says which reading it is rather than
+                # presenting it as the supply loop.
+                out_cap_text += (
+                    f" — read as the nearest **cross-net** pad pair "
+                    f"({BASIS_CROSS_NET} basis): {divider.upper} has no pad on "
+                    f"{' / '.join(out_cap.anchor_without) or 'the output net'} "
+                    f"on this PCB document, so this is a placement gap across "
+                    f"nets, layer-blind, not a same-net loop reading"
+                )
         elif not divider.output_nets:
             out_cap_text = (
                 "no output node was established, so the sensing point has no "
@@ -1094,6 +1248,22 @@ class RegulatorFbPlacement(PcbRule):
                 f"({', '.join(out_cap.candidates)}) are not placed on this PCB "
                 f"document, so the sensing point has no measured distance"
             )
+        elif out_cap.state == CAP_NO_ANCHOR_PAD:
+            if board.component(divider.upper) is None:
+                out_cap_text = (
+                    f"the upper leg {divider.upper} is not placed on this PCB "
+                    f"document, so the sensing point's gap has no measured "
+                    f"distance — unmeasurable, not 0 mil, and not the "
+                    f"capacitors' doing"
+                )
+            else:
+                out_cap_text = (
+                    f"the upper leg {divider.upper} has no pad on "
+                    f"{' / '.join(out_cap.anchor_without)} on this PCB document, "
+                    f"so the output-net gap cannot be measured from it — "
+                    f"unmeasurable, not 0 mil, and not the capacitors' doing "
+                    f"(the anchor side is what is missing, not a candidate pad)"
+                )
         else:
             out_cap_text = (
                 f"{', '.join(out_cap.unmeasurable)} is placed on this PCB "
@@ -1121,6 +1291,13 @@ class RegulatorFbPlacement(PcbRule):
                 f"the capacitors on the FB node {divider.tap_net!r} "
                 f"({', '.join(sense.candidates)}) are not placed on this PCB "
                 f"document"
+            )
+        elif sense.state == CAP_NO_ANCHOR_PAD:
+            sense_text = (
+                f"{divider.ic} has no pad on the FB node {divider.tap_net!r} on "
+                f"this PCB document, so the FB-node gap cannot be measured from "
+                f"it — unmeasurable, not 0 mil, and not the capacitors' doing "
+                f"(the anchor side is what is missing, not a candidate pad)"
             )
         else:
             sense_text = (
@@ -1190,6 +1367,9 @@ class RegulatorFbPlacement(PcbRule):
                     f"{', '.join(sorted(cap_nets)) or '(none)'}",
                     f"output-node distance: {out_cap_text}",
                     f"output-node distance reading: state {out_cap.state}; "
+                    f"reading basis {out_cap.basis or '(none)'}; "
+                    f"anchor {divider.upper} has no pad on "
+                    f"{', '.join(out_cap.anchor_without) or '(none)'}; "
                     f"candidates on that node "
                     f"{', '.join(out_cap.candidates) or '(none)'}; placed on this "
                     f"document {', '.join(out_cap.placed) or '(none)'}; placed but "
