@@ -3,7 +3,7 @@
 > **这份文件是路由，不是规格。** 它只回答三件事：这是什么项目、三条线现在各在哪、
 > 干活要去读哪份权威文件。细节一律不在这里复制；两处说法冲突时以它指的文件为准。
 > 写它的场合：从 Kimi Code 迁到 DeepSeek Harness（dsh）这类**换 harness**、开新会话、
-> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-10-25**。
+> 或换人接手。口径是岳定的那句：**机制不搬，只搬记忆**。最后核对：**2026-10-31**。
 
 ## 1. 一句话
 
@@ -32,31 +32,27 @@ boardwise 是**立创 EDA Pro（EasyEDA Pro）的 AI harness**，五条能力：
 [`docs/draw.md`](draw.md)｜桥协议全表 [`docs/bridge.md`](bridge.md)｜真机坑全表
 [`docs/pits.md`](pits.md)｜测试与保密闸地图 [`docs/testing-doctrine.md`](testing-doctrine.md)。
 
-## 3. 三条线的当前状态（核对日期 2026-10-25）
+## 3. 三条线的当前状态（核对日期 2026-10-31）
 
-### 3.0 540 平台后的派单路由（先看这里）
+### 3.0 0.6.0与派单路由（先看这里）
 
-- **539 已收口**：commit `0f638deaa5d089194e8addf2d400cb7422d422bf`，其后 0.5.22 的
-  `63df468`/`23f030f` 已包含它；真机为
-  `completion=incomplete / delivery=partial`，不是板子通过。
-- **540 已完成、未提交**：A/B/C + 对抗修复 + 只读真机验收；142 模块/0 legacy、24 CLI 命令、
-  DSH 10 工具。首轮 Python 7876/21/5、connector 536、DSH 122/1、Rust 7、4 case；对抗后首轮
-  为 Python **8206/19/5/1 failed**（rulebody 钉已按 B2 补）、DSH **127/1**、Rust **45+显式4**、5 case。
+- **0.6.0 功能门槛已收口**：200A/B/C 已随 `d2130b7` 入库；542 P0 反激三关、岳人眼和重开
+  `saved_verified` 全过；527D2/D3 已落。CH343 示例随 `a8613c5` 入库。
+- **540 已完成**：A/B/C + 对抗修复 + 只读真机验收；142 模块/0 legacy、24 CLI 命令、DSH 10 工具。
+  最终候选读数见 `evidence/540/candidate-regression.md`（Python **8132/94/5/0 failed**），
+  不再等待该文件；它是 540 的历史读数，0.6.0 发布验收另记。
+- **V4 / #89 已进入候选**：`e431e94`、`ba4fbae`、`1a7e4a1`、`643cf6d` 覆盖 V4 单 PCB、
+  主机 ERC、同网测量与证据边界。V4 多 PCB、部分跨视图语义和实时 PCB 位图缺口仍公开；
+  `incomplete/partial` 不解释为板级通过。
 - **独立派单**：审查读 `tasks/review-line.md`，绘制读 `tasks/draw-line.md`，shared/CLI/bridge/
   parser/model 的集成改动读 `tasks/shared-platform.md`。两线可独立派小批，shared、全量、真机串行；
-  算法与迁移不同批。542 经岳批准使用 `E:\boardwise-wt-draw` / `drawing-line`，主工作区及
-  未提交 201H 文件保留；其他线不得把旧档案 worktree 当可写工作区。
-- **行为与证据**：B 组 `evidence/540/b-behavior-equivalence.md`，C 组 `evidence/540/c-acceptance.md`，
-  两轮全量 `final-regression.md` / `final-regression-adversarial.md`；**最终候选读数以
-  `evidence/540/candidate-regression.md` 为准**（后续步骤产生，未产生不算通过）。构建见 `docs/rust-platform.md`。
-- **#87/#88 验收与边界**：矩阵与 #88 四视图实测见 `tasks/issue-87-88-acceptance.md`
-  （#88：pre-#83 15=281+14 / bd5809f 50 / rings 边+弦 containment 56 / HEAD 1=295，
-  55=14+35+6）。#87②仍开放、④仅字符串级部分完成、⑤仅离线替代，**#87 整单不关**；
-  提出人已接受 #88 的 1/295 与四视图并授权关单，`element_ids` 唯一性另立。
-- **下一段**：542 反激 P0 已于 2026-10-27 提前完成并冻结：P4 三关、岳人眼和重开
-  `saved_verified` 全过，证据 `evidence/542/final-p4.md`。11 月 1 日后按
-  `tasks/542_schematic_3_0_nov01.md` §7 开始 V4；CH343 不挤占已完成的 P0。其他 0.6.0
-  阻塞项仍按各自任务验收，0.6.x 与 0.7.0 边界见 `docs/roadmap.md` §10。
+  算法与迁移不同批。旧档案 worktree 不当可写工作区；新建/删除 worktree 仍逐次问岳。
+- **行为与证据**：540B 见 `evidence/540/b-behavior-equivalence.md`，540C 见
+  `evidence/540/c-acceptance.md`；构建见 `docs/rust-platform.md`。V4 在线证据见
+  `outputs/review/v4-online-acceptance.md`，#89 见 `tasks/89a_regulator_same_net_distance.md`、
+  `tasks/89b_fb_same_net_distance.md`。
+- **下一段**：0.6.x 绘制算法与 Rust strangler 并行，V4 后续样本/多 PCB 和 041 跨板网络分批；
+  R4 stub 仍冻结。版本骨架见 `docs/roadmap.md` §1–§2。
 
 > 以下 3.1–3.4 保留 2026-10-23/24 的业务与发布历史；当前派单和平台状态以 §3.0 为准。
 
@@ -105,10 +101,10 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
 
 ### 3.3 插件线 —— boardwise-dsh（发给 dsh 用户的产品面）
 
-- **540B7 当前工作树**：根 shim 与 `dsh-plugin/package.json` 为 0.5.22；`index.ts` 仅组装
-  review/shared/draw 注册，旧 8 工具顺序不变，新增离线 `boardwise_draw_compile` /
-  `boardwise_draw_lint` 共 10 工具。**127 passed / 1 skipped** + typecheck + build，离线 smoke 为
-  3 candidates/6 artifacts + page 8 pages/16 artifacts + lint replay 0；未热加载、未发布（下列为 0.1.3 历史）。
+- **0.6.0**：根 shim 与 `dsh-plugin/package.json` 已统一为 0.6.0；`index.ts` 仅组装
+  review/shared/draw 注册，旧 8 工具顺序不变，另有离线 `boardwise_draw_compile` /
+  `boardwise_draw_lint` 共 10 工具。**127 passed / 1 skipped** + typecheck + build；新 tarball 为
+  `boardwise-dsh-0.6.0.tgz`。下列 0.1.x 内容只作历史，不是当前版本。
 - `dsh-plugin/package.json` 0.1.2 → **0.1.3**（commit `23b2a53`）：`npm run check` 全绿
   （51 passed / 1 skipped + typecheck + build），`npm pack` 出 `boardwise-dsh-0.1.3.tgz`，
   `npm publish --dry-run` exit 0。
@@ -125,10 +121,10 @@ comment「待验证」+ 验证步骤，由提出人实测确认后自己关；�
   为准，push 前商城安装仍装到空壳。
 - **待做**：`npm login` → `cd dsh-plugin && npm publish --access public`（**岳的 npm 账号，
   未 publish**）；push 后等几小时复检商城页。
-- **版本策略（2026-10-24 定）**：从 **0.6.0 起插件与 boardwise 外部版本同号**；发布 0.6.0
-  时同时把根 shim `package.json` 与 `dsh-plugin/package.json` 改成 0.6.0。`0.1.3` 是
-  `0.1.x` 线最后一版，不再发 `0.1.x`。`BOARDWISE_EXE` 持久化暂不做，保留环境变量方式；
-  根 shim 入库、npm publish 都并入 0.6.0 发布动作。
+- **版本策略执行**：从 **0.6.0 起插件与 boardwise 外部版本同号**，根 shim
+  `package.json` 与 `dsh-plugin/package.json` 已一起改成 0.6.0。`0.1.3` 是 `0.1.x`
+  最后一版。`BOARDWISE_EXE` 持久化暂不做，保留环境变量方式；npm registry 发布仍按上面的
+  待做处理，不因本地 `npm pack` 或 GitHub Release 自动视为已 publish。
 - 纪律：**TS 侧不实现任何审查逻辑**；CLI 命令面变更时检查 dsh-plugin 工具面要不要跟，
   漂移哨兵 `tests/test_dsh_plugin_sync.py` 常跑。
 

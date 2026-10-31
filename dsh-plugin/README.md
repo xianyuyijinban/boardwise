@@ -10,8 +10,8 @@ TS 里不重算任何审查结论（任务书 045 §1）。
 
 ## 版本策略
 
-**从 0.5.22 起，插件版本与 boardwise 外部版本同号**：根 shim
-`package.json` 与 `dsh-plugin/package.json` 一起改成 `0.5.22`，不再单独维护 `0.1.x` 线。
+**从 0.6.0 起，插件版本与 boardwise 外部版本同号**：根 shim
+`package.json` 与 `dsh-plugin/package.json` 一起改成 `0.6.0`，不再单独维护 `0.1.x` 线。
 `0.1.3` 是 `0.1.x` 的最后一版；现有安装可继续使用，升级时按本版 tarball 重装。
 
 ## 工具面
@@ -126,10 +126,10 @@ npm pack                       # 产出 boardwise-dsh-<version>.tgz
 ### 装进 profile
 
 ```sh
-dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
-dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
+dsh plugin --profile desktop add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
+dsh plugin --profile web add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
 # desktop / web / headless 是**不同** profile，各装一次
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
 ```
 
 也可以从 GitHub 装（要求仓库根的 shim 已提交，见下节）：
@@ -182,7 +182,7 @@ desktop 则用 `D:\.pnpm-store\v11`。两套 store 对不上，pnpm 就报这个
 pnpm 在解析阶段就拒）：
 
 ```sh
-dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
+dsh plugin --profile headless add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
 # → ERR_PNPM_UNEXPECTED_STORE（modules dir 的 store 与当前 store 不一致）
 ```
 
@@ -192,7 +192,7 @@ profile，在它上面安装：
 
 ```sh
 dsh --profile boardwise-clean --from-default-profile headless --dump-config
-dsh plugin --profile boardwise-clean add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
+dsh plugin --profile boardwise-clean add file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
 ```
 
 本机实测：安装 431ms 成功，`--dump-config` 出现 `# == boardwise-dsh` / `tool-boardwise`；旧
@@ -211,7 +211,7 @@ dsh plugin --profile boardwise-clean add file:E:/boardwise/dsh-plugin/boardwise-
 DSH="$HOME/AppData/Roaming/DSH Desktop/host-commands/desktop/generations/<hash>/bin/dsh.cmd"
 "$DSH" --profile boardwise-web-clean --from-default-profile web --dump-config
 "$DSH" plugin --profile boardwise-web-clean add \
-  file:E:/boardwise/dsh-plugin/boardwise-dsh-0.5.22.tgz
+  file:E:/boardwise/dsh-plugin/boardwise-dsh-0.6.0.tgz
 "$DSH" --profile boardwise-web-clean --dump-config | grep -n 'tool-boardwise'
 ```
 

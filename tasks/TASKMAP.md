@@ -16,36 +16,23 @@
 
 ---
 
-## §0 当前在做（截至 2026-10-30）
+## §0 当前在做（截至 2026-10-31）
 
-- **已完成、未提交**：`540`（0.6.0 前平台准备）——540A/B/C 已验收，并在对抗修复与
-  只读真机追加验收后收口；142 模块/0 legacy、24 个 CLI 命令和 DSH 10 工具面保持兼容，
-  Rust 合同、差分与最小 workspace 已实际运行。**读数要分层，别混用**：
-  - 首轮全量 `evidence/540/final-regression.md`：Python **7876/21/5**、connector **536**、
-    DSH **122/1**、Rust **7**、4 case；
-  - 对抗后首轮 `evidence/540/final-regression-adversarial.md`：Python
-    **8206 passed / 19 skipped / 5 xfailed / 1 failed**（唯一红是 rulebody 源码指纹钉，
-    已按 B2 下沉补钉）、connector 536、DSH **127/1**、Rust **45 + 显式 4**、5 case；
-  - **最终候选读数以 `evidence/540/candidate-regression.md` 为准**（该文件由后续步骤
-    产生，未产生前**不算通过**）；本轮收口摘要 `evidence/540/final-regression-followup.md`。
-  - 真机只读：`evidence/540/real-machine-instance-20261025-233933/25-final-report.md`
-    与 `outputs/review/540/`——`conclusion=incomplete`（0 器件 0 网络）、`delivery=partial`，
-    **不是板级通过**。
-- **已验收、已提交**：`537` 审查流程与 `538` 块级独立子岛编译，随 `539` 的
-  `0f638de` 一并入库，并含在 0.5.22 历史中。其 2026-10-25 基线复跑为
-  Python **7708 passed / 19 skipped / 5 xfailed**，connector **536 passed** + typecheck，
-  DSH **113 passed / 1 skipped** + typecheck + build；不把这些旧读数冒充 540 最终全量。
-- **已验收、已提交**：`539` 的 F1–F9、对抗审查、只读真机与全量复核，
-  commit `0f638deaa5d089194e8addf2d400cb7422d422bf`；其后 0.5.22 的
-  `63df468`/`23f030f` 已包含它。真机结论为
-  `completion=incomplete / delivery=partial`，不是板子通过，也不是 540 的提交。
-- **工作树**：当前含 `540`、`200A/B/C`、`#87④` 等未提交改动，按各自任务书归属，
-  不把整棵脏树算进单一批次；旧 `520k–533` 岛系列的状态见下方各行与 `docs/handoff.md`。
-- **0.6.0 门槛**：`200A/B/C` 工作树完成、审查线验收通过（证据 `outputs/200/acceptance.md`）；
-  整体 Python 全量仍有 MSYS 与绘制线两个域外红项。发布候选必须先报证据，何时发布仍由岳决定。
+- **0.6.0 正式版**：四个功能门槛均已收口——`200A/B/C` 随 `d2130b7` 入库；
+  542 P0 反激整页三关、岳人眼与重开持久化验收通过；`527D2/D3` 已落地。
+  540 平台准备、CH343 示例、V4 首批适配和 #89 同网测量修复也已进入本版。
+- **V4 / #89 最近四笔**：`e431e94`（V4 工作流）、`ba4fbae`（同网测量）、
+  `1a7e4a1`（测量状态文案）、`643cf6d`（V4 证据边界）。V4 当前只承诺单 PCB 工作流；
+  多 PCB、部分跨视图语义和实时 PCB 位图缺口不关闭、不隐瞒。
+- **540 最终候选证据已产生**：`evidence/540/candidate-regression.md` 记录 Python
+  **8132 passed / 94 skipped / 5 xfailed / 0 failed**，其他门禁与差分结果见同文件；
+  不再写成「待 candidate-regression.md」。它是 540 的历史候选读数，不冒充 0.6.0 最终全量。
+- **本版发布验收**：Python **8821 passed / 25 skipped / 0 failed**；connector 542、
+  DSH 127/1、Rust 47+显式4；真机 doctor 9/9、evidence exit 0、P4 lint 0/0/0；
+  三件发布件与保密扫描通过。任何 `incomplete/partial` 都是证据覆盖结论，不是板级通过。
 - **0.6.0 后**：绘制算法与 Rust strangler 双主线并行；共享底座、全量测试与真机串行。
-  0.6.x / 0.7.0 的验收边界由 540 同步进 roadmap、SCHEDULE 与 handoff。
-- **既有搁置不变**：`201C`、`121b`、`text_overlap` 与 `R4` 阶段二；540 不顺手复活。
+  0.6.x / 0.7.0 的验收边界见 roadmap、SCHEDULE 与 handoff。
+- **既有搁置不变**：`201C`、`121b`、`text_overlap` 与 `R4` 阶段二；发布收口不顺手复活。
 
 ---
 
@@ -320,9 +307,9 @@
 
 | 编号 | 主题 | 状态 | 证据/任务书路径 |
 |---|---|---|---|
-| 200A | v0.6.0 122 E 阶段·器件检查收口+报告整合 | 工作树 | tasks/200a_report_integration.md；outputs/200a/report-integration-evidence.md |
-| 200B | v0.6.0 高速 A1 跨分割 | 工作树 | tasks/200b_cross_split.md；outputs/200b/evidence.md |
-| 200C | v0.6.0 高速 A2 换层地孔+A3 差分对内 | 工作树 | tasks/200c1_ground_via.md、200c2_diffpair.md；outputs/200c1/evidence.md、200c2/evidence.md |
+| 200A | v0.6.0 122 E 阶段·器件检查收口+报告整合 | 已落 `d2130b7` | tasks/200a_report_integration.md；outputs/200a/report-integration-evidence.md |
+| 200B | v0.6.0 高速 A1 跨分割 | 已落 `d2130b7` | tasks/200b_cross_split.md；outputs/200b/evidence.md |
+| 200C | v0.6.0 高速 A2 换层地孔+A3 差分对内 | 已落 `d2130b7` | tasks/200c1_ground_via.md、200c2_diffpair.md；outputs/200c1/evidence.md、200c2/evidence.md |
 | 201A | 地/电源符号策略重写 | 已落 | `856fb0a`；tasks/201a_flag_strategy.md；outputs/201a/evidence.md |
 | 201B | 拓扑感知模块落位+位姿联合搜索 | 已落 | `856fb0a`+`7ce7a5d`；tasks/201b_placement.md；outputs/201b/ |
 | 201C | 布线协商三步 | **搁置**（踢出 v0.5.15） | tasks/201c_routing.md；`.tmp_201c_hold/`；outputs/201c/evidence.md §13 |
@@ -364,14 +351,14 @@
 | 537 | 审查流程环境/证据/权限/交付硬闸，含已复现的采样值输入与 Windows 编码缺口 | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/537_review_workflow_gates.md；Python 7650 passed；connector 536 passed；dsh-plugin 113 passed/1 skipped |
 | 538 | archipelago 独立子岛编译与局部回滚（不含组装配/页级 pack/整页交付） | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/538_island_compile.md；Python 7708 passed；connector 536 passed；dsh-plugin 113 passed/1 skipped |
 | 539 | 537/538 对抗审查、真机只读验收与交付证据修复（F1–F9） | 已提交 `0f638de`（含在 0.5.22 历史） | tasks/539_adversarial_real_acceptance.md；真机 incomplete/partial 如实交付；最终 Python 7731 / connector 536 / DSH 113+1 |
-| 540 | 0.6.0 前工作区整理、审查/绘制解耦、Rust 迁移平台准备；不改业务算法、不批量翻译 | 完成、未提交（A/B/C + 对抗修复 + 只读真机追加验收；候选读数待 `candidate-regression.md`） | tasks/540_pre060_platform.md；tasks/540b_review_draw_decoupling.md；tasks/540c_rust_platform.md；evidence/540/final-regression.md；evidence/540/final-regression-adversarial.md；evidence/540/final-regression-followup.md；evidence/540/real-machine-instance-20261025-233933/25-final-report.md；outputs/review/540/ |
-| 541 | **审查分阶段交付与可中断流程**：一次 checkup 后先交付 initial/partial 首轮检查点再分批深挖（每批 ≤3 finding）；run 冻结输入、同基准复读、中止只读已有产物出 partial。SOP 小节 + 双 SKILL 路由 + 匿名测试已落地；RunManifest / 重算 guard / harness 硬闸仍为规划 | 已提交、未推送（只 commit 不 push） | docs/review-sop.md §3.0a；tasks/review-stage-runtime-gates.md；tests/test_review_stage_delivery.py；两份 SKILL 的 3.0a 路由 |
-| 542 | **原理图绘制 3.0（2026-11-01 可用版）**：drawing-line 集成、反激整页三关、编译/布线/宿主/视觉四缝挖洞修复、RC 冻结与 V4 交接；CH343 仅作不挤占关键路径的 P1 | **P0 完成、候选冻结（2026-10-27 提前）**：P4 三关、岳人眼与重开 `saved_verified` 全过；V4 11-01 后实施，未发正式包 | tasks/542_schematic_3_0_nov01.md；evidence/542/final-p4.md；evidence/201h/live/ |
-| V4 | **立创 EDA Pro 4.x 适配**（岳 2026-10-19 裁：**11 月起（0.6.x）做**）。四件事：① 在真 V4 上复跑 `doctor` + 一块板的 `checkup`，逐字段对拍 0.4.26 那次的结果包（当年结论：`.epro2` 归档与 V3 同格式、零适配；之后 0.5.x 六七个版本未在 V4 复测）；② 在线 connector-on-V4 探针重跑（当年 8/8 arity 一致、V4 是纯超集）；③ `.eprj3` 文件夹工程的真样本终验（yAxisDirection / NC 引脚 id / CANVAS 缺失，仍挂着）；④ `.eprj2` 导出引导在 V4 菜单里逐字核（V4 本地保存仍是 `.eprj2` SQLite 壳） | 规划（11 月开） | tasks/038-eprj3-tierA.md §V4.1.60 实测 |
-| 038R | **V4 审查线差分调研**：区分 `.eprj2` 壳、`.epro2` 归档、`.eprj3` 文件夹与在线通道；给出 P0 在线复测、P1 入口/全链、P2 真样本与 PCB 适配顺序；登记 0.6.0 后 AI 电路语义编译层的共享模型边界，不实施编译器 | 调研完成、未实施 | tasks/038_v4_review_line_research.md；outputs/review/v4-review-line-research.md |
-| 038S | **真实 eprj3 样本只读差分**：P1/P2+PCB1 的 V4.1.60 样本；证实两入口原理图一致、现有 PCB builder 可复用；发现 EOF 尾帧假损坏、PCB 覆盖/文案失真、版本缺失和 POUR/POURED 单位差；Tier-B 仅调研未实施 | 样本调研完成、未实施 | tasks/038_v4_sample_research.md；outputs/review/v4-review-line-research.md §6；.tmp_v4_sample_20261031/REPORT.md |
-| 038F | **V3/V4 容器隔离与单 PCB Tier-B**：F1 EOF 帧、F2 版本、F3 覆盖、F4 source 适配、F5 CLI/checkup 接线；V3/V4 在适配层分叉，DesignModel/BoardGeometry/规则/报告继承。真实样本运行 32 项 PCB 检查并出图；多 PCB、在线 V4、网差和单位语义未关闭 | F1–F5 工作树完成，集成验收后待提交 | tasks/038_v4_isolation_plan.md；outputs/review/v4-eof-frame.md；v4-eprj3-version.md；v4-eprj3-pcb-coverage.md；v4-eprj3-pcb-source.md；v4-eprj3-tierb.md |
-| 038O | **V4.1.93 在线只读验收与 O1–O3 修复**：doctor 9/9、关键 API 在位；容器/page边界已修，liveSchematic/schematicImage/livePcb=ok；PCB render 激活后60s仍不返回，已停用不适用API、pcbImage=not-applicable；V4逐条ERC按type/rule/primitives计数，两页host-wide只报519一次，review-evidence rc=0/capture.ok=true。板级仍incomplete，多PCB/全格式语义未关闭 | 在线闭环完成，全量仅MSYS一项域外红，待提交 | tasks/038_v4_online_acceptance.md；tasks/038_v4_live_gaps.md；outputs/review/v4-online-acceptance.md；outputs/review/v4-live-gaps-acceptance.md |
+| 540 | 0.6.0 前工作区整理、审查/绘制解耦、Rust 迁移平台准备；不改业务算法、不批量翻译 | 已落（A/B/C + 对抗修复 + 只读真机追加验收；最终候选 8132 passed / 94 skipped / 5 xfailed） | tasks/540_pre060_platform.md；tasks/540b_review_draw_decoupling.md；tasks/540c_rust_platform.md；**evidence/540/candidate-regression.md**；outputs/review/540/ |
+| 541 | **审查分阶段交付与可中断流程**：initial/partial 检查点、冻结输入、同基准复读、中止只读已有产物出 partial；RunManifest / 重算 guard / harness 硬闸仍为规划 | 已落 | docs/review-sop.md §3.0a；tasks/review-stage-runtime-gates.md；tests/test_review_stage_delivery.py；两份 SKILL 的 3.0a 路由 |
+| 542 | **原理图绘制 3.0**：drawing-line 集成、反激整页三关、四缝挖洞修复、RC 冻结与 V4 交接；CH343 示例 | **P0 完成并纳入 0.6.0**：P4 三关、岳人眼与重开 `saved_verified` 全过 | tasks/542_schematic_3_0_nov01.md；evidence/542/final-p4.md；evidence/201h/live/ |
+| V4 | **立创 EDA Pro 4.x 适配**：归档与 `.eprj3` 单 PCB 审查、在线容器/page、主机 ERC 与证据边界 | **首批已随 `e431e94` 落入 0.6.0**；多 PCB、部分跨视图语义、实时 PCB 位图与后续真样本仍开放 | tasks/038-eprj3-tierA.md；tasks/038_v4_live_gaps.md |
+| 038R | **V4 审查线差分调研**：容器/在线通道与 P0–P2 顺序、共享模型边界 | 调研完成，首批已实施 | tasks/038_v4_review_line_research.md；outputs/review/v4-review-line-research.md |
+| 038S | **真实 eprj3 样本只读差分**：证实原理图一致与 PCB builder 复用，发现 EOF、覆盖、版本与 POUR/POURED 单位差 | 样本调研完成，首批适配已实施，单位语义未关闭 | tasks/038_v4_sample_research.md；outputs/review/v4-review-line-research.md §6；.tmp_v4_sample_20261031/REPORT.md |
+| 038F | **V3/V4 容器隔离与单 PCB Tier-B**：F1 EOF、F2 版本、F3 覆盖、F4 source、F5 CLI/checkup；共享规则/报告 | **已随 `e431e94` 落入候选**；多 PCB、网差和单位语义未关闭 | tasks/038_v4_isolation_plan.md；outputs/review/v4-eof-frame.md；v4-eprj3-version.md；v4-eprj3-pcb-coverage.md；v4-eprj3-pcb-source.md；v4-eprj3-tierb.md |
+| 038O | **V4.1.93 在线只读验收与 O1–O3 修复**：doctor 9/9、page 采集、PCB render 不适用、逐条 ERC 与证据缺口披露 | **已随 `e431e94`/`643cf6d` 落入候选**；板级仍 incomplete，多 PCB/全格式语义未关闭 | tasks/038_v4_online_acceptance.md；tasks/038_v4_live_gaps.md；outputs/review/v4-online-acceptance.md；outputs/review/v4-live-gaps-acceptance.md |
 
 ## 字母/别名批号与里程碑（E / R / perf / bug98 / releases）
 

@@ -1,4 +1,4 @@
-# 排期（2026-10-17 更新；主代理维护，岳裁）
+# 排期（2026-10-31 更新；主代理维护，岳裁）
 
 > **2026-10-17 岳裁：v0.6.0 押后到 10 月底**。这段时间不发新版，打磨存量功能，
 > 主攻**原理图绘制质量**（目标：先把一个模块画好；布线和布局算法重写），
@@ -25,30 +25,22 @@
 | **v0.5.19**（内测，未排） | **R4-C（岳 10-19 裁）**：`bridge update-connector --no-reload`（写记录、不 reload，点一次扩展菜单生效，**528A 已落工作树**，含 528A-a 版本闸：显式 `--version` 与 `extension.json` 不一致直接 exit 2，避免一次必然假 FAILED 把人赶去卸载重装）；**stub 方案冻结到 0.6.x 之后**（实验④已证明「写 + 点一次菜单」可用，stub 只剩「零点击」的增量，却要换来无认证 WS 上执行远端载荷的风险）。真机已验：`--no-reload` exit 0、instance id 前后不变、无 `--yes` 也不问确认（`outputs/528a/evidence.md`） | **✅ 2026-10-20 已发（内测，tag `v0.5.19`）**：+ **527D2** `category_provenance` 落货架 · **527D3** 17 个分类读点分档感知（`category_verdict` 三态）· **201F** A\* 可采纳下界（A\* 14.2 s→2.05 s，83 预览逐字节相同）· **四条缝的只读红队 21 洞 / 20 修**（含 3 条比改动前更糟的真回归）。读数：pytest 6621 passed / 25 skipped · connector 536 + tsc · dsh 50/1 + build。产物 exe `4a2fda98…` / eext `4f672ec7…` / dsh `e84862c1…` | — |
 | **v0.5.20**（**内测**，2026-10-23） | **审查线实板反馈修复**：#83 铺铜包含性判据恒真（间距静默丢行）· #84 载流不建模铺铜/分支（承担铜时细线档降 UNKNOWN(INFO) 逐段点名）· #85 同封装焊盘对误报间距 · #86 旧库 Value 为空按货架 MPN/C 号补容值；**#88 以 5 条 `xfail(strict=True)` 记档**（铺铜弧当弦视图）· **绘图线并回 main**（merge `534d21f`：520a2–533 多岛落图）+ **535 合并暴露三层回归修复**（`2c71844`：pin-text 单模块容忍、地网降级旗标+记账、埋脚逃逸）+ **535 跟进**（`f4f3709`：143 F1 拒绝保持在 gnd 降级之前）· dsh 迁移（`docs/handoff.md`、SKILL 双副本、根 package.json shim `23b2a53`）；dsh-plugin 0.1.3 | 挖洞✓（dsh 子代理只读红队：0 实锤 / 4 存疑记档）· 实测：dsh 侧 6934 passed / **5 环境红**（3 条钩=沙箱拦 msys BaseNamedObjects、1 条 hunt=假接缝+真网络、1 条=并行竞态单跑即绿，机制均定位记档）——**0 红读数待在非沙箱终端补取**（`--basetemp=$env:TEMP\tmp_pt_rel520`）· connector 536 passed + tsc · dsh 50/1 + build；产物 exe `b0e0dce9…` / eext `E523BD6F…` / dsh `16DA3308…` | — |
 | **v0.5.21**（**正式版**，2026-10-23） | **dsh 迁移暴露的测试基建三修**（发布 v0.5.20 时被沙箱环境照出的暗伤）：① `parts hunt` 的 fetch_detail 假接缝修复（`cli.py` 函数内局部 import 甩开猴子补丁 → `globals().get` 优先 + 惰性兜底；`test_520_parts_hunt` 离线密封，521/522 两处同名死补丁一并激活）· ② 钩测试 3 条加 sh 共享对象探测 skip（本机 python 子进程受限时自动 skip，非受限环境照真跑）· ③ guard probe 收集竞态根治（`--confcutdir=tests/`，churn 对拍 5/40→0/40）· 附带：epru docstring 抹除机器路径、handoff「在 dsh 里跑测试」基线节 | 挖洞✓（dsh 红队 0 实锤）· 实测✓（**dsh 与终端双边 6936 passed / 0 failed / 25 skipped / 5 xfailed 逐字一致**，互证等价；钩链另有真实 commit/push 触发旁证）· 上机：无新增 bridge/connector 行为面，闸不适用；产物 exe `93a4be1d…` / eext `55FABAA6…` / dsh `16DA3308…`（0.1.3 未变） | — |
-| **v0.6.0**（正式，**岳 10-19 重定门槛**） | **122 E 阶段**（器件检查收口 + 报告整合）+ **高速 A 档 1~3****＋ 绘图线磨清楚（新硬门槛，判据见 `tasks/528_060_gate.md` §2）＋ 527D2/527D3 完成** | 200A 对照表已出（E1-E4 已落，缺口在报告整合 E5a/b/c）；**绘图线是关键路径**，201G 已把 0 候选拆成**三层**：① 构造阶梯 `right-of(D3,T1)` 结构性无解（两端 chain、按 origin 量、chain 把成员放同一根轴 ⇒ x 全 0；已被 201B 拓扑搜索兜住）② 拓扑档旗标席位 `SEC_12V`@`D3.1`（局部太挤：D3 自己器体在脚正上方 11.5 单位，向上结构性无解、向下被 `LED_K` 线挡）③ **修 ② 之后 readability 立刻拒 27 条，全为「文字 vs 几何」**（16 `text-overlap` + 7 `text-on-wire` + 1 `wire-through-body`，零电气错误）⇒ 真正的大山是**文字行可移动性** | 191C（差分对要网序号） |
+| **v0.6.0**（正式版，2026-10-31） | 200A/B/C 报告与高速审查 + 542 反激人工锚 + CH343 示例 + 527D2/D3 + 540 平台准备 + V4 单 PCB 首批 + #89 同网测量与证据披露 | 全量 **8821 passed / 25 skipped / 0 failed**；connector 542、DSH 127/1、Rust 47+显式4；真机 doctor 9/9、evidence exit 0、P4 lint 0/0/0；三件发布件验收通过 | — |
 | **v0.6.x** | **041 跨板网络**（DRAFT → 细化，040b 已落地）+ **V4 适配**（岳 2026-10-19 裁：**11 月起做**，见 `tasks/038-eprj3-tierA.md` §V4） | 0.6.0 后 | — |
 | **0.6.0 后（独立方向）** | **AI 电路语义编译层**：网表 → 类型化、类 C 的可读语言，AI 读编译结果而非原始网表；调研任务 `tasks/038_v4_review_line_research.md` 只登记 V3/V4 共用语义边界，不实施编译器 | 先定义语义合同与可验证还原，再逐规则/逐视图小批接入；不与 V4 适配同批 | — |
 | 远景 | **R5 SPICE**：岳 10-17 裁——等**原理图绘制过关** + **041 跨板网络**搞定后再开 | 冻结 | 两个前置 |
 
-## 当前主攻（2026-10-19 起：**0.5.x 已收尾，等 0.6.0 解冻**）
+## 当前主攻（2026-10-31：**0.6.0 已收口，随后进入 0.6.x**）
 
-岳 2026-10-19 四条裁决（任务书 `tasks/528_060_gate.md`）：**R4 走 C**（先做免 reload，stub 冻结）、
-**191D 数值不动**（只补分类空白带）、**绘图线磨清楚了才能发 0.6.0**、**527D2/527D3 在 0.6.0 前完成**。
-
-- **0.6.0 的四个阻塞项**（缺一不发）：① `200A/200B/200C`（122 E 阶段 + 高速 A 档）；
-  ② **绘图线过锚**（反激 `draw compile` 出 `ok=True` 且岳亲眼看 SVG「一眼认出反激」，
-  外加 roadmap §8 三条区域级裁定）；③ `527D3` ✅（2026-10-19 已落，17 读点 + 三态闸）；
-  ④ `527D2` ✅（2026-10-19 已落，`category_provenance` 落货架）。**只剩 ① 与 ②**。
-- **绘图线顺序**（关键路径，与 200A/B/C 并行）：`201E` A\* 效率 ✅ → `201F` 可采纳下界 ✅
-  （A\* 14.2 s→2.05 s，整页 23.0 s→11.05 s，83 预览逐字节相同）
-  → `201G` **0 候选的两个真因**（诊断单 `tasks/201g_flyback_zero_candidate.md`）→ router 进针方向
-  （`wire-on-pin-line`）→ 文字行可移动性 → 回锚验收。`201C` 与 121 仍搁置。
-  > 201E 实测把顺序改了：**整页 0 候选与 A\* 快慢无关**。25 档里 24 档死在关系约束
-  > `same-column(Q1,R5)`，剩下一档死在 `SEC_12V` 在 `D3.1` 的旗标席位；`readability.check`
-  > 一次都没被调用过。所以「文字行可移动性」之前先要把 201G 这两个真因钉死。
-  > 201F 之后若还想快，下一个该动的是**状态空间**（`best` 表按 `(node, arrived)` 四方向展开，
-  > 整张图仍被走一遍），不是继续加强 `h`。
-- **0.6.x（11 月起）**：`041` 跨板网络 + **V4 适配** + `R4 stub`（冻结项）。
+- **0.6.0 四个功能门槛均已完成**：① `200A/200B/200C` 随 `d2130b7` 入库；
+  ② 542 P0 反激整页三关、岳人眼和关闭重开验收通过；③ `527D3` 已落；
+  ④ `527D2` 已落。早期诊断和失败读数保留在任务书中，不再当作当前进度。
+- **本版追加内容**：540 平台准备、CH343 示例、V4 首批单 PCB 工作流，以及 #89 稳压器/FB
+  同网测量与证据披露修复。V4 多 PCB、实时 PCB 位图和部分样本语义仍是公开边界。
+- **本版验收已完成**：全量测试、真机、三件发布件与保密闸分别记录；服务端哈希在 Release
+  上传后回读。不用旧批次的绿读数替代本版，不把 `incomplete/partial` 写成板级通过。
+- **0.6.x**：绘制算法与 Rust strangler 并行；`041` 跨板网络、V4 后续样本与多 PCB 适配按任务书
+  分批；`R4 stub` 仍冻结，未经岳裁不复活。算法与迁移不同批，shared/全量/真机串行。
 - **非阻塞**：R6 的 `L2b`/`L2c`；`529` 去耦分类空白带；`527C2` 跨视图 note 按几何分两句。
 - **存量打磨**：岳跑测试用例 → 反馈 → 修复，循环。
 
@@ -71,34 +63,28 @@
 - **两份过时 DRAFT 标注归档**：051 早有「已被 052 取代」横幅；088b-deltas 三条偏差已由岳 10-02 逐条裁定并随 followups 落账，本轮加归档横幅，只留作裁决原文。
 - **189A1 不改**：`read_stackup.used_copper_layer_ids` 维持「文档声明口径」。改读 `effective_layer_ids` 会把通孔盘的内层带进 used 集，与 `test_125_pcb_measure.py::test_foc_main_board_used_layers` 的实读 `[1,2,16]`（岳 2026-10-07 亲裁值）冲突；裁决注释已在 `core/measure.py:321`。
 
-## 540 平台准备与后续双主线（2026-10-25）
+## 540 平台准备与后续双主线（2026-10-31 复核）
 
-| 工作 | 当前状态 | 下一步 / 锁 |
+| 工作 | 当前状态 | 证据 / 锁 |
 |---|---|---|
-| 540A 工作区约定 | 完成；批准的回收站清理与目录守卫均有记录 | 新探针按固定目录，不扩大清理 |
-| 540B1–B7 | 完成；142 模块/0 legacy、24 CLI 命令、DSH 10 工具（DSH 现 **127 passed / 1 skipped**）；行为矩阵见 `evidence/540/b-behavior-equivalence.md` | 不提交、不发布；shared/CLI/bridge 改动走集成锁 |
-| 540B8 派单与路线 | 完成；行为矩阵、review/draw/shared 三入口与集成锁已建立 | 文档/owner/layer/workspace/CLI 联合复核 85 passed |
-| 540B 对抗修复 | 完成；B2 权威化（caller-held component 为准，detached/key-mismatch/stale-copy 不再误判），指纹 direct `ea1d06e0` / recursive `25b7de70`（**源码位置变化，非判决改变**），`test_126a` + `test_540_shared_connectivity` **28 passed**；bridge/doc 邻域 **160 passed**，Origin 只豁免精确 `https://client`、lookalike 有安全负例 | 旧值 `7e3ac51a`/`43979be9` 留作历史；`rm -rf` 删除纪律偏差已在 540B 留痕 |
-| 540C Rust 平台 | 完成；8 个合同文件 **346 passed**、Rust **45 passed / 4 ignored** + 显式 **4 passed**、真实差分 **5 case**（新增 `compile-page-result-projection`）双侧 normalized SHA `5230498…` 相同（caseBook `7df2c400…`），fmt/clippy 零警告；旧 LayoutPlan golden `62a272b1…` 不变 | 证据 `evidence/540/c-acceptance.md`、`c-differential-comparison-adversarial.json`；不批量翻译、不全局安装 |
-| 真机追加验收（只读） | 完成但**不通过**：R1 friendlyName `test` / 活动页 P1 / `consistent=true`；doctor **8/9**（运行 connector 0.5.21 ≠ 仓库 0.5.22，未热更新）；checkup **exit 3** / `conclusion=incomplete`（0 器件 0 网络）、`delivery=partial`；finalize 两次 exit 0、15 文件幂等；`livePcb=ok` 只是读数通道，视觉复核未完成、`netlist=missing` | 证据 `evidence/540/real-machine-instance-20261025-233933/25-final-report.md` 与 `outputs/review/540/`；环境修复（daemon 重启 / revoke）仅经明确授权后执行，本轮未热更新、未写设计 |
-| 最终集成验收 | 分层记：首轮 `evidence/540/final-regression.md`（Python 7876/21/5、connector 536、DSH 122/1、Rust 7、4 case）；对抗后首轮 `final-regression-adversarial.md`（Python **8206/19/5/1 failed**，唯一红为 rulebody 指纹钉、已按 B2 下沉补钉；connector 536、DSH 127/1、Rust 45+显式 4、5 case） | **最终候选结果以 `evidence/540/candidate-regression.md` 为准（由后续步骤产生，未产生前不算通过）**；540 未提交，不得声称全绿 |
+| 540A/B 工作区与解耦 | 已落；142 模块/0 legacy、24 CLI 命令、DSH 10 工具；三入口与集成锁已建立 | `evidence/540/b-behavior-equivalence.md`；shared/CLI/bridge 改动走集成锁 |
+| 540C Rust 平台 | 已落；最小 workspace、合同、fmt/clippy、显式语料与 5 case 双侧差分均已运行 | `evidence/540/c-acceptance.md`；不批量翻译、不全局安装 |
+| 540 最终候选验收 | Python **8132 passed / 94 skipped / 5 xfailed / 0 failed**；其他门禁读数见证据 | **`evidence/540/candidate-regression.md`**；这是 540 历史候选读数，不替代 0.6.0 最终全量 |
+| 540 真机追加验收 | 历史结论为 `conclusion=incomplete / delivery=partial`（0 器件 0 网络），不是板级通过 | `evidence/540/real-machine-instance-20261025-233933/25-final-report.md`；0.6.0 真机另验 |
 
 - 审查线派单：`tasks/review-line.md`；绘制线派单：`tasks/draw-line.md`；shared 集成锁：
   `tasks/shared-platform.md`。两线可独立派小批，shared/全量/真机串行，算法与迁移不同批。
 - 0.6.x：绘制算法与 Rust strangler 并行；新工具/引擎默认 Rust，旧工具垂直迁移。
 - 0.7.0：Rust 接管全部受支持主流程，不是逐行翻译全部 Python；connector/DSH 薄适配可留 TS。
-- 539 已 commit `0f638de`，其后随 0.5.22 的 `63df468`/`23f030f` 历史一并包含；
-  540 仍未提交。0.6.0 的 200A/B/C 与人工反激视觉锚不因平台准备而关闭。
 
-## 200 审查线收口（2026-10-30）
+## 200 审查线收口（2026-10-31 复核）
 
 | 项 | 当前状态 | 证据 |
 |---|---|---|
-| 200A 报告整合 | **工作树完成** | `outputs/200a/report-integration-evidence.md` |
-| 200B 高速 A1 | **工作树完成** | `outputs/200b/evidence.md` |
-| 200C 高速 A2/A3 | **工作树完成** | `outputs/200c1/evidence.md`、`outputs/200c2/evidence.md` |
+| 200A 报告整合 | **已落 `d2130b7`** | `outputs/200a/report-integration-evidence.md` |
+| 200B 高速 A1 | **已落 `d2130b7`** | `outputs/200b/evidence.md` |
+| 200C 高速 A2/A3 | **已落 `d2130b7`** | `outputs/200c1/evidence.md`、`outputs/200c2/evidence.md` |
 
-最终集成：Python **8540 passed / 25 skipped / 2 failed**（残余为 MSYS 与绘制线，
-审查侧红项清零）；connector 536 + typecheck、DSH 127/1 + typecheck/build、Rust 47/4、
-跨语言 8 passed、differential 5/5 且 normalized SHA 一致。详见 `outputs/200/acceptance.md`。
-200A/B/C 未提交、未发布；整体全量未绿，不改变 0.6.0 的发布裁决与人工门槛。
+200 批历史集成读数 **8540 passed / 25 skipped / 2 failed** 与失败原文仍见
+`outputs/200/acceptance.md`，不改写历史。当前 0.6.0 的最终全量、真机与发布件验收单独记录；
+功能门槛已收口不等于发布件已经签发。

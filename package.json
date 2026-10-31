@@ -1,6 +1,6 @@
 {
   "name": "boardwise-dsh",
-  "version": "0.5.22",
+  "version": "0.6.0",
   "description": "DeepSeek Harness tools for boardwise review, shared diagnostics and offline draw compile/lint. Thin CLI/JSON adapters — every judgement stays in Python.",
   "license": "MIT",
   "type": "module",
